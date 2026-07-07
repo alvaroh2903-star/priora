@@ -69,6 +69,20 @@
       textarea { min-height: 120px; resize: vertical; }
       .hidden { display: none; }
       .status { font-size: 13px; color: var(--muted); margin-top: 8px; min-height: 18px; }
+      pre.parse-output {
+        display: none;
+        margin-top: 8px;
+        padding: 12px;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        font-size: 12px;
+        color: var(--text);
+        white-space: pre-wrap;
+        word-break: break-word;
+        overflow-x: auto;
+        max-height: 360px;
+      }
     </style>
   </head>
   <body>
@@ -200,12 +214,17 @@
                 <div class="subject">${escapeHtml(c.subject)}</div>
                 <div class="meta">${c.count} mensagem(ns) · ${date}</div>
                 <button class="secondary analyze-btn" data-cid="${cid}" style="margin-top:6px;">Analisar com IA</button>
+                <button class="secondary parse-btn" data-cid="${cid}" style="margin-top:6px; margin-left:6px;">Parsear (Clara)</button>
                 <div class="analysis meta" style="margin-top:8px;"></div>
+                <pre class="parse-output"></pre>
               </div>`;
             })
             .join('');
           document.querySelectorAll('.analyze-btn').forEach((btn) => {
             btn.addEventListener('click', () => analyzeConversation(btn));
+          });
+          document.querySelectorAll('.parse-btn').forEach((btn) => {
+            btn.addEventListener('click', () => parseConversation(btn));
           });
         } catch (e) {
           $('logistics').innerHTML = '<p class="meta">Erro ao buscar e-mails.</p>';
@@ -242,6 +261,27 @@
           `;
         } catch (e) {
           target.textContent = 'Erro ao analisar.';
+        } finally {
+          btn.disabled = false;
+        }
+      }
+
+      async function parseConversation(btn) {
+        const cid = btn.getAttribute('data-cid');
+        const out = btn.parentElement.querySelector('.parse-output');
+        out.style.display = 'block';
+        out.textContent = 'Parseando com a Clara...';
+        btn.disabled = true;
+        try {
+          const res = await fetch('/api/parse/conversations/' + encodeURIComponent(cid), {
+            method: 'POST',
+          });
+          const data = await res.json();
+          out.textContent = res.ok
+            ? JSON.stringify(data, null, 2)
+            : 'Erro: ' + (data.error || res.statusText);
+        } catch (e) {
+          out.textContent = 'Erro ao parsear.';
         } finally {
           btn.disabled = false;
         }
