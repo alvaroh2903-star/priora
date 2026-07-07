@@ -12,6 +12,8 @@ nome do usuário autenticado.
 - 📤 Enviar e-mails (`POST /api/emails/send`)
 - 🚢 **Logística + IA**: filtra e-mails por palavras-chave (embarque, contêiner, courier…)
   e usa a Claude (Anthropic) para **resumir** e **extrair dados estruturados** de cada conversa
+- 🤖 **Clara / Parser (`ParsedEmail`)**: extrai por e-mail tracking, processo Rocket,
+  referências externas (`{type,value}`), documentos, resolução do HBL, datas, evidências e confiança
 - 🖥️ UI de demonstração em `/`
 
 ## Como funciona (arquitetura)
@@ -30,10 +32,12 @@ src/
 │   └── graphService.ts      # Chamadas ao Microsoft Graph (listar/ler/enviar/buscar)
 ├── ai/
 │   ├── claudeClient.ts      # Cliente Anthropic (Claude)
-│   └── emailAnalyzer.ts     # Resumo + extração estruturada (structured outputs)
+│   ├── emailAnalyzer.ts     # Resumo + extração estruturada por conversa
+│   └── emailParser.ts       # Parser "Clara" → ParsedEmail (regex + IA)
 └── routes/
     ├── emailRoutes.ts       # API REST /api/emails
-    └── analysisRoutes.ts    # API REST /api/analysis (logística + IA)
+    ├── analysisRoutes.ts    # API REST /api/analysis (logística + IA)
+    └── parseRoutes.ts       # API REST /api/parse (ParsedEmail)
 public/
 └── index.html               # UI de demonstração
 ```
@@ -103,6 +107,39 @@ Abra `http://localhost:3000`, clique em **Entrar com a Microsoft** e teste.
 | POST   | `/api/emails/send`    | Envia um e-mail                             |
 | GET    | `/api/analysis/emails` | E-mails de logística agrupados por conversa (`?top=`) |
 | POST   | `/api/analysis/conversations/:conversationId` | Analisa uma conversa com IA (resumo + dados) |
+| POST   | `/api/parse/messages/:id` | Parseia UM e-mail → `ParsedEmail` |
+| POST   | `/api/parse/conversations/:conversationId` | Parseia todos os e-mails da thread → `ParsedEmail[]` |
+
+### Parser da Clara (`ParsedEmail`)
+
+`POST /api/parse/messages/:id` busca o e-mail completo no Graph e devolve:
+
+```jsonc
+{
+  "emailId": "AAMk...",
+  "internetMessageId": "<...@...>",
+  "conversationId": "AAQk...",
+  "subject": "...", "from": "...", "to": ["..."], "cc": ["..."],
+  "sentDateTime": "...", "receivedDateTime": "...",
+  "attachments": [{ "name": "OMBL.pdf", "contentType": "application/pdf" }],
+  "tracking": [{ "carrier": "FedEx", "number": "871089761136" }],
+  "processNumbers": ["IM1578"],
+  "externalReferences": [{ "type": "container", "value": "MSKU1234567" },
+                         { "type": "unknown", "value": "SHYY26041185" }],
+  "documents": ["OMBL", "Invoice"],
+  "hblResolution": "Telex Release",
+  "carrier": "FedEx",
+  "dates": [{ "text": "Posted on Apr.27", "normalized": "2026-04-27" }],
+  "evidences": [{ "conclusion": "OMBL esperado", "snippet": "...we sent Original MBL via FEDEX..." }],
+  "confidence": 0.86
+}
+```
+
+**Como funciona:** processo Rocket (`IMxxxx`) e container (ISO 6346) saem por
+**regex** (garantia). O restante — carrier/tracking, `externalReferences` sem
+assumir o tipo, documentos, resolução do HBL, datas relativas, evidências e
+confiança — sai da **Claude** com *structured outputs* (esquema Zod) + *adaptive
+thinking*. Os dois resultados são mesclados e deduplicados.
 
 Exemplo de envio:
 

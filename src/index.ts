@@ -5,6 +5,7 @@ import { config } from './config';
 import { authRouter } from './auth/authRoutes';
 import { emailRouter } from './routes/emailRoutes';
 import { analysisRouter } from './routes/analysisRoutes';
+import { parseRouter } from './routes/parseRoutes';
 
 const app = express();
 
@@ -31,6 +32,7 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 app.use('/auth', authRouter);
 app.use('/api/emails', emailRouter);
 app.use('/api/analysis', analysisRouter);
+app.use('/api/parse', parseRouter);
 
 /** Estado de autenticação do usuário atual (para a UI). */
 app.get('/api/me', (req, res) => {

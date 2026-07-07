@@ -147,6 +147,74 @@ export async function getConversation(
   return response.value as ConversationMessage[];
 }
 
+export interface EmailAttachmentMeta {
+  id: string;
+  name: string;
+  contentType: string;
+  size: number;
+  isInline: boolean;
+}
+
+export interface Recipient {
+  emailAddress: { name?: string; address: string };
+}
+
+/** Mensagem completa, com todos os campos que a Clara precisa para parsear. */
+export interface FullEmailMessage {
+  id: string;
+  internetMessageId?: string;
+  conversationId: string;
+  subject: string;
+  from?: Recipient;
+  toRecipients?: Recipient[];
+  ccRecipients?: Recipient[];
+  sentDateTime?: string;
+  receivedDateTime?: string;
+  body?: { contentType: string; content: string };
+  bodyPreview?: string;
+  hasAttachments: boolean;
+  attachments?: EmailAttachmentMeta[];
+}
+
+const FULL_FIELDS =
+  'id,internetMessageId,conversationId,subject,from,toRecipients,ccRecipients,sentDateTime,receivedDateTime,body,bodyPreview,hasAttachments';
+// Só metadados do anexo (nome/tipo) — sem baixar o conteúdo (contentBytes).
+const ATTACHMENT_EXPAND = 'attachments($select=id,name,contentType,size,isInline)';
+
+/** Busca uma mensagem completa (corpo em texto puro + metadados de anexos). */
+export async function getFullMessage(
+  accessToken: string,
+  id: string,
+): Promise<FullEmailMessage> {
+  const client = getGraphClient(accessToken);
+  return client
+    .api(`/me/messages/${id}`)
+    .header('Prefer', 'outlook.body-content-type="text"')
+    .select(FULL_FIELDS)
+    .expand(ATTACHMENT_EXPAND)
+    .get();
+}
+
+/** Busca todas as mensagens completas de uma conversa (thread), em ordem cronológica. */
+export async function getConversationFull(
+  accessToken: string,
+  conversationId: string,
+  opts: { top?: number } = {},
+): Promise<FullEmailMessage[]> {
+  const client = getGraphClient(accessToken);
+  const safeId = conversationId.replace(/'/g, "''");
+  const response = await client
+    .api('/me/messages')
+    .header('Prefer', 'outlook.body-content-type="text"')
+    .filter(`conversationId eq '${safeId}'`)
+    .orderby('receivedDateTime asc')
+    .top(opts.top ?? 50)
+    .select(FULL_FIELDS)
+    .expand(ATTACHMENT_EXPAND)
+    .get();
+  return response.value as FullEmailMessage[];
+}
+
 export interface SendMailInput {
   subject: string;
   body: string;
