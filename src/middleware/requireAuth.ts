@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { msalClient } from '../auth/msalClient';
+import { getMsalClient } from '../auth/msalClient';
 import { config } from '../config';
 
 /** Request com o access token do Graph anexado pelo middleware. */
@@ -26,6 +26,7 @@ export async function requireAuth(
       return;
     }
 
+    const msalClient = getMsalClient();
     const account = await msalClient
       .getTokenCache()
       .getAccountByHomeId(homeAccountId);

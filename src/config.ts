@@ -2,25 +2,15 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-/** Lê uma variável de ambiente obrigatória, falhando cedo se ela não existir. */
-function required(name: string): string {
-  const value = process.env[name];
-  if (!value) {
-    throw new Error(
-      `Variável de ambiente obrigatória ausente: ${name}. ` +
-        `Copie .env.example para .env e preencha os valores.`,
-    );
-  }
-  return value;
-}
-
 export const config = {
   port: parseInt(process.env.PORT || '3000', 10),
   isProduction: process.env.NODE_ENV === 'production',
   sessionSecret: process.env.SESSION_SECRET || 'dev-insecure-secret-change-me',
   azure: {
-    clientId: required('AZURE_CLIENT_ID'),
-    clientSecret: required('AZURE_CLIENT_SECRET'),
+    // Opcionais: sem eles o servidor sobe normalmente e serve a página; o login
+    // com a Microsoft é que fica indisponível até serem preenchidos no .env.
+    clientId: process.env.AZURE_CLIENT_ID || '',
+    clientSecret: process.env.AZURE_CLIENT_SECRET || '',
     tenantId: process.env.AZURE_TENANT_ID || 'common',
     redirectUri:
       process.env.AZURE_REDIRECT_URI || 'http://localhost:3000/auth/callback',
@@ -59,3 +49,8 @@ export const config = {
 };
 
 export const authority = `https://login.microsoftonline.com/${config.azure.tenantId}`;
+
+/** Indica se o login com a Microsoft está configurado (client id + secret). */
+export function isAzureConfigured(): boolean {
+  return Boolean(config.azure.clientId && config.azure.clientSecret);
+}

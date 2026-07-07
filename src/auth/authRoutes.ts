@@ -1,17 +1,25 @@
 import crypto from 'crypto';
 import { Router } from 'express';
-import { msalClient } from './msalClient';
-import { config } from '../config';
+import { getMsalClient } from './msalClient';
+import { config, isAzureConfigured } from '../config';
 
 export const authRouter = Router();
 
 /** Inicia o login: redireciona o usuário para a tela "Entrar com a Microsoft". */
 authRouter.get('/login', async (req, res, next) => {
   try {
+    if (!isAzureConfigured()) {
+      return res
+        .status(503)
+        .send(
+          'Login com a Microsoft ainda não configurado. Preencha AZURE_CLIENT_ID e ' +
+            'AZURE_CLIENT_SECRET no arquivo .env e reinicie o servidor.',
+        );
+    }
     const state = crypto.randomBytes(16).toString('hex');
     req.session.authState = state;
 
-    const url = await msalClient.getAuthCodeUrl({
+    const url = await getMsalClient().getAuthCodeUrl({
       scopes: config.loginScopes,
       redirectUri: config.azure.redirectUri,
       state,
@@ -36,7 +44,7 @@ authRouter.get('/callback', async (req, res, next) => {
     }
     delete req.session.authState;
 
-    const result = await msalClient.acquireTokenByCode({
+    const result = await getMsalClient().acquireTokenByCode({
       code,
       scopes: config.loginScopes,
       redirectUri: config.azure.redirectUri,
@@ -58,12 +66,11 @@ authRouter.get('/callback', async (req, res, next) => {
 authRouter.post('/logout', async (req, res, next) => {
   try {
     const homeAccountId = req.session.homeAccountId;
-    if (homeAccountId) {
-      const account = await msalClient
-        .getTokenCache()
-        .getAccountByHomeId(homeAccountId);
+    if (homeAccountId && isAzureConfigured()) {
+      const cache = getMsalClient().getTokenCache();
+      const account = await cache.getAccountByHomeId(homeAccountId);
       if (account) {
-        await msalClient.getTokenCache().removeAccount(account);
+        await cache.removeAccount(account);
       }
     }
     req.session.destroy(() => res.json({ status: 'logged_out' }));
