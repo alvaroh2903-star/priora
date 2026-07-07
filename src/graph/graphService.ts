@@ -71,6 +71,82 @@ export async function getMessage(accessToken: string, id: string): Promise<unkno
     .get();
 }
 
+export interface LogisticsSummary {
+  id: string;
+  conversationId: string;
+  subject: string;
+  from?: { emailAddress: { name?: string; address: string } };
+  receivedDateTime: string;
+  bodyPreview: string;
+  isRead: boolean;
+  hasAttachments: boolean;
+  webLink: string;
+}
+
+/**
+ * Busca e-mails que mencionem qualquer uma das palavras-chave de logística.
+ * Usa o $search do Graph (full-text) com os termos combinados por OR.
+ */
+export async function searchLogisticsMessages(
+  accessToken: string,
+  opts: { keywords: string[]; top?: number },
+): Promise<LogisticsSummary[]> {
+  const client = getGraphClient(accessToken);
+  const top = opts.top ?? 50;
+  // KQL: "termo1" OR "termo2" OR ... — $search não combina com $orderby.
+  const searchQuery = opts.keywords.map((k) => `"${k}"`).join(' OR ');
+
+  const response = await client
+    .api('/me/messages')
+    .search(searchQuery)
+    .top(top)
+    .select(
+      'id,conversationId,subject,from,receivedDateTime,bodyPreview,isRead,hasAttachments,webLink',
+    )
+    .get();
+
+  return response.value as LogisticsSummary[];
+}
+
+export interface ConversationMessage {
+  id: string;
+  conversationId: string;
+  subject: string;
+  from?: { emailAddress: { name?: string; address: string } };
+  toRecipients?: Array<{ emailAddress: { name?: string; address: string } }>;
+  receivedDateTime: string;
+  body?: { contentType: string; content: string };
+  bodyPreview?: string;
+}
+
+/**
+ * Retorna todas as mensagens de uma conversa (thread), em ordem cronológica,
+ * com o corpo em texto puro (Prefer: text) para alimentar a IA.
+ */
+export async function getConversation(
+  accessToken: string,
+  conversationId: string,
+  opts: { top?: number } = {},
+): Promise<ConversationMessage[]> {
+  const client = getGraphClient(accessToken);
+  const top = opts.top ?? 50;
+  // Escapa aspas simples para o filtro OData.
+  const safeId = conversationId.replace(/'/g, "''");
+
+  const response = await client
+    .api('/me/messages')
+    .header('Prefer', 'outlook.body-content-type="text"')
+    .filter(`conversationId eq '${safeId}'`)
+    .orderby('receivedDateTime asc')
+    .top(top)
+    .select(
+      'id,conversationId,subject,from,toRecipients,receivedDateTime,body,bodyPreview',
+    )
+    .get();
+
+  return response.value as ConversationMessage[];
+}
+
 export interface SendMailInput {
   subject: string;
   body: string;

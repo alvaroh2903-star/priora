@@ -42,6 +42,20 @@ export const config = {
   ],
   /** Escopos de recurso usados na renovação silenciosa (sem os reservados do OIDC). */
   graphScopes: ['User.Read', 'Mail.Read', 'Mail.Send'],
+  /** Configuração da IA (Anthropic / Claude). A chave é opcional: sem ela, as
+   *  rotas de leitura/envio funcionam, mas a análise por IA fica indisponível. */
+  ai: {
+    apiKey: process.env.ANTHROPIC_API_KEY || '',
+    model: process.env.ANTHROPIC_MODEL || 'claude-opus-4-8',
+  },
+  /** Palavras-chave usadas para filtrar e-mails de logística/comércio exterior. */
+  logisticsKeywords: (
+    process.env.LOGISTICS_KEYWORDS ||
+    'embarque,embarcação,contêiner,conteiner,container,courier,courrier,navio,porto,frete,carga,BL,bill of lading,conhecimento de embarque,despacho,desembaraço,importação,exportação,armador,booking,AWB'
+  )
+    .split(',')
+    .map((k) => k.trim())
+    .filter(Boolean),
 };
 
 export const authority = `https://login.microsoftonline.com/${config.azure.tenantId}`;

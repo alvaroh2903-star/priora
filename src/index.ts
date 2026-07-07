@@ -4,6 +4,7 @@ import session from 'express-session';
 import { config } from './config';
 import { authRouter } from './auth/authRoutes';
 import { emailRouter } from './routes/emailRoutes';
+import { analysisRouter } from './routes/analysisRoutes';
 
 const app = express();
 
@@ -29,6 +30,7 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 // Rotas de autenticação e de e-mail.
 app.use('/auth', authRouter);
 app.use('/api/emails', emailRouter);
+app.use('/api/analysis', analysisRouter);
 
 /** Estado de autenticação do usuário atual (para a UI). */
 app.get('/api/me', (req, res) => {

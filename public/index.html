@@ -98,6 +98,18 @@
         </div>
 
         <div class="panel">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <h2 style="margin:0; font-size:16px;">Logística + IA</h2>
+            <button id="loadLogisticsBtn" class="secondary">Buscar e-mails de logística</button>
+          </div>
+          <p class="meta" style="margin:6px 0 0;">
+            Filtra e-mails por palavras-chave (embarque, contêiner, courier…) e usa a IA para
+            resumir e extrair os dados de cada conversa.
+          </p>
+          <div id="logistics"></div>
+        </div>
+
+        <div class="panel">
           <h2 style="margin:0 0 8px; font-size:16px;">Enviar e-mail</h2>
           <form id="sendForm">
             <label for="to">Para (separe por vírgula)</label>
@@ -169,6 +181,71 @@
       });
 
       $('refreshBtn').addEventListener('click', loadMessages);
+
+      $('loadLogisticsBtn').addEventListener('click', loadLogistics);
+
+      async function loadLogistics() {
+        $('logistics').innerHTML = '<p class="meta">Buscando...</p>';
+        try {
+          const data = await fetch('/api/analysis/emails?top=50').then((r) => r.json());
+          if (!data.conversations || data.conversations.length === 0) {
+            $('logistics').innerHTML = '<p class="meta">Nenhum e-mail de logística encontrado.</p>';
+            return;
+          }
+          $('logistics').innerHTML = data.conversations
+            .map((c) => {
+              const date = new Date(c.latest).toLocaleString('pt-BR');
+              const cid = escapeHtml(c.conversationId);
+              return `<div class="msg">
+                <div class="subject">${escapeHtml(c.subject)}</div>
+                <div class="meta">${c.count} mensagem(ns) · ${date}</div>
+                <button class="secondary analyze-btn" data-cid="${cid}" style="margin-top:6px;">Analisar com IA</button>
+                <div class="analysis meta" style="margin-top:8px;"></div>
+              </div>`;
+            })
+            .join('');
+          document.querySelectorAll('.analyze-btn').forEach((btn) => {
+            btn.addEventListener('click', () => analyzeConversation(btn));
+          });
+        } catch (e) {
+          $('logistics').innerHTML = '<p class="meta">Erro ao buscar e-mails.</p>';
+        }
+      }
+
+      async function analyzeConversation(btn) {
+        const cid = btn.getAttribute('data-cid');
+        const target = btn.parentElement.querySelector('.analysis');
+        target.textContent = 'Analisando com IA...';
+        btn.disabled = true;
+        try {
+          const res = await fetch('/api/analysis/conversations/' + encodeURIComponent(cid), {
+            method: 'POST',
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            target.textContent = 'Erro: ' + (data.error || res.statusText);
+            return;
+          }
+          const a = data.analysis;
+          const dados = Object.entries(a.dados)
+            .filter(([, v]) => v)
+            .map(([k, v]) => `<li><b>${escapeHtml(k)}:</b> ${escapeHtml(v)}</li>`)
+            .join('');
+          const acoes = (a.acoes_pendentes || [])
+            .map((x) => `<li>${escapeHtml(x)}</li>`)
+            .join('');
+          target.innerHTML = `
+            <div style="color:var(--text);"><b>Categoria:</b> ${escapeHtml(a.categoria)}</div>
+            <div style="color:var(--text); margin-top:4px;"><b>Resumo:</b> ${escapeHtml(a.resumo)}</div>
+            ${dados ? `<div style="margin-top:6px;"><b>Dados:</b><ul style="margin:4px 0;">${dados}</ul></div>` : ''}
+            ${acoes ? `<div style="margin-top:6px;"><b>Ações pendentes:</b><ul style="margin:4px 0;">${acoes}</ul></div>` : ''}
+          `;
+        } catch (e) {
+          target.textContent = 'Erro ao analisar.';
+        } finally {
+          btn.disabled = false;
+        }
+      }
 
       $('sendForm').addEventListener('submit', async (e) => {
         e.preventDefault();

@@ -10,6 +10,8 @@ nome do usuário autenticado.
 - 🔐 Login com a Microsoft (OAuth2 Authorization Code + refresh token silencioso)
 - 📥 Listar e ler e-mails da caixa de entrada (`GET /api/emails`, `GET /api/emails/:id`)
 - 📤 Enviar e-mails (`POST /api/emails/send`)
+- 🚢 **Logística + IA**: filtra e-mails por palavras-chave (embarque, contêiner, courier…)
+  e usa a Claude (Anthropic) para **resumir** e **extrair dados estruturados** de cada conversa
 - 🖥️ UI de demonstração em `/`
 
 ## Como funciona (arquitetura)
@@ -25,12 +27,27 @@ src/
 ├── middleware/
 │   └── requireAuth.ts       # Renova o token e protege as rotas de e-mail
 ├── graph/
-│   └── graphService.ts      # Chamadas ao Microsoft Graph (listar/ler/enviar)
+│   └── graphService.ts      # Chamadas ao Microsoft Graph (listar/ler/enviar/buscar)
+├── ai/
+│   ├── claudeClient.ts      # Cliente Anthropic (Claude)
+│   └── emailAnalyzer.ts     # Resumo + extração estruturada (structured outputs)
 └── routes/
-    └── emailRoutes.ts       # API REST /api/emails
+    ├── emailRoutes.ts       # API REST /api/emails
+    └── analysisRoutes.ts    # API REST /api/analysis (logística + IA)
 public/
 └── index.html               # UI de demonstração
 ```
+
+### Camada de IA
+
+A análise usa a **Claude (Anthropic)** via SDK oficial (`@anthropic-ai/sdk`):
+
+- Filtra e-mails de logística com o `$search` do Graph (palavras-chave configuráveis).
+- Agrupa por conversa (`conversationId`) e monta a thread em texto puro.
+- Envia para o modelo (`claude-opus-4-8` por padrão) com **adaptive thinking** e
+  **structured outputs** (esquema Zod), garantindo um JSON válido com `resumo`,
+  `categoria`, `dados` (embarcação, contêiner, BL, portos, datas, valores…) e
+  `acoes_pendentes`.
 
 O login usa o fluxo **Authorization Code**. Após o callback, o `homeAccountId`
 da conta fica na sessão; a cada requisição protegida, `requireAuth` chama
@@ -84,6 +101,8 @@ Abra `http://localhost:3000`, clique em **Entrar com a Microsoft** e teste.
 | GET    | `/api/emails`         | Lista e-mails (`?top=`, `?folder=`, `?search=`, `?filter=`) |
 | GET    | `/api/emails/:id`     | Detalhe de um e-mail                        |
 | POST   | `/api/emails/send`    | Envia um e-mail                             |
+| GET    | `/api/analysis/emails` | E-mails de logística agrupados por conversa (`?top=`) |
+| POST   | `/api/analysis/conversations/:conversationId` | Analisa uma conversa com IA (resumo + dados) |
 
 Exemplo de envio:
 
