@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Priora — Outlook</title>
+    <style>
+      :root {
+        --bg: #0f172a;
+        --panel: #1e293b;
+        --border: #334155;
+        --text: #e2e8f0;
+        --muted: #94a3b8;
+        --accent: #2563eb;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        line-height: 1.5;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 16px 24px;
+        border-bottom: 1px solid var(--border);
+      }
+      h1 { font-size: 20px; margin: 0; }
+      main { max-width: 900px; margin: 0 auto; padding: 24px; }
+      button {
+        background: var(--accent);
+        color: white;
+        border: 0;
+        padding: 9px 16px;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 14px;
+      }
+      button.secondary { background: transparent; border: 1px solid var(--border); }
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 20px;
+        margin-bottom: 20px;
+      }
+      .msg {
+        border-bottom: 1px solid var(--border);
+        padding: 12px 0;
+      }
+      .msg:last-child { border-bottom: 0; }
+      .msg .subject { font-weight: 600; }
+      .msg .meta { color: var(--muted); font-size: 13px; }
+      .msg .preview { color: var(--muted); font-size: 14px; margin-top: 4px; }
+      label { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
+      input, textarea {
+        width: 100%;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        color: var(--text);
+        padding: 9px 12px;
+        border-radius: 8px;
+        font-size: 14px;
+        font-family: inherit;
+      }
+      textarea { min-height: 120px; resize: vertical; }
+      .hidden { display: none; }
+      .status { font-size: 13px; color: var(--muted); margin-top: 8px; min-height: 18px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Priora · Outlook</h1>
+      <div id="userArea">
+        <a href="/auth/login"><button id="loginBtn">Entrar com a Microsoft</button></a>
+        <span id="userInfo" class="hidden">
+          <span id="username"></span>
+          <button id="logoutBtn" class="secondary">Sair</button>
+        </span>
+      </div>
+    </header>
+
+    <main>
+      <div id="loggedOut" class="panel">
+        <p>Faça login com sua conta Microsoft para ler e enviar e-mails do Outlook.</p>
+      </div>
+
+      <div id="loggedIn" class="hidden">
+        <div class="panel">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <h2 style="margin:0; font-size:16px;">Caixa de entrada</h2>
+            <button id="refreshBtn" class="secondary">Atualizar</button>
+          </div>
+          <div id="messages"></div>
+        </div>
+
+        <div class="panel">
+          <h2 style="margin:0 0 8px; font-size:16px;">Enviar e-mail</h2>
+          <form id="sendForm">
+            <label for="to">Para (separe por vírgula)</label>
+            <input id="to" type="text" placeholder="alguem@exemplo.com" required />
+            <label for="subject">Assunto</label>
+            <input id="subject" type="text" required />
+            <label for="body">Mensagem</label>
+            <textarea id="body" required></textarea>
+            <div style="margin-top:12px;">
+              <button type="submit">Enviar</button>
+            </div>
+            <div id="sendStatus" class="status"></div>
+          </form>
+        </div>
+      </div>
+    </main>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+
+      async function refreshMe() {
+        const me = await fetch('/api/me').then((r) => r.json());
+        if (me.authenticated) {
+          $('loginBtn').parentElement.classList.add('hidden');
+          $('userInfo').classList.remove('hidden');
+          $('username').textContent = me.username || '';
+          $('loggedOut').classList.add('hidden');
+          $('loggedIn').classList.remove('hidden');
+          loadMessages();
+        } else {
+          $('loggedOut').classList.remove('hidden');
+          $('loggedIn').classList.add('hidden');
+        }
+      }
+
+      async function loadMessages() {
+        $('messages').innerHTML = '<p class="meta">Carregando...</p>';
+        try {
+          const data = await fetch('/api/emails?top=15').then((r) => r.json());
+          if (!data.value || data.value.length === 0) {
+            $('messages').innerHTML = '<p class="meta">Nenhuma mensagem.</p>';
+            return;
+          }
+          $('messages').innerHTML = data.value
+            .map((m) => {
+              const from = m.from ? m.from.emailAddress.address : '(desconhecido)';
+              const date = new Date(m.receivedDateTime).toLocaleString('pt-BR');
+              return `<div class="msg">
+                <div class="subject">${escapeHtml(m.subject || '(sem assunto)')}</div>
+                <div class="meta">${escapeHtml(from)} · ${date}</div>
+                <div class="preview">${escapeHtml(m.bodyPreview || '')}</div>
+              </div>`;
+            })
+            .join('');
+        } catch (e) {
+          $('messages').innerHTML = '<p class="meta">Erro ao carregar mensagens.</p>';
+        }
+      }
+
+      function escapeHtml(s) {
+        return String(s).replace(/[&<>"']/g, (c) =>
+          ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]),
+        );
+      }
+
+      $('logoutBtn').addEventListener('click', async () => {
+        await fetch('/auth/logout', { method: 'POST' });
+        location.reload();
+      });
+
+      $('refreshBtn').addEventListener('click', loadMessages);
+
+      $('sendForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        $('sendStatus').textContent = 'Enviando...';
+        const payload = {
+          to: $('to').value.split(',').map((s) => s.trim()).filter(Boolean),
+          subject: $('subject').value,
+          body: $('body').value,
+        };
+        const res = await fetch('/api/emails/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (res.ok) {
+          $('sendStatus').textContent = 'E-mail enviado!';
+          $('sendForm').reset();
+        } else {
+          const err = await res.json().catch(() => ({}));
+          $('sendStatus').textContent = 'Erro: ' + (err.error || res.statusText);
+        }
+      });
+
+      refreshMe();
+    </script>
+  </body>
+</html>

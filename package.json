@@ -1,0 +1,36 @@
+{
+  "name": "priora",
+  "version": "0.1.0",
+  "description": "Priora SaaS — integração de e-mail do Outlook via Microsoft Graph API",
+  "main": "dist/index.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "dev": "ts-node src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "outlook",
+    "microsoft-graph",
+    "email",
+    "saas"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@azure/msal-node": "^2.13.1",
+    "@microsoft/microsoft-graph-client": "^3.0.7",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-session": "^1.18.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/express-session": "^1.18.0",
+    "@types/node": "^20.14.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.5.3"
+  }
+}
