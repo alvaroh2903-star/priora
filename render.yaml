@@ -1,0 +1,30 @@
+# Deploy da Priora no Render (https://render.com) — direto do GitHub, sem instalar nada.
+# Passo a passo: crie uma conta no Render, "New +" -> "Blueprint", conecte o repositório
+# e selecione a branch. O Render lê este arquivo e cria o serviço. Depois preencha os
+# segredos marcados como "sync: false" no painel do Render (Environment).
+services:
+  - type: web
+    name: priora
+    runtime: node
+    plan: free
+    # --include=dev garante que o TypeScript (devDependency) exista para o build.
+    buildCommand: npm install --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: NODE_ENV
+        value: production
+      - key: SESSION_SECRET
+        generateValue: true          # o Render gera um valor forte automaticamente
+      - key: AZURE_TENANT_ID
+        value: common
+      - key: AZURE_CLIENT_ID
+        sync: false                  # cole no painel do Render
+      - key: AZURE_CLIENT_SECRET
+        sync: false                  # cole no painel do Render
+      - key: AZURE_REDIRECT_URI
+        sync: false                  # https://SEU-APP.onrender.com/auth/callback
+      - key: ANTHROPIC_API_KEY
+        sync: false                  # opcional (necessário para a Clara/IA)

@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Plus Jakarta Sans',sans-serif;-webkit-font-smoothing:antialiased;background:#F4F5FB}
+  ::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:#D7DAE8;border-radius:8px;border:2px solid #F4F5FB}::-webkit-scrollbar-track{background:transparent}
+  @keyframes claraBob{0%,100%{transform:translateY(0)}50%{transform:translateY(-7px)}}
+  @keyframes growUp{from{transform:scaleY(0)}to{transform:scaleY(1)}}
+  @keyframes growW{from{width:0}}
+  .rcard{transition:transform .18s,box-shadow .22s}.rcard:hover{transform:translateY(-2px);box-shadow:0 18px 38px -22px rgba(31,38,80,.28)}
+  .bar-hit{cursor:pointer;transition:filter .15s}.bar-hit:hover{filter:brightness(1.08) saturate(1.06)}
+  .row-hit{transition:background .14s}.row-hit:hover{background:rgba(67,39,230,.06)}
+  @keyframes tipIn{from{opacity:0}to{opacity:1}}
+</style>
+</helmet>
+<main style="flex:1;min-width:0;display:flex;flex-direction:column">
+    <dc-import name="Topbar" title="Relatórios" subtitle="Visão consolidada da operação — volume, prazos, exceções e custo." icon-path="M14 3v5h5 M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z M8 13v4 M12 11v6 M16 14v3" hint-size="100%,110px"></dc-import>
+
+    <div style="padding:22px 36px 40px 36px">
+
+      <!-- Clara banner -->
+      <div style="display:flex;align-items:center;flex-wrap:wrap;gap:20px 24px;background:linear-gradient(108deg,#FFFFFF 60%,#F3F1FE 100%);border:1px solid #EAEBF4;border-radius:22px;padding:22px 26px;box-shadow:0 12px 30px -22px rgba(31,38,80,.28)">
+        <div style="position:relative;width:84px;height:84px;border-radius:50%;background:radial-gradient(circle at 50% 35%,#EDE9FF,#F6F4FF);display:flex;align-items:flex-end;justify-content:center;overflow:hidden;flex-shrink:0;box-shadow:0 8px 22px -10px rgba(67,39,230,.42);border:1px solid rgba(67,39,230,.14)">
+          <img src="assets/clara.png" alt="Clara" style="position:absolute;width:143px;height:auto;left:-19px;top:7px">
+        </div>
+        <div style="flex:1 1 360px;min-width:300px">
+          <div style="display:flex;align-items:center;gap:9px;margin-bottom:7px;flex-wrap:wrap">
+            <span style="font-size:17px;font-weight:800">Clara</span>
+            <span style="font-size:10px;font-weight:700;letter-spacing:.05em;color:#fff;background:#4327E6;padding:3px 8px;border-radius:20px">IA</span>
+            <span style="font-size:12px;color:#9AA0B4;margin-left:4px">Junho 2025 · parcial</span>
+          </div>
+          <p style="font-size:15px;color:#3C4258;line-height:1.5;max-width:600px">O volume de couriers caiu <b style="color:#177D54">8%</b> e o tempo médio melhorou para <b style="color:#161A2E">6,4 dias</b>. As exceções concentram-se em <b style="color:#161A2E">atraso pós-atracação</b> — vale revisar com os agentes.</p>
+        </div>
+        <button class="rcard" style="display:flex;align-items:center;gap:9px;background:#fff;border:1px solid #E6E8F2;border-radius:12px;padding:11px 16px;font-family:inherit;font-size:13.5px;font-weight:700;color:#3C4258;cursor:pointer">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="2"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 21h16"/></svg>Exportar PDF</button>
+      </div>
+
+      <!-- KPIs -->
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;margin-top:16px">
+        <sc-for list="{{ kpis }}" as="k" hint-placeholder-count="4">
+          <div style="background:#fff;border:1px solid #EAEBF4;border-radius:16px;padding:16px 18px">
+            <div style="display:flex;align-items:center;gap:8px"><span style="width:9px;height:9px;border-radius:50%;background:{{ k.color }}"></span><span style="font-size:12.5px;color:#7A8099;font-weight:600">{{ k.label }}</span></div>
+            <div style="font-size:27px;font-weight:800;margin-top:8px;letter-spacing:-.02em">{{ k.value }}</div>
+            <div style="font-size:11.5px;color:{{ k.deltaColor }};font-weight:700;margin-top:4px">{{ k.delta }}</div>
+          </div>
+        </sc-for>
+      </div>
+
+      <!-- Charts row 1 -->
+      <div style="display:grid;grid-template-columns:1.4fr 1fr;gap:16px;margin-top:16px">
+        <!-- volume por mês -->
+        <div class="rcard" style="background:#fff;border:1px solid #EAEBF4;border-radius:20px;padding:22px 24px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px"><h3 style="font-size:15.5px;font-weight:800">Volume de couriers</h3><span style="font-size:12px;color:#9AA0B4">por mês</span></div>
+          <p style="font-size:12.5px;color:#9AA0B4;margin-bottom:20px">Couriers recebidos nos últimos 6 meses</p>
+          <div style="display:flex;align-items:flex-end;gap:16px;height:200px;padding-top:10px">
+            <sc-for list="{{ months }}" as="m" hint-placeholder-count="6">
+              <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:9px;height:100%;justify-content:flex-end">
+                <span style="font-size:12px;font-weight:700;color:#3C4258">{{ m.value }}</span>
+                <div class="bar-hit" onMouseEnter="{{ m.onEnter }}" onMouseLeave="{{ hideTip }}" style="width:100%;max-width:46px;height:{{ m.h }};background:{{ m.fill }};border-radius:8px 8px 0 0;transform-origin:bottom;animation:growUp .7s ease both;cursor:pointer"></div>
+                <span style="font-size:11.5px;color:#9AA0B4;font-weight:600">{{ m.label }}</span>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+        <!-- por transportadora -->
+        <div class="rcard" style="background:#fff;border:1px solid #EAEBF4;border-radius:20px;padding:22px 24px">
+          <h3 style="font-size:15.5px;font-weight:800;margin-bottom:6px">Por transportadora</h3>
+          <p style="font-size:12.5px;color:#9AA0B4;margin-bottom:20px">Participação no mês</p>
+          <div style="display:flex;flex-direction:column;gap:16px">
+            <sc-for list="{{ carriers }}" as="c" hint-placeholder-count="3">
+              <div class="row-hit" onMouseEnter="{{ c.onEnter }}" onMouseLeave="{{ hideTip }}" style="cursor:pointer;border-radius:10px;margin:0 -8px;padding:7px 8px">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:7px"><span style="font-size:13px;font-weight:700;color:#3C4258">{{ c.name }}</span><span style="font-size:12.5px;color:#7A8099"><b style="color:#161A2E">{{ c.value }}</b> · {{ c.pct }}</span></div>
+                <div style="height:10px;background:#F0F1F7;border-radius:8px;overflow:hidden"><div style="height:100%;width:{{ c.pct }};background:{{ c.fill }};border-radius:8px;animation:growW .8s ease both"></div></div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </div>
+
+      <!-- Charts row 2 -->
+      <div style="display:grid;grid-template-columns:1fr 1.4fr;gap:16px;margin-top:16px">
+        <!-- exceções -->
+        <div class="rcard" style="background:#fff;border:1px solid #EAEBF4;border-radius:20px;padding:22px 24px">
+          <h3 style="font-size:15.5px;font-weight:800;margin-bottom:6px">Exceções por tipo</h3>
+          <p style="font-size:12.5px;color:#9AA0B4;margin-bottom:20px">Últimos 6 meses</p>
+          <div style="display:flex;flex-direction:column;gap:14px">
+            <sc-for list="{{ exceptions }}" as="e" hint-placeholder-count="5">
+              <div class="row-hit" onMouseEnter="{{ e.onEnter }}" onMouseLeave="{{ hideTip }}" style="display:flex;align-items:center;gap:12px;cursor:pointer;border-radius:10px;margin:0 -8px;padding:6px 8px">
+                <span style="width:9px;height:9px;border-radius:50%;background:{{ e.fill }};flex-shrink:0"></span>
+                <span style="font-size:13px;color:#3C4258;flex:1;min-width:0">{{ e.name }}</span>
+                <div style="width:120px;height:8px;background:#F0F1F7;border-radius:8px;overflow:hidden;flex-shrink:0"><div style="height:100%;width:{{ e.pct }};background:{{ e.fill }};border-radius:8px;animation:growW .8s ease both"></div></div>
+                <span style="font-size:13px;font-weight:800;width:24px;text-align:right">{{ e.value }}</span>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+        <!-- custo demurrage -->
+        <div class="rcard" style="background:#fff;border:1px solid #EAEBF4;border-radius:20px;padding:22px 24px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px"><h3 style="font-size:15.5px;font-weight:800">Custo de demurrage</h3><span style="font-size:12px;color:#9AA0B4">vs. economia evitada</span></div>
+          <p style="font-size:12.5px;color:#9AA0B4;margin-bottom:18px">A Clara evitou <b style="color:#177D54">R$ 47k</b> em junho antecipando retiradas</p>
+          <div style="display:flex;align-items:flex-end;gap:14px;height:190px">
+            <sc-for list="{{ costMonths }}" as="m" hint-placeholder-count="6">
+              <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:8px;height:100%;justify-content:flex-end">
+                <div onMouseEnter="{{ m.onEnter }}" onMouseLeave="{{ hideTip }}" style="width:100%;display:flex;align-items:flex-end;justify-content:center;gap:3px;flex:1;cursor:pointer">
+                  <div style="width:42%;height:{{ m.costH }};background:#E5484D;border-radius:6px 6px 0 0;transform-origin:bottom;animation:growUp .7s ease both" title="custo"></div>
+                  <div style="width:42%;height:{{ m.saveH }};background:#1F9D6B;border-radius:6px 6px 0 0;transform-origin:bottom;animation:growUp .7s ease both" title="economia"></div>
+                </div>
+                <span style="font-size:11.5px;color:#9AA0B4;font-weight:600">{{ m.label }}</span>
+              </div>
+            </sc-for>
+          </div>
+          <div style="display:flex;gap:18px;margin-top:14px;padding-top:14px;border-top:1px solid #F0F1F7">
+            <span style="display:flex;align-items:center;gap:7px;font-size:12.5px;color:#7A8099"><span style="width:10px;height:10px;border-radius:3px;background:#E5484D"></span>Custo incorrido</span>
+            <span style="display:flex;align-items:center;gap:7px;font-size:12.5px;color:#7A8099"><span style="width:10px;height:10px;border-radius:3px;background:#1F9D6B"></span>Economia evitada</span>
+          </div>
+        </div>
+      </div>
+
+      <div style="text-align:center;margin-top:36px;font-size:13.5px;color:#9AA0B4;font-style:italic">Números servem à decisão. A Clara destaca o que mudou — o resto fica de apoio.</div>
+    </div>
+    {{ tip }}
+  </main>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state={tip:null};
+  showTip=(d)=>(e)=>{const r=e.currentTarget.getBoundingClientRect();this.setState({tip:Object.assign({},d,{t:r.top,h:r.height,cx:r.left+r.width/2})});};
+  hideTip=()=>this.setState({tip:null});
+  buildTip(){
+    const t=this.state.tip; if(!t) return null; const h=React.createElement;
+    const vw=(typeof window!=='undefined'?window.innerWidth:1200), half=128;
+    const left=Math.max(half+10,Math.min(vw-half-10,t.cx));
+    let top,transform;
+    if(t.t>160){top=t.t-12;transform='translate(-50%,-100%)';} else {top=t.t+t.h+12;transform='translate(-50%,0)';}
+    const rows=(t.rows||[]).map((r,i)=>h('div',{key:i,style:{display:'flex',alignItems:'center',justifyContent:'space-between',gap:20,marginTop:i?6:0}},
+      h('span',{style:{display:'flex',alignItems:'center',gap:7,fontSize:12,color:'#AAB0C6',whiteSpace:'nowrap'}},h('span',{style:{width:8,height:8,borderRadius:'50%',background:r.color||'#7C5CF6',flexShrink:0}}),r.label),
+      h('span',{style:{fontSize:12.5,fontWeight:700,color:'#fff',whiteSpace:'nowrap'}},r.value)));
+    const kids=[h('div',{key:'h',style:{fontSize:13,fontWeight:800,color:'#fff',marginBottom:rows.length?9:0,letterSpacing:'-.01em'}},t.title),...rows];
+    if(t.note)kids.push(h('div',{key:'n',style:{fontSize:11.5,lineHeight:1.5,color:'#C4CADF',marginTop:10,paddingTop:10,borderTop:'1px solid #2A3152',maxWidth:230}},t.note));
+    return h('div',{style:{position:'fixed',left:left,top:top,transform:transform,zIndex:7000,pointerEvents:'none',background:'#12172B',border:'1px solid #2A3152',borderRadius:13,padding:'13px 15px',minWidth:178,maxWidth:256,boxShadow:'0 18px 44px -16px rgba(0,0,0,.6)',fontFamily:"'Plus Jakarta Sans',sans-serif",animation:'tipIn .14s ease both'}},kids);
+  }
+  renderVals(){
+    const kpis=[
+      {label:'Couriers (mês)',value:'23',color:'#4327E6',delta:'▼ 8% vs. maio',deltaColor:'#177D54'},
+      {label:'Tempo médio',value:'6,4d',color:'#1F9D6B',delta:'▼ 0,6d mais rápido',deltaColor:'#177D54'},
+      {label:'Exceções',value:'11',color:'#E8990C',delta:'em 6 meses',deltaColor:'#9AA0B4'},
+      {label:'Processos liberados',value:'128',color:'#4327E6',delta:'▲ 5% vs. maio',deltaColor:'#177D54'},
+    ];
+    const mv=[18,24,21,27,25,23]; const mmax=Math.max(...mv);
+    const volNotes=['Início de ano em ritmo baixo, após o recesso.','Retomada forte — +33% vs. janeiro.','Leve recuo no período de Carnaval.','Pico do semestre — maior volume de couriers.','Volume estável, perto do pico.','▼ 8% vs. maio — queda saudável, puxada pela triagem da Clara.'];
+    const months=['Jan','Fev','Mar','Abr','Mai','Jun'].map((label,i)=>({label,value:mv[i],h:Math.round(mv[i]/mmax*160)+'px',fill:i===5?'#4327E6':'#C9CCEC',onEnter:this.showTip({title:label+' · 2025',rows:[{label:'Couriers recebidos',value:String(mv[i]),color:'#4327E6'}],note:volNotes[i]})}));
+    const carrierNotes={DHL:'Principal parceiro internacional — maior volume e melhor SLA.',FedEx:'Usado para urgências, sobretudo em rotas da Ásia.',Sedex:'Apenas envios nacionais e documentos avulsos.'};
+    const carriers=[
+      {name:'DHL',value:11,pct:'48%',fill:'#4327E6'},
+      {name:'FedEx',value:9,pct:'39%',fill:'#6E59F2'},
+      {name:'Sedex',value:3,pct:'13%',fill:'#A99CF5'},
+    ].map(c=>Object.assign({},c,{onEnter:this.showTip({title:c.name,rows:[{label:'Envios no mês',value:String(c.value),color:c.fill},{label:'Participação',value:c.pct,color:c.fill}],note:carrierNotes[c.name]})}));
+    const exc=[['Atraso pós-atracação',4,'#E5484D'],['Courier extraviado',2,'#E8990C'],['OMBL ausente',2,'#E8990C'],['Envelope violado',2,'#B9760A'],['Greve / força maior',1,'#9AA0B4']];
+    const excNotes={'Atraso pós-atracação':'Maior ofensor: demora no envio do Termo por Embarque assinado pelo cliente.','Courier extraviado':'Ambos resolvidos com aviso rápido ao agente, que enviou a 3ª via de segurança.','OMBL ausente':'Original B/L não chegou junto à carga.','Envelope violado':'Inspeção reforçada na recepção após os casos.','Greve / força maior':'Paralisação portuária pontual em abril.'};
+    const emax=Math.max(...exc.map(e=>e[1]));
+    const exceptions=exc.map(([name,value,fill])=>({name,value,fill,pct:Math.round(value/emax*100)+'%',onEnter:this.showTip({title:name,rows:[{label:'Casos (6 meses)',value:String(value),color:fill}],note:excNotes[name]})}));
+    const cost=[[9,22],[14,31],[7,28],[18,40],[5,44],[12,47]]; const cmax=47;
+    const costNotes=['Operação tranquila no início do ano.','Mais retiradas antecipadas; economia cresce.','Custo baixo e economia consistente.','Maior custo (greve), mas a economia ainda superou.','Menor custo do semestre e economia recorde até então.','Recorde: a Clara antecipou 6 retiradas — R$ 47k evitados.'];
+    const costMonths=['Jan','Fev','Mar','Abr','Mai','Jun'].map((label,i)=>({label,costH:Math.round(cost[i][0]/cmax*150)+'px',saveH:Math.round(cost[i][1]/cmax*150)+'px',onEnter:this.showTip({title:label+' · 2025',rows:[{label:'Custo incorrido',value:'R$ '+cost[i][0]+'k',color:'#E5484D'},{label:'Economia evitada',value:'R$ '+cost[i][1]+'k',color:'#1F9D6B'}],note:costNotes[i]})}));
+    return {kpis,months,carriers,exceptions,costMonths,tip:this.buildTip(),hideTip:this.hideTip};
+  }
+}
+</script>
+</body>
+</html>

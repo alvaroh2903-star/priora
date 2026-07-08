@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<title>Priora — Inteligência para Importação</title>
+<link rel="icon" type="image/png" href="assets/logo-p-navy.png?v=2">
+<link rel="shortcut icon" type="image/png" href="assets/logo-p-navy.png?v=2">
+<link rel="apple-touch-icon" href="assets/logo-p-navy.png?v=2">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+<script src="./priora-bus.js"></script>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{background:#F4F5FB}
+  body{font-family:'Plus Jakarta Sans',sans-serif;-webkit-font-smoothing:antialiased}
+  ::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:#D7DAE8;border-radius:8px;border:2px solid #F4F5FB}::-webkit-scrollbar-track{background:transparent}
+  @keyframes claraBob{0%,100%{transform:translateY(0)}50%{transform:translateY(-7px)}}
+  @keyframes pageIn{from{transform:translateY(12px)}to{transform:translateY(0)}}
+  @keyframes pulseRing{0%{box-shadow:0 0 0 0 rgba(229,72,77,.5)}70%{box-shadow:0 0 0 9px rgba(229,72,77,0)}100%{box-shadow:0 0 0 0 rgba(229,72,77,0)}}
+  @keyframes expandIn{from{transform:translateY(-6px)}to{transform:translateY(0)}}
+  [data-view]{display:none}
+  [data-view="on"]{display:flex;flex-direction:column;flex:1;min-width:0}
+</style>
+</helmet>
+<div ref="{{ rootRef }}" style="display:flex;min-height:100vh;width:100%;background:#F4F5FB;font-family:'Plus Jakarta Sans',sans-serif;color:#161A2E">
+  <dc-import name="Sidebar" active="{{ activeKey }}" hint-size="250px,100vh" style="flex-shrink:0"></dc-import>
+
+  <div data-view="{{ vw.inicio }}" data-screen-label="Início"><sc-if value="{{ m.inicio }}" hint-placeholder-val="{{ false }}"><dc-import name="Inicio" hint-size="100%,640px"></dc-import></sc-if></div>
+  <div data-view="{{ vw.fila }}" data-screen-label="Fila de Decisões"><sc-if value="{{ m.fila }}" hint-placeholder-val="{{ false }}"><dc-import name="Fila de Decisoes" hint-size="100%,640px"></dc-import></sc-if></div>
+  <div data-view="{{ vw.processos }}" data-screen-label="Processos"><sc-if value="{{ m.processos }}" hint-placeholder-val="{{ false }}"><dc-import name="Processos" hint-size="100%,640px"></dc-import></sc-if></div>
+  <div data-view="{{ vw.liberacao }}" data-screen-label="Liberação"><sc-if value="{{ m.liberacao }}" hint-placeholder-val="{{ false }}"><dc-import name="Liberacao" hint-size="100%,640px"></dc-import></sc-if></div>
+  <div data-view="{{ vw.couriers }}" data-screen-label="Couriers"><sc-if value="{{ m.couriers }}" hint-placeholder-val="{{ false }}"><dc-import name="Courier Module" hint-size="100%,640px"></dc-import></sc-if></div>
+  <div data-view="{{ vw.demurrage }}" data-screen-label="Demurrage"><sc-if value="{{ m.demurrage }}" hint-placeholder-val="{{ false }}"><dc-import name="Demurrage" hint-size="100%,640px"></dc-import></sc-if></div>
+  <div data-view="{{ vw.exigem }}" data-screen-label="Exigem Atenção"><sc-if value="{{ m.exigem }}" hint-placeholder-val="{{ false }}"><dc-import name="Exigem Atencao" hint-size="100%,640px"></dc-import></sc-if></div>
+  <div data-view="{{ vw.equipe }}" data-screen-label="Equipe & Desempenho"><sc-if value="{{ m.equipe }}" hint-placeholder-val="{{ false }}"><dc-import name="Equipe e Desempenho" hint-size="100%,640px"></dc-import></sc-if></div>
+  <div data-view="{{ vw.relatorios }}" data-screen-label="Relatórios"><sc-if value="{{ m.relatorios }}" hint-placeholder-val="{{ false }}"><dc-import name="Relatorios" hint-size="100%,640px"></dc-import></sc-if></div>
+
+  <template id="__bundler_thumbnail">
+    <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="100" fill="#0D1227"/><path d="M50 24 30 34v22l20 10 20-10V34Z" fill="none" stroke="#fff" stroke-width="4"/><path d="m30 34 20 10 20-10M50 44v22" stroke="#4327E6" stroke-width="4" fill="none"/></svg>
+  </template>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  KEYS = ['inicio','fila','processos','liberacao','couriers','demurrage','exigem','equipe','relatorios'];
+  HREF2KEY = {
+    'Inicio.dc.html':'inicio',
+    'Fila de Decisoes.dc.html':'fila',
+    'Processos.dc.html':'processos',
+    'Liberacao.dc.html':'liberacao',
+    'Courier Module.dc.html':'couriers',
+    'Demurrage.dc.html':'demurrage',
+    'Exigem Atencao.dc.html':'exigem',
+    'Equipe e Desempenho.dc.html':'equipe',
+    'Relatorios.dc.html':'relatorios'
+  };
+  rootRef = React.createRef();
+
+  constructor(props){
+    super(props);
+    var h = '';
+    try { h = (location.hash || '').replace(/^#/, ''); } catch(e){}
+    var t = this.KEYS.indexOf(h) >= 0 ? h : 'inicio';
+    this.state = { tab: t, mounted: { [t]: true } };
+  }
+
+  go(key){
+    if (!key) return;
+    if (this.state.tab === key) { try { window.scrollTo(0,0); } catch(e){} return; }
+    this.setState(function(s){ var mm = Object.assign({}, s.mounted); mm[key] = true; return { tab: key, mounted: mm }; });
+    try { history.replaceState(null, '', '#' + key); } catch(e){}
+    try { window.scrollTo(0,0); } catch(e){}
+  }
+
+  onNav = (e) => {
+    var t = e.target;
+    var a = t && t.closest ? t.closest('a') : null;
+    if (!a) return;
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return;
+    var href = a.getAttribute('href') || '';
+    if (href === '' || href === '#') { e.preventDefault(); return; }
+    var key = this.HREF2KEY[href];
+    if (!key) { try { key = this.HREF2KEY[decodeURIComponent(href)]; } catch(_){} }
+    if (!key) return;
+    e.preventDefault();
+    this.go(key);
+  };
+
+  syncFromHash = () => {
+    var h = (location.hash || '').replace(/^#/, '');
+    if (this.KEYS.indexOf(h) >= 0 && h !== this.state.tab) {
+      this.setState(function(s){ var mm = Object.assign({}, s.mounted); mm[h] = true; return { tab: h, mounted: mm }; });
+      try { window.scrollTo(0,0); } catch(e){}
+    }
+  };
+
+  componentDidMount(){
+    try{
+      document.title = 'Priora — Inteligência para Importação';
+      var href = 'assets/logo-p-navy.png?v=2';
+      document.querySelectorAll('link[rel~="icon"],link[rel="shortcut icon"],link[rel="apple-touch-icon"]').forEach(function(l){ l.href = href; });
+      if(!document.querySelector('link[rel="icon"]')){ var l=document.createElement('link'); l.rel='icon'; l.type='image/png'; l.href=href; document.head.appendChild(l); }
+    }catch(e){}
+    var el = this.rootRef.current;
+    if (el) el.addEventListener('click', this.onNav, true);
+    window.addEventListener('hashchange', this.syncFromHash);
+    this._onNavigate = (e) => { var k = e && e.detail && e.detail.module; if (k && this.KEYS.indexOf(k) >= 0) this.go(k); };
+    window.addEventListener('priora:navigate', this._onNavigate);
+    var self = this;
+    this._timers = [];
+    var i = 0;
+    var warm = function(){
+      var k = self.KEYS[i++];
+      if (!k) return;
+      self.setState(function(s){
+        if (s.mounted[k]) return null;
+        var mm = Object.assign({}, s.mounted); mm[k] = true; return { mounted: mm };
+      });
+      self._timers.push(setTimeout(warm, 160));
+    };
+    this._timers.push(setTimeout(warm, 450));
+  }
+
+  componentWillUnmount(){
+    var el = this.rootRef.current;
+    if (el) el.removeEventListener('click', this.onNav, true);
+    window.removeEventListener('hashchange', this.syncFromHash);
+    window.removeEventListener('priora:navigate', this._onNavigate);
+    (this._timers || []).forEach(function(t){ clearTimeout(t); });
+  }
+
+  renderVals(){
+    var tab = this.state.tab;
+    var vw = {}, m = {};
+    var st = this.state;
+    this.KEYS.forEach(function(k){ vw[k] = (k === tab ? 'on' : 'off'); m[k] = !!st.mounted[k]; });
+    return { activeKey: tab, vw: vw, m: m, rootRef: this.rootRef };
+  }
+}
+</script>
+</body>
+</html>

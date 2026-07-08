@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+<script src="./priora-bus.js"></script>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Plus Jakarta Sans',sans-serif;-webkit-font-smoothing:antialiased;background:#F4F5FB}
+  ::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:#D7DAE8;border-radius:8px;border:2px solid #F4F5FB}::-webkit-scrollbar-track{background:transparent}
+  @keyframes claraBob{0%,100%{transform:translateY(0)}50%{transform:translateY(-7px)}}
+  @keyframes pageIn{from{transform:translateY(12px)}to{transform:translateY(0)}}
+  @keyframes slideUp{from{transform:translateY(10px)}to{transform:translateY(0)}}
+  .dcard{transition:opacity .3s ease,box-shadow .22s ease,transform .18s ease}
+  .dcard:hover{box-shadow:0 16px 36px -24px rgba(31,38,80,.3)}
+  .tag-btn{transition:background .15s,color .15s,border-color .15s}
+  .act-btn{transition:background .16s,border-color .16s,transform .14s}.act-btn:hover{transform:translateY(-1px)}
+  .link-btn{transition:color .15s}.link-btn:hover{color:#3D34C9!important}
+  .risk-row{transition:background .15s}.risk-row:hover{background:#F3F1FE!important}
+</style>
+</helmet>
+<main style="flex:1;min-width:0;display:flex;flex-direction:column">
+    <dc-import name="Topbar" title="Fila de Decisões" subtitle="Apenas processos que exigem validação humana. A Clara já reuniu as evidências." icon-path="M9 5h10 M9 12h10 M9 19h7 M4 5h.01 M4 12h.01 M4 19h.01" hint-size="100%,110px"></dc-import>
+
+    <div style="padding:22px 36px 40px 36px;animation:pageIn .35s ease both">
+
+      <!-- KPIs -->
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px">
+        <sc-for list="{{ kpis }}" as="k" hint-placeholder-count="4">
+          <div style="background:#fff;border:1px solid #EAEBF4;border-radius:16px;padding:16px 18px">
+            <div style="display:flex;align-items:center;gap:8px"><span style="width:9px;height:9px;border-radius:50%;background:{{ k.color }}"></span><span style="font-size:12.5px;color:#7A8099;font-weight:600">{{ k.label }}</span></div>
+            <div style="font-size:28px;font-weight:800;margin-top:8px;letter-spacing:-.02em;color:{{ k.valColor }}">{{ k.value }}</div>
+            <div style="font-size:11.5px;color:#9AA0B4;margin-top:3px">{{ k.sub }}</div>
+          </div>
+        </sc-for>
+      </div>
+
+      <!-- Filter tags -->
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:22px">
+        <sc-for list="{{ tags }}" as="t" hint-placeholder-count="8">
+          <button class="tag-btn" onClick="{{ t.onClick }}" style="padding:8px 14px;border-radius:10px;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer;border:1px solid {{ t.border }};background:{{ t.bg }};color:{{ t.color }}">{{ t.label }}</button>
+        </sc-for>
+      </div>
+
+      <div style="display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:20px;align-items:start;margin-top:22px">
+
+        <!-- MAIN: decision cards -->
+        <div style="display:flex;flex-direction:column;gap:14px;min-width:0">
+          <sc-for list="{{ decisoes }}" as="d" hint-placeholder-count="4">
+            <div class="dcard" style="background:#fff;border:1px solid #EAEBF4;border-radius:18px;padding:20px 22px;opacity:{{ d.opacity }}">
+              <!-- resolved banner -->
+              <sc-if value="{{ d.resolved }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:13px;padding:8px 12px;border-radius:10px;font-size:12.5px;font-weight:700;background:{{ d.bannerBg }};color:{{ d.bannerColor }}">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="{{ d.bannerIcon }}"></path></svg>{{ d.bannerText }}
+                </div>
+              </sc-if>
+
+              <!-- header -->
+              <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px;flex-wrap:wrap">
+                <div style="display:flex;align-items:flex-start;gap:13px;min-width:0">
+                  <span style="width:38px;height:38px;border-radius:11px;background:{{ d.iconBg }};display:flex;align-items:center;justify-content:center;flex-shrink:0">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="{{ d.iconColor }}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="{{ d.iconPath }}"></path></svg></span>
+                  <div style="min-width:0">
+                    <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap">
+                      <span style="font-family:'JetBrains Mono',monospace;font-size:15.5px;font-weight:700;color:#4327E6">{{ d.code }}</span>
+                      <span style="font-size:15px;font-weight:700;color:#161A2E">— {{ d.cliente }}</span>
+                    </div>
+                    <div style="font-size:13.5px;color:#5A6076;margin-top:3px">{{ d.tipo }}</div>
+                    <div style="display:flex;align-items:center;gap:6px;font-size:11.5px;color:#9AA0B4;margin-top:5px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>{{ d.tempo }}</div>
+                  </div>
+                </div>
+                <span style="display:inline-flex;align-items:center;gap:7px;padding:5px 11px;border-radius:9px;font-size:12px;font-weight:700;border:1px solid {{ d.evBorder }};background:{{ d.evBg }};color:{{ d.evColor }}">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="{{ d.evIcon }}"></path></svg>{{ d.evidencia }}</span>
+              </div>
+
+              <!-- Clara recommendation -->
+              <div style="display:flex;align-items:flex-start;gap:16px;flex-wrap:wrap;background:#F8F7FE;border:1px solid #ECE9FB;border-radius:14px;padding:15px 17px;margin-top:15px">
+                <div style="flex:1 1 200px;min-width:0">
+                  <div style="display:flex;align-items:center;gap:8px;margin-bottom:7px"><span style="width:26px;height:26px;border-radius:8px;background:#EEEBFE;display:flex;align-items:center;justify-content:center"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="2"><path d="M12 3 4 7v10l8 4 8-4V7Z"/></svg></span><span style="font-size:11.5px;color:#9AA0B4;font-weight:600">Clara recomenda</span></div>
+                  <p style="font-size:15px;font-weight:800;color:#3D34C9;line-height:1.35">{{ d.recomendacao }}</p>
+                </div>
+                <div style="flex:1 1 220px;min-width:0">
+                  <div style="font-size:11.5px;color:#9AA0B4;font-weight:600;margin-bottom:7px">Porque encontrei</div>
+                  <div style="display:flex;flex-direction:column;gap:6px">
+                    <sc-for list="{{ d.porque }}" as="p" hint-placeholder-count="3">
+                      <div style="display:flex;align-items:flex-start;gap:7px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="{{ d.porqueColor }}" stroke-width="2.4" style="flex-shrink:0;margin-top:2px"><path d="m5 12 5 5 9-10"/></svg><span style="font-size:12.5px;color:#5A6076;line-height:1.4">{{ p }}</span></div>
+                    </sc-for>
+                  </div>
+                </div>
+              </div>
+
+              <!-- actions -->
+              <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:15px;padding-top:14px;border-top:1px solid #F0F1F7">
+                <sc-if value="{{ d.pending }}" hint-placeholder-val="{{ true }}">
+                  <button onClick="{{ d.onConfirm }}" class="act-btn" style="flex:1;min-width:130px;display:flex;align-items:center;justify-content:center;gap:7px;background:#fff;color:#177D54;border:1px solid #BFE6D2;border-radius:11px;padding:11px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer" style-hover="background:#E7F6EF">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6 9 17l-5-5"/></svg>Confirmar</button>
+                  <button onClick="{{ d.onReject }}" class="act-btn" style="flex:1;min-width:130px;display:flex;align-items:center;justify-content:center;gap:7px;background:#fff;color:#C2333A;border:1px solid #F3D2D3;border-radius:11px;padding:11px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer" style-hover="background:#FDECEC">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 6l12 12M18 6 6 18"/></svg>Revisar</button>
+                </sc-if>
+                <button onClick="{{ d.onVerProcesso }}" class="act-btn" style="flex:1;min-width:130px;display:flex;align-items:center;justify-content:center;gap:7px;background:#fff;color:#5A6076;border:1px solid #E6E8F2;border-radius:11px;padding:11px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer" style-hover="background:#F3F1FE">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>Ver Processo</button>
+                <button onClick="{{ d.onEvidencias }}" class="act-btn" style="flex:1;min-width:130px;display:flex;align-items:center;justify-content:center;gap:7px;background:#fff;color:#5A6076;border:1px solid #E6E8F2;border-radius:11px;padding:11px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer" style-hover="background:#F3F1FE">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M9 13h6M9 17h6"/></svg>Evidências</button>
+              </div>
+            </div>
+          </sc-for>
+
+          <sc-if value="{{ empty }}" hint-placeholder-val="{{ false }}">
+            <div style="background:#fff;border:1px dashed #D7DAE8;border-radius:18px;padding:48px;text-align:center;color:#9AA0B4;font-size:14px">Nenhuma decisão nesta categoria.</div>
+          </sc-if>
+        </div>
+
+        <!-- RIGHT RAIL -->
+        <div style="display:flex;flex-direction:column;gap:18px;position:sticky;top:22px">
+          <div style="background:#fff;border:1px solid #EAEBF4;border-radius:20px;padding:20px 22px">
+            <div style="display:flex;align-items:center;gap:9px;margin-bottom:6px"><span style="width:28px;height:28px;border-radius:9px;background:#EEEBFE;display:flex;align-items:center;justify-content:center"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="2"><path d="M12 3 4 7v10l8 4 8-4V7Z"/></svg></span><h3 style="font-size:14.5px;font-weight:800">Clara — Resumo da Fila</h3></div>
+            <p style="font-size:13px;color:#7A8099;margin-bottom:14px"><b style="color:#161A2E">{{ pendingCount }} decisões</b> aguardando você.</p>
+            <div style="display:flex;flex-direction:column;gap:10px">
+              <div class="risk-row" style="background:#FAFAFE;border-radius:12px;padding:12px 14px;cursor:pointer">
+                <div style="display:flex;align-items:center;gap:8px"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#E5484D" stroke-width="2.2"><path d="M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg><span style="font-size:12px;font-weight:700;color:#C2333A">Maior risco</span></div>
+                <p style="font-size:12px;color:#7A8099;margin-top:5px">IM2540 — EXTRUSA possui evidências conflitantes.</p>
+              </div>
+              <div style="background:#FAFAFE;border-radius:12px;padding:12px 14px">
+                <div style="display:flex;align-items:center;gap:8px"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#E8990C" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span style="font-size:12px;font-weight:700;color:#161A2E">Mais antiga</span></div>
+                <p style="font-size:12px;color:#7A8099;margin-top:5px">IM2540 aguardando há 3 dias.</p>
+              </div>
+              <div style="background:#FAFAFE;border-radius:12px;padding:12px 14px">
+                <div style="display:flex;align-items:center;gap:8px"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="2.2"><path d="M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/></svg><span style="font-size:12px;font-weight:700;color:#161A2E">Categoria mais frequente</span></div>
+                <p style="font-size:12px;color:#7A8099;margin-top:5px">Telex Release — 2 casos</p>
+              </div>
+              <div style="background:#FAFAFE;border-radius:12px;padding:12px 14px">
+                <div style="display:flex;align-items:center;gap:8px"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="2.2"><path d="M13 2 3 14h9l-1 8 10-12h-9z"/></svg><span style="font-size:12px;font-weight:700;color:#161A2E">Tempo médio de validação</span></div>
+                <p style="font-size:12px;color:#7A8099;margin-top:5px">7 minutos por decisão</p>
+              </div>
+            </div>
+          </div>
+
+          <div style="background:#fff;border:1px solid #EAEBF4;border-radius:20px;padding:20px 22px">
+            <h3 style="font-size:14.5px;font-weight:800;margin-bottom:14px">Atividades recentes</h3>
+            <div style="display:flex;flex-direction:column;gap:3px">
+              <sc-for list="{{ atividades }}" as="a" hint-placeholder-count="4">
+                <div class="risk-row" style="display:flex;align-items:flex-start;gap:11px;padding:9px 8px;border-radius:11px;margin:0 -8px">
+                  <span style="width:28px;height:28px;border-radius:9px;background:{{ a.bg }};display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="{{ a.color }}" stroke-width="2.2"><path d="{{ a.iconPath }}"></path></svg></span>
+                  <div style="flex:1;min-width:0"><div style="font-size:12.5px;font-weight:700">{{ a.label }}</div><div style="font-size:11px;color:#9AA0B4;margin-top:1px">{{ a.sub }}</div></div>
+                  <span style="font-size:10.5px;color:#9AA0B4;flex-shrink:0">{{ a.time }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <sc-if value="{{ toastOn }}" hint-placeholder-val="{{ false }}">
+      <div style="position:fixed;right:24px;bottom:24px;z-index:60;display:flex;align-items:center;gap:12px;background:#fff;border:1px solid #EAEBF4;box-shadow:0 18px 44px -16px rgba(31,38,80,.4);border-radius:14px;padding:14px 18px;max-width:380px;animation:pageIn .3s ease both">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1F9D6B" stroke-width="2.2" style="flex-shrink:0"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg>
+        <p style="font-size:13.5px;color:#161A2E;font-weight:600;line-height:1.4">{{ toastMsg }}</p>
+      </div>
+    </sc-if>
+  </main>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = { filter:'Todos', resolved:{}, toastOn:false, toastMsg:'' };
+  TAGS = ['Todos','Telex Release','OHBL','Procuração','Termo','Courier','Retirada','Financeiro'];
+
+  DATA = [
+    { id:'d1', code:'IM2591', cliente:'COBRAX', cat:'Telex Release', tipo:'Confirmar Telex Release (HBL)', tempo:'Agora',
+      ev:'Pendência documental', recomendacao:'Confirmar Telex Release no HBL',
+      porque:['Cliente marcou Telex Release no portal','HBL liberado eletronicamente','Aguarda validação do analista'] },
+    { id:'d2', code:'IM2571', cliente:'BRA TRADE', cat:'Telex Release', tipo:'Confirmar Telex Release', tempo:'Há 2 horas',
+      ev:'Evidência Forte', recomendacao:'Confirmar Telex Release',
+      porque:['E-mail do agente confirmando Telex Release','Nenhum courier relacionado localizado','Nenhuma instrução de HBL Original'] },
+    { id:'d3', code:'IM2580', cliente:'KLABIN', cat:'OHBL', tipo:'Validar OHBL enviado pelo cliente', tempo:'Há 1 hora',
+      ev:'Pendência documental', recomendacao:'Cobrar cliente',
+      porque:['OHBL enviado pelo cliente','Documento legível','Nenhuma divergência aparente'] },
+    { id:'d4', code:'IM2540', cliente:'EXTRUSA', cat:'Courier', tipo:'Revisar possível conflito documental', tempo:'Há 3 dias',
+      ev:'Evidência Conflitante', recomendacao:'Informações conflitantes — revisar',
+      porque:['Cliente informou Telex','E-mail do agente menciona HBL Original','Courier DHL identificado'] },
+  ];
+
+  EV = {
+    'Evidência Forte':{ bg:'#E7F6EF', color:'#177D54', border:'#BFE6D2', icon:'m5 12 5 5 9-10' },
+    'Evidência Conflitante':{ bg:'#FDECEC', color:'#C2333A', border:'#F3D2D3', icon:'M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z' },
+    'Pendência documental':{ bg:'#FDF3E0', color:'#B9760A', border:'#F5E0BC', icon:'M12 7v5l3 2M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z' },
+  };
+
+  toast(msg){ this.setState({ toastOn:true, toastMsg:msg }); clearTimeout(this._t); this._t=setTimeout(()=>this.setState({toastOn:false}), 2600); }
+
+  renderVals(){
+    const f = this.state.filter;
+    const tags = this.TAGS.map(label => {
+      const active = f === label;
+      return { label, onClick:()=>this.setState({filter:label}),
+        bg: active?'#4327E6':'#fff', color: active?'#fff':'#5A6076', border: active?'#4327E6':'#E6E8F2' };
+    });
+    const visible = this.DATA.filter(d => f==='Todos' || d.cat===f);
+    const decisoes = visible.map(d => {
+      const ev = this.EV[d.ev];
+      const status = this.state.resolved[d.id];
+      const resolved = !!status;
+      const conf = status==='confirmada';
+      return {
+        code:d.code, cliente:d.cliente, tipo:d.tipo, tempo:d.tempo, evidencia:d.ev,
+        iconBg: ev.bg, iconColor: ev.color, iconPath:'M9 11l3 3L22 4 M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11',
+        evBg:ev.bg, evColor:ev.color, evBorder:ev.border, evIcon:ev.icon,
+        recomendacao:d.recomendacao, porque:d.porque,
+        porqueColor: d.ev==='Evidência Conflitante' ? '#E5484D' : '#1F9D6B',
+        resolved, pending:!resolved, opacity: resolved?0.6:1,
+        bannerBg: conf?'#E7F6EF':'#FDF3E0', bannerColor: conf?'#177D54':'#B9760A',
+        bannerIcon: conf?'M20 6 9 17l-5-5':'M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z',
+        bannerText: conf?'Decisão confirmada':'Encaminhado para revisão',
+        onConfirm:()=>{ this.setState(s=>({resolved:{...s.resolved,[d.id]:'confirmada'}})); this.toast('Decisão confirmada para '+d.code+'.'); },
+        onReject:()=>{ this.setState(s=>({resolved:{...s.resolved,[d.id]:'rejeitada'}})); this.toast(d.code+' encaminhado para revisão.'); },
+        onVerProcesso:()=>{ if(window.PrioraBus) window.PrioraBus.focus('processos', d.code); },
+        onEvidencias:()=>{ if(window.PrioraBus) window.PrioraBus.focus('liberacao', d.code); },
+      };
+    });
+    const pendingCount = this.DATA.filter(d=>!this.state.resolved[d.id]).length;
+    const resolvedCount = Object.keys(this.state.resolved).length;
+    const kpis = [
+      { label:'Críticas', value:'3', sub:'Exigem atenção', color:'#E5484D', valColor:'#C2333A' },
+      { label:'Pendentes', value:String(pendingCount), sub:'Aguardando decisão', color:'#E8990C', valColor:'#161A2E' },
+      { label:'Resolvidas hoje', value:String(14+resolvedCount), sub:'Decisões concluídas', color:'#1F9D6B', valColor:'#161A2E' },
+      { label:'Total', value:String(this.DATA.length), sub:'Na fila de decisões', color:'#7A8099', valColor:'#161A2E' },
+    ];
+    const atividades = [
+      { label:'Decisão confirmada', sub:'IM2531 — Telex', time:'08:54', bg:'#E7F6EF', color:'#1F9D6B', iconPath:'M20 6 9 17l-5-5' },
+      { label:'Encaminhado p/ revisão', sub:'IM2509', time:'Ontem', bg:'#FDF3E0', color:'#B9760A', iconPath:'M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z' },
+      { label:'Nova decisão na fila', sub:'IM2591 — COBRAX', time:'Ontem', bg:'#EEEBFE', color:'#4327E6', iconPath:'M12 5v14M5 12h14' },
+      { label:'OHBL validado', sub:'IM2488 — KLABIN', time:'2 dias', bg:'#E7F6EF', color:'#1F9D6B', iconPath:'M20 6 9 17l-5-5' },
+    ];
+    return { kpis, tags, decisoes, empty: decisoes.length===0, pendingCount, atividades, toastOn:this.state.toastOn, toastMsg:this.state.toastMsg };
+  }
+}
+</script>
+</body>
+</html>

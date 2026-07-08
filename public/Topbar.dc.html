@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+.tb-btn{transition:background .16s,border-color .16s}
+.tb-btn:hover{background:#F3F1FE;border-color:#CFC6FB}
+html[data-theme="dark"] .tb-btn:hover{background:#1C2238!important;border-color:#3A3170!important}
+.nt-row{transition:background .14s}
+.nt-row:hover{background:#F5F4FE}
+html[data-theme="dark"] .nt-row:hover{background:#1C2238!important}
+.tb-cta{transition:filter .14s}.tb-cta:hover{filter:brightness(1.07)}
+.tb-av{transition:filter .14s,transform .14s}.tb-av:hover{filter:brightness(1.08);transform:translateY(-1px)}
+.tb-pop{animation:tbPop .17s cubic-bezier(.2,.9,.3,1) both;transform-origin:top right}
+@keyframes tbPop{from{opacity:0;transform:scale(.96) translateY(-4px)}to{opacity:1;transform:scale(1) translateY(0)}}
+</style>
+</helmet>
+<header style="display:flex;align-items:flex-start;justify-content:space-between;gap:20px;padding:26px 36px 0 36px;font-family:'Plus Jakarta Sans',sans-serif">
+  <div style="min-width:0">
+    <div style="display:flex;align-items:center;gap:13px">
+      <span style="width:42px;height:42px;border-radius:13px;background:#EEEBFE;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="{{ iconPath }}"></path></svg>
+      </span>
+      <h1 style="font-size:27px;font-weight:800;letter-spacing:-.02em;color:#161A2E">{{ title }}</h1>
+    </div>
+    <p style="color:#7A8099;font-size:14px;margin-top:9px;margin-left:55px">{{ subtitle }}</p>
+  </div>
+  <div style="flex:1;max-width:440px;align-self:center;display:flex;align-items:center;gap:11px;background:#fff;border:1px solid #E6E8F2;border-radius:13px;padding:0 15px;height:46px;transition:border-color .2s,box-shadow .2s" onfocusin="this.style.borderColor='#4327E6';this.style.boxShadow='0 0 0 4px rgba(67,39,230,.1)'" onfocusout="this.style.borderColor='#E6E8F2';this.style.boxShadow='none'">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#9AA0B4" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+    <input placeholder="Buscar processo, cliente, container ou courier..." style="flex:1;border:none;background:transparent;font-family:inherit;font-size:14px;color:#161A2E;height:100%;outline:none">
+  </div>
+  <div style="display:flex;align-items:center;gap:12px;flex-shrink:0">
+    <sc-if value="{{ anyOpen }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ closeAll }}" style="position:fixed;inset:0;z-index:1990;background:transparent"></div>
+    </sc-if>
+
+    <!-- ====== NOTIFICATIONS ====== -->
+    <div style="position:relative;z-index:2000">
+      <button class="tb-btn" onClick="{{ toggleNotif }}" style="position:relative;width:42px;height:42px;border-radius:12px;border:1px solid #E6E8F2;background:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#5A6076" stroke-width="1.9"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
+        <sc-if value="{{ hasUnread }}" hint-placeholder-val="{{ true }}">
+          <span style="position:absolute;top:7px;right:8px;width:8px;height:8px;border-radius:50%;background:#E5484D;border:1.5px solid #fff"></span>
+        </sc-if>
+      </button>
+      <sc-if value="{{ notifOpen }}" hint-placeholder-val="{{ false }}">
+        <div class="tb-pop" data-prs="card" style="position:absolute;top:calc(100% + 11px);right:0;width:374px;max-width:88vw;background:#fff;border:1px solid #EEEFF6;border-radius:16px;box-shadow:0 24px 60px -20px rgba(8,12,32,.42);overflow:hidden">
+          <div data-prs="head" style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid #EEEFF6">
+            <div style="display:flex;align-items:center;gap:9px">
+              <span data-prs="title" style="font-size:15px;font-weight:800;color:#161A2E">Notificações</span>
+              <sc-if value="{{ hasUnread }}" hint-placeholder-val="{{ true }}"><span style="font-size:11px;font-weight:700;color:#fff;background:#E5484D;padding:2px 8px;border-radius:20px">{{ unreadLabel }}</span></sc-if>
+            </div>
+            <button onClick="{{ markAllRead }}" style="background:none;border:none;color:#4327E6;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;padding:4px 6px;border-radius:8px">Marcar lidas</button>
+          </div>
+          <div style="max-height:344px;overflow-y:auto;padding:7px">
+            <sc-for list="{{ notifs }}" as="n" hint-placeholder-count="3">
+              <a href="{{ n.href }}" onClick="{{ n.open }}" class="nt-row" style="display:flex;gap:12px;padding:11px 12px;border-radius:12px;text-decoration:none">
+                <span style="width:38px;height:38px;border-radius:11px;background:{{ n.iconBg }};display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="{{ n.iconStroke }}" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="{{ n.iconPath }}"></path></svg></span>
+                <div style="flex:1;min-width:0">
+                  <div data-prs="title" style="font-size:13px;font-weight:600;color:#1E2236;line-height:1.42">{{ n.title }}</div>
+                  <div data-prs="muted" style="font-size:11.5px;color:#9AA0B4;margin-top:3px">{{ n.meta }}</div>
+                </div>
+                <sc-if value="{{ n.unread }}" hint-placeholder-val="{{ false }}"><span style="width:8px;height:8px;border-radius:50%;background:#4327E6;flex-shrink:0;margin-top:5px"></span></sc-if>
+              </a>
+            </sc-for>
+          </div>
+        </div>
+      </sc-if>
+    </div>
+
+    <!-- ====== HELP / TOUR ====== -->
+    <div style="position:relative;z-index:2000">
+      <button class="tb-btn" onClick="{{ toggleHelp }}" style="width:42px;height:42px;border-radius:12px;border:1px solid #E6E8F2;background:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#5A6076" stroke-width="1.9"><circle cx="12" cy="12" r="9"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
+      </button>
+      <sc-if value="{{ helpOpen }}" hint-placeholder-val="{{ false }}">
+        <div class="tb-pop" data-prs="card" style="position:absolute;top:calc(100% + 11px);right:0;width:304px;max-width:88vw;background:#fff;border:1px solid #EEEFF6;border-radius:16px;box-shadow:0 24px 60px -20px rgba(8,12,32,.42);padding:16px">
+          <div data-prs="title" style="font-size:15px;font-weight:800;color:#161A2E">Precisa de ajuda?</div>
+          <div data-prs="muted" style="font-size:12.5px;color:#7A8099;margin-top:5px;line-height:1.5">Faça um tour rápido pelos módulos principais da Priora.</div>
+          <button onClick="{{ startTour }}" class="tb-cta" style="width:100%;margin-top:14px;display:flex;align-items:center;gap:11px;padding:12px;border:none;border-radius:12px;background:linear-gradient(100deg,#4327E6,#6E59F2);color:#fff;cursor:pointer;text-align:left;font-family:inherit;box-shadow:0 10px 22px -12px rgba(67,39,230,.7)">
+            <span style="width:32px;height:32px;border-radius:9px;background:rgba(255,255,255,.18);display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="16" height="16" viewBox="0 0 24 24" fill="#fff" stroke="none"><path d="M8 5v14l11-7z"/></svg></span>
+            <span style="flex:1;min-width:0"><span style="display:block;font-size:13.5px;font-weight:800">Iniciar tour guiado</span><span style="display:block;font-size:11px;opacity:.85;margin-top:1px">Conheça o sistema em 1 minuto</span></span>
+          </button>
+          <div data-prs="muted" style="text-align:center;font-size:11px;color:#9AA0B4;margin-top:13px">Priora · versão 1.0</div>
+        </div>
+      </sc-if>
+    </div>
+
+    <!-- ====== PROFILE AVATAR ====== -->
+    <div onClick="{{ openProfile }}" class="tb-av" title="Meu perfil" style="position:relative;z-index:2000;width:42px;height:42px;border-radius:12px;background:{{ avatarGrad }};display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;cursor:pointer;flex-shrink:0">{{ initial }}</div>
+  </div>
+</header>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:900,&quot;height&quot;:110},&quot;title&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Título&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;subtitle&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Subtítulo da tela&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;iconPath&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;M12 3 4 7v10l8 4 8-4V7Z&quot;,&quot;tsType&quot;:&quot;string&quot;}}">
+class Component extends DCLogic {
+  AVATARS = [
+    'linear-gradient(135deg,#4327E6,#6E59F2)',
+    'linear-gradient(135deg,#1D7AF2,#37B6F0)',
+    'linear-gradient(135deg,#0E9F6E,#3DD68C)',
+    'linear-gradient(135deg,#E8770C,#F5A623)',
+    'linear-gradient(135deg,#D6409F,#F26EC0)',
+    'linear-gradient(135deg,#3A4060,#5A6184)'
+  ];
+  KIND = {
+    risk:    { bg:'#FDEBEC', st:'#E5484D', p:'M10.29 4.86 2.82 18a2 2 0 0 0 1.71 3h14.94a2 2 0 0 0 1.71-3L13.71 4.86a2 2 0 0 0-3.42 0Z M12 9v4 M12 17h.01' },
+    courier: { bg:'#E7F0FE', st:'#1D7AF2', p:'M3 6h11v9H3z M14 9h4l3 3v3h-7 M7 20a2 2 0 1 0 0-4 2 2 0 0 0 0 4 M17 20a2 2 0 1 0 0-4 2 2 0 0 0 0 4' },
+    decision:{ bg:'#EEEBFE', st:'#4327E6', p:'M12 3 4 8l8 5 8-5z M4 13l8 5 8-5' },
+    report:  { bg:'#EDEFF5', st:'#7A8099', p:'M14 3v5h5 M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z M8 13h8 M8 17h5' }
+  };
+
+  constructor(props){
+    super(props);
+    this.state = {
+      notifOpen:false, helpOpen:false,
+      prof:this.loadProf(),
+      notifs:[
+        {id:'n1', title:'Container MSKU 765123-4 atinge o fim do período livre em 2 dias', kind:'risk', module:'Demurrage', time:'há 12 min', href:'Demurrage.dc.html', read:false},
+        {id:'n2', title:'Courier DHL #4471 atrasou a entrega do BL original', kind:'courier', module:'Couriers', time:'há 1 h', href:'Courier Module.dc.html', read:false},
+        {id:'n3', title:'3 processos aguardam a sua liberação', kind:'decision', module:'Liberação', time:'há 2 h', href:'Liberacao.dc.html', read:false},
+        {id:'n4', title:'Relatório semanal de desempenho disponível', kind:'report', module:'Relatórios', time:'ontem', href:'Relatorios.dc.html', read:true}
+      ]
+    };
+  }
+
+  loadProf(){
+    var p = { name:'Diogo', initial:'D', avatar:0 };
+    try {
+      var s = JSON.parse(localStorage.getItem('priora.profile')||'null');
+      if (s && s.name) { p.name=s.name; p.initial=s.initial||(s.name[0]||'D').toUpperCase(); p.avatar=(typeof s.avatar==='number')?s.avatar:0; }
+    } catch(e){}
+    return p;
+  }
+
+  componentDidMount(){
+    this._onProf = () => this.setState({ prof:this.loadProf() });
+    window.addEventListener('priora:profile-changed', this._onProf);
+    window.addEventListener('storage', this._onProf);
+  }
+  componentWillUnmount(){
+    window.removeEventListener('priora:profile-changed', this._onProf);
+    window.removeEventListener('storage', this._onProf);
+  }
+
+  toggleNotif = () => this.setState(s => ({ notifOpen:!s.notifOpen, helpOpen:false }));
+  toggleHelp  = () => this.setState(s => ({ helpOpen:!s.helpOpen, notifOpen:false }));
+  closeAll    = () => this.setState({ notifOpen:false, helpOpen:false });
+  markAllRead = () => this.setState(s => ({ notifs:s.notifs.map(n => Object.assign({}, n, { read:true })) }));
+  openNotif = (id) => () => this.setState(s => ({ notifOpen:false, notifs:s.notifs.map(n => n.id===id ? Object.assign({}, n, { read:true }) : n) }));
+  openProfile = () => { this.closeAll(); try { window.dispatchEvent(new CustomEvent('priora:open-profile')); } catch(e){} };
+  startTour   = () => { this.closeAll(); try { window.dispatchEvent(new CustomEvent('priora:start-tour')); } catch(e){} };
+
+  renderVals(){
+    var self = this;
+    var notifs = this.state.notifs.map(function(n){
+      var k = self.KIND[n.kind] || self.KIND.report;
+      return Object.assign({}, n, { unread:!n.read, iconBg:k.bg, iconStroke:k.st, iconPath:k.p, meta:n.module+' · '+n.time, open:self.openNotif(n.id) });
+    });
+    var unread = this.state.notifs.filter(function(n){ return !n.read; }).length;
+    var av = this.AVATARS[this.state.prof.avatar] || this.AVATARS[0];
+    return {
+      title:this.props.title, subtitle:this.props.subtitle, iconPath:this.props.iconPath,
+      notifOpen:this.state.notifOpen, helpOpen:this.state.helpOpen,
+      anyOpen:this.state.notifOpen || this.state.helpOpen,
+      toggleNotif:this.toggleNotif, toggleHelp:this.toggleHelp, closeAll:this.closeAll,
+      markAllRead:this.markAllRead, openProfile:this.openProfile, startTour:this.startTour,
+      notifs:notifs, hasUnread:unread>0, unreadLabel:unread+(unread===1?' nova':' novas'),
+      initial:this.state.prof.initial, avatarGrad:av
+    };
+  }
+}
+</script>
+</body>
+</html>

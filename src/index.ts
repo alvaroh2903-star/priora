@@ -9,6 +9,12 @@ import { parseRouter } from './routes/parseRoutes';
 
 const app = express();
 
+// Em produção o app roda atrás do proxy HTTPS do host (Render etc.).
+// Sem isto, o express-session não seta o cookie "secure" e o login quebra.
+if (config.isProduction) {
+  app.set('trust proxy', 1);
+}
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -25,8 +31,15 @@ app.use(
   }),
 );
 
-// UI de demonstração (public/index.html).
-app.use(express.static(path.join(__dirname, '..', 'public')));
+const PUBLIC_DIR = path.join(__dirname, '..', 'public');
+
+// Painel Priora (front-end) + assets, servidos na mesma origem que a API.
+app.use(express.static(PUBLIC_DIR));
+
+// A raiz serve o shell do painel (Priora.dc.html), que importa os demais módulos.
+app.get('/', (_req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, 'Priora.dc.html'));
+});
 
 // Rotas de autenticação e de e-mail.
 app.use('/auth', authRouter);

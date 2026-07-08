@@ -1,0 +1,747 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<title>Priora — Inteligência para Importação</title>
+<link rel="icon" type="image/png" href="assets/logo-p-navy.png?v=2">
+<link rel="shortcut icon" type="image/png" href="assets/logo-p-navy.png?v=2">
+<link rel="apple-touch-icon" href="assets/logo-p-navy.png?v=2">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:#F6F7FB}
+body{font-family:'Plus Jakarta Sans',sans-serif;-webkit-font-smoothing:antialiased}
+::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:#DDE0EC;border-radius:8px;border:2px solid #F6F7FB}::-webkit-scrollbar-track{background:transparent}
+@keyframes pcIn{from{transform:translateY(10px)}to{transform:translateY(0)}}
+@keyframes pcBob{0%,100%{transform:translateY(0)}50%{transform:translateY(-7px)}}
+.pc-nav:hover{background:#F4F3FB}
+.pc-card{transition:transform .16s,box-shadow .16s,border-color .16s}
+.pc-card:hover{transform:translateY(-2px);box-shadow:0 22px 44px -24px rgba(31,38,80,.3);border-color:#DAD5F6}
+.pc-cta:hover{filter:brightness(1.05)}
+.pc-ghost:hover{background:#F5F4FB;border-color:#D8D3F3}
+.pc-menu:hover{background:#F1F2F8}
+.pc-proc-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px}
+@media(max-width:1080px){.pc-proc-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:720px){.pc-proc-grid{grid-template-columns:1fr}}
+</style>
+</helmet>
+<div style="display:flex;min-height:100vh;width:100%;background:#F6F7FB;font-family:'Plus Jakarta Sans',sans-serif;color:#1A1E33">
+
+  <!-- ================= SIDEBAR ================= -->
+  <aside style="width:236px;flex-shrink:0;background:#fff;border-right:1px solid #ECEDF4;display:flex;flex-direction:column;position:sticky;top:0;height:100vh;padding:26px 18px">
+    <div style="display:flex;align-items:center;gap:11px;padding:0 6px">
+      <img src="assets/logo-p-navy.png" alt="Priora" style="height:34px;width:auto">
+      <div>
+        <div style="color:#1A1E33;font-weight:800;font-size:18px;letter-spacing:.06em;line-height:1">PRIORA</div>
+        <div style="color:#9AA0B4;font-size:10.5px;font-weight:500;margin-top:3px">Portal do Processo</div>
+      </div>
+    </div>
+
+    <nav style="display:flex;flex-direction:column;gap:3px;margin-top:34px">
+      <sc-for list="{{ nav }}" as="n" hint-placeholder-count="5">
+        <div class="pc-nav" onClick="{{ n.onClick }}" style="display:flex;align-items:center;gap:13px;padding:12px 13px;border-radius:12px;font-size:14px;cursor:pointer;user-select:none;background:{{ n.bg }};color:{{ n.color }};font-weight:{{ n.weight }}">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="{{ n.icon }}"></path></svg>
+          <span style="flex:1;line-height:1.2">{{ n.label }}</span>
+          <sc-if value="{{ n.locked }}" hint-placeholder-val="{{ false }}">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="opacity:.45;flex-shrink:0"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+          </sc-if>
+        </div>
+      </sc-for>
+    </nav>
+
+    <div style="margin-top:auto">
+      <div style="display:flex;align-items:center;gap:10px;padding:11px 12px;border:1px solid #EDEEF5;border-radius:13px;margin-bottom:16px">
+        <div style="width:34px;height:34px;border-radius:10px;background:linear-gradient(135deg,#4327E6,#6E59F2);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:14px;flex-shrink:0">{{ clientInitial }}</div>
+        <div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:700;color:#1A1E33;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ clientName }}</div><div style="font-size:10.5px;color:#9AA0B4">Cliente</div></div>
+        <a href="Login.dc.html" title="Sair" class="pc-menu" style="width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;text-decoration:none"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#9AA0B4" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg></a>
+      </div>
+      <div style="display:flex;align-items:flex-start;gap:10px;padding:0 6px">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#8B79F0" stroke-width="1.7" style="flex-shrink:0;margin-top:1px"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/><path d="m9 12 2 2 4-4"/></svg>
+        <div><div style="font-size:11.5px;font-weight:700;color:#5A6076">Ambiente seguro e confiável</div><div style="font-size:10.5px;color:#9AA0B4;line-height:1.5;margin-top:2px">Seus dados estão protegidos com segurança de ponta.</div></div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ================= MAIN ================= -->
+  <main style="flex:1;min-width:0;display:flex;justify-content:center">
+    <div style="width:100%;max-width:{{ shellMax }};padding:30px 40px 60px">
+
+      <!-- ============ TAB: PROCESSOS ============ -->
+      <sc-if value="{{ isProcessos }}" hint-placeholder-val="{{ true }}">
+        <div style="animation:pcIn .3s ease both">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:26px">
+            <div><h1 style="font-size:26px;font-weight:800;letter-spacing:-.01em">Meus processos</h1><p style="font-size:14px;color:#7A8099;margin-top:5px">Selecione um processo para acompanhar em detalhe.</p></div>
+            {{ secBadge }}
+          </div>
+          <div class="pc-proc-grid">
+            <sc-for list="{{ procList }}" as="p" hint-placeholder-count="3">
+              <div class="pc-card" style="position:relative;background:#fff;border:1px solid #ECEDF4;border-radius:20px;overflow:hidden;box-shadow:0 1px 2px rgba(20,24,50,.04);display:flex;flex-direction:column">
+                <span style="position:absolute;left:0;top:0;bottom:0;width:5px;background:{{ p.accent }}"></span>
+                <div style="padding:22px 24px 0 26px">
+                  <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+                    <div style="min-width:0"><div style="font-family:'JetBrains Mono',monospace;font-size:19px;font-weight:700;color:#1A1E33">{{ p.code }}</div><div style="font-size:13px;color:#7A8099;margin-top:2px">{{ p.cliente }}</div></div>
+                    <span style="display:inline-flex;align-items:center;gap:7px;padding:6px 12px;border-radius:9px;font-size:12px;font-weight:700;color:{{ p.statusColor }};background:{{ p.statusBg }};white-space:nowrap;flex-shrink:0"><span style="width:7px;height:7px;border-radius:50%;background:{{ p.statusColor }}"></span>{{ p.statusGeral }}</span>
+                  </div>
+                  <div style="display:flex;gap:22px;margin-top:18px">
+                    <div style="min-width:0"><div style="font-size:10px;color:#9AA0B4;text-transform:uppercase;letter-spacing:.05em">Navio</div><div style="font-size:13px;font-weight:700;color:#3C4258;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ p.navio }}</div></div>
+                    <div><div style="font-size:10px;color:#9AA0B4;text-transform:uppercase;letter-spacing:.05em">Rota</div><div style="font-size:13px;font-weight:700;color:#3C4258;margin-top:3px">{{ p.origem }} → {{ p.destino }}</div></div>
+                    <div><div style="font-size:10px;color:#9AA0B4;text-transform:uppercase;letter-spacing:.05em">ETA</div><div style="font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;color:#3C4258;margin-top:3px">{{ p.eta }}</div></div>
+                  </div>
+                  <div style="margin-top:18px;padding-top:16px;border-top:1px solid #F1F2F8">
+                    <div style="font-size:10px;color:#9AA0B4;text-transform:uppercase;letter-spacing:.05em;margin-bottom:9px">Pendências principais</div>
+                    <sc-if value="{{ p.hasPend }}" hint-placeholder-val="{{ true }}">
+                      <div style="display:flex;flex-direction:column;gap:7px">
+                        <sc-for list="{{ p.pendencias }}" as="pd" hint-placeholder-count="2">
+                          <div style="display:flex;align-items:center;gap:9px;font-size:13px;color:#5A6076"><span style="width:6px;height:6px;border-radius:50%;background:{{ pd.dot }};flex-shrink:0"></span>{{ pd.text }}</div>
+                        </sc-for>
+                      </div>
+                    </sc-if>
+                    <sc-if value="{{ p.noPend }}" hint-placeholder-val="{{ false }}">
+                      <div style="display:flex;align-items:center;gap:9px;font-size:13px;color:#177D54;font-weight:600"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#1F9D6B" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg>Sem pendências</div>
+                    </sc-if>
+                  </div>
+                </div>
+                <div style="padding:18px 24px 22px 26px;margin-top:auto">
+                  <button onClick="{{ p.onOpen }}" class="pc-cta" style="width:100%;display:flex;align-items:center;justify-content:center;gap:9px;background:{{ p.btnBg }};color:{{ p.btnColor }};border:{{ p.btnBorder }};border-radius:13px;padding:14px;font-family:inherit;font-size:13.5px;font-weight:700;cursor:pointer;box-shadow:{{ p.btnShadow }}">{{ p.btnLabel }}<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ============ EMPTY (no process) ============ -->
+      <sc-if value="{{ showEmpty }}" hint-placeholder-val="{{ false }}">
+        <div style="animation:pcIn .3s ease both;max-width:540px;margin:60px auto 0;text-align:center;background:#fff;border:1px solid #ECEDF4;border-radius:22px;padding:46px 40px;box-shadow:0 1px 2px rgba(20,24,50,.04)">
+          <div style="width:66px;height:66px;border-radius:18px;background:#EEEBFE;display:flex;align-items:center;justify-content:center;margin:0 auto 20px"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="1.8"><path d="M12 3 4 7v10l8 4 8-4V7Z M4 7l8 4 8-4M12 11v10"/></svg></div>
+          <h2 style="font-size:20px;font-weight:800">Selecione um processo</h2>
+          <p style="font-size:14px;color:#7A8099;line-height:1.55;margin-top:9px;max-width:400px;margin-left:auto;margin-right:auto">Para acompanhar {{ emptyWhat }}, abra primeiro um processo. Todas as informações desta área são exibidas dentro do processo selecionado.</p>
+          <button onClick="{{ goProcessos }}" class="pc-cta" style="display:inline-flex;align-items:center;gap:9px;margin-top:24px;background:#4327E6;color:#fff;border:none;border-radius:13px;padding:14px 24px;font-family:inherit;font-size:13.5px;font-weight:700;cursor:pointer;box-shadow:0 14px 28px -12px rgba(67,39,230,.6)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M12 3 4 7v10l8 4 8-4V7Z"/></svg>Ver meus processos</button>
+        </div>
+      </sc-if>
+
+      <!-- ============ TAB: LIBERAÇÃO ============ -->
+      <sc-if value="{{ isLiberacao }}" hint-placeholder-val="{{ false }}">
+        <div style="animation:pcIn .3s ease both;display:flex;flex-direction:column;gap:20px">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:14px">{{ processChip }}{{ secBadge }}</div>
+          {{ timeline }}
+
+          <div style="background:#fff;border:1px solid #ECEDF4;border-radius:22px;padding:28px 30px;box-shadow:0 1px 2px rgba(20,24,50,.04)">
+            <div style="display:flex;gap:22px;align-items:flex-start">
+              {{ heroRobot }}
+              <div style="flex:1;min-width:0;padding-top:4px">
+                <h2 style="font-size:25px;font-weight:800;letter-spacing:-.01em">Priora</h2>
+                <p style="font-size:14.5px;color:#3C4258;margin-top:10px">Olá, equipe <b style="color:#4327E6">{{ clientName }}</b>.</p>
+                <p style="font-size:14.5px;color:#3C4258;line-height:1.6;margin-top:8px">{{ cur.lib.heroLine }}</p>
+                <sc-if value="{{ cur.lib.hasAction }}" hint-placeholder-val="{{ false }}">
+                  <div style="display:flex;align-items:center;gap:9px;margin-top:14px;padding:12px 15px;background:#F5F4FB;border-radius:12px"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#8B79F0" stroke-width="1.9"><path d="M12 3v3M12 18v3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M3 12h3M18 12h3M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg><span style="font-size:12.5px;color:#8B79F0;font-weight:600">Mostramos apenas o que precisa da sua atenção.</span></div>
+                </sc-if>
+              </div>
+            </div>
+
+            <sc-if value="{{ cur.lib.hasAction }}" hint-placeholder-val="{{ false }}">
+              <div style="margin-top:22px;display:flex;flex-direction:column;gap:14px">
+                <sc-for list="{{ cur.lib.pending }}" as="pd" hint-placeholder-count="2">
+                  <div style="background:linear-gradient(135deg,#fff 60%,{{ pd.tintBg }});border:1px solid {{ pd.tintBorder }};border-radius:16px;padding:22px 24px">
+                    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px">
+                      <div style="display:flex;align-items:center;gap:13px">
+                        <span style="width:46px;height:46px;border-radius:13px;background:{{ pd.iconBg }};display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="{{ pd.iconColor }}" stroke-width="1.8"><path d="M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/></svg></span>
+                        <div><h3 style="font-size:18px;font-weight:800">{{ pd.name }}</h3><div style="display:flex;align-items:center;gap:7px;margin-top:5px"><span style="font-size:13px;color:#7A8099">Status:</span><span style="width:8px;height:8px;border-radius:50%;background:{{ pd.dotColor }}"></span><span style="font-size:13px;font-weight:700;color:{{ pd.statusColor }}">{{ pd.status }}</span></div></div>
+                      </div>
+                      <span style="font-size:11.5px;font-weight:700;color:{{ pd.badgeColor }};background:{{ pd.badgeBg }};padding:5px 12px;border-radius:8px;white-space:nowrap">{{ pd.badge }}</span>
+                    </div>
+                    <sc-if value="{{ pd.isOhbl }}" hint-placeholder-val="{{ true }}">
+                      <div style="display:flex;gap:11px;margin-top:20px;flex-wrap:wrap">
+                        <button onClick="{{ openUpload }}" class="pc-cta" style="display:flex;align-items:center;gap:8px;background:#4327E6;color:#fff;border:none;border-radius:12px;padding:13px 20px;font-family:inherit;font-size:13.5px;font-weight:700;cursor:pointer;box-shadow:0 12px 24px -13px rgba(67,39,230,.7)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M12 15V3M7 8l5-5 5 5M5 21h14"/></svg>Enviar documento</button>
+                        <button onClick="{{ askTelex }}" class="pc-ghost" style="display:flex;align-items:center;gap:8px;background:#fff;color:#3C4258;border:1px solid #E2E4EE;border-radius:12px;padding:13px 20px;font-family:inherit;font-size:13.5px;font-weight:700;cursor:pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="m8 12 3 3 5-6"/></svg>Marcar como Telex Release</button>
+                        <button onClick="{{ pd.onRemind }}" class="pc-ghost" style="display:flex;align-items:center;gap:8px;background:{{ pd.remindBg }};color:{{ pd.remindColor }};border:1px solid {{ pd.remindBorder }};border-radius:12px;padding:13px 20px;font-family:inherit;font-size:13.5px;font-weight:700;cursor:pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="{{ pd.remindIcon }}"/></svg>{{ pd.remindLabel }}</button>
+                      </div>
+                    </sc-if>
+                    <sc-if value="{{ pd.isTermoPending }}" hint-placeholder-val="{{ false }}">
+                      <div style="display:flex;gap:11px;margin-top:20px;flex-wrap:wrap">
+                        <button onClick="{{ pd.onBaixar }}" class="pc-ghost" style="display:flex;align-items:center;gap:8px;background:#fff;color:#3C4258;border:1px solid #E2E4EE;border-radius:12px;padding:13px 20px;font-family:inherit;font-size:13.5px;font-weight:700;cursor:pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="2"><path d="M12 3v12M7 11l5 5 5-5M5 21h14"/></svg>Baixar Termo</button>
+                        <button onClick="{{ pd.onEnviar }}" class="pc-cta" style="display:flex;align-items:center;gap:8px;background:#4327E6;color:#fff;border:none;border-radius:12px;padding:13px 20px;font-family:inherit;font-size:13.5px;font-weight:700;cursor:pointer;box-shadow:0 12px 24px -13px rgba(67,39,230,.7)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M12 15V3M7 8l5-5 5 5M5 21h14"/></svg>Enviar Termo Assinado</button>
+                        <button onClick="{{ pd.onRemind }}" class="pc-ghost" style="display:flex;align-items:center;gap:8px;background:{{ pd.remindBg }};color:{{ pd.remindColor }};border:1px solid {{ pd.remindBorder }};border-radius:12px;padding:13px 20px;font-family:inherit;font-size:13.5px;font-weight:700;cursor:pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="{{ pd.remindIcon }}"/></svg>{{ pd.remindLabel }}</button>
+                      </div>
+                    </sc-if>
+                  </div>
+                </sc-for>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ cur.lib.allSet }}" hint-placeholder-val="{{ false }}">
+              <div style="margin-top:22px;display:flex;align-items:center;gap:13px;background:linear-gradient(135deg,#fff 60%,#E9F7F0);border:1px solid #C7E8D6;border-radius:16px;padding:18px 22px">
+                <span style="width:42px;height:42px;border-radius:12px;background:#E7F6EF;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="#1F9D6B" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg></span>
+                <div><div style="font-size:15px;font-weight:800;color:#177D54">{{ cur.lib.status }}</div><div style="font-size:13px;color:#5A6076;margin-top:2px">{{ cur.lib.allSetNote }}</div></div>
+              </div>
+            </sc-if>
+          </div>
+
+          <div style="background:#fff;border:1px solid #ECEDF4;border-radius:22px;padding:8px 30px;box-shadow:0 1px 2px rgba(20,24,50,.04)">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:18px 0 14px;border-bottom:1px solid #F1F2F8">
+              <div style="display:flex;align-items:center;gap:11px"><span style="width:24px;height:24px;border-radius:50%;background:#E7F6EF;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#1F9D6B" stroke-width="2.6"><path d="m5 12 5 5 9-10"/></svg></span><h3 style="font-size:15.5px;font-weight:800">Itens já recebidos <span style="color:#9AA0B4;font-weight:600">({{ cur.lib.recCount }})</span></h3></div>
+            </div>
+            <sc-for list="{{ cur.lib.recebidos }}" as="r" hint-placeholder-count="3">
+              <div style="display:flex;align-items:center;gap:13px;padding:17px 0;border-bottom:{{ r.border }}">
+                <span style="width:24px;height:24px;border-radius:50%;background:{{ r.iconBg }};display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="{{ r.iconColor }}" stroke-width="2.6"><path d="{{ r.icon }}"></path></svg></span>
+                <div style="flex:1;min-width:0"><div style="font-size:14.5px;font-weight:700;color:#1A1E33">{{ r.label }}</div><sc-if value="{{ r.hasSub }}" hint-placeholder-val="{{ false }}"><div style="font-size:12px;color:#9AA0B4;margin-top:2px">{{ r.sub }}</div></sc-if></div>
+                <span style="font-size:11.5px;font-weight:700;color:{{ r.tagColor }};background:{{ r.tagBg }};padding:5px 12px;border-radius:8px;white-space:nowrap">{{ r.tag }}</span>
+              </div>
+            </sc-for>
+          </div>
+          {{ footNote }}
+        </div>
+      </sc-if>
+
+      <!-- ============ TAB: DEMURRAGE ============ -->
+      <sc-if value="{{ isDemurrage }}" hint-placeholder-val="{{ false }}">
+        <div style="animation:pcIn .3s ease both;display:flex;flex-direction:column;gap:20px">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:14px">{{ processChip }}{{ secBadge }}</div>
+          <div>
+            <h1 style="font-size:26px;font-weight:800;letter-spacing:-.01em">Controle de Containers</h1><p style="font-size:14px;color:#7A8099;margin-top:5px">Acompanhe a devolução dos containers e evite custos de Demurrage.</p>
+          </div>
+
+          <div style="background:#fff;border:1px solid #ECEDF4;border-radius:22px;padding:28px 30px;box-shadow:0 1px 2px rgba(20,24,50,.04);display:flex;gap:22px;align-items:flex-start">
+            {{ heroRobot }}
+            <div style="flex:1;min-width:0;padding-top:4px">
+              <h2 style="font-size:25px;font-weight:800;letter-spacing:-.01em">Priora</h2>
+              <p style="font-size:14.5px;color:#3C4258;margin-top:10px">Olá, equipe <b style="color:#4327E6">{{ clientName }}</b>.</p>
+              <p style="font-size:14.5px;color:#3C4258;line-height:1.6;margin-top:8px">{{ cur.dem.heroLine }}</p>
+            </div>
+          </div>
+
+          <sc-if value="{{ cur.dem.ftStarted }}" hint-placeholder-val="{{ false }}">
+          <div style="background:#fff;border:1px solid #ECEDF4;border-radius:22px;padding:26px 30px;box-shadow:0 1px 2px rgba(20,24,50,.04)">
+            <div style="display:flex;gap:20px;flex-wrap:wrap">
+              <div style="flex:1;min-width:130px"><div style="font-size:12.5px;color:#7A8099">Free Time Contratado</div><div style="margin-top:6px"><span style="font-size:28px;font-weight:800">{{ cur.dem.ft.contratado }}</span><span style="font-size:14px;color:#9AA0B4;margin-left:5px">dias</span></div></div>
+              <div style="flex:1;min-width:130px"><div style="font-size:12.5px;color:#7A8099">Dias Utilizados</div><div style="margin-top:6px"><span style="font-size:28px;font-weight:800">{{ cur.dem.ft.usados }}</span><span style="font-size:14px;color:#9AA0B4;margin-left:5px">dias</span></div></div>
+              <div style="flex:1;min-width:130px"><div style="font-size:12.5px;color:#7A8099">Dias Restantes</div><div style="margin-top:6px"><span style="font-size:28px;font-weight:800;color:{{ cur.dem.ft.restColor }}">{{ cur.dem.ft.restantes }}</span><span style="font-size:14px;color:#9AA0B4;margin-left:5px">dias</span></div></div>
+            </div>
+            <div style="margin-top:20px;height:9px;border-radius:6px;background:#EEF0F5;overflow:hidden;position:relative"><div style="height:100%;width:{{ cur.dem.ft.pct }}%;border-radius:6px;background:{{ cur.dem.ft.barBg }}"></div><span style="position:absolute;top:50%;left:{{ cur.dem.ft.pct }}%;transform:translate(-50%,-50%);width:15px;height:15px;border-radius:50%;background:#fff;border:3px solid {{ cur.dem.ft.knob }};box-shadow:0 2px 5px rgba(0,0,0,.15)"></span></div>
+            <p style="text-align:center;font-size:13px;color:#7A8099;margin-top:14px">{{ cur.dem.ft.pct }}% do Free Time utilizado</p>
+            <sc-if value="{{ cur.dem.hasCost }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-top:18px;padding:16px 18px;background:#FDF0F0;border:1px solid #F6DADA;border-radius:14px">
+                <div style="display:flex;align-items:center;gap:11px"><span style="width:38px;height:38px;border-radius:11px;background:#FDECEC;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#E5484D" stroke-width="1.9"><path d="M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg></span><div><div style="font-size:12px;color:#7A8099;font-weight:600">Custo estimado até agora</div><div style="font-size:22px;font-weight:800;color:#C2333A;margin-top:1px">{{ cur.dem.totalCost }}</div></div></div>
+                <div style="text-align:right"><div style="font-size:12px;color:#7A8099;font-weight:600">Diária atual</div><div style="font-size:16px;font-weight:800;color:#C2333A;margin-top:2px">{{ cur.dem.totalDaily }}</div></div>
+              </div>
+            </sc-if>
+          </div>
+          </sc-if>
+
+          <!-- Free time ainda não iniciado -->
+          <sc-if value="{{ cur.dem.notStarted }}" hint-placeholder-val="{{ true }}">
+            <div style="background:#fff;border:1px solid #ECEDF4;border-radius:22px;padding:26px 30px;box-shadow:0 1px 2px rgba(20,24,50,.04);display:flex;align-items:flex-start;gap:16px">
+              <span style="width:44px;height:44px;border-radius:13px;background:#EEEBFE;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="1.9"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span>
+              <div style="flex:1;min-width:0">
+                <h3 style="font-size:16px;font-weight:800">Free Time ainda não iniciado</h3>
+                <p style="font-size:13.5px;color:#5A6076;line-height:1.6;margin-top:6px">O período de free time ainda não foi iniciado. Acompanhe esta área após a retirada do container. O free time contratado para este processo é de <b style="color:#3C4258">{{ cur.dem.ft.contratado }} dias</b>.</p>
+              </div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ cur.dem.ftStarted }}" hint-placeholder-val="{{ false }}">
+          <sc-for list="{{ cur.dem.containers }}" as="c" hint-placeholder-count="3">
+            <div style="position:relative;background:#fff;border:1px solid #ECEDF4;border-left:4px solid {{ c.accent }};border-radius:16px;padding:20px 22px;box-shadow:0 1px 2px rgba(20,24,50,.04);display:flex;align-items:center;gap:18px">
+              <span style="width:52px;height:52px;border-radius:14px;background:{{ c.iconBg }};display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="{{ c.accent }}" stroke-width="1.8"><rect x="3" y="6" width="18" height="12" rx="1.5"/><path d="M7 6v12M12 6v12M17 6v12"/></svg></span>
+              <div style="flex:1;min-width:0">
+                <div style="display:flex;align-items:center;gap:11px;flex-wrap:wrap"><span style="font-family:'JetBrains Mono',monospace;font-size:17px;font-weight:700;color:#1A1E33">{{ c.numero }}</span><span style="display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:700;color:{{ c.accent }};background:{{ c.badgeBg }};padding:4px 11px;border-radius:8px"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="{{ c.accent }}" stroke-width="2.4"><path d="{{ c.badgeIcon }}"></path></svg>{{ c.badgeLabel }}</span></div>
+                <div style="display:flex;gap:34px;margin-top:12px;flex-wrap:wrap">
+                  <div style="display:flex;align-items:center;gap:8px"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#9AA0B4" stroke-width="1.9"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M3 9h18M8 2v4M16 2v4"/></svg><div><div style="font-size:12.5px;color:{{ c.l1color }};font-weight:600">{{ c.l1label }}</div><div style="font-size:12.5px;color:#9AA0B4">{{ c.l1value }}</div></div></div>
+                  <sc-if value="{{ c.hasCost }}" hint-placeholder-val="{{ false }}">
+                    <div><div style="font-size:12.5px;color:#C2333A;font-weight:600">Custo acumulado</div><div style="font-size:12.5px;font-weight:700;color:#C2333A;margin-top:1px">{{ c.custoValor }}</div></div>
+                    <div><div style="font-size:12.5px;color:#7A8099;font-weight:600">Diária</div><div style="font-size:12.5px;color:#9AA0B4;margin-top:1px">{{ c.diaria }}</div></div>
+                  </sc-if>
+                  <div style="display:flex;align-items:center;gap:8px"><div><div style="font-size:12.5px;color:#7A8099;font-weight:600">Minuta</div><div style="display:flex;align-items:center;gap:6px;margin-top:1px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="{{ c.minutaColor }}" stroke-width="2.2"><path d="{{ c.minutaIcon }}"></path></svg><span style="font-size:12.5px;font-weight:700;color:{{ c.minutaColor }}">{{ c.minutaText }}</span></div></div></div>
+                </div>
+              </div>
+              <sc-if value="{{ c.hasActions }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex;flex-direction:column;gap:9px;flex-shrink:0">
+                  <sc-if value="{{ c.minutaSent }}" hint-placeholder-val="{{ false }}">
+                    <button disabled="{{ true }}" style="display:flex;align-items:center;justify-content:center;gap:8px;background:#E7F6EF;color:#177D54;border:1px solid #C7E8D6;border-radius:11px;padding:11px 17px;font-family:inherit;font-size:12.5px;font-weight:700;cursor:default;white-space:nowrap"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#1F9D6B" stroke-width="2.6"><path d="m5 12 5 5 9-10"/></svg>Minuta enviada</button>
+                  </sc-if>
+                  <sc-if value="{{ c.minutaPending }}" hint-placeholder-val="{{ true }}">
+                    <button onClick="{{ c.onAnexar }}" class="pc-cta" style="display:flex;align-items:center;justify-content:center;gap:8px;background:#4327E6;color:#fff;border:none;border-radius:11px;padding:11px 17px;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer;white-space:nowrap;box-shadow:0 10px 20px -12px rgba(67,39,230,.7)"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M12 15V3M7 8l5-5 5 5M5 21h14"/></svg>{{ c.anexarLabel }}</button>
+                    <sc-if value="{{ c.hasRemind }}" hint-placeholder-val="{{ false }}">
+                      <button onClick="{{ c.onRemind }}" class="pc-ghost" style="display:flex;align-items:center;justify-content:center;gap:8px;background:#fff;color:#3C4258;border:1px solid #E2E4EE;border-radius:11px;padding:11px 17px;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer;white-space:nowrap"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#7A8099" stroke-width="2"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0"/></svg>Lembrar depois</button>
+                    </sc-if>
+                  </sc-if>
+                </div>
+              </sc-if>
+              <button onClick="{{ notify }}" class="pc-menu" style="width:32px;height:32px;border-radius:9px;border:none;background:transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="18" height="18" viewBox="0 0 24 24" fill="#9AA0B4"><circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/></svg></button>
+            </div>
+          </sc-for>
+          </sc-if>
+
+          <div style="display:flex;gap:14px;align-items:flex-start;background:#F5F4FB;border:1px solid #E7E4F6;border-radius:16px;padding:20px 22px">
+            <span style="width:38px;height:38px;border-radius:11px;background:#EEEBFE;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4M12 8h.01"/></svg></span>
+            <p style="font-size:13.5px;color:#5A6076;line-height:1.6">A Demurrage é calculada quando o container não é devolvido dentro do Free Time contratado. Caso o container já tenha sido devolvido, favor anexar a minuta de devolução.</p>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ============ TAB: RETIRADA ============ -->
+      <sc-if value="{{ isRetirada }}" hint-placeholder-val="{{ false }}">
+        <div style="animation:pcIn .3s ease both;display:flex;flex-direction:column;gap:20px">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:14px">{{ processChip }}{{ secBadge }}</div>
+          {{ timeline }}
+
+          <div style="background:#fff;border:1px solid #ECEDF4;border-radius:22px;padding:28px 30px;box-shadow:0 1px 2px rgba(20,24,50,.04);display:flex;gap:22px;align-items:flex-start">
+            {{ heroRobot }}
+            <div style="flex:1;min-width:0;padding-top:4px">
+              <h2 style="font-size:25px;font-weight:800;letter-spacing:-.01em">Priora</h2>
+              <p style="font-size:14.5px;color:#3C4258;margin-top:10px">Olá, equipe <b style="color:#4327E6">{{ clientName }}</b>.</p>
+              <p style="font-size:14.5px;color:#3C4258;line-height:1.6;margin-top:8px">{{ cur.ret.note }}</p>
+            </div>
+          </div>
+
+          <!-- Telex → HBL disponível -->
+          <sc-if value="{{ cur.ret.showHbl }}" hint-placeholder-val="{{ false }}">
+            <div style="background:#fff;border:1px solid #ECEDF4;border-radius:22px;padding:26px 30px;box-shadow:0 1px 2px rgba(20,24,50,.04)">
+              <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap">
+                <div style="display:flex;align-items:center;gap:13px"><span style="width:46px;height:46px;border-radius:13px;background:#E7F6EF;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#1F9D6B" stroke-width="1.8"><path d="M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/></svg></span><div><h3 style="font-size:17px;font-weight:800">HBL Original</h3><div style="font-size:12.5px;color:#7A8099;margin-top:2px">Liberado por Telex Release</div></div></div>
+                <span style="display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:700;color:#177D54;background:#E7F6EF;padding:6px 13px;border-radius:9px;white-space:nowrap"><span style="width:7px;height:7px;border-radius:50%;background:#1F9D6B"></span>Disponível para retirada</span>
+              </div>
+              <div style="font-size:11px;font-weight:700;color:#9AA0B4;text-transform:uppercase;letter-spacing:.05em;margin:22px 0 11px">Deseja retirar o documento físico?</div>
+              <div style="display:flex;flex-direction:column;gap:10px">
+                <sc-for list="{{ cur.ret.options }}" as="o" hint-placeholder-count="3">
+                  <button onClick="{{ o.onClick }}" style="display:flex;align-items:center;gap:13px;width:100%;text-align:left;padding:15px 17px;border-radius:13px;border:1.5px solid {{ o.border }};background:{{ o.bg }};font-family:inherit;cursor:pointer;transition:all .13s"><span style="width:20px;height:20px;border-radius:50%;border:2px solid {{ o.dot }};display:flex;align-items:center;justify-content:center;flex-shrink:0"><span style="width:10px;height:10px;border-radius:50%;background:{{ o.dotFill }}"></span></span><span style="font-size:14px;font-weight:700;color:{{ o.color }}">{{ o.label }}</span></button>
+                </sc-for>
+              </div>
+              <sc-if value="{{ cur.ret.hasChoice }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex;align-items:center;gap:10px;margin-top:16px;padding:14px 16px;background:#EEF7F1;border:1px solid #CDE9DA;border-radius:12px"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#1F9D6B" stroke-width="2.2" style="flex-shrink:0"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg><span style="font-size:13px;font-weight:600;color:#177D54;line-height:1.45">{{ cur.ret.choiceMsg }}</span></div>
+              </sc-if>
+            </div>
+            <div style="background:#fff;border:1px solid #ECEDF4;border-radius:22px;padding:24px 30px;box-shadow:0 1px 2px rgba(20,24,50,.04)">
+              <h3 style="font-size:15.5px;font-weight:800;margin-bottom:4px">Local de retirada</h3>
+              <p style="font-size:12.5px;color:#9AA0B4;margin-bottom:15px">Endereço para retirada dos documentos originais</p>
+              <div style="display:flex;align-items:flex-start;gap:13px;padding:16px;background:#FAFAFE;border:1px solid #F0F1F7;border-radius:13px"><span style="width:36px;height:36px;border-radius:11px;background:#EEEBFE;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="2"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg></span><div><div style="font-size:14px;font-weight:700;color:#1A1E33">{{ cur.ret.local }}</div><div style="font-size:12.5px;color:#7A8099;margin-top:3px;line-height:1.5">{{ cur.ret.endereco }}</div></div></div>
+            </div>
+          </sc-if>
+
+          <!-- Outros documentos físicos disponíveis / em trânsito -->
+          <sc-if value="{{ cur.ret.hasDocs }}" hint-placeholder-val="{{ false }}">
+            <div style="background:#fff;border:1px solid #ECEDF4;border-radius:22px;padding:24px 30px;box-shadow:0 1px 2px rgba(20,24,50,.04)">
+              <h3 style="font-size:15.5px;font-weight:800;margin-bottom:15px">{{ cur.ret.docsTitle }}</h3>
+              <div style="display:flex;flex-direction:column;gap:11px">
+                <sc-for list="{{ cur.ret.docs }}" as="d" hint-placeholder-count="2">
+                  <div style="display:flex;align-items:center;gap:14px;padding:15px 17px;background:#FAFAFE;border:1px solid #F0F1F7;border-radius:13px"><span style="width:36px;height:36px;border-radius:11px;background:{{ d.iconBg }};display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="{{ d.iconColor }}" stroke-width="2"><path d="{{ d.icon }}"></path></svg></span><div style="flex:1;min-width:0"><div style="font-size:14px;font-weight:700;color:#1A1E33">{{ d.label }}</div><div style="font-size:12px;color:#9AA0B4;margin-top:1px">{{ d.sub }}</div></div><span style="font-size:11.5px;font-weight:700;color:{{ d.tagColor }};background:{{ d.tagBg }};padding:5px 11px;border-radius:8px;white-space:nowrap">{{ d.tag }}</span></div>
+                </sc-for>
+              </div>
+            </div>
+          </sc-if>
+
+          <!-- Nenhum documento disponível (reference empty state) -->
+          <sc-if value="{{ cur.ret.empty }}" hint-placeholder-val="{{ false }}">
+            <div style="background:#fff;border:1px solid #ECEDF4;border-radius:22px;padding:48px 40px;box-shadow:0 1px 2px rgba(20,24,50,.04);text-align:center">
+              <svg width="150" height="118" viewBox="0 0 150 118" fill="none" style="margin:0 auto 6px;display:block">
+                <path d="M31 40h18l7 9h30a5 5 0 0 1 5 5v40a5 5 0 0 1-5 5H31a5 5 0 0 1-5-5V45a5 5 0 0 1 5-5Z" fill="#F1F0FB" stroke="#DAD7F2" stroke-width="2"/>
+                <rect x="44" y="30" width="46" height="34" rx="4" fill="#fff" stroke="#DAD7F2" stroke-width="2"/>
+                <path d="M52 40h30M52 47h30M52 54h18" stroke="#CBC7EA" stroke-width="2.4" stroke-linecap="round"/>
+                <path d="M26 66h29a6 6 0 0 1 6 6 6 6 0 0 0 6 6h4a6 6 0 0 0 6-6 6 6 0 0 1 6-6h29v28a5 5 0 0 1-5 5H31a5 5 0 0 1-5-5V66Z" fill="#EAE7FA" stroke="#DAD7F2" stroke-width="2"/>
+                <ellipse cx="112" cy="35" rx="12" ry="8" fill="#F1F0FB"/><ellipse cx="40" cy="30" rx="9" ry="6" fill="#F1F0FB"/>
+                <circle cx="100" cy="44" r="15" fill="#4327E6"/><path d="M95 39l10 10M105 39l-10 10" stroke="#fff" stroke-width="2.6" stroke-linecap="round"/>
+              </svg>
+              <h3 style="font-size:19px;font-weight:800">Nenhum documento disponível</h3>
+              <p style="font-size:14px;color:#7A8099;line-height:1.55;margin-top:9px;max-width:420px;margin-left:auto;margin-right:auto">{{ cur.ret.emptyNote }}</p>
+              <button onClick="{{ goProcessosArea }}" class="pc-ghost" style="display:flex;align-items:center;justify-content:space-between;gap:14px;width:100%;max-width:440px;margin:26px auto 0;background:#FAFAFE;border:1px solid #ECEDF4;border-radius:13px;padding:16px 20px;font-family:inherit;cursor:pointer;text-align:left">
+                <span style="display:flex;align-items:center;gap:12px"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="2" style="flex-shrink:0"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4M12 8h.01"/></svg><span style="font-size:13.5px;color:#5A6076;font-weight:600;line-height:1.4">Acompanhe o andamento do processo nas demais áreas do portal.</span></span>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#9AA0B4" stroke-width="2.2" style="flex-shrink:0"><path d="m9 6 6 6-6 6"/></svg>
+              </button>
+            </div>
+          </sc-if>
+          {{ footNote }}
+        </div>
+      </sc-if>
+
+      <!-- ============ TAB: FEEDBACK ============ -->
+      <sc-if value="{{ isFeedback }}" hint-placeholder-val="{{ false }}">
+        <div style="animation:pcIn .3s ease both;display:flex;flex-direction:column;gap:20px">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:14px">{{ processChip }}{{ secBadge }}</div>
+          <div style="background:#fff;border:1px solid #ECEDF4;border-radius:22px;padding:30px 32px;box-shadow:0 1px 2px rgba(20,24,50,.04)">
+            <h3 style="font-size:20px;font-weight:800">Como foi sua experiência?</h3>
+            <p style="font-size:14px;color:#7A8099;margin-top:7px;line-height:1.55">Seu retorno sobre o processo {{ cur.code }} ajuda a Priora a melhorar o acompanhamento das suas importações.</p>
+            <div style="margin-top:26px"><div style="font-size:12.5px;font-weight:700;color:#5A6076;margin-bottom:12px">Avaliação geral</div>
+              <div style="display:flex;gap:10px">
+                <sc-for list="{{ stars }}" as="s" hint-placeholder-count="5">
+                  <button onClick="{{ s.onClick }}" style="width:52px;height:52px;border-radius:14px;border:1px solid {{ s.border }};background:{{ s.bg }};cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .12s"><svg width="26" height="26" viewBox="0 0 24 24" fill="{{ s.fill }}" stroke="{{ s.stroke }}" stroke-width="1.6"><path d="M12 2l3 6.9 7.6.6-5.8 5 1.8 7.4L12 18l-6.6 3.9 1.8-7.4-5.8-5 7.6-.6z"/></svg></button>
+                </sc-for>
+              </div>
+            </div>
+            <div style="margin-top:26px"><div style="font-size:12.5px;font-weight:700;color:#5A6076;margin-bottom:12px">O que funcionou bem?</div>
+              <div style="display:flex;flex-wrap:wrap;gap:10px">
+                <sc-for list="{{ chips }}" as="c" hint-placeholder-count="4">
+                  <button onClick="{{ c.onClick }}" style="display:flex;align-items:center;gap:7px;padding:10px 16px;border-radius:11px;border:1px solid {{ c.border }};background:{{ c.bg }};color:{{ c.color }};font-family:inherit;font-size:13px;font-weight:600;cursor:pointer;transition:all .12s">{{ c.label }}</button>
+                </sc-for>
+              </div>
+            </div>
+            <div style="margin-top:26px"><div style="font-size:12.5px;font-weight:700;color:#5A6076;margin-bottom:12px">Comentário (opcional)</div>
+              <textarea value="{{ fbText }}" onChange="{{ onFbText }}" placeholder="Conte com suas palavras como foi acompanhar este processo…" style="width:100%;min-height:120px;padding:15px 17px;border:1px solid #E2E4EE;border-radius:14px;font-family:inherit;font-size:14px;color:#1A1E33;resize:vertical;outline:none;background:#fff" onfocus="this.style.borderColor='#4327E6';this.style.boxShadow='0 0 0 3px rgba(67,39,230,.12)'" onblur="this.style.borderColor='';this.style.boxShadow='none'"></textarea>
+            </div>
+            <button onClick="{{ sendFeedback }}" class="pc-cta" style="display:flex;align-items:center;justify-content:center;gap:9px;width:100%;margin-top:26px;background:#4327E6;color:#fff;border:none;border-radius:14px;padding:15px;font-family:inherit;font-size:14.5px;font-weight:700;cursor:pointer;box-shadow:0 14px 28px -13px rgba(67,39,230,.65)">Enviar feedback</button>
+          </div>
+          {{ footNote }}
+        </div>
+      </sc-if>
+
+    </div>
+  </main>
+
+  <!-- UPLOAD MODAL -->
+  <sc-if value="{{ uploadOpen }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ closeUpload }}" style="position:fixed;inset:0;z-index:210;background:rgba(16,20,40,.5);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:24px;animation:pcIn .2s ease both">
+      <div onClick="{{ stop }}" style="width:480px;max-width:100%;background:#fff;border-radius:22px;box-shadow:0 36px 80px -28px rgba(16,20,40,.55);font-family:'Plus Jakarta Sans',sans-serif;overflow:hidden">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px;padding:24px 26px 0">
+          <div style="display:flex;align-items:center;gap:13px"><span style="width:44px;height:44px;border-radius:13px;background:#EEEBFE;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="1.9"><path d="M12 15V3M7 8l5-5 5 5M5 21h14"/></svg></span><div><h3 style="font-size:18px;font-weight:800">{{ upTitle }}</h3><div style="font-size:12.5px;color:#7A8099;margin-top:2px">Processo {{ cur.code }}</div></div></div>
+          <button onClick="{{ closeUpload }}" class="pc-menu" style="width:34px;height:34px;border-radius:10px;border:none;background:#F4F5FB;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5A6076" stroke-width="2.2"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+        </div>
+        <div style="padding:16px 26px 26px">
+          <p style="font-size:13.5px;color:#5A6076;line-height:1.55">{{ upText }}</p>
+          <label style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:11px;margin-top:16px;padding:34px 20px;border:2px dashed {{ upBorder }};border-radius:15px;background:{{ upBg }};cursor:pointer;text-align:center;transition:all .15s">
+            <input type="file" accept=".pdf,.jpg,.jpeg,.png" onChange="{{ onFile }}" style="display:none">
+            <sc-if value="{{ noFile }}" hint-placeholder-val="{{ true }}">
+              <span style="width:48px;height:48px;border-radius:14px;background:#EEEBFE;display:flex;align-items:center;justify-content:center"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="1.9"><path d="M12 15V3M7 8l5-5 5 5M5 21h14"/></svg></span>
+              <span style="font-size:14px;font-weight:700;color:#3C4258">Arraste o arquivo ou clique para selecionar</span>
+              <span style="font-size:12px;color:#9AA0B4">PDF, JPG ou PNG · até 10&nbsp;MB</span>
+            </sc-if>
+            <sc-if value="{{ hasFile }}" hint-placeholder-val="{{ false }}">
+              <span style="width:48px;height:48px;border-radius:14px;background:#E7F6EF;display:flex;align-items:center;justify-content:center"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#1F9D6B" stroke-width="2"><path d="M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="m9 15 2 2 4-4"/></svg></span>
+              <span style="font-size:14px;font-weight:700;color:#177D54">{{ fileName }}</span>
+              <span style="font-size:12px;color:#9AA0B4">Clique para trocar o arquivo</span>
+            </sc-if>
+          </label>
+          <div style="display:flex;gap:11px;margin-top:20px">
+            <button onClick="{{ closeUpload }}" class="pc-ghost" style="flex:1;background:#fff;color:#5A6076;border:1px solid #E2E4EE;border-radius:12px;padding:13px;font-family:inherit;font-size:13.5px;font-weight:700;cursor:pointer">Cancelar</button>
+            <button onClick="{{ submitUpload }}" class="pc-cta" style="flex:1;background:{{ upSubmitBg }};color:#fff;border:none;border-radius:12px;padding:13px;font-family:inherit;font-size:13.5px;font-weight:700;cursor:{{ upSubmitCursor }};box-shadow:0 12px 24px -13px rgba(67,39,230,.7)">Enviar documento</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- MINUTA MODAL -->
+  <sc-if value="{{ minutaOpen }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ closeMinuta }}" style="position:fixed;inset:0;z-index:210;background:rgba(16,20,40,.5);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:24px;animation:pcIn .2s ease both">
+      <div onClick="{{ stop }}" style="width:480px;max-width:100%;background:#fff;border-radius:22px;box-shadow:0 36px 80px -28px rgba(16,20,40,.55);font-family:'Plus Jakarta Sans',sans-serif;overflow:hidden">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px;padding:24px 26px 0">
+          <div style="display:flex;align-items:center;gap:13px"><span style="width:44px;height:44px;border-radius:13px;background:#EEEBFE;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="1.9"><path d="M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/></svg></span><div><h3 style="font-size:18px;font-weight:800">Anexar Minuta de Devolução</h3><div style="font-size:12.5px;color:#7A8099;margin-top:2px">Container {{ minutaCode }}</div></div></div>
+          <button onClick="{{ closeMinuta }}" class="pc-menu" style="width:34px;height:34px;border-radius:10px;border:none;background:#F4F5FB;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5A6076" stroke-width="2.2"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+        </div>
+        <div style="padding:16px 26px 26px">
+          <p style="font-size:13.5px;color:#5A6076;line-height:1.55">Selecione a minuta de devolução emitida pelo terminal ou armador. Formatos aceitos: PDF, JPG e PNG (máx. 10 MB).</p>
+          <label style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:11px;margin-top:16px;padding:34px 20px;border:2px dashed {{ mnBorder }};border-radius:15px;background:{{ mnBg }};cursor:pointer;text-align:center;transition:all .15s">
+            <input type="file" accept=".pdf,.jpg,.jpeg,.png" onChange="{{ onMinutaFile }}" style="display:none">
+            <sc-if value="{{ mnNoFile }}" hint-placeholder-val="{{ true }}">
+              <span style="width:48px;height:48px;border-radius:14px;background:#EEEBFE;display:flex;align-items:center;justify-content:center"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="1.9"><path d="M12 15V3M7 8l5-5 5 5M5 21h14"/></svg></span>
+              <span style="font-size:14px;font-weight:700;color:#3C4258">Arraste o arquivo ou clique para selecionar</span>
+              <span style="font-size:12px;color:#9AA0B4">PDF, JPG ou PNG (máx. 10&nbsp;MB)</span>
+            </sc-if>
+            <sc-if value="{{ mnHasFile }}" hint-placeholder-val="{{ false }}">
+              <span style="width:48px;height:48px;border-radius:14px;background:#E7F6EF;display:flex;align-items:center;justify-content:center"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#1F9D6B" stroke-width="2"><path d="M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="m9 15 2 2 4-4"/></svg></span>
+              <span style="font-size:14px;font-weight:700;color:#177D54">{{ minutaFileName }}</span>
+              <span style="font-size:12px;color:#9AA0B4">Clique para trocar o arquivo</span>
+            </sc-if>
+          </label>
+          <div style="display:flex;gap:11px;margin-top:20px">
+            <button onClick="{{ closeMinuta }}" class="pc-ghost" style="flex:1;background:#fff;color:#5A6076;border:1px solid #E2E4EE;border-radius:12px;padding:13px;font-family:inherit;font-size:13.5px;font-weight:700;cursor:pointer">Cancelar</button>
+            <button onClick="{{ submitMinuta }}" class="pc-cta" style="flex:1;background:{{ mnSubmitBg }};color:#fff;border:none;border-radius:12px;padding:13px;font-family:inherit;font-size:13.5px;font-weight:700;cursor:{{ mnSubmitCursor }};box-shadow:0 12px 24px -13px rgba(67,39,230,.7)">Anexar minuta</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- TELEX CONFIRM MODAL -->
+  <sc-if value="{{ telexOpen }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ closeTelex }}" style="position:fixed;inset:0;z-index:210;background:rgba(16,20,40,.5);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:24px;animation:pcIn .2s ease both">
+      <div onClick="{{ stop }}" style="width:440px;max-width:100%;background:#fff;border-radius:22px;box-shadow:0 36px 80px -28px rgba(16,20,40,.55);font-family:'Plus Jakarta Sans',sans-serif;padding:28px 28px 24px;text-align:center">
+        <span style="width:56px;height:56px;border-radius:16px;background:#EEEBFE;display:flex;align-items:center;justify-content:center;margin:0 auto 16px"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="1.9"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="m8 12 3 3 5-6"/></svg></span>
+        <h3 style="font-size:19px;font-weight:800">Marcar como Telex Release?</h3>
+        <p style="font-size:13.5px;color:#5A6076;line-height:1.55;margin-top:9px">Ao confirmar, informamos à equipe que a liberação deste processo será feita por <b>Telex Release</b> — sem necessidade de HBL Original físico. A equipe validará com o agente.</p>
+        <div style="display:flex;gap:11px;margin-top:22px">
+          <button onClick="{{ closeTelex }}" class="pc-ghost" style="flex:1;background:#fff;color:#5A6076;border:1px solid #E2E4EE;border-radius:12px;padding:13px;font-family:inherit;font-size:13.5px;font-weight:700;cursor:pointer">Cancelar</button>
+          <button onClick="{{ confirmTelex }}" class="pc-cta" style="flex:1;background:#4327E6;color:#fff;border:none;border-radius:12px;padding:13px;font-family:inherit;font-size:13.5px;font-weight:700;cursor:pointer;box-shadow:0 12px 24px -13px rgba(67,39,230,.7)">Confirmar Telex</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- TOAST -->
+  <sc-if value="{{ toastOn }}" hint-placeholder-val="{{ false }}">
+    <div style="position:fixed;right:24px;bottom:24px;z-index:200;display:flex;align-items:center;gap:12px;background:#fff;border:1px solid #ECEDF4;box-shadow:0 18px 44px -16px rgba(31,38,80,.4);border-radius:14px;padding:14px 18px;max-width:380px;animation:pcIn .3s ease both">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1F9D6B" stroke-width="2.2" style="flex-shrink:0"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg>
+      <p style="font-size:13.5px;color:#1A1E33;font-weight:600;line-height:1.4">{{ toastMsg }}</p>
+    </div>
+  </sc-if>
+
+  <template id="__bundler_thumbnail">
+    <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="100" fill="#F6F7FB"/><circle cx="50" cy="42" r="22" fill="#EEEBFE"/><circle cx="50" cy="42" r="13" fill="#4327E6"/><circle cx="45" cy="40" r="2.4" fill="#fff"/><circle cx="55" cy="40" r="2.4" fill="#fff"/></svg>
+  </template>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1180,&quot;height&quot;:900}}">
+class Component extends DCLogic {
+  CLIENT = 'BRA TRADE';
+  NAV = [
+    { key:'processos', label:'Processos', icon:'M12 3 4 7v10l8 4 8-4V7Z M4 7l8 4 8-4M12 11v10' },
+    { key:'liberacao', label:'Liberação', icon:'M12 3 4 7v10l8 4 8-4V7Z M4 7l8 4 8-4M12 11v10' },
+    { key:'demurrage', label:'Demurrage', icon:'M3 6h11v9H3z M14 9h4l3 3v3h-7 M6.5 19a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3 M17.5 19a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3' },
+    { key:'retirada', label:'Retirada de Documentos', icon:'M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z' },
+    { key:'feedback', label:'Feedback', icon:'M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z' },
+  ];
+
+  PROCS = [
+    { code:'IM2591', navio:'HAPAG EXPRESS', origem:'Shanghai', destino:'Itajaí', etd:'06/05', eta:'30/05/2026', etaShort:'30/05',
+      statusGeral:'Aguardando Telex', statusKind:'amber', accent:'#E8990C',
+      pendencias:[['Confirmar Telex Release','amber'],['Enviar Termo assinado','amber']],
+      lib:{ mode:'action',
+        heroLine:'Sua carga está prevista para atracar em 30/05. Para garantirmos uma liberação rápida, precisamos destes itens:',
+        pending:[
+          { key:'ohbl', kind:'ohbl', name:'OHBL / Telex Release', status:'Aguardando confirmação de Telex Release' },
+          { key:'termo', kind:'termo', name:'Termo por Embarque', status:'Aguardando assinatura', file:'Termo_por_Embarque_IM2591.pdf' },
+        ],
+        recebidos:[['Procuração','Recebido','green'],['Prazo de Pagamento','Não necessário','gray','Cliente possui prazo de pagamento.']] },
+      dem:{ ftStarted:false, heroCount:'1 container vinculado a este processo', heroTail:'A carga ainda não atracou — o free time começa após a retirada do container.',
+        ft:{ contratado:21, usados:0, restantes:21, pct:0, tone:'green' },
+        containers:[['HLXU3345678','neutral','A caminho','No free time','Restam 9 dias','na']] },
+      telexConfirmado:false,
+      ret:{ local:'Rocket Logistics — Itajaí/SC', endereco:'Rua Manoel Dono Morgado, 48 — Fazenda, Itajaí/SC. Seg a Sex, 9h às 11h30 e das 14h às 17h.', extra:[],
+        emptyNote:'Assim que houver documentos físicos disponíveis para retirada, avisaremos por aqui.' } },
+
+    { code:'IM2567', navio:'MSC BRAZIL', origem:'Shanghai', destino:'Itajaí', etd:'02/05', eta:'20/06/2026', etaShort:'20/06',
+      statusGeral:'Em demurrage', statusKind:'red', accent:'#E5484D',
+      pendencias:[['2 containers gerando demurrage','red'],['Devolver containers vazios','red']],
+      lib:{ mode:'ok', status:'Carga liberada',
+        heroLine:'Sua carga já está liberada. O foco agora é a devolução dos containers para encerrar os custos de demurrage.',
+        allSetNote:'Documentação completa e Telex Release confirmado. Nada pendente da sua parte na liberação.',
+        recebidos:[['Termo por Embarque','Recebido','green'],['Telex Release','Confirmado','green'],['OHBL','Via Telex Release','green']] },
+      dem:{ ftStarted:true, heroCount:'2 containers vinculados a este processo', heroTail:'Ambos exigem atenção.',
+        ft:{ contratado:21, usados:25, restantes:0, pct:100, tone:'red' },
+        containers:[['FBIU5238915','red','Crítico','Free Time','Excedido há 4 dias','send',4],['GAOU6159773','red','Crítico','Free Time','Excedido há 4 dias','send',4]] },
+      telexConfirmado:true,
+      ret:{ local:'Rocket Logistics — Itajaí/SC', endereco:'Rua Manoel Dono Morgado, 48 — Fazenda, Itajaí/SC. Seg a Sex, 9h às 11h30 e das 14h às 17h.',
+        extra:[['DI averbada','Registro liberado','blue','Disponível','M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z','#E7F0FE','#2563EB',true]] } },
+
+    { code:'IM2588', navio:'MSC BRAZIL', origem:'Ningbo', destino:'Itajaí', etd:'28/05', eta:'24/06/2026', etaShort:'24/06',
+      statusGeral:'Apto — sem pendências', statusKind:'green', accent:'#1F9D6B',
+      pendencias:[],
+      lib:{ mode:'ok', status:'Apto para liberação',
+        heroLine:'Toda a documentação está completa e validada. Sua carga está apta para liberação assim que atracar.',
+        allSetNote:'Sem pendências da sua parte — aguardando apenas a atracação do navio.',
+        recebidos:[['Termo por Embarque','Recebido','green'],['OHBL','Recebido','green'],['Procuração','Recebido','green']] },
+      dem:{ ftStarted:false, heroCount:'2 containers vinculados a este processo', heroTail:'A carga ainda não atracou — o free time começa após a retirada dos containers.',
+        ft:{ contratado:21, usados:0, restantes:21, pct:0, tone:'green' },
+        containers:[['TCLU7887654','amber','Atenção','Free Time','Restam 3 dias','send_remind'],['MSKU2233445','amber','Atenção','Free Time','Restam 3 dias','send_remind']] },
+      telexConfirmado:false,
+      ret:{ local:'Rocket Logistics — Itajaí/SC', endereco:'Rua Manoel Dono Morgado, 48 — Fazenda, Itajaí/SC. Seg a Sex, 9h às 11h30 e das 14h às 17h.',
+        extra:[['OHBL Original','Via courier — a caminho','amber','Em trânsito','M3 5h18v14H3z M3 8l9 6 9-6','#FDF3E0','#B9760A',false]],
+        emptyNote:'Este processo usa HBL Original físico, que ainda está em trânsito. Assim que o courier chegar, o documento ficará disponível para retirada.' } },
+  ];
+
+  S = { red:{c:'#C2333A',b:'#FDECEC'}, amber:{c:'#B9760A',b:'#FDF3E0'}, green:{c:'#177D54',b:'#E7F6EF'}, blue:{c:'#1D4ED8',b:'#E7F0FE'}, gray:{c:'#5A6076',b:'#F1F2F8'} };
+
+  constructor(props){
+    super(props);
+    let tab='processos', cur=null;
+    try{ const s=JSON.parse(sessionStorage.getItem('priora.portal')||'null'); if(s){ if(s.tab) tab=s.tab; if(s.cur) cur=s.cur; } }catch(e){}
+    if(tab!=='processos' && !cur) tab='processos';
+    this.state={ tab, cur, toastOn:false, toastMsg:'', rating:0, chips:{}, fbText:'', retChoice:{}, uploadOpen:false, uploadKind:'ohbl', telexOpen:false, fileName:'', remind:{}, termoSent:{}, minutaOpen:false, minutaCode:'', minutaFileName:'', minutaSent:{} };
+  }
+  persist(){ try{ sessionStorage.setItem('priora.portal', JSON.stringify({ tab:this.state.tab, cur:this.state.cur })); }catch(e){} }
+
+  go(tab){ this.setState({tab}, ()=>this.persist()); try{ window.scrollTo({top:0,behavior:'smooth'}); }catch(e){} }
+  openProc(code){ this.setState({ cur:code, tab:'liberacao' }, ()=>this.persist()); try{ window.scrollTo({top:0,behavior:'auto'}); }catch(e){} }
+  toast(msg){ clearTimeout(this._t); this.setState({toastOn:true, toastMsg:msg}); this._t=setTimeout(()=>this.setState({toastOn:false}), 2600); }
+  curProc(){ return this.PROCS.find(p=>p.code===this.state.cur) || null; }
+
+  openMinuta(code){ this.setState({ minutaOpen:true, minutaCode:code, minutaFileName:'' }); }
+  openTermo(code){ this.setState({ cur:code, uploadOpen:true, uploadKind:'termo', fileName:'' }); }
+
+  RET_OPTS = [
+    { key:'sim', label:'Sim, desejo retirar', msg:'Registramos que você deseja retirar o HBL. A equipe da Priora deixará o documento preparado no escritório.' },
+    { key:'nao', label:'Não desejo retirar', msg:'Tudo bem. O HBL permanecerá guardado em segurança no nosso escritório.' },
+    { key:'depois', label:'Decidirei posteriormente', msg:'Sem problema. Você pode retornar aqui e decidir quando quiser.' },
+  ];
+  setRetChoice(code, key){ this.setState(s=>({ retChoice:{...s.retChoice,[code]:key} })); const o=this.RET_OPTS.find(x=>x.key===key); this.toast(o?o.msg.split('.')[0]+'.':'Preferência registrada.'); }
+
+  buildRet(cur){
+    const S=this.S, rd=cur.ret||{}, telex=!!cur.telexConfirmado;
+    const extra=(rd.extra||[]).map(d=>({ label:d[0], sub:d[1], tag:d[3], tagColor:S[d[2]].c, tagBg:S[d[2]].b, icon:d[4], iconBg:d[5], iconColor:d[6], available:d[7]!==false }));
+    const extraAvailable=extra.filter(d=>d.available);
+    const showHbl=telex, available=telex||extraAvailable.length>0, empty=!available;
+    let note;
+    if(telex) note='O HBL deste processo foi liberado por Telex Release, impresso e assinado. O documento encontra-se disponível para retirada em nosso escritório.';
+    else if(extraAvailable.length>0) note='Há documentos originais disponíveis para retirada em nosso escritório.';
+    else note='Não identificamos documentos físicos disponíveis para retirada neste processo.';
+    const choice=this.state.retChoice[cur.code]||null;
+    const options=this.RET_OPTS.map(o=>{ const on=choice===o.key; return { label:o.label, onClick:()=>this.setRetChoice(cur.code,o.key), border:on?'#1F9D6B':'#E6E8F2', bg:on?'#EEF7F1':'#fff', color:on?'#177D54':'#3C4258', dot:on?'#1F9D6B':'#C7CBDA', dotFill:on?'#1F9D6B':'transparent' }; });
+    const chosen=choice?this.RET_OPTS.find(o=>o.key===choice):null;
+    return { note, showHbl, options, hasChoice:!!chosen, choiceMsg:chosen?chosen.msg:'', hasDocs:extra.length>0 && !empty, docsTitle: telex?'Outros documentos':'Documentos originais', docs:extra, empty, emptyNote: rd.emptyNote, local:rd.local, endereco:rd.endereco };
+  }
+
+  DEM_ICON = { neutral:{accent:'#5A6076',iconBg:'#F1F2F8',badgeBg:'#F1F2F8',badgeIcon:'M12 3 4 7v10l8 4 8-4V7Z'}, green:{accent:'#1F9D6B',iconBg:'#E7F6EF',badgeBg:'#E7F6EF',badgeIcon:'m5 12 5 5 9-10'}, amber:{accent:'#E8990C',iconBg:'#FEF5E6',badgeBg:'#FDF3E0',badgeIcon:'M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z'}, red:{accent:'#E5484D',iconBg:'#FDECEC',badgeBg:'#FDECEC',badgeIcon:'M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z'} };
+  FT_BAR = { green:{bar:'linear-gradient(90deg,#1F9D6B,#37C98A)',knob:'#1F9D6B',rest:'#177D54'}, amber:{bar:'linear-gradient(90deg,#1F9D6B 55%,#F5B31E)',knob:'#E8990C',rest:'#E8990C'}, red:{bar:'linear-gradient(90deg,#1F9D6B 40%,#F5B31E 70%,#E5484D)',knob:'#E5484D',rest:'#C2333A'} };
+
+  buildDem(cur){
+    const S=this.S, dm=cur.dem, ic=this.DEM_ICON, ftb=this.FT_BAR[dm.ft.tone]||this.FT_BAR.green;
+    const RATE=250; let totalCost=0, totalDaily=0;
+    const fmt=(n)=>'R$ '+n.toLocaleString('pt-BR');
+    const containers = dm.containers.map(c=>{
+      const t=ic[c[1]]||ic.neutral, act=c[5];
+      const days=c[6]||0; const cost=days*RATE;
+      if(days>0){ totalCost+=cost; totalDaily+=RATE; }
+      const sent = !!(this.state.minutaSent && this.state.minutaSent[c[0]]);
+      return { numero:c[0], accent:t.accent, iconBg:t.iconBg, badgeBg:t.badgeBg, badgeIcon:t.badgeIcon, badgeLabel:c[2],
+        l1label:c[3], l1value:c[4], l1color: c[1]==='red'?'#C2333A':(c[1]==='amber'?'#B9760A':'#7A8099'),
+        hasCost: days>0, custoValor: fmt(cost), diaria: fmt(RATE)+'/dia',
+        minutaText: sent?'Enviada':(act==='na'?'—':'Não enviada'), minutaColor: sent?'#177D54':(act==='na'?'#9AA0B4':'#C2333A'), minutaIcon: sent?'m5 12 5 5 9-10':(act==='na'?'M5 12h14':'M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z'),
+        hasActions: act!=='na', hasRemind: act==='send_remind', anexarLabel: act==='send_remind'?'Anexar minuta de devolução':'Anexar minuta',
+        minutaSent: sent, minutaPending: !sent,
+        onAnexar:()=>this.openMinuta(c[0]), onRemind:()=>this.toast('Lembrete agendado para '+c[0]+'.') };
+    });
+    return { heroLine: 'Identificamos '+dm.heroCount+'. '+dm.heroTail,
+      ftStarted: !!dm.ftStarted, notStarted: !dm.ftStarted,
+      hasCost: totalCost>0, totalCost: fmt(totalCost), totalDaily: fmt(totalDaily)+'/dia',
+      ft:{ contratado:dm.ft.contratado, usados:dm.ft.usados, restantes:dm.ft.restantes, pct:dm.ft.pct, barBg:ftb.bar, knob:ftb.knob, restColor:ftb.rest }, containers };
+  }
+
+  buildLib(cur){
+    const S=this.S, lb=cur.lib, action=lb.mode==='action';
+    const recebidos = lb.recebidos.map((r,i,arr)=>{ const kind=r[2]; const gr=kind==='green';
+      return { label:r[0], tag:r[1], tagColor: gr?'#177D54':'#5A6076', tagBg: gr?'#E7F6EF':'#F1F2F8',
+        iconBg: gr?'#E7F6EF':'#F1F2F8', iconColor: gr?'#1F9D6B':'#9AA0B4', icon: gr?'m5 12 5 5 9-10':'M5 12h14',
+        hasSub: !!r[3], sub:r[3]||'', border: i<arr.length-1?'1px solid #F1F2F8':'none' }; });
+    const reminded = !!this.state.remind[cur.code];
+    const sentMap = this.state.termoSent||{};
+    const remMap = this.state.remind||{};
+    const pending = (lb.pending||[]).map(pd=>{
+      const termoSent = pd.kind==='termo' && !!sentMap[cur.code];
+      const done = termoSent;
+      const rkey = cur.code+':'+pd.key;
+      const rem = !!remMap[rkey];
+      return { name:pd.name, kind:pd.kind,
+        isOhbl: pd.kind==='ohbl',
+        isTermoPending: pd.kind==='termo' && !termoSent,
+        status: termoSent ? 'Enviado para conferência' : pd.status,
+        statusColor: done ? '#177D54' : '#C2333A', dotColor: done ? '#1F9D6B' : '#E5484D',
+        badge: done ? 'Enviado' : 'Pendente', badgeColor: done ? '#177D54' : '#C2333A', badgeBg: done ? '#E7F6EF' : '#FDECEC',
+        tintBg: done ? '#EFFAF4' : '#FDF0F0', tintBorder: done ? '#C7E8D6' : '#F6DADA',
+        iconBg: done ? '#E7F6EF' : '#FDECEC', iconColor: done ? '#1F9D6B' : '#E5484D',
+        remindLabel: rem?'Lembrete ativo':'Lembrar depois',
+        remindBg: rem?'#FDF3E0':'#fff', remindColor: rem?'#B9760A':'#3C4258', remindBorder: rem?'#F3E4C4':'#E2E4EE',
+        remindIcon: rem?'M12 8v5l3 2M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0':'M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0',
+        onRemind:()=>{ const on=!this.state.remind[rkey]; this.setState(s=>({remind:{...s.remind,[rkey]:on}})); this.toast(on?'Lembrete ativado para '+pd.name+'.':'Lembrete removido.'); },
+        onBaixar:()=>this.toast('Download de '+(pd.file||'Termo por Embarque.pdf')+' iniciado.'),
+        onEnviar:()=>this.openTermo(cur.code) };
+    });
+    return { hasAction:action, allSet:!action, status:lb.status||'', allSetNote:lb.allSetNote||'',
+      pending, heroLine:lb.heroLine,
+      recebidos, recCount:recebidos.length,
+      remindLabel: reminded?'Lembrete ativo':'Lembrar depois',
+      remindBg: reminded?'#FDF3E0':'#fff', remindColor: reminded?'#B9760A':'#3C4258', remindBorder: reminded?'#F3E4C4':'#E2E4EE',
+      remindIcon: reminded?'M12 8v5l3 2M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0':'M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0' }; }
+
+  robotEl(size){
+    const h=React.createElement, s=size||84;
+    return h('div',{style:{position:'relative',width:s,height:s,borderRadius:'50%',overflow:'hidden',background:'radial-gradient(circle at 50% 35%,#EDE9FF,#F6F4FF)',display:'flex',alignItems:'flex-end',justifyContent:'center',flexShrink:0,boxShadow:'0 8px 22px -10px rgba(67,39,230,.42)',border:'1px solid rgba(67,39,230,.14)'}},
+      h('img',{src:'assets/clara.png',alt:'Clara',style:{position:'absolute',width:s*1.7,height:'auto',left:'50%',top:s*0.08,transform:'translateX(-50%)'}}));
+  }
+  timelineEl(p){
+    const h=React.createElement;
+    const dot=(c)=>h('span',{style:{width:9,height:9,borderRadius:'50%',background:c,flexShrink:0}});
+    const dash=h('div',{style:{flex:1,height:0,borderTop:'2px dashed #CFC9F0',margin:'0 4px'}});
+    const port=(name,label,align)=>h('div',{style:{textAlign:align,minWidth:0}},h('div',{style:{fontSize:17,fontWeight:800,color:'#1A1E33',whiteSpace:'nowrap'}},name),h('div',{style:{fontSize:12,color:'#9AA0B4',marginTop:3}},label));
+    return h('div',{style:{background:'#fff',border:'1px solid #ECEDF4',borderRadius:22,padding:'24px 30px',boxShadow:'0 1px 2px rgba(20,24,50,.04)'}},
+      h('div',{style:{display:'flex',alignItems:'center',gap:10}},
+        dot('#4327E6'), port(p.origem,'ETD: '+p.etd,'left'), dash,
+        h('div',{style:{width:46,height:46,borderRadius:'50%',background:'#F1F0FB',border:'1px solid #E2DEF6',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}},
+          h('svg',{width:22,height:22,viewBox:'0 0 24 24',fill:'none',stroke:'#4327E6','strokeWidth':1.8},h('path',{d:'M3 14h18l-2 5H5zM5 14V9a2 2 0 0 1 2-2h7l4 4v3M9 7V4h4'}))),
+        dash, port(p.destino,'ETA: '+p.etaShort,'right'), dot('#4327E6')),
+      h('div',{style:{textAlign:'center',fontSize:12.5,color:'#9AA0B4',marginTop:12}},'Navio: '+p.navio));
+  }
+  secBadgeEl(){
+    const h=React.createElement;
+    return h('div',{style:{display:'inline-flex',alignItems:'center',gap:8,background:'#E9F7F0',border:'1px solid #C7E8D6',borderRadius:22,padding:'8px 15px',flexShrink:0}},
+      h('svg',{width:15,height:15,viewBox:'0 0 24 24',fill:'none',stroke:'#1F9D6B','strokeWidth':2},h('rect',{x:5,y:11,width:14,height:10,rx:2}),h('path',{d:'M8 11V7a4 4 0 0 1 8 0v4'})),
+      h('span',{style:{fontSize:12.5,fontWeight:700,color:'#177D54'}},'Acesso seguro'));
+  }
+  procChipEl(code){
+    const h=React.createElement;
+    return h('div',{style:{display:'inline-flex',alignItems:'center',gap:11,background:'#fff',border:'1px solid #ECEDF4',borderRadius:13,padding:'8px 9px 8px 15px',boxShadow:'0 1px 2px rgba(20,24,50,.04)'}},
+      h('div',{style:{textAlign:'right'}},h('div',{style:{fontSize:10,color:'#9AA0B4',textTransform:'uppercase',letterSpacing:'.05em'}},'Processo'),h('div',{style:{fontFamily:"'JetBrains Mono',monospace",fontSize:14,fontWeight:700,color:'#4327E6',marginTop:1}},code)),
+      h('button',{onClick:()=>this.go('processos'),style:{display:'flex',alignItems:'center',gap:6,background:'#F5F4FB',border:'1px solid #E6E4F2',borderRadius:10,padding:'8px 13px',fontFamily:'inherit',fontSize:12,fontWeight:700,color:'#4327E6',cursor:'pointer',whiteSpace:'nowrap'}},'Trocar'));
+  }
+  footNoteEl(){
+    const h=React.createElement;
+    return h('div',{style:{display:'flex',alignItems:'center',justifyContent:'center',gap:9,marginTop:4}},
+      h('svg',{width:16,height:16,viewBox:'0 0 24 24',fill:'none',stroke:'#B4A9F2','strokeWidth':1.8},h('path',{d:'M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z'})),
+      h('span',{style:{fontSize:12.5,color:'#9AA0B4'}},'Todas as informações são atualizadas pela nossa equipe.'));
+  }
+
+  renderVals(){
+    const S=this.S, tab=this.state.tab, cur=this.curProc();
+    const nav = this.NAV.map(n=>{ const on=tab===n.key; const locked=n.key!=='processos' && !this.state.cur;
+      return { label:n.label, icon:n.icon, bg: on?'#EEEBFE':'transparent', color: on?'#4327E6':'#565C72', weight: on?'700':'500', locked,
+        onClick:()=>{ if(locked){ this.toast('Selecione um processo primeiro.'); this.go('processos'); } else this.go(n.key); } }; });
+
+    const procList = this.PROCS.map(p=>{ const st=S[p.statusKind]; const isCur=p.code===this.state.cur;
+      return { code:p.code, cliente:this.CLIENT, navio:p.navio, origem:p.origem, destino:p.destino, eta:p.etaShort, statusGeral:p.statusGeral, statusColor:st.c, statusBg:st.b, accent:p.accent,
+        hasPend:p.pendencias.length>0, noPend:p.pendencias.length===0, pendencias:p.pendencias.map(pd=>({ text:pd[0], dot:S[pd[1]].c })),
+        onOpen:()=>this.openProc(p.code), btnLabel:isCur?'Continuar no processo':'Abrir Processo',
+        btnBg:isCur?'#F3F1FE':'#4327E6', btnColor:isCur?'#3D34C9':'#fff', btnBorder:isCur?'1px solid #D8D1F8':'none', btnShadow:isCur?'none':'0 14px 28px -15px rgba(67,39,230,.6)' }; });
+
+    let curVM=null;
+    if(cur) curVM = { code:cur.code, lib:this.buildLib(cur), dem:this.buildDem(cur), ret:this.buildRet(cur) };
+
+    const rating=this.state.rating;
+    const stars = [1,2,3,4,5].map(i=>({ onClick:()=>this.setState({rating:i}), border: i<=rating?'#F5C147':'#E6E8F2', bg: i<=rating?'#FEF7E4':'#fff', fill: i<=rating?'#F5B31E':'none', stroke: i<=rating?'#F5B31E':'#C7CBDA' }));
+    const CHIPS=['Comunicação clara','Agilidade','Transparência','Suporte da equipe'];
+    const chips = CHIPS.map(l=>{ const on=!!this.state.chips[l]; return { label:l, onClick:()=>this.setState(s=>({chips:{...s.chips,[l]:!s.chips[l]}})), border:on?'#4327E6':'#E6E8F2', bg:on?'#EEEBFE':'#fff', color:on?'#3D34C9':'#5A6076' }; });
+
+    return {
+      clientName:this.CLIENT, clientInitial:this.CLIENT[0],
+      shellMax: tab==='processos' ? '1180px' : '900px',
+      nav, procList, cur:curVM||{ code:'', lib:{recebidos:[]}, dem:{containers:[],ft:{}}, ret:{options:[],docs:[]} },
+      timeline: cur?this.timelineEl(cur):null, heroRobot:this.robotEl(118),
+      secBadge:this.secBadgeEl(), processChip: cur?this.procChipEl(cur.code):null, footNote:this.footNoteEl(),
+      isProcessos:tab==='processos', isLiberacao:tab==='liberacao'&&!!cur, isDemurrage:tab==='demurrage'&&!!cur, isRetirada:tab==='retirada'&&!!cur, isFeedback:tab==='feedback'&&!!cur,
+      showEmpty: tab!=='processos' && !cur,
+      emptyWhat: tab==='liberacao'?'a liberação':(tab==='demurrage'?'a demurrage':(tab==='retirada'?'a retirada de documentos':'o feedback')),
+      goProcessos:()=>this.go('processos'), goProcessosArea:()=>this.go('liberacao'),
+      notify:()=>this.toast('Registrado. A equipe da Priora foi notificada.'),
+      stop:(e)=>e.stopPropagation(),
+      uploadOpen:this.state.uploadOpen, telexOpen:this.state.telexOpen,
+      upTitle: this.state.uploadKind==='termo' ? 'Enviar Termo Assinado' : 'Enviar Documento',
+      upText: this.state.uploadKind==='termo' ? 'Selecione o Termo por Embarque assinado para envio. Formatos aceitos: PDF, JPG e PNG (máx. 10 MB).' : 'Selecione o arquivo do OHBL para envio. Formatos aceitos: PDF, JPG, PNG.',
+      openUpload:()=>this.setState({uploadOpen:true, uploadKind:'ohbl', fileName:''}),
+      closeUpload:()=>this.setState({uploadOpen:false}),
+      onFile:(e)=>{ const f=e.target.files&&e.target.files[0]; if(f) this.setState({fileName:f.name}); },
+      noFile:!this.state.fileName, hasFile:!!this.state.fileName, fileName:this.state.fileName,
+      upBorder:this.state.fileName?'#BFE6D2':'#D8D3F3', upBg:this.state.fileName?'#F3FBF6':'#FAFAFE',
+      upSubmitBg:this.state.fileName?'#4327E6':'#B7ACF2', upSubmitCursor:this.state.fileName?'pointer':'not-allowed',
+      submitUpload:()=>{ if(!this.state.fileName){ this.toast('Selecione um arquivo primeiro.'); return; } if(this.state.uploadKind==='termo'){ const code=this.state.cur; this.setState(s=>({uploadOpen:false, termoSent:{...s.termoSent,[code]:true}})); this.toast('Termo assinado enviado com sucesso.'); } else { this.setState({uploadOpen:false}); this.toast('Documento enviado. A equipe vai validar e liberar sua carga.'); } },
+      askTelex:()=>this.setState({telexOpen:true}),
+      closeTelex:()=>this.setState({telexOpen:false}),
+      confirmTelex:()=>{ this.setState({telexOpen:false}); this.toast('Telex Release marcado. A equipe vai validar e liberar sua carga.'); },
+      remindLater:()=>{ const code=this.state.cur; const on=!this.state.remind[code]; this.setState(s=>({remind:{...s.remind,[code]:on}})); this.toast(on?'Lembrete ativado. Vamos te avisar sobre este item.':'Lembrete removido.'); },
+      minutaOpen:this.state.minutaOpen, minutaCode:this.state.minutaCode, minutaFileName:this.state.minutaFileName,
+      closeMinuta:()=>this.setState({minutaOpen:false}),
+      onMinutaFile:(e)=>{ const f=e.target.files&&e.target.files[0]; if(f) this.setState({minutaFileName:f.name}); },
+      mnNoFile:!this.state.minutaFileName, mnHasFile:!!this.state.minutaFileName,
+      mnBorder:this.state.minutaFileName?'#BFE6D2':'#D8D3F3', mnBg:this.state.minutaFileName?'#F3FBF6':'#FAFAFE',
+      mnSubmitBg:this.state.minutaFileName?'#4327E6':'#B7ACF2', mnSubmitCursor:this.state.minutaFileName?'pointer':'not-allowed',
+      submitMinuta:()=>{ if(!this.state.minutaFileName){ this.toast('Selecione um arquivo primeiro.'); return; } const code=this.state.minutaCode; this.setState(s=>({minutaOpen:false, minutaSent:{...s.minutaSent,[code]:true}})); this.toast('Minuta enviada com sucesso. Nossa equipe realizará a conferência.'); },
+      stars, chips, fbText:this.state.fbText, onFbText:(e)=>this.setState({fbText:e.target.value}),
+      sendFeedback:()=>{ this.toast('Feedback enviado. Obrigado!'); this.setState({rating:0,chips:{},fbText:''}); },
+      toastOn:this.state.toastOn, toastMsg:this.state.toastMsg,
+    };
+  }
+}
+</script>
+</body>
+</html>

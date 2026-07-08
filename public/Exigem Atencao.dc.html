@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Plus Jakarta Sans',sans-serif;-webkit-font-smoothing:antialiased;background:#F4F5FB}
+  ::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:#D7DAE8;border-radius:8px;border:2px solid #F4F5FB}::-webkit-scrollbar-track{background:transparent}
+  @keyframes claraBob{0%,100%{transform:translateY(0)}50%{transform:translateY(-7px)}}
+  @keyframes slideUp{from{transform:translateY(14px)}to{transform:translateY(0)}}
+  @keyframes pulseRing{0%{box-shadow:0 0 0 0 rgba(229,72,77,.5)}70%{box-shadow:0 0 0 9px rgba(229,72,77,0)}100%{box-shadow:0 0 0 0 rgba(229,72,77,0)}}
+  .att-row{transition:background .15s}.att-row:hover{background:#FAFAFE!important}
+  .att-card{transition:transform .18s,box-shadow .22s}.att-card:hover{transform:translateY(-2px);box-shadow:0 18px 38px -22px rgba(31,38,80,.3)}
+</style>
+</helmet>
+<main style="flex:1;min-width:0;display:flex;flex-direction:column">
+    <dc-import name="Topbar" title="Exigem Atenção" subtitle="Tudo que está em risco real — agregado de todos os módulos, num só lugar." icon-path="M12 9v4 M12 17h.01 M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" hint-size="100%,110px"></dc-import>
+
+    <div style="padding:22px 36px 40px 36px">
+
+      <!-- Clara banner -->
+      <div style="display:flex;align-items:center;flex-wrap:wrap;gap:20px 24px;background:linear-gradient(108deg,#FFF 58%,#FDEFEF 100%);border:1px solid #F4DEDE;border-radius:22px;padding:22px 26px;box-shadow:0 12px 30px -22px rgba(80,31,31,.22)">
+        <div style="position:relative;width:84px;height:84px;border-radius:20px;background:radial-gradient(circle at 50% 35%,#FBE9E9,#FEF5F5);display:flex;align-items:flex-end;justify-content:center;overflow:hidden;flex-shrink:0">
+          <img src="assets/clara.png" alt="Clara" style="width:78px;height:auto;margin-bottom:-4px;animation:claraBob 5s ease-in-out infinite">
+        </div>
+        <div style="flex:1 1 340px;min-width:300px">
+          <div style="display:flex;align-items:center;gap:9px;margin-bottom:7px;flex-wrap:wrap">
+            <span style="font-size:17px;font-weight:800">Clara</span>
+            <span style="font-size:10px;font-weight:700;letter-spacing:.05em;color:#fff;background:#E5484D;padding:3px 8px;border-radius:20px">ALERTA</span>
+          </div>
+          <p style="font-size:15px;color:#3C4258;line-height:1.5;max-width:580px"><b style="color:#C2333A">9 itens</b> exigem atenção agora, em 4 frentes. A maior concentração de risco está em <b style="color:#161A2E">documentos de importação a caminho da atracação</b>.</p>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px;flex:0 0 auto">
+          <span style="font-size:12px;color:#9AA0B4;font-weight:600">Nível de risco operacional</span>
+          <div style="display:flex;align-items:center;gap:9px"><span style="width:11px;height:11px;border-radius:50%;background:#E5484D;animation:pulseRing 2s infinite"></span><span style="font-size:20px;font-weight:800;color:#C2333A">Elevado</span></div>
+        </div>
+      </div>
+
+      <!-- Category grid -->
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:16px;margin-top:18px">
+        <sc-for list="{{ cats }}" as="c" hint-placeholder-count="4">
+          <div class="att-card" style="background:#fff;border:1px solid #EAEBF4;border-radius:20px;overflow:hidden">
+            <div style="display:flex;align-items:center;gap:12px;padding:18px 22px;border-bottom:1px solid #F2F3F9">
+              <span style="width:38px;height:38px;border-radius:11px;background:{{ c.iconBg }};display:flex;align-items:center;justify-content:center;flex-shrink:0">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="{{ c.iconColor }}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="{{ c.iconPath }}"></path></svg>
+              </span>
+              <div style="flex:1"><div style="font-size:15.5px;font-weight:800">{{ c.title }}</div><div style="font-size:12px;color:#9AA0B4;margin-top:2px">{{ c.sub }}</div></div>
+              <span style="font-size:13px;font-weight:800;color:{{ c.iconColor }};background:{{ c.iconBg }};padding:4px 12px;border-radius:20px">{{ c.count }}</span>
+            </div>
+            <div>
+              <sc-for list="{{ c.items }}" as="i" hint-placeholder-count="3">
+                <div class="att-row" style="display:flex;align-items:center;gap:14px;padding:14px 22px;border-bottom:1px solid #F4F5FA;cursor:pointer">
+                  <span style="width:9px;height:9px;border-radius:50%;background:{{ i.dot }};flex-shrink:0"></span>
+                  <div style="flex:1;min-width:0">
+                    <div style="display:flex;align-items:center;gap:9px"><span style="font-family:'JetBrains Mono',monospace;font-size:13.5px;font-weight:700">{{ i.code }}</span><span style="font-size:11.5px;font-weight:700;color:{{ i.tagColor }};background:{{ i.tagBg }};padding:2px 8px;border-radius:6px">{{ i.tag }}</span></div>
+                    <div style="font-size:12.5px;color:#7A8099;margin-top:4px;line-height:1.4">{{ i.reason }}</div>
+                  </div>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#C2C7D6" stroke-width="2.4" style="flex-shrink:0"><path d="m9 6 6 6-6 6"/></svg>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+
+      <div style="text-align:center;margin-top:36px;font-size:13.5px;color:#9AA0B4;font-style:italic">Se nada aparece aqui, a operação está tranquila. Esta tela existe para os dias em que não está.</div>
+    </div>
+  </main>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  CATS=[
+    {title:'Couriers críticos',sub:'Risco para a liberação documental',icon:'M3 5h13v9H3z M16 8h3l3 3v3h-6 M6.5 18a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3 M17.5 18a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3',iconBg:'#FDECEC',iconColor:'#E5484D',
+      items:[
+        {code:'FedEx ··· 4710',tag:'12 dias',tagColor:'#C2333A',tagBg:'#FDECEC',dot:'#E5484D',reason:'Sem leitura; OMBL de 3 processos a bordo. Atraca em 3 dias.'},
+        {code:'DHL ··· 6789',tag:'9 dias',tagColor:'#C2333A',tagBg:'#FDECEC',dot:'#E5484D',reason:'Sem atualização há 72h. 5 processos dependem deste envelope.'},
+      ]},
+    {title:'Demurrage vencendo',sub:'Custo evitável por estadia',icon:'M3 6h11v9H3z M14 9h4l3 3v3h-7 M6.5 19a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3 M17.5 19a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3',iconBg:'#FDF3E0',iconColor:'#E8990C',
+      items:[
+        {code:'HLBU 118 0034',tag:'Em demurrage',tagColor:'#C2333A',tagBg:'#FDECEC',dot:'#E5484D',reason:'2 dias de atraso · R$ 1.450/dia acumulando agora.'},
+        {code:'MSCU 442 1190',tag:'3 dias',tagColor:'#B9760A',tagBg:'#FDF3E0',dot:'#E8990C',reason:'Free time expira em 3 dias · R$ 1.200/dia após o prazo.'},
+      ]},
+    {title:'Processos em risco',sub:'Atracação ameaçada por documento',icon:'M12 3 4 7v10l8 4 8-4V7Z',iconBg:'#FDECEC',iconColor:'#E5484D',
+      items:[
+        {code:'IM1500',tag:'Atraca 3d',tagColor:'#C2333A',tagBg:'#FDECEC',dot:'#E5484D',reason:'OMBL Original ausente — liberação bloqueada sem o documento.'},
+        {code:'IM2210',tag:'Atraca 5d',tagColor:'#C2333A',tagBg:'#FDECEC',dot:'#E5484D',reason:'OMBL no courier DHL parado; sem contingência definida.'},
+        {code:'IM2330',tag:'Atraca 12d',tagColor:'#B9760A',tagBg:'#FDF3E0',dot:'#E8990C',reason:'OHBL não localizado; previsão original já expirou.'},
+      ]},
+    {title:'Documentos ausentes',sub:'Esperados e não recebidos',icon:'M14 3v5h5 M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z',iconBg:'#FDF3E0',iconColor:'#E8990C',
+      items:[
+        {code:'IM1500 · OMBL',tag:'Crítico',tagColor:'#C2333A',tagBg:'#FDECEC',dot:'#E5484D',reason:'Não veio no envelope; agente acionado para 2ª via.'},
+        {code:'IM2480 · OHBL',tag:'Conferência',tagColor:'#B9760A',tagBg:'#FDF3E0',dot:'#E8990C',reason:'Esperado no courier recebido, não localizado na conferência.'},
+      ]},
+  ];
+  renderVals(){ return { cats: this.CATS.map(c=>({...c, iconPath:c.icon, count:c.items.length})) }; }
+}
+</script>
+</body>
+</html>

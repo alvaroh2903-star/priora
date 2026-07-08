@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+<script src="./priora-bus.js"></script>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Plus Jakarta Sans',sans-serif;-webkit-font-smoothing:antialiased;background:#F4F5FB}
+  ::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:#D7DAE8;border-radius:8px;border:2px solid #F4F5FB}::-webkit-scrollbar-track{background:transparent}
+  @keyframes claraBob{0%,100%{transform:translateY(0)}50%{transform:translateY(-7px)}}
+  @keyframes pageIn{from{transform:translateY(12px)}to{transform:translateY(0)}}
+  @keyframes expandIn{from{transform:translateY(-6px)}to{transform:translateY(0)}}
+  @keyframes pulseRing{0%{box-shadow:0 0 0 0 rgba(229,72,77,.5)}70%{box-shadow:0 0 0 9px rgba(229,72,77,0)}100%{box-shadow:0 0 0 0 rgba(229,72,77,0)}}
+  .chev{transition:transform .25s ease}.chev-open{transform:rotate(180deg)}
+  .solid-btn{transition:transform .15s,box-shadow .2s,background .18s}.solid-btn:hover{transform:translateY(-1px)}
+  .ghost-btn{transition:background .16s,border-color .16s,color .16s}.ghost-btn:hover{background:#F3F1FE!important;border-color:#CFC6FB!important;color:#3D34C9!important}
+  .row-hover{transition:background .15s}.row-hover:hover{background:#FAFAFE!important}
+  .link-btn{transition:color .15s}.link-btn:hover{color:#3D34C9!important}
+</style>
+</helmet>
+<main style="flex:1;min-width:0;display:flex;flex-direction:column">
+    <dc-import name="Topbar" title="Demurrage" subtitle="Acompanhe devoluções de containers, riscos e custos em aberto — antes de virarem prejuízo." icon-path="M3 6h11v9H3z M14 9h4l3 3v3h-7 M6.5 19a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3 M17.5 19a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3" hint-size="100%,110px"></dc-import>
+
+    <div style="padding:22px 36px 40px 36px;animation:pageIn .35s ease both">
+
+      <!-- KPIs -->
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px">
+        <sc-for list="{{ kpis }}" as="k" hint-placeholder-count="4">
+          <div style="background:#fff;border:1px solid #EAEBF4;border-radius:16px;padding:16px 18px">
+            <div style="display:flex;align-items:center;gap:8px"><span style="width:9px;height:9px;border-radius:50%;background:{{ k.color }}"></span><span style="font-size:12.5px;color:#7A8099;font-weight:600">{{ k.label }}</span></div>
+            <div style="font-size:25px;font-weight:800;margin-top:8px;letter-spacing:-.02em;color:{{ k.valColor }}">{{ k.value }}</div>
+            <div style="font-size:11.5px;color:{{ k.subColor }};margin-top:3px;font-weight:600">{{ k.sub }}</div>
+          </div>
+        </sc-for>
+      </div>
+
+      <div style="display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:20px;align-items:start;margin-top:24px">
+        <div style="display:flex;flex-direction:column;gap:18px;min-width:0">
+          <sc-for list="{{ sections }}" as="s" hint-placeholder-count="3">
+            <div style="background:#fff;border:1px solid #EAEBF4;border-radius:20px;padding:20px 22px">
+              <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:15px">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="{{ s.color }}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="{{ s.iconPath }}"></path></svg>
+                <h2 style="font-size:13.5px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:#161A2E">{{ s.title }}</h2>
+                <span style="font-size:12px;color:#9AA0B4">{{ s.hint }}</span>
+                <span style="margin-left:auto;font-size:12px;font-weight:700;color:{{ s.color }};background:{{ s.badgeBg }};padding:3px 10px;border-radius:20px">{{ s.count }}</span>
+              </div>
+
+              <sc-for list="{{ s.cards }}" as="c" hint-placeholder-count="1">
+                <div data-proc="{{ c.id }}" style="position:relative;border:1px solid {{ c.cardBorder }};border-radius:15px;padding:17px 19px 17px 21px;overflow:hidden;box-shadow:{{ c.ring }};transition:box-shadow .3s ease">
+                  <span style="position:absolute;left:0;top:0;bottom:0;width:5px;background:{{ c.accent }}"></span>
+                  <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap">
+                    <div style="display:flex;align-items:flex-start;gap:12px;min-width:0;flex:1">
+                      <span style="width:38px;height:38px;border-radius:11px;background:{{ c.iconBg }};display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="{{ c.accent }}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="{{ c.iconPath }}"></path></svg></span>
+                      <div style="min-width:0">
+                        <p style="font-size:13.5px;font-weight:700;color:{{ c.accent }};line-height:1.35">{{ c.topline }}</p>
+                        <div style="display:flex;align-items:center;gap:9px;margin-top:4px;flex-wrap:wrap"><span style="font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:700;color:#4327E6">{{ c.code }}</span><span style="font-size:13.5px;font-weight:700">— {{ c.cliente }}</span></div>
+                        <div style="display:flex;align-items:center;gap:14px;margin-top:7px;flex-wrap:wrap">
+                          <sc-for list="{{ c.meta }}" as="m" hint-placeholder-count="2"><span style="font-size:11.5px;color:#9AA0B4">{{ m }}</span></sc-for>
+                        </div>
+                      </div>
+                    </div>
+                    <div style="text-align:right;flex-shrink:0">
+                      <div style="font-size:20px;font-weight:800;color:{{ c.bigColor }}">{{ c.big }}</div>
+                      <sc-for list="{{ c.rightLines }}" as="l" hint-placeholder-count="2"><div style="font-size:11px;color:{{ l.color }};margin-top:2px">{{ l.text }}</div></sc-for>
+                    </div>
+                  </div>
+
+                  <!-- expanded -->
+                  <sc-if value="{{ c.open }}" hint-placeholder-val="{{ false }}">
+                    <div style="margin-top:15px;display:flex;flex-direction:column;gap:13px;animation:expandIn .22s ease both">
+                      <sc-if value="{{ c.hasContainers }}" hint-placeholder-val="{{ false }}">
+                        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:11px">
+                          <sc-for list="{{ c.containers }}" as="ct" hint-placeholder-count="2">
+                            <div style="background:#FAFAFE;border:1px solid #F0F1F7;border-radius:11px;padding:12px 14px">
+                              <div style="font-family:'JetBrains Mono',monospace;font-size:12.5px;font-weight:700;color:#161A2E">{{ ct.numero }}</div>
+                              <sc-for list="{{ ct.lines }}" as="ln" hint-placeholder-count="2"><div style="font-size:11px;color:{{ ln.color }};margin-top:4px">{{ ln.text }}</div></sc-for>
+                            </div>
+                          </sc-for>
+                        </div>
+                      </sc-if>
+                      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:11px">
+                        <sc-for list="{{ c.stats }}" as="st" hint-placeholder-count="3">
+                          <div style="background:#FAFAFE;border-radius:11px;padding:12px 14px"><div style="font-size:10px;color:#9AA0B4;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px">{{ st.label }}</div><div style="font-size:14px;font-weight:800;color:{{ st.valueColor }}">{{ st.value }}</div><div style="font-size:11px;color:#9AA0B4;margin-top:1px">{{ st.sub }}</div></div>
+                        </sc-for>
+                      </div>
+                      <div style="display:flex;align-items:flex-start;gap:11px;background:#F8F7FE;border:1px solid #ECE9FB;border-radius:12px;padding:13px 15px">
+                        <span style="width:28px;height:28px;border-radius:9px;background:#EEEBFE;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="2"><path d="M12 3 4 7v10l8 4 8-4V7Z"/></svg></span>
+                        <p style="font-size:12.5px;color:#4A5063;line-height:1.5"><b style="color:#4327E6">Clara</b> {{ c.clara }}</p>
+                      </div>
+                    </div>
+                  </sc-if>
+
+                  <!-- actions -->
+                  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:14px;padding-top:13px;border-top:1px solid #F2F3F9">
+                    <sc-if value="{{ c.canSolicitar }}" hint-placeholder-val="{{ true }}">
+                      <button onClick="{{ c.onSolicitar }}" class="solid-btn" style="display:flex;align-items:center;gap:7px;border:none;border-radius:10px;padding:10px 15px;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer;background:{{ c.solicitarBg }};color:{{ c.solicitarColor }}">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="{{ c.solicitarIcon }}"></path></svg>{{ c.solicitarLabel }}</button>
+                    </sc-if>
+                    <button onClick="{{ c.onToggle }}" class="ghost-btn" style="display:flex;align-items:center;gap:7px;background:#fff;color:#5A6076;border:1px solid #E6E8F2;border-radius:10px;padding:10px 15px;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer">
+                      <svg class="chev {{ c.chevClass }}" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m6 9 6 6 6-6"/></svg>{{ c.toggleLabel }}</button>
+                    <sc-if value="{{ c.hasProcesso }}" hint-placeholder-val="{{ false }}">
+                      <button onClick="{{ c.onVerProcesso }}" class="ghost-btn" style="display:flex;align-items:center;gap:7px;background:#fff;color:#5A6076;border:1px solid #E6E8F2;border-radius:10px;padding:10px 15px;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer">Ver processo</button>
+                    </sc-if>
+                  </div>
+                </div>
+              </sc-for>
+            </div>
+          </sc-for>
+
+          <div style="text-align:center;padding:8px;font-size:13px;color:#9AA0B4;font-style:italic">"Custos não surgem de surpresa. Surgem de falta de acompanhamento."</div>
+        </div>
+
+        <!-- RIGHT RAIL -->
+        <div style="display:flex;flex-direction:column;gap:18px;position:sticky;top:22px">
+          <div style="background:#fff;border:1px solid #EAEBF4;border-radius:20px;padding:20px 22px">
+            <div style="display:flex;align-items:center;gap:9px;margin-bottom:6px"><span style="width:28px;height:28px;border-radius:9px;background:#EEEBFE;display:flex;align-items:center;justify-content:center"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="2.2"><path d="M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></span><h3 style="font-size:14.5px;font-weight:800">Resumo geral</h3></div>
+            <p style="font-size:12.5px;color:#7A8099;margin-bottom:14px">Analisei todos os processos e identifiquei:</p>
+            <div style="display:flex;flex-direction:column;gap:11px">
+              <sc-for list="{{ resumo }}" as="r" hint-placeholder-count="3">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:10px"><div style="display:flex;align-items:center;gap:8px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="{{ r.color }}" stroke-width="2.2"><path d="{{ r.iconPath }}"></path></svg><span style="font-size:12px;color:#5A6076;line-height:1.3">{{ r.label }}</span></div><span style="font-size:12.5px;font-weight:800;color:{{ r.valColor }};white-space:nowrap">{{ r.value }}</span></div>
+              </sc-for>
+            </div>
+            <div style="margin-top:14px;padding-top:13px;border-top:1px solid #F0F1F7;display:flex;align-items:center;justify-content:space-between"><span style="font-size:13.5px;font-weight:800;color:#161A2E">R$ 18.420</span><span style="font-size:11px;color:#9AA0B4">impacto total estimado</span></div>
+          </div>
+
+          <div style="background:#fff;border:1px solid #F4DEDE;border-radius:20px;padding:20px 22px">
+            <div style="display:flex;align-items:center;gap:9px;margin-bottom:11px"><span style="width:10px;height:10px;border-radius:50%;background:#E5484D;animation:pulseRing 2s infinite"></span><h3 style="font-size:13.5px;font-weight:800;color:#C2333A">Maior risco atual</h3></div>
+            <div style="font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:700">IM2567 — BRA TRADE</div>
+            <p style="font-size:12.5px;color:#7A8099;margin-top:5px;line-height:1.5">R$ 460/dia em demurrage · 2 containers fora do free time.</p>
+            <a href="#" class="solid-btn" style="display:flex;align-items:center;justify-content:center;gap:8px;margin-top:14px;background:#4327E6;color:#fff;text-decoration:none;border-radius:11px;padding:11px;font-size:13px;font-weight:700;box-shadow:0 10px 22px -12px rgba(67,39,230,.7)">Ver caso prioritário<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
+          </div>
+
+          <div style="background:#fff;border:1px solid #EAEBF4;border-radius:20px;padding:20px 22px">
+            <h3 style="font-size:14.5px;font-weight:800;margin-bottom:14px">Atividades recentes</h3>
+            <div style="display:flex;flex-direction:column;gap:3px">
+              <sc-for list="{{ atividades }}" as="a" hint-placeholder-count="3">
+                <div class="row-hover" style="display:flex;align-items:flex-start;gap:11px;padding:9px 8px;border-radius:11px;margin:0 -8px">
+                  <span style="width:28px;height:28px;border-radius:9px;background:{{ a.bg }};display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="{{ a.color }}" stroke-width="2.2"><path d="{{ a.iconPath }}"></path></svg></span>
+                  <div style="flex:1;min-width:0"><div style="font-size:12.5px;font-weight:700">{{ a.label }}</div><div style="font-size:11px;color:#9AA0B4;margin-top:1px">{{ a.sub }}</div></div>
+                  <span style="font-size:10.5px;color:#9AA0B4;flex-shrink:0">{{ a.time }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <sc-if value="{{ toastOn }}" hint-placeholder-val="{{ false }}">
+      <div style="position:fixed;right:24px;bottom:24px;z-index:60;display:flex;align-items:center;gap:12px;background:#fff;border:1px solid #EAEBF4;box-shadow:0 18px 44px -16px rgba(31,38,80,.4);border-radius:14px;padding:14px 18px;max-width:380px;animation:pageIn .3s ease both">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1F9D6B" stroke-width="2.2" style="flex-shrink:0"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg>
+        <p style="font-size:13.5px;color:#161A2E;font-weight:600;line-height:1.4">{{ toastMsg }}</p>
+      </div>
+    </sc-if>
+  </main>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = { open:{ IM2567:true }, minuta:{}, toastOn:false, toastMsg:'', highlight:null };
+
+  componentDidMount(){
+    this._onFocus = (e)=>{ const dt=e&&e.detail; if(dt && dt.module==='demurrage' && dt.id) this.focusProc(dt.id); };
+    window.addEventListener('priora:focus', this._onFocus);
+    const p = window.PrioraBus && window.PrioraBus.consume('demurrage');
+    if (p && p.id) this.focusProc(p.id);
+  }
+  componentWillUnmount(){ window.removeEventListener('priora:focus', this._onFocus); clearTimeout(this._t); clearTimeout(this._hl); }
+
+  focusProc(id){
+    this.setState(s=>({ open:{...s.open,[id]:true}, highlight:id }));
+    if (window.PrioraBus) window.PrioraBus.scrollToSel('[data-proc="'+id+'"]');
+    clearTimeout(this._hl); this._hl = setTimeout(()=>this.setState({highlight:null}), 2800);
+  }
+
+  toast(msg){ this.setState({toastOn:true,toastMsg:msg}); clearTimeout(this._t); this._t=setTimeout(()=>this.setState({toastOn:false}),2600); }
+
+  cardData(){
+    return {
+      custo: [{
+        id:'IM2567', accent:'#E5484D', iconBg:'#FDECEC', cardBorder:'#F4DEDE',
+        iconPath:'M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z',
+        topline:'Cliente acumulando R$ 460/dia em demurrage', code:'IM2567', cliente:'BRA TRADE',
+        meta:['2 containers em demurrage','Cliente: BRA TRADE'],
+        big:'R$ 1.840', bigColor:'#161A2E', rightLines:[{text:'estimados acumulados',color:'#9AA0B4'},{text:'+ R$ 460/dia',color:'#C2333A'}],
+        hasContainers:true,
+        containers:[
+          {numero:'FBIU5238915', lines:[{text:'Retirado 12/05 · Free Time 21d',color:'#9AA0B4'},{text:'Demurrage: 4 dias · R$ 920',color:'#C2333A'},{text:'Minuta: Não recebida',color:'#C2333A'}]},
+          {numero:'GAOU6159773', lines:[{text:'Retirado 12/05 · Free Time 21d',color:'#9AA0B4'},{text:'Demurrage: 4 dias · R$ 920',color:'#C2333A'},{text:'Minuta: Não recebida',color:'#C2333A'}]},
+        ],
+        stats:[{label:'Free time',value:'Vencido',valueColor:'#C2333A',sub:'21 dias — esgotado'},{label:'Responsável',value:'Cliente',valueColor:'#C2333A',sub:'BRA TRADE'},{label:'Motivo',value:'Não devolução',valueColor:'#161A2E',sub:'Prazo excedido'}],
+        clara:'2 containers fora do free time há 4 dias. Responsabilidade do cliente BRA TRADE. Solicitar minuta urgente para documentar a cobrança.',
+        canSolicitar:true, hasProcesso:false,
+      }],
+      risco: [{
+        id:'IM2588', accent:'#E8990C', iconBg:'#FEF4E1', cardBorder:'#F5E6C8',
+        iconPath:'M12 7v5l3 2M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z',
+        topline:'Risco de gerar custo ao cliente em até 3 dias', code:'IM2588', cliente:'KLABIN',
+        meta:['2 containers','Cliente: KLABIN'],
+        big:'3 dias', bigColor:'#B9760A', rightLines:[{text:'restam de Free Time',color:'#9AA0B4'}],
+        hasContainers:true,
+        containers:[
+          {numero:'TCLU7887654', lines:[{text:'Free Time 21d',color:'#9AA0B4'},{text:'Restam 3 dias · Custo potencial R$ 920',color:'#B9760A'}]},
+          {numero:'MSKU2233445', lines:[{text:'Free Time 21d',color:'#9AA0B4'},{text:'Restam 3 dias · Custo potencial R$ 920',color:'#B9760A'}]},
+        ],
+        stats:[{label:'Free time restante',value:'3 dias',valueColor:'#B9760A',sub:'Vence em breve'},{label:'Responsável',value:'Cliente',valueColor:'#B9760A',sub:'KLABIN'},{label:'Custo estimado',value:'R$ 1.840',valueColor:'#161A2E',sub:'se não devolvido'}],
+        clara:'3 dias antes de gerar custo. Contatar a KLABIN para antecipar a devolução e evitar a cobrança de demurrage.',
+        canSolicitar:false, hasProcesso:true,
+      }],
+      pend: [{
+        id:'IM2550', accent:'#4327E6', iconBg:'#EEEBFE', cardBorder:'#E4E1FA',
+        iconPath:'M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z',
+        topline:'Minuta pendente após devolução', code:'IM2550', cliente:'JBS',
+        meta:['1 container devolvido','Cliente: JBS'],
+        big:'15/06', bigColor:'#177D54', rightLines:[{text:'devolução realizada',color:'#9AA0B4'},{text:'aguardando minuta',color:'#9AA0B4'}],
+        hasContainers:false, containers:[],
+        stats:[{label:'Status',value:'Devolvido',valueColor:'#177D54',sub:'15/06/2026'},{label:'Minuta',value:'Não localizada',valueColor:'#C2333A',sub:'Pendente do cliente'},{label:'Custo',value:'R$ 0',valueColor:'#161A2E',sub:'Sem custo ativo'}],
+        clara:'Container devolvido mas minuta não localizada. Solicitar confirmação ao cliente JBS para encerrar a pendência documental.',
+        canSolicitar:true, hasProcesso:true,
+      },{
+        id:'IM2544', accent:'#1F9D6B', iconBg:'#E7F6EF', cardBorder:'#D6EEE2',
+        iconPath:'M20 6 9 17l-5-5',
+        topline:'Minuta recebida — demurrage encerrada, sem custos', code:'IM2544', cliente:'AMBEV',
+        meta:['1 container devolvido','Cliente: AMBEV'],
+        big:'R$ 0', bigColor:'#177D54', rightLines:[{text:'sem custo ativo',color:'#9AA0B4'},{text:'encerrado',color:'#177D54'}],
+        hasContainers:true,
+        containers:[{numero:'MRKU7788991', lines:[{text:'Devolvido 14/06',color:'#9AA0B4'},{text:'Minuta recebida',color:'#177D54'},{text:'Sem demurrage',color:'#177D54'}]}],
+        stats:[{label:'Status',value:'Encerrado',valueColor:'#177D54',sub:'Sem pendências'},{label:'Minuta',value:'Recebida',valueColor:'#177D54',sub:'14/06/2026'},{label:'Custo',value:'R$ 0',valueColor:'#161A2E',sub:'Sem custo ativo'}],
+        clara:'container devolvido e minuta recebida. Processo de demurrage encerrado sem custos ao cliente.',
+        canSolicitar:false, hasProcesso:true,
+      }],
+    };
+  }
+
+  vm(c){
+    const open = !!this.state.open[c.id];
+    const solicitado = !!this.state.minuta[c.id];
+    const hl = this.state.highlight === c.id;
+    return { ...c, open, chevClass: open?'chev-open':'', toggleLabel: open?'Recolher':'Ver detalhes',
+      ring: hl ? '0 0 0 3px #4327E6, 0 18px 40px -20px rgba(67,39,230,.45)' : 'none',
+      onVerProcesso:()=>{ if(window.PrioraBus) window.PrioraBus.focus('processos', c.id); },
+      solicitarBg: solicitado?'#E7F6EF':'#0D1227', solicitarColor: solicitado?'#177D54':'#fff',
+      solicitarLabel: solicitado?'Minuta solicitada':'Solicitar Minuta',
+      solicitarIcon: solicitado?'M20 6 9 17l-5-5':'M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z',
+      onToggle:()=>this.setState(s=>({open:{...s.open,[c.id]:!s.open[c.id]}})),
+      onSolicitar:()=>{ if(this.state.minuta[c.id])return; this.setState(s=>({minuta:{...s.minuta,[c.id]:true}})); this.toast('Notificação enviada no portal do cliente.'); },
+    };
+  }
+
+  renderVals(){
+    const d = this.cardData();
+    const sections = [
+      { title:'Custo ativo ao cliente', hint:'Processos que já estão gerando custos.', color:'#E5484D', badgeBg:'#FDECEC', count:'6 processos', iconPath:'M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z', cards:d.custo.map(c=>this.vm(c)) },
+      { title:'Risco iminente', hint:'Podem começar a gerar custos em breve.', color:'#E8990C', badgeBg:'#FEF4E1', count:'12 processos', iconPath:'M12 7v5l3 2M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z', cards:d.risco.map(c=>this.vm(c)) },
+      { title:'Pendências documentais', hint:'Devolvidos, aguardando comprovante do cliente.', color:'#4327E6', badgeBg:'#EEEBFE', count: (this.state.minuta['IM2550']?'3':'4')+' processos', iconPath:'M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z', cards:d.pend.map(c=>this.vm(c)) },
+    ];
+    const kpis = [
+      { label:'Custo ativo ao cliente', value:'6', sub:'R$ 4.260 estimados', subColor:'#C2333A', color:'#E5484D', valColor:'#C2333A' },
+      { label:'Risco iminente', value:'12', sub:'R$ 9.320 estimados', subColor:'#B9760A', color:'#E8990C', valColor:'#161A2E' },
+      { label:'Pendências documentais', value: this.state.minuta['IM2550']?'3':'4', sub:'R$ 0', subColor:'#9AA0B4', color:'#4327E6', valColor:'#161A2E' },
+      { label:'Impacto total estimado', value:'R$ 18.420', sub:'em custos potenciais', subColor:'#9AA0B4', color:'#6E59F2', valColor:'#161A2E' },
+    ];
+    const resumo = [
+      { label:'6 processos gerando custos', value:'R$ 4.260', color:'#E5484D', valColor:'#C2333A', iconPath:'M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z' },
+      { label:'12 próximos de gerar custo', value:'R$ 9.320', color:'#E8990C', valColor:'#B9760A', iconPath:'M12 7v5l3 2M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z' },
+      { label:(this.state.minuta['IM2550']?'3':'4')+' aguardando minuta', value:'R$ 0', color:'#4327E6', valColor:'#161A2E', iconPath:'M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z' },
+    ];
+    const atividades = [
+      { label:'Container devolvido', sub:'MSCU1234567', time:'Há 5h', bg:'#E7F6EF', color:'#1F9D6B', iconPath:'M20 6 9 17l-5-5' },
+      { label:'Minuta solicitada', sub:'IM2550 — JBS', time:'Ontem', bg:'#EEEBFE', color:'#4327E6', iconPath:'M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z' },
+      { label:'Demurrage iniciado', sub:'IM2567 — BRA TRADE', time:'4 dias', bg:'#FDECEC', color:'#E5484D', iconPath:'M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z' },
+    ];
+    return { sections, kpis, resumo, atividades, toastOn:this.state.toastOn, toastMsg:this.state.toastMsg };
+  }
+}
+</script>
+</body>
+</html>
