@@ -35,9 +35,31 @@ authRouter.get('/callback', async (req, res, next) => {
   try {
     const code = req.query.code as string | undefined;
     const state = req.query.state as string | undefined;
+    const oauthError = req.query.error as string | undefined;
+    const oauthErrorDescription = req.query.error_description as
+      | string
+      | undefined;
+
+    // A Microsoft pode redirecionar de volta com um erro (ex.: consentimento
+    // recusado). Surfamos o motivo real em vez de "código ausente".
+    if (oauthError) {
+      return res
+        .status(400)
+        .send(
+          `A Microsoft recusou o login: ${oauthError}\n\n` +
+            `${oauthErrorDescription || ''}\n\n` +
+            `Volte para http://localhost:${config.port} e tente novamente.`,
+        );
+    }
 
     if (!code) {
-      return res.status(400).send('Código de autorização ausente.');
+      return res
+        .status(400)
+        .send(
+          'Código de autorização ausente. Comece o login pela página inicial ' +
+            `(http://localhost:${config.port}) clicando em "Entrar com a Microsoft" — ` +
+            'não abra /auth/callback diretamente nem recarregue essa página.',
+        );
     }
     if (!state || state !== req.session.authState) {
       return res.status(400).send('Parâmetro "state" inválido (possível CSRF).');
