@@ -463,11 +463,10 @@ class Component extends DCLogic {
       { label:'ETA atualizada', sub:'IM2588 — KLABIN', time:'Ontem', bg:'#E7F0FE', color:'#2563EB', iconPath:'M3 17h18M5 17V9l7-5 7 5v8' },
     ];
     const detail = this.state.detail;
-    const base = { kpis, atencao, aguardando, todos, claraPoints, atividades };
-    const live = this.state.live;
-    if (live && live.length) {
-      Object.assign(base, this.liveLists(live, open));
-    }
+    // Sempre usa dados reais do Outlook (sem exemplos). Enquanto carrega ou se
+    // não houver e-mails, as listas ficam vazias — nunca dados fictícios.
+    const base = { atividades: [] };
+    Object.assign(base, this.liveLists(this.state.live || [], open));
     return Object.assign(base, {
       listView: !detail, detailView: !!detail, d: detail ? this.buildDetail(detail) : {}
     });

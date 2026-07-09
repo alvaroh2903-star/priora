@@ -108,6 +108,23 @@ export async function searchLogisticsMessages(
   return response.value as LogisticsSummary[];
 }
 
+/** Lista as mensagens recentes da caixa de entrada (resumo + conversationId). */
+export async function listRecentSummaries(
+  accessToken: string,
+  opts: { top?: number } = {},
+): Promise<LogisticsSummary[]> {
+  const client = getGraphClient(accessToken);
+  const response = await client
+    .api('/me/mailFolders/inbox/messages')
+    .top(opts.top ?? 40)
+    .select(
+      'id,conversationId,subject,from,receivedDateTime,bodyPreview,isRead,hasAttachments,webLink',
+    )
+    .orderby('receivedDateTime DESC')
+    .get();
+  return response.value as LogisticsSummary[];
+}
+
 export interface ConversationMessage {
   id: string;
   conversationId: string;

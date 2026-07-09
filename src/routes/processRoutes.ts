@@ -1,6 +1,10 @@
 import { Router } from 'express';
 import { requireAuth, AuthedRequest } from '../middleware/requireAuth';
-import { searchLogisticsMessages, LogisticsSummary } from '../graph/graphService';
+import {
+  searchLogisticsMessages,
+  listRecentSummaries,
+  LogisticsSummary,
+} from '../graph/graphService';
 import { config } from '../config';
 
 export const processRouter = Router();
@@ -29,10 +33,17 @@ interface ProcessItem {
  */
 processRouter.get('/', async (req: AuthedRequest, res, next) => {
   try {
-    const messages = await searchLogisticsMessages(req.accessToken!, {
+    // Primeiro busca por palavras-chave de logística; se não achar nada,
+    // cai para a caixa de entrada recente (para o usuário ver seus e-mails reais).
+    let messages = await searchLogisticsMessages(req.accessToken!, {
       keywords: config.logisticsKeywords,
       top: 60,
     });
+    let source = 'logistica';
+    if (messages.length === 0) {
+      messages = await listRecentSummaries(req.accessToken!, { top: 40 });
+      source = 'inbox';
+    }
 
     const groups = new Map<string, LogisticsSummary[]>();
     for (const m of messages) {
@@ -68,7 +79,7 @@ processRouter.get('/', async (req: AuthedRequest, res, next) => {
     }
 
     processes.sort((a, b) => (a.data < b.data ? 1 : -1));
-    res.json({ count: processes.length, processes });
+    res.json({ count: processes.length, source, processes });
   } catch (err) {
     next(err);
   }
