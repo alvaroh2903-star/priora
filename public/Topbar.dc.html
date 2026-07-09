@@ -120,12 +120,7 @@ class Component extends DCLogic {
     this.state = {
       notifOpen:false, helpOpen:false,
       prof:this.loadProf(),
-      notifs:[
-        {id:'n1', title:'Container MSKU 765123-4 atinge o fim do período livre em 2 dias', kind:'risk', module:'Demurrage', time:'há 12 min', href:'Demurrage.dc.html', read:false},
-        {id:'n2', title:'Courier DHL #4471 atrasou a entrega do BL original', kind:'courier', module:'Couriers', time:'há 1 h', href:'Courier Module.dc.html', read:false},
-        {id:'n3', title:'3 processos aguardam a sua liberação', kind:'decision', module:'Liberação', time:'há 2 h', href:'Liberacao.dc.html', read:false},
-        {id:'n4', title:'Relatório semanal de desempenho disponível', kind:'report', module:'Relatórios', time:'ontem', href:'Relatorios.dc.html', read:true}
-      ]
+      notifs:[]
     };
   }
 

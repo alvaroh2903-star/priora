@@ -13,215 +13,25 @@
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
   body{font-family:'Plus Jakarta Sans',sans-serif;-webkit-font-smoothing:antialiased;background:#F4F5FB}
-  ::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:#D7DAE8;border-radius:8px;border:2px solid #F4F5FB}::-webkit-scrollbar-track{background:transparent}
-  @keyframes claraBob{0%,100%{transform:translateY(0)}50%{transform:translateY(-7px)}}
   @keyframes pageIn{from{transform:translateY(12px)}to{transform:translateY(0)}}
-  @keyframes pulseRing{0%{box-shadow:0 0 0 0 rgba(229,72,77,.5)}70%{box-shadow:0 0 0 9px rgba(229,72,77,0)}100%{box-shadow:0 0 0 0 rgba(229,72,77,0)}}
-  .mod-card{transition:transform .18s ease,box-shadow .22s ease,border-color .2s}
-  .mod-card:hover{transform:translateY(-3px);box-shadow:0 20px 40px -24px rgba(31,38,80,.34);border-color:#DDE0EE!important}
-  .att-card{transition:transform .18s ease,box-shadow .22s ease}
-  .att-card:hover{transform:translateY(-2px);box-shadow:0 18px 38px -22px rgba(31,38,80,.3)}
-  .act-row{transition:background .15s}.act-row:hover{background:#FAFAFE!important}
-  .solid-btn{transition:transform .15s,box-shadow .2s,background .18s}.solid-btn:hover{transform:translateY(-1px)}
-  .open-link{transition:gap .18s,color .16s}.open-link:hover{gap:11px!important}
-  .link-btn{transition:color .15s}.link-btn:hover{color:#3D34C9!important}
 </style>
 </helmet>
 <main style="flex:1;min-width:0;display:flex;flex-direction:column">
     <dc-import name="Topbar" title="Início" subtitle="Central de atenção operacional — o que precisa de você hoje." icon-path="M4 11.5 12 4l8 7.5 M6 10v9h12v-9" hint-size="100%,110px"></dc-import>
-
-    <div style="padding:22px 36px 40px 36px;animation:pageIn .35s ease both">
-      <div style="display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:20px;align-items:start">
-
-        <!-- LEFT COLUMN -->
-        <div style="display:flex;flex-direction:column;gap:22px;min-width:0">
-
-          <!-- Clara hero -->
-          <div style="display:flex;align-items:stretch;flex-wrap:wrap;gap:22px;background:linear-gradient(108deg,#FFFFFF 56%,#F3F1FE 100%);border:1px solid #EAEBF4;border-radius:22px;padding:24px 26px;box-shadow:0 12px 30px -22px rgba(31,38,80,.28)">
-            <div style="display:flex;align-items:center;gap:20px;flex:1 1 380px;min-width:300px">
-              <div style="position:relative;width:84px;height:84px;border-radius:50%;background:radial-gradient(circle at 50% 35%,#EDE9FF,#F6F4FF);display:flex;align-items:flex-end;justify-content:center;overflow:hidden;flex-shrink:0;box-shadow:0 8px 22px -10px rgba(67,39,230,.42);border:1px solid rgba(67,39,230,.14)">
-                <img src="assets/clara.png" alt="Clara" style="position:absolute;width:143px;height:auto;left:-19px;top:7px">
-              </div>
-              <div style="min-width:0">
-                <div style="display:flex;align-items:center;gap:9px;margin-bottom:4px">
-                  <span style="font-size:17px;font-weight:800">Clara</span>
-                  <span style="font-size:10px;font-weight:700;letter-spacing:.05em;color:#fff;background:#4327E6;padding:3px 8px;border-radius:20px">IA</span>
-                </div>
-                <h2 style="font-size:22px;font-weight:800;letter-spacing:-.02em">Bom dia, Carlos!</h2>
-                <p style="font-size:14px;color:#7A8099;margin-top:3px">Analisei <b style="color:#161A2E">184 processos ativos</b>.</p>
-                <div style="display:flex;flex-direction:column;gap:8px;margin-top:14px">
-                  <sc-for list="{{ findings }}" as="f" hint-placeholder-count="4">
-                    <div style="display:flex;align-items:center;gap:10px">
-                      <span style="width:9px;height:9px;border-radius:50%;background:{{ f.color }};flex-shrink:0"></span>
-                      <span style="font-size:13.5px;color:#3C4258"><b style="color:#161A2E">{{ f.n }}</b> {{ f.label }}</span>
-                    </div>
-                  </sc-for>
-                </div>
-              </div>
-            </div>
-            <div style="flex:1 1 240px;min-width:240px;background:#FBFBFE;border:1px solid #EEEFF6;border-radius:16px;padding:20px;display:flex;flex-direction:column;justify-content:space-between;gap:16px">
-              <div>
-                <div style="display:flex;align-items:center;gap:9px;margin-bottom:11px">
-                  <span style="width:28px;height:28px;border-radius:50%;background:#E7F6EF;display:flex;align-items:center;justify-content:center"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#1F9D6B" stroke-width="2.4"><path d="m5 12 5 5 9-10"/></svg></span>
-                  <span style="font-size:10.5px;font-weight:700;color:#177D54;text-transform:uppercase;letter-spacing:.05em">Status geral</span>
-                </div>
-                <p style="font-size:14px;color:#161A2E;font-weight:600;line-height:1.4">Nenhum risco operacional crítico identificado.</p>
-                <p style="font-size:13.5px;color:#7A8099;line-height:1.45;margin-top:7px">Sua atenção é necessária em apenas <b style="color:#4327E6">3 situações</b> hoje.</p>
-              </div>
-              <a href="Fila de Decisoes.dc.html" class="solid-btn" style="display:flex;align-items:center;justify-content:center;gap:9px;background:#4327E6;color:#fff;text-decoration:none;border-radius:12px;padding:12px;font-size:13.5px;font-weight:700;box-shadow:0 10px 22px -10px rgba(67,39,230,.7)">Ver prioridades
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
-            </div>
-          </div>
-
-          <!-- O que exige atenção agora -->
-          <div>
-            <div style="display:flex;align-items:center;gap:10px;margin-bottom:15px">
-              <span style="width:10px;height:10px;border-radius:50%;background:#E5484D;animation:pulseRing 2s infinite"></span>
-              <h2 style="font-size:17px;font-weight:800">O que exige atenção agora</h2>
-            </div>
-            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:14px">
-              <sc-for list="{{ attention }}" as="a" hint-placeholder-count="3">
-                <div class="att-card" style="position:relative;background:#fff;border:1px solid {{ a.border }};border-radius:18px;padding:19px 21px 19px 24px;overflow:hidden;display:flex;flex-direction:column">
-                  <span style="position:absolute;left:0;top:0;bottom:0;width:5px;background:{{ a.accent }}"></span>
-                  <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
-                    <span style="width:34px;height:34px;border-radius:10px;background:{{ a.iconBg }};display:flex;align-items:center;justify-content:center;flex-shrink:0">
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="{{ a.accent }}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="{{ a.iconPath }}"></path></svg></span>
-                    <div style="min-width:0">
-                      <div style="font-size:11px;font-weight:700;color:{{ a.accent }};text-transform:uppercase;letter-spacing:.04em">{{ a.kind }}</div>
-                      <div style="font-family:'JetBrains Mono',monospace;font-size:15px;font-weight:700;color:#161A2E">{{ a.code }}</div>
-                    </div>
-                  </div>
-                  <p style="font-size:13px;color:#5A6076;line-height:1.5;flex:1">{{ a.desc }}</p>
-                  <sc-if value="{{ a.useLink }}" hint-placeholder-val="{{ true }}">
-                    <a href="{{ a.href }}" class="solid-btn" style="display:flex;align-items:center;justify-content:center;gap:8px;margin-top:15px;background:{{ a.btnBg }};color:{{ a.btnColor }};text-decoration:none;border:1px solid {{ a.btnBorder }};border-radius:11px;padding:10px;font-size:13px;font-weight:700">{{ a.cta }}
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
-                  </sc-if>
-                  <sc-if value="{{ a.useBtn }}" hint-placeholder-val="{{ false }}">
-                    <button onClick="{{ a.onClick }}" class="solid-btn" style="display:flex;align-items:center;justify-content:center;gap:8px;margin-top:15px;background:{{ a.btnBg }};color:{{ a.btnColor }};border:1px solid {{ a.btnBorder }};border-radius:11px;padding:10px;font-size:13px;font-weight:700;font-family:inherit;cursor:pointer">{{ a.cta }}
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
-                  </sc-if>
-                </div>
-              </sc-for>
-            </div>
-          </div>
-
-          <!-- Módulos operacionais -->
-          <div>
-            <h2 style="font-size:17px;font-weight:800;margin-bottom:3px">Módulos operacionais</h2>
-            <p style="font-size:13.5px;color:#9AA0B4;margin-bottom:15px">O estado de cada frente, num relance.</p>
-            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(225px,1fr));gap:14px">
-              <sc-for list="{{ modules }}" as="m" hint-placeholder-count="4">
-                <a href="{{ m.href }}" class="mod-card" style="display:flex;flex-direction:column;background:#fff;border:1px solid #EAEBF4;border-radius:18px;padding:18px 20px;text-decoration:none">
-                  <div style="display:flex;align-items:center;gap:11px;margin-bottom:14px">
-                    <span style="width:38px;height:38px;border-radius:11px;background:{{ m.iconBg }};display:flex;align-items:center;justify-content:center;flex-shrink:0">
-                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="{{ m.iconColor }}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="{{ m.iconPath }}"></path></svg></span>
-                    <span style="font-size:15.5px;font-weight:800;color:#161A2E">{{ m.title }}</span>
-                  </div>
-                  <div style="display:flex;flex-direction:column;gap:8px;flex:1">
-                    <sc-for list="{{ m.rows }}" as="r" hint-placeholder-count="3">
-                      <div style="display:flex;align-items:baseline;gap:9px">
-                        <span style="font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:700;color:{{ r.color }};min-width:22px">{{ r.n }}</span>
-                        <span style="font-size:12.5px;color:#7A8099;line-height:1.35">{{ r.label }}</span>
-                      </div>
-                    </sc-for>
-                  </div>
-                  <div class="open-link" style="display:flex;align-items:center;gap:7px;margin-top:16px;padding-top:14px;border-top:1px solid #F0F1F7;font-size:13px;font-weight:700;color:{{ m.iconColor }}">Abrir módulo
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div>
-                </a>
-              </sc-for>
-            </div>
-          </div>
+    <div style="flex:1;display:flex;align-items:center;justify-content:center;padding:40px;animation:pageIn .35s ease both">
+      <div style="text-align:center;max-width:440px;background:#fff;border:1px solid #E6E8F2;border-radius:16px;padding:44px 34px">
+        <div style="width:58px;height:58px;border-radius:15px;background:#EEEBFE;display:flex;align-items:center;justify-content:center;margin:0 auto 18px">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
         </div>
-
-        <!-- RIGHT COLUMN -->
-        <div style="display:flex;flex-direction:column;gap:18px;position:sticky;top:22px">
-          <!-- Atividades recentes -->
-          <div style="background:#fff;border:1px solid #EAEBF4;border-radius:20px;padding:20px 22px">
-            <h3 style="font-size:15px;font-weight:800;margin-bottom:15px">Atividades recentes</h3>
-            <div style="display:flex;flex-direction:column;gap:3px">
-              <sc-for list="{{ activities }}" as="ac" hint-placeholder-count="5">
-                <div class="act-row" onClick="{{ ac.onClick }}" style="display:flex;align-items:center;gap:12px;padding:9px 8px;border-radius:11px;margin:0 -8px;cursor:pointer">
-                  <span style="width:32px;height:32px;border-radius:10px;background:{{ ac.bg }};display:flex;align-items:center;justify-content:center;flex-shrink:0">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="{{ ac.color }}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="{{ ac.iconPath }}"></path></svg></span>
-                  <div style="flex:1;min-width:0">
-                    <div style="font-size:13px;font-weight:700;color:#161A2E">{{ ac.label }}</div>
-                    <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#9AA0B4;margin-top:2px">{{ ac.sub }}</div>
-                  </div>
-                  <span style="font-size:11px;color:#9AA0B4;flex-shrink:0">{{ ac.time }}</span>
-                </div>
-              </sc-for>
-            </div>
-            <button class="link-btn" style="width:100%;margin-top:13px;background:transparent;border:none;font-family:inherit;font-size:12.5px;font-weight:700;color:#4327E6;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px">Ver todas atividades
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
-          </div>
-
-          <!-- Resumo operacional -->
-          <div style="background:#fff;border:1px solid #EAEBF4;border-radius:20px;padding:20px 22px">
-            <div style="display:flex;align-items:center;gap:9px;margin-bottom:15px">
-              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="2"><path d="M3 17l6-6 4 4 8-8"/><path d="M17 7h4v4"/></svg>
-              <h3 style="font-size:15px;font-weight:800">Resumo operacional</h3>
-            </div>
-            <div style="display:flex;flex-direction:column;gap:13px">
-              <sc-for list="{{ summary }}" as="s" hint-placeholder-count="4">
-                <div style="display:flex;align-items:center;gap:12px">
-                  <span style="width:32px;height:32px;border-radius:10px;background:{{ s.bg }};display:flex;align-items:center;justify-content:center;flex-shrink:0">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="{{ s.color }}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="{{ s.iconPath }}"></path></svg></span>
-                  <span style="font-size:17px;font-weight:800;color:{{ s.valColor }}">{{ s.value }}</span>
-                  <span style="font-size:12.5px;color:#7A8099;line-height:1.3">{{ s.label }}</span>
-                </div>
-              </sc-for>
-            </div>
-            <a href="Relatorios.dc.html" class="link-btn" style="width:100%;margin-top:15px;padding-top:14px;border-top:1px solid #F0F1F7;background:transparent;border:none;font-family:inherit;font-size:12.5px;font-weight:700;color:#4327E6;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;text-decoration:none">Ver resumo completo
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
-          </div>
-        </div>
+        <div style="font-size:19px;font-weight:800;color:#161A2E;margin-bottom:9px">Em construção</div>
+        <div style="font-size:14px;line-height:1.6;color:#6B7192">Esta tela será conectada aos seus dados reais do Outlook em breve.<br>Por enquanto, use a aba <b style="color:#4327E6">Processos</b> — já funcionando com seus e-mails.</div>
       </div>
     </div>
-  </main>
+</main>
 </x-dc>
 <script type="text/x-dc" data-dc-script>
 class Component extends DCLogic {
-  renderVals() {
-    const findings = [
-      { n: '2', label: 'processos gerando demurrage', color: '#E5484D' },
-      { n: '4', label: 'liberações aguardando cliente', color: '#E8990C' },
-      { n: '1', label: 'courier sem atualização', color: '#F0A024' },
-      { n: '3', label: 'decisões humanas pendentes', color: '#4327E6' },
-    ];
-    const modules = [
-      { title:'Liberação', href:'Liberacao.dc.html', iconBg:'#EEEBFE', iconColor:'#4327E6', iconPath:'M9 11l3 3L22 4 M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11',
-        rows:[{n:'18',label:'aptos para liberação',color:'#177D54'},{n:'6',label:'aguardando cliente',color:'#B9760A'},{n:'2',label:'aguardando Rocket',color:'#5A6076'}] },
-      { title:'Couriers', href:'Courier Module.dc.html', iconBg:'#E7F0FE', iconColor:'#2563EB', iconPath:'M3 5h18v14H3z M3 8l9 6 9-6',
-        rows:[{n:'3',label:'em trânsito',color:'#3D34C9'},{n:'1',label:'atrasado',color:'#C2333A'},{n:'4',label:'documentos pendentes',color:'#5A6076'}] },
-      { title:'Demurrage', href:'Demurrage.dc.html', iconBg:'#FEF1E5', iconColor:'#E8990C', iconPath:'M3 6h11v9H3z M14 9h4l3 3v3h-7 M6.5 19a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3 M17.5 19a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3',
-        rows:[{n:'2',label:'gerando demurrage',color:'#C2333A'},{n:'5',label:'próximos do vencimento',color:'#B9760A'},{n:'3',label:'aguardando minuta',color:'#5A6076'}] },
-      { title:'Fila de Decisões', href:'Fila de Decisoes.dc.html', iconBg:'#EEEBFE', iconColor:'#4327E6', iconPath:'M9 5h10 M9 12h10 M9 19h10 M4 5h.01 M4 12h.01 M4 19h.01',
-        rows:[{n:'4',label:'aguardando validação',color:'#3D34C9'},{n:'1',label:'crítica (IM2540)',color:'#C2333A'},{n:'•',label:'maior prioridade: Telex IM2591',color:'#9AA0B4'}] },
-    ];
-    const attention = [
-      { kind:'Demurrage', code:'IM2567', accent:'#E5484D', border:'#F4DEDE', iconBg:'#FDECEC', iconPath:'M12 9v4 M12 17h.01 M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z',
-        desc:'2 containers gerando demurrage para a BRA TRADE. Última cobrança há 4 dias — R$ 460/dia.', cta:'Abrir Demurrage', href:'Demurrage.dc.html', useLink:true, btnBg:'#FDECEC', btnColor:'#C2333A', btnBorder:'#F6D2D3' },
-      { kind:'Courier', code:'DHL 44556677', accent:'#2563EB', border:'#DCE6FB', iconBg:'#E7F0FE', iconPath:'M3 5h18v14H3z M3 8l9 6 9-6',
-        desc:'Courier atrasado. DHL 44556677 sem atualização há 8 dias. Contato com o agente recomendado.', cta:'Abrir Couriers', useBtn:true, onClick:()=>{ if(window.PrioraBus) window.PrioraBus.focus('couriers','44556677'); }, btnBg:'#E7F0FE', btnColor:'#1D4ED8', btnBorder:'#CBDBF8' },
-      { kind:'Liberação', code:'IM1622 — LOGMINAS', accent:'#4327E6', border:'#E4E1FA', iconBg:'#EEEBFE', iconPath:'M9 11l3 3L22 4 M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11',
-        desc:'Liberação crítica. IM1622 apto para agendamento há 5 dias. ETA amanhã e nenhum agendamento iniciado.', cta:'Abrir Liberação', useBtn:true, onClick:()=>{ if(window.PrioraBus) window.PrioraBus.focus('liberacao','IM1622'); }, btnBg:'#EEEBFE', btnColor:'#3D34C9', btnBorder:'#D9D2FB' },
-    ];
-    const go = (module, id) => () => { if (window.PrioraBus) window.PrioraBus.focus(module, id); };
-    const activities = [
-      { label:'Minuta recebida', sub:'IM2544', time:'Há 28 min', bg:'#EEEBFE', color:'#4327E6', iconPath:'M14 3v5h5 M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z', onClick:go('demurrage','IM2544') },
-      { label:'Courier recebido', sub:'DHL 77889910', time:'Há 1 hora', bg:'#E7F0FE', color:'#2563EB', iconPath:'M3 5h18v14H3z M3 8l9 6 9-6', onClick:go('couriers','77889910') },
-      { label:'Telex confirmado', sub:'IM1578', time:'Há 2 horas', bg:'#E7F6EF', color:'#1F9D6B', iconPath:'m5 12 5 5 9-10', onClick:go('liberacao','IM1578') },
-      { label:'Processo liberado', sub:'IM2531', time:'Há 3 horas', bg:'#E7F6EF', color:'#177D54', iconPath:'M12 3 4 7v10l8 4 8-4V7Z M9 12l2 2 4-4', onClick:go('liberacao','IM2531') },
-      { label:'Container devolvido', sub:'MSCU1234567', time:'Há 5 horas', bg:'#FEF1E5', color:'#E8990C', iconPath:'M3 6h11v9H3z M14 9h4l3 3v3h-7 M6.5 19a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3 M17.5 19a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3', onClick:go('demurrage','IM2550') },
-    ];
-    const summary = [
-      { value:'184', label:'processos monitorados', bg:'#E7F0FE', color:'#2563EB', valColor:'#161A2E', iconPath:'M4 19V5 M4 19h16 M8 16v-5 M13 16V8 M18 16v-9' },
-      { value:'18', label:'aptos para liberação', bg:'#E7F6EF', color:'#1F9D6B', valColor:'#161A2E', iconPath:'M9 11l3 3L22 4 M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11' },
-      { value:'3', label:'alertas ativos', bg:'#FDECEC', color:'#E5484D', valColor:'#161A2E', iconPath:'M12 9v4 M12 17h.01 M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z' },
-      { value:'96%', label:'dos processos dentro do prazo', bg:'#E7F6EF', color:'#177D54', valColor:'#177D54', iconPath:'m5 12 5 5 9-10' },
-    ];
-    return { findings, modules, attention, activities, summary };
-  }
+  renderVals(){ return {}; }
 }
 </script>
 </body>

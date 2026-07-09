@@ -9,259 +9,29 @@
 <x-dc>
 <helmet>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+<script src="./priora-bus.js"></script>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
   body{font-family:'Plus Jakarta Sans',sans-serif;-webkit-font-smoothing:antialiased;background:#F4F5FB}
-  ::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:#D7DAE8;border-radius:8px;border:2px solid #F4F5FB}::-webkit-scrollbar-track{background:transparent}
-  @keyframes claraBob{0%,100%{transform:translateY(0)}50%{transform:translateY(-7px)}}
-  @keyframes growBar{from{width:0}}
-  .mcard{transition:transform .18s,box-shadow .22s}.mcard:hover{transform:translateY(-2px);box-shadow:0 18px 38px -22px rgba(31,38,80,.3)}
-  @keyframes tipIn{from{opacity:0}to{opacity:1}}
-  @keyframes accDown{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}
-  .mcard.exp{box-shadow:0 22px 46px -24px rgba(31,38,80,.34);border-color:#D8D3F3}
-  .prow{transition:background .14s}.prow:hover{background:#F5F4FB}
-  .chev{transition:transform .26s cubic-bezier(.2,.9,.3,1)}
-  .team-md{display:grid;grid-template-columns:minmax(0,340px) minmax(0,1fr);gap:18px;align-items:start}
-  .team-detail-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,240px);gap:20px;align-items:start}
-  @media(max-width:1180px){.team-md{grid-template-columns:1fr}.team-detail-grid{grid-template-columns:1fr}}
-  @media(max-width:820px){.mrow{flex-wrap:wrap;gap:14px 18px}}
+  @keyframes pageIn{from{transform:translateY(12px)}to{transform:translateY(0)}}
 </style>
 </helmet>
 <main style="flex:1;min-width:0;display:flex;flex-direction:column">
     <dc-import name="Topbar" title="Equipe & Desempenho" subtitle="Carga de trabalho e ritmo da operação — onde o time precisa de apoio." icon-path="M9 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6 M3 20a6 6 0 0 1 12 0 M16 5.5a3 3 0 0 1 0 6 M22 20a6 6 0 0 0-5-5.9" hint-size="100%,110px"></dc-import>
-
-    <div style="padding:22px 36px 40px 36px">
-
-      <!-- Clara banner -->
-      <div style="display:flex;align-items:center;flex-wrap:wrap;gap:20px 24px;background:linear-gradient(108deg,#FFFFFF 60%,#F3F1FE 100%);border:1px solid #EAEBF4;border-radius:22px;padding:22px 26px;box-shadow:0 12px 30px -22px rgba(31,38,80,.28)">
-        <div style="position:relative;width:84px;height:84px;border-radius:50%;background:radial-gradient(circle at 50% 35%,#EDE9FF,#F6F4FF);display:flex;align-items:flex-end;justify-content:center;overflow:hidden;flex-shrink:0;box-shadow:0 8px 22px -10px rgba(67,39,230,.42);border:1px solid rgba(67,39,230,.14)">
-          <img src="assets/clara.png" alt="Clara" style="position:absolute;width:143px;height:auto;left:-19px;top:7px">
+    <div style="flex:1;display:flex;align-items:center;justify-content:center;padding:40px;animation:pageIn .35s ease both">
+      <div style="text-align:center;max-width:440px;background:#fff;border:1px solid #E6E8F2;border-radius:16px;padding:44px 34px">
+        <div style="width:58px;height:58px;border-radius:15px;background:#EEEBFE;display:flex;align-items:center;justify-content:center;margin:0 auto 18px">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
         </div>
-        <div style="flex:1 1 360px;min-width:300px">
-          <div style="display:flex;align-items:center;gap:9px;margin-bottom:7px;flex-wrap:wrap">
-            <span style="font-size:17px;font-weight:800">Clara</span>
-            <span style="font-size:10px;font-weight:700;letter-spacing:.05em;color:#fff;background:#4327E6;padding:3px 8px;border-radius:20px">IA</span>
-          </div>
-          <p style="font-size:15px;color:#3C4258;line-height:1.5;max-width:600px">O time resolveu <b>96 itens</b> esta semana, com tempo médio de <b style="color:#161A2E">4,2h</b>. <b style="color:#B9760A">Kaio está sobrecarregado</b> — 14 itens ativos contra a média de 8. Vale redistribuir.</p>
-        </div>
+        <div style="font-size:19px;font-weight:800;color:#161A2E;margin-bottom:9px">Em construção</div>
+        <div style="font-size:14px;line-height:1.6;color:#6B7192">Esta tela será conectada aos seus dados reais do Outlook em breve.<br>Por enquanto, use a aba <b style="color:#4327E6">Processos</b> — já funcionando com seus e-mails.</div>
       </div>
-
-      <!-- KPIs -->
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;margin-top:16px">
-        <sc-for list="{{ kpis }}" as="k" hint-placeholder-count="4">
-          <div style="background:#fff;border:1px solid #EAEBF4;border-radius:16px;padding:16px 18px">
-            <div style="display:flex;align-items:center;gap:8px"><span style="width:9px;height:9px;border-radius:50%;background:{{ k.color }}"></span><span style="font-size:12.5px;color:#7A8099;font-weight:600">{{ k.label }}</span></div>
-            <div style="font-size:27px;font-weight:800;margin-top:8px;letter-spacing:-.02em">{{ k.value }}</div>
-            <div style="font-size:11.5px;color:{{ k.deltaColor }};font-weight:700;margin-top:4px">{{ k.delta }}</div>
-          </div>
-        </sc-for>
-      </div>
-
-      <!-- Team grid -->
-      <div style="display:flex;align-items:center;gap:11px;margin:30px 0 14px">
-        <h2 style="font-size:17px;font-weight:800">Analistas</h2>
-        <span style="font-size:13px;color:#9AA0B4">Carga ativa e desempenho na semana</span>
-      </div>
-      <div style="display:flex;flex-direction:column;gap:14px">
-        <sc-for list="{{ team }}" as="m" hint-placeholder-count="5">
-          <div class="mcard {{ m.expClass }}" onClick="{{ m.onToggle }}" style="background:#fff;border:1px solid #EAEBF4;border-radius:18px;padding:16px 22px;cursor:pointer">
-            <div class="mrow" style="display:flex;align-items:center;gap:22px">
-              <div style="display:flex;align-items:center;gap:13px;width:230px;flex-shrink:0;min-width:0">
-                <div style="width:44px;height:44px;border-radius:12px;background:{{ m.color }};display:flex;align-items:center;justify-content:center;color:#fff;font-size:16px;font-weight:700;flex-shrink:0">{{ m.initial }}</div>
-                <div style="min-width:0"><div style="font-size:15px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ m.name }}</div><div style="font-size:12px;color:#9AA0B4;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ m.role }}</div></div>
-              </div>
-              <span style="font-size:11.5px;font-weight:700;color:{{ m.loadColor }};background:{{ m.loadBg }};padding:5px 12px;border-radius:20px;white-space:nowrap;flex-shrink:0">{{ m.loadLabel }}</span>
-              <div onMouseEnter="{{ m.onEnter }}" onMouseLeave="{{ hideTip }}" style="flex:1;min-width:150px">
-                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:7px"><span style="font-size:12px;color:#7A8099;font-weight:600">Carga ativa</span><span style="font-size:12.5px;font-weight:700;color:#3C4258">{{ m.active }} itens</span></div>
-                <div style="height:8px;background:#F0F1F7;border-radius:8px;overflow:hidden"><div style="height:100%;width:{{ m.loadPct }};background:{{ m.loadColor }};border-radius:8px;animation:growBar .7s ease both"></div></div>
-              </div>
-              <div style="display:flex;align-items:center;gap:26px;flex-shrink:0">
-                <div style="text-align:center;min-width:56px"><div style="font-size:19px;font-weight:800">{{ m.resolved }}</div><div style="font-size:11px;color:#9AA0B4;margin-top:2px">resolvidos</div></div>
-                <div style="text-align:center;min-width:56px"><div style="font-size:19px;font-weight:800">{{ m.avg }}</div><div style="font-size:11px;color:#9AA0B4;margin-top:2px">tempo médio</div></div>
-                <div style="text-align:center;min-width:48px"><div style="font-size:19px;font-weight:800;color:{{ m.slaColor }}">{{ m.sla }}</div><div style="font-size:11px;color:#9AA0B4;margin-top:2px">SLA</div></div>
-              </div>
-              <svg class="chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#B8BDD0" stroke-width="2.4" style="flex-shrink:0;transform:{{ m.chevRot }}"><path d="m6 9 6 6 6-6"/></svg>
-            </div>
-
-            <sc-if value="{{ m.expanded }}" hint-placeholder-val="{{ false }}">
-              <div onClick="{{ stop }}" style="margin-top:18px;padding-top:18px;border-top:1px solid #F0F1F7;cursor:default;animation:accDown .24s ease both">
-                <div class="team-md">
-                  <!-- LEFT: process list -->
-                  <div>
-                    <div style="font-size:12.5px;font-weight:700;color:#5A6076;margin-bottom:11px">Processos ativos ({{ m.active }})</div>
-                    <div style="border:1px solid #EEF0F6;border-radius:15px;overflow:hidden">
-                      <sc-for list="{{ m.procs }}" as="p" hint-placeholder-count="2">
-                        <div class="prow" onClick="{{ p.onSelect }}" style="position:relative;display:flex;align-items:center;gap:11px;padding:14px 15px;border-bottom:1px solid #F2F3F9;cursor:pointer;background:{{ p.rowBg }}">
-                          <span style="position:absolute;left:0;top:0;bottom:0;width:3px;background:{{ p.rowAccent }}"></span>
-                          <div style="min-width:0;flex:1">
-                            <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap"><span style="font-family:'JetBrains Mono',monospace;font-size:13.5px;font-weight:700;color:#161A2E">{{ p.code }}</span><span style="font-size:10.5px;font-weight:700;color:{{ p.badgeColor }};background:{{ p.badgeBg }};padding:3px 9px;border-radius:7px;white-space:nowrap">{{ p.badge }}</span></div>
-                            <div style="font-size:11.5px;color:#9AA0B4;margin-top:4px">{{ p.cliente }} · {{ p.rowInfo }}</div>
-                          </div>
-                          <div style="display:flex;align-items:center;gap:8px;flex-shrink:0"><span style="font-size:11.5px;font-weight:700;color:{{ p.respColor }}">{{ p.resp }}</span><svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#C2C7D6" stroke-width="2.4" style="transform:{{ p.chevRot }}"><path d="m6 9 6 6 6-6"/></svg></div>
-                        </div>
-                      </sc-for>
-                    </div>
-                    <a href="Processos.dc.html" style="display:flex;align-items:center;justify-content:center;gap:7px;margin-top:11px;padding:11px;border-radius:11px;text-decoration:none;font-size:12.5px;font-weight:700;color:#4327E6" style-hover="background:#F3F1FE">Ver todos os {{ m.active }} processos<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="2.4"><path d="m9 6 6 6-6 6"/></svg></a>
-                  </div>
-
-                  <!-- RIGHT: detail panel -->
-                  <div style="background:#FBFBFE;border:1px solid #EEF0F6;border-radius:16px;padding:22px 24px">
-                    <div style="display:flex;align-items:center;gap:11px;flex-wrap:wrap">
-                      <span style="font-family:'JetBrains Mono',monospace;font-size:19px;font-weight:700;color:#161A2E">{{ m.sel.code }}</span>
-                      <span style="font-size:11.5px;font-weight:700;color:{{ m.sel.badgeColor }};background:{{ m.sel.badgeBg }};padding:5px 12px;border-radius:8px">{{ m.sel.badge }}</span>
-                      <span style="font-size:11.5px;font-weight:700;color:{{ m.sel.prioColor }};background:{{ m.sel.prioBg }};padding:5px 12px;border-radius:8px">{{ m.sel.prioLabel }}</span>
-                    </div>
-                    <div style="display:flex;gap:26px;margin-top:18px;flex-wrap:wrap">
-                      <div><div style="font-size:10.5px;color:#9AA0B4;text-transform:uppercase;letter-spacing:.04em">Cliente</div><div style="font-size:13.5px;font-weight:700;color:#3C4258;margin-top:4px">{{ m.sel.cliente }}</div></div>
-                      <div><div style="font-size:10.5px;color:#9AA0B4;text-transform:uppercase;letter-spacing:.04em">Navio</div><div style="font-size:13.5px;font-weight:700;color:#3C4258;margin-top:4px">{{ m.sel.navio }}</div></div>
-                      <div><div style="font-size:10.5px;color:#9AA0B4;text-transform:uppercase;letter-spacing:.04em">Rota</div><div style="font-size:13.5px;font-weight:700;color:#3C4258;margin-top:4px">{{ m.sel.rota }}</div></div>
-                      <div><div style="font-size:10.5px;color:#9AA0B4;text-transform:uppercase;letter-spacing:.04em">ETA</div><div style="font-family:'JetBrains Mono',monospace;font-size:13.5px;font-weight:700;color:#3C4258;margin-top:4px">{{ m.sel.eta }}</div></div>
-                      <div><div style="font-size:10.5px;color:#9AA0B4;text-transform:uppercase;letter-spacing:.04em">Responsável</div><div style="font-size:13.5px;font-weight:700;color:{{ m.sel.respColor }};margin-top:4px">{{ m.sel.resp }}</div></div>
-                    </div>
-                    <div class="team-detail-grid" style="margin-top:22px">
-                      <div>
-                        <div style="font-size:13px;font-weight:800;color:#161A2E;margin-bottom:13px">Linha do tempo</div>
-                        <sc-for list="{{ m.sel.timeline }}" as="t" hint-placeholder-count="4">
-                          <div style="display:flex;gap:12px">
-                            <div style="display:flex;flex-direction:column;align-items:center;flex-shrink:0"><span style="width:18px;height:18px;border-radius:50%;background:{{ t.dotBg }};display:flex;align-items:center;justify-content:center;margin-top:2px"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="{{ t.tick }}" stroke-width="3"><path d="{{ t.icon }}"/></svg></span><span style="width:2px;flex:1;background:{{ t.line }};min-height:16px"></span></div>
-                            <div style="padding-bottom:15px"><div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#9AA0B4">{{ t.when }}</div><div style="font-size:13px;font-weight:600;color:{{ t.labelColor }};margin-top:2px">{{ t.label }}</div></div>
-                          </div>
-                        </sc-for>
-                      </div>
-                      <div style="background:linear-gradient(150deg,#fff 58%,#F3F1FE);border:1px solid #E9E5FB;border-radius:15px;padding:17px 18px">
-                        <div style="display:flex;align-items:center;gap:9px;margin-bottom:11px">
-                          <div style="position:relative;width:34px;height:34px;border-radius:50%;background:radial-gradient(circle at 50% 35%,#EDE9FF,#F6F4FF);display:flex;align-items:flex-end;justify-content:center;overflow:hidden;flex-shrink:0;box-shadow:0 5px 12px -6px rgba(67,39,230,.4);border:1px solid rgba(67,39,230,.14)"><img src="assets/clara.png" alt="Clara" style="position:absolute;width:56px;height:auto;left:-11px;top:2px"></div>
-                          <span style="font-size:14px;font-weight:800">Clara</span>
-                        </div>
-                        <p style="font-size:12.5px;color:#3C4258;line-height:1.55">{{ m.sel.clara }}</p>
-                        <div style="margin-top:14px;padding-top:13px;border-top:1px solid #E4E0F5">
-                          <div style="font-size:10.5px;font-weight:800;color:#4327E6;text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px">Ação recomendada</div>
-                          <p style="font-size:12.5px;color:#3C4258;line-height:1.5">{{ m.sel.acao }}</p>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </sc-if>
-          </div>
-        </sc-for>
-      </div>
-
-      <div style="text-align:center;margin-top:36px;font-size:13.5px;color:#9AA0B4;font-style:italic">Desempenho não é cobrar mais — é ver cedo quem precisa de ajuda.</div>
     </div>
-    {{ tip }}
-  </main>
+</main>
 </x-dc>
 <script type="text/x-dc" data-dc-script>
 class Component extends DCLogic {
-  team(){
-    return [
-      {name:'Kaio',role:'Analista Operacional Sr.',initial:'K',color:'#4327E6',active:14,resolved:28,avg:'3,8h',sla:'94%',load:'high'},
-      {name:'Samuel',role:'Assistente Operacional',initial:'S',color:'#1F9D6B',active:9,resolved:31,avg:'2,9h',sla:'98%',load:'mid'},
-      {name:'Pedro',role:'Analista Operacional',initial:'P',color:'#E8990C',active:7,resolved:18,avg:'4,6h',sla:'91%',load:'mid'},
-      {name:'Angelina',role:'Analista Operacional',initial:'A',color:'#D6409F',active:5,resolved:14,avg:'4,1h',sla:'96%',load:'low'},
-      {name:'Gilmar',role:'Analista Pleno',initial:'G',color:'#0E7490',active:4,resolved:5,avg:'5,2h',sla:'89%',load:'low'},
-    ];
-  }
-  LOAD={high:{color:'#E5484D',bg:'#FDECEC',label:'Sobrecarregado'},mid:{color:'#4327E6',bg:'#EEEBFE',label:'Equilibrado'},low:{color:'#1F9D6B',bg:'#E7F6EF',label:'Disponível'}};
-  state={tip:null, openA:null, openP:null};
-
-  SC={ demurrage:{badge:'Crítico (Demurrage)',dot:'#E5484D',c:'#C2333A',b:'#FDECEC'}, telex:{badge:'Aguardando Telex',dot:'#E8990C',c:'#B9760A',b:'#FDF3E0'}, cliente:{badge:'Aguardando cliente',dot:'#E8990C',c:'#B9760A',b:'#FDF3E0'}, liberado:{badge:'Apto para liberação',dot:'#1F9D6B',c:'#177D54',b:'#E7F6EF'}, critico:{badge:'Crítico',dot:'#E5484D',c:'#C2333A',b:'#FDECEC'} };
-  RESPC={ Cliente:'#B9760A', Priora:'#6E59F2', 'Concluído':'#177D54', Agente:'#C2620A' };
-  PRIO={ alta:{label:'Prioridade alta',c:'#C2333A',b:'#FDECEC'}, media:{label:'Prioridade média',c:'#B9760A',b:'#FDF3E0'}, concluido:{label:'Concluído',c:'#177D54',b:'#E7F6EF'} };
-
-  // Canonical processes reused from Processos / Liberação / Demurrage / Portal — same story everywhere.
-  PROCS={
-    IM2567:{ cliente:'BRA TRADE', kind:'demurrage', prio:'alta', navio:'MSC BRAZIL', rota:'Shanghai → Itajaí', eta:'20/06', resp:'Cliente', rowInfo:'Excedido há 4 dias',
-      acao:'Cobrar a devolução dos containers para encerrar o demurrage.',
-      timeline:[['Processo registrado','02/05','09:10',0],['Courier recebido','08/05','14:22',0],['Telex confirmado','13/05','11:05',0],['Demurrage iniciada — 2 containers','16/05','00:00',1]],
-      clara:'Containers retirados pelo cliente e não devolvidos — gerando demurrage a R$ 460/dia (R$ 1.840 até agora). Telex Release já confirmado; falta apenas a devolução.' },
-    IM2591:{ cliente:'COBRAX', kind:'telex', prio:'media', navio:'HAPAG EXPRESS', rota:'Shanghai → Itajaí', eta:'30/05', resp:'Agente', rowInfo:'ETA: 30/05',
-      acao:'Acompanhar o agente para confirmação do Telex no sistema da origem.',
-      timeline:[['Cliente marcou Telex Release no sistema','17/05','10:23',0],['Priora notificou o agente','17/05','11:05',0],['Agente confirmou o recebimento','18/05','09:47',0],['Aguardando confirmação do armador/terminal','19/05','14:32',1]],
-      clara:'Cliente já marcou o Telex Release. Ainda aguardamos a confirmação do agente no sistema da origem.' },
-    IM2588:{ cliente:'KLABIN', kind:'cliente', prio:'media', navio:'MSC BRAZIL', rota:'Ningbo → Itajaí', eta:'24/06', resp:'Cliente', rowInfo:'Free time: 3 dias',
-      acao:'Contatar o cliente para antecipar a devolução dentro do free time.',
-      timeline:[['Processo registrado','28/05','08:30',0],['Containers retirados','04/06','16:10',0],['Free time próximo do fim','21/06','',1]],
-      clara:'2 containers com 3 dias de free time restante. Recomendo contatar o cliente para antecipar a devolução e evitar demurrage.' },
-    IM1604:{ cliente:'KLABIN', kind:'cliente', prio:'media', navio:'CMA CGM TANYA', rota:'Ningbo → Itajaí', eta:'26/06', resp:'Cliente', rowInfo:'Termo pendente',
-      acao:'Reenviar a cobrança do Termo e do OHBL ao cliente.',
-      timeline:[['Processo registrado','01/06','10:00',0],['Cobrança enviada ao cliente','12/06','15:40',1]],
-      clara:'Aguardando documentação do cliente e o courier ainda em trânsito. Recomendo reforçar a cobrança do Termo e do OHBL.' },
-    IM2550:{ cliente:'JBS', kind:'cliente', prio:'media', navio:'MAERSK SELETAR', rota:'Xangai → Santos', eta:'22/06', resp:'Cliente', rowInfo:'Minuta pendente',
-      acao:'Solicitar a minuta de devolução ao cliente para encerrar o processo.',
-      timeline:[['Processo registrado','25/05','09:00',0],['Liberado','10/06','13:20',0],['Container devolvido','15/06','17:05',0],['Aguardando minuta do cliente','16/06','',1]],
-      clara:'Container devolvido, mas a minuta não foi localizada. Recomendo solicitar a confirmação ao cliente para encerrar a pendência documental.' },
-    IM1402:{ cliente:'VALE DO AÇO', kind:'liberado', prio:'concluido', navio:'EVER GOLDEN', rota:'Xangai → Santos', eta:'19/06', resp:'Concluído', done:true, rowInfo:'ETA: 19/06',
-      acao:'Nenhuma ação necessária — processo concluído.',
-      timeline:[['Procuração recebida','20/05','09:15',0],['OHBL validado','05/06','11:40',0],['Pagamento confirmado','10/06','14:05',0],['Liberação concluída','16/06','16:30',0]],
-      clara:'Documentação completa e processo liberado. Nenhuma ação pendente.' },
-    IM1388:{ cliente:'SUL COMEX', kind:'liberado', prio:'concluido', navio:'ONE HARMONY', rota:'Ningbo → Itajaí', eta:'18/06', resp:'Concluído', done:true, rowInfo:'ETA: 18/06',
-      acao:'Nenhuma ação necessária — processo concluído.',
-      timeline:[['Documentação recebida','18/05','08:50',0],['OHBL validado','22/05','10:10',0],['Pagamento confirmado','10/06','13:30',0],['Liberação concluída','14/06','15:20',0]],
-      clara:'Processo liberado e atracado, sem pendências.' },
-    IM2540:{ cliente:'ENCANTEX', kind:'critico', prio:'alta', navio:'COSCO SHIPPING', rota:'Ningbo → Itajaí', eta:'18/06', resp:'Priora', rowInfo:'Conflito documental',
-      acao:'Revisar o conflito Telex vs. HBL Original na Fila de Decisões.',
-      timeline:[['Processo registrado','30/05','09:30',0],['Documentação básica recebida','04/06','14:00',0],['Agente informou HBL físico','06/06','10:45',0],['Conflito identificado pela Clara','07/06','16:20',1]],
-      clara:'Cliente selecionou Telex Release, mas o agente informou envio de HBL Original físico. Revisar o conflito na Fila de Decisões antes de liberar.' },
-  };
-  TEAMPROCS={ Kaio:['IM2550','IM1388'], Samuel:['IM1402'], Pedro:['IM2567','IM2591'], Angelina:['IM2588','IM1604'], Gilmar:['IM2540'] };
-
-  toggleA=(name)=>(e)=>{ this.setState(s=>({ openA:s.openA===name?null:name, openP:null })); };
-  selectP=(code)=>(e)=>{ e.stopPropagation(); this.setState({ openP:code }); };
-  stop=(e)=>e.stopPropagation();
-
-  buildRow(code, selCode){
-    const p=this.PROCS[code], sc=this.SC[p.kind]||this.SC.cliente, sel=code===selCode;
-    return { code, cliente:p.cliente, badge:sc.badge, badgeColor:sc.c, badgeBg:sc.b, rowInfo:p.rowInfo,
-      resp:p.resp, respColor:this.RESPC[p.resp]||'#3C4258', selected:sel,
-      rowBg:sel?'#F6F4FE':'#fff', rowAccent:sel?sc.dot:'transparent', chevRot:sel?'rotate(180deg)':'rotate(0deg)',
-      onSelect:this.selectP(code) };
-  }
-  buildDetail(code){
-    const p=this.PROCS[code]; if(!p) return null;
-    const sc=this.SC[p.kind]||this.SC.cliente, pr=this.PRIO[p.prio]||this.PRIO.media;
-    const tl=(p.timeline||[]).map((r,i,arr)=>{ const isLast=i===arr.length-1; const done=p.done||!r[3];
-      return { when:(r[1]+(r[2]?('  '+r[2]):'')), label:r[0], labelColor:done?'#3C4258':'#161A2E',
-        dotBg:done?'#E7F6EF':'#FDF3E0', tick:done?'#1F9D6B':'#E8990C', icon:done?'m5 12 5 5 9-10':'M12 8v4l3 1.6',
-        line:isLast?'transparent':(done?'#D7E7DE':'#EEE2C8') }; });
-    return { code, cliente:p.cliente, navio:p.navio, rota:p.rota, eta:p.eta, resp:p.resp, respColor:this.RESPC[p.resp]||'#3C4258',
-      badge:sc.badge, badgeColor:sc.c, badgeBg:sc.b, prioLabel:pr.label, prioColor:pr.c, prioBg:pr.b,
-      timeline:tl, clara:p.clara, acao:p.acao };
-  }
-  showTip=(d)=>(e)=>{const r=e.currentTarget.getBoundingClientRect();this.setState({tip:Object.assign({},d,{t:r.top,h:r.height,cx:r.left+r.width/2})});};
-  hideTip=()=>this.setState({tip:null});
-  buildTip(){
-    const t=this.state.tip; if(!t) return null; const h=React.createElement;
-    const vw=(typeof window!=='undefined'?window.innerWidth:1200), half=128;
-    const left=Math.max(half+10,Math.min(vw-half-10,t.cx));
-    let top,transform;
-    if(t.t>160){top=t.t-12;transform='translate(-50%,-100%)';} else {top=t.t+t.h+12;transform='translate(-50%,0)';}
-    const rows=(t.rows||[]).map((r,i)=>h('div',{key:i,style:{display:'flex',alignItems:'center',justifyContent:'space-between',gap:20,marginTop:i?6:0}},
-      h('span',{style:{display:'flex',alignItems:'center',gap:7,fontSize:12,color:'#AAB0C6',whiteSpace:'nowrap'}},h('span',{style:{width:8,height:8,borderRadius:'50%',background:r.color||'#7C5CF6',flexShrink:0}}),r.label),
-      h('span',{style:{fontSize:12.5,fontWeight:700,color:'#fff',whiteSpace:'nowrap'}},r.value)));
-    const kids=[h('div',{key:'h',style:{fontSize:13,fontWeight:800,color:'#fff',marginBottom:rows.length?9:0,letterSpacing:'-.01em'}},t.title),...rows];
-    if(t.note)kids.push(h('div',{key:'n',style:{fontSize:11.5,lineHeight:1.5,color:'#C4CADF',marginTop:10,paddingTop:10,borderTop:'1px solid #2A3152',maxWidth:230}},t.note));
-    return h('div',{style:{position:'fixed',left:left,top:top,transform:transform,zIndex:7000,pointerEvents:'none',background:'#12172B',border:'1px solid #2A3152',borderRadius:13,padding:'13px 15px',minWidth:178,maxWidth:256,boxShadow:'0 18px 44px -16px rgba(0,0,0,.6)',fontFamily:"'Plus Jakarta Sans',sans-serif",animation:'tipIn .14s ease both'}},kids);
-  }
-  renderVals(){
-    const teamNotes={Kaio:'Sobrecarregado — 14 itens ativos contra a média de 8. Priorize redistribuir.',Samuel:'Equilibrado e muito produtivo: 31 resolvidos com SLA de 98%.',Pedro:'Equilibrado; o SLA de 91% ainda tem espaço para melhorar.',Angelina:'Disponível — pode assumir parte da carga do Kaio.',Gilmar:'Disponível; em ramp-up (5 resolvidos esta semana).'};
-    const team=this.team().map(m=>{const l=this.LOAD[m.load];const pct=Math.min(100,Math.round(m.active/14*100));const slaColor=parseInt(m.sla)>=95?'#177D54':(parseInt(m.sla)>=90?'#B9760A':'#C2333A');
-      const codes=this.TEAMPROCS[m.name]||[]; const expanded=this.state.openA===m.name;
-      const selCode=codes.indexOf(this.state.openP)>=0?this.state.openP:codes[0];
-      return Object.assign({},m,{loadColor:l.color,loadBg:l.bg,loadLabel:l.label,loadPct:pct+'%',slaColor:slaColor,
-        expanded, expClass:expanded?'exp':'', chevRot:expanded?'rotate(180deg)':'rotate(0deg)', onToggle:this.toggleA(m.name),
-        procs:codes.map(c=>this.buildRow(c, selCode)), sel:expanded?this.buildDetail(selCode):null,
-        onEnter:this.showTip({title:m.name,rows:[{label:'Carga ativa',value:m.active+' itens',color:l.color},{label:'Resolvidos (sem.)',value:String(m.resolved),color:'#1F9D6B'},{label:'Tempo médio',value:m.avg,color:'#4327E6'},{label:'SLA cumprido',value:m.sla,color:slaColor}],note:teamNotes[m.name]})});});
-    const kpis=[
-      {label:'Resolvidos (semana)',value:'96',color:'#1F9D6B',delta:'▲ 12% vs. semana anterior',deltaColor:'#177D54'},
-      {label:'Tempo médio',value:'4,2h',color:'#4327E6',delta:'▼ 0,4h mais rápido',deltaColor:'#177D54'},
-      {label:'SLA cumprido',value:'94%',color:'#E8990C',delta:'Meta: 95%',deltaColor:'#9AA0B4'},
-      {label:'Pendências abertas',value:'39',color:'#E5484D',delta:'7 acima do ideal',deltaColor:'#C2333A'},
-    ];
-    return {team,kpis,tip:this.buildTip(),hideTip:this.hideTip,stop:this.stop};
-  }
+  renderVals(){ return {}; }
 }
 </script>
 </body>
