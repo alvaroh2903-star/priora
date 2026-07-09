@@ -143,5 +143,32 @@ class Component extends DCLogic {
   }
 }
 </script>
+<script>
+/* Porta de entrada: se o usuário não estiver logado no Outlook, mostra uma
+   tela de conexão por cima do painel. Vanilla JS — não interfere no runtime. */
+(function(){
+  function showConnect(){
+    if (document.getElementById('priora-connect')) return;
+    var o = document.createElement('div');
+    o.id = 'priora-connect';
+    o.style.cssText = 'position:fixed;inset:0;z-index:99999;background:#0D1227;display:flex;align-items:center;justify-content:center;font-family:sans-serif;padding:24px';
+    o.innerHTML =
+      '<div style="text-align:center;color:#fff;max-width:400px">'
+      + '<div style="font-size:28px;font-weight:800;margin-bottom:12px">Priora</div>'
+      + '<div style="font-size:15px;line-height:1.5;color:#AEB4CC;margin-bottom:26px">Conecte sua conta do Outlook para ver seus processos, couriers, documentos e a análise da Clara com seus e-mails reais.</div>'
+      + '<a href="/auth/login" style="display:inline-block;background:#4327E6;color:#fff;text-decoration:none;padding:14px 24px;border-radius:12px;font-weight:700;font-size:15px">Entrar com a Microsoft</a>'
+      + '</div>';
+    document.body.appendChild(o);
+  }
+  function check(){
+    fetch('/api/me', { credentials:'same-origin' })
+      .then(function(r){ return r.json(); })
+      .then(function(d){ if (!d || !d.authenticated) showConnect(); })
+      .catch(function(){});
+  }
+  if (document.readyState === 'loading') window.addEventListener('DOMContentLoaded', function(){ setTimeout(check, 400); });
+  else setTimeout(check, 400);
+})();
+</script>
 </body>
 </html>

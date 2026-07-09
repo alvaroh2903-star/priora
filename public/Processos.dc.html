@@ -283,7 +283,7 @@
 </x-dc>
 <script type="text/x-dc" data-dc-script>
 class Component extends DCLogic {
-  state = { detail:null };
+  state = { detail:null, live:null };
 
   S = { red:{c:'#C2333A',b:'#FDECEC'}, amber:{c:'#B9760A',b:'#FDF3E0'}, green:{c:'#177D54',b:'#E7F6EF'}, purple:{c:'#3D34C9',b:'#EEEBFE'}, blue:{c:'#1D4ED8',b:'#E7F0FE'}, gray:{c:'#5A6076',b:'#F1F2F8'} };
   TXT = { green:'#177D54', red:'#C2333A', amber:'#B9760A', blue:'#1D4ED8', gray:'#3C4258', purple:'#3D34C9' };
@@ -293,6 +293,13 @@ class Component extends DCLogic {
     window.addEventListener('priora:focus', this._onFocus);
     const p = window.PrioraBus && window.PrioraBus.consume('processos');
     if (p && p.id) this.openDetail(p.id, true);
+    // Puxa os processos reais do Outlook. Em erro/401, mantém os dados de exemplo.
+    try {
+      fetch('/api/processes', { credentials:'same-origin' })
+        .then(function(r){ return r.ok ? r.json() : null; })
+        .then(function(d){ if (d && Array.isArray(d.processes)) this.setState({ live: d.processes }); }.bind(this))
+        .catch(function(){});
+    } catch(e){}
   }
   componentWillUnmount(){ window.removeEventListener('priora:focus', this._onFocus); }
 
@@ -456,8 +463,49 @@ class Component extends DCLogic {
       { label:'ETA atualizada', sub:'IM2588 — KLABIN', time:'Ontem', bg:'#E7F0FE', color:'#2563EB', iconPath:'M3 17h18M5 17V9l7-5 7 5v8' },
     ];
     const detail = this.state.detail;
-    return { kpis, atencao, aguardando, todos, claraPoints, atividades,
-      listView: !detail, detailView: !!detail, d: detail ? this.buildDetail(detail) : {} };
+    const base = { kpis, atencao, aguardando, todos, claraPoints, atividades };
+    const live = this.state.live;
+    if (live && live.length) {
+      Object.assign(base, this.liveLists(live, open));
+    }
+    return Object.assign(base, {
+      listView: !detail, detailView: !!detail, d: detail ? this.buildDetail(detail) : {}
+    });
+  }
+
+  // Converte os processos reais (/api/processes) para a mesma estrutura da UI.
+  liveLists(live, open){
+    const fmt = (iso)=>{ try{ return new Date(iso).toLocaleDateString('pt-BR'); }catch(e){ return ''; } };
+    const total = live.length;
+    const comProc = live.filter(function(p){ return p.codigo && p.codigo !== '—'; }).length;
+    const comTrack = live.filter(function(p){ return !!p.tracking; }).length;
+    const kpis = [
+      { label:'Conversas de logística', value:String(total), color:'#4327E6', valColor:'#161A2E' },
+      { label:'Com nº de processo', value:String(comProc), color:'#1F9D6B', valColor:'#161A2E' },
+      { label:'Com courier/tracking', value:String(comTrack), color:'#E8990C', valColor:'#161A2E' },
+      { label:'Fonte', value:'Outlook', color:'#2563EB', valColor:'#161A2E' },
+    ];
+    const atencao = live.slice(0,3).map(function(p){
+      return { codigo:p.codigo, cliente:p.cliente, armador:'—', eta:fmt(p.data), analista:'—',
+        problema:p.assunto, impacto: p.tracking ? ('Courier: '+p.tracking) : (p.count+' mensagem(ns) na conversa'),
+        onOpen:open(p.codigo) };
+    });
+    const aguardando = live.slice(3,7).map(function(p){
+      return { codigo:p.codigo, cliente:p.cliente, status:p.assunto, onOpen:open(p.codigo) };
+    });
+    const TAGL = { tracking:{t:'Courier',c:'#3D34C9',b:'#EEEBFE'}, plain:{t:'Logística',c:'#B9760A',b:'#FDF3E0'} };
+    const todos = live.map(function(p){
+      var tg = p.tracking ? TAGL.tracking : TAGL.plain;
+      return { codigo:p.codigo, cliente:p.cliente, analista:fmt(p.data),
+        status: p.tracking ? ('Courier: '+p.tracking) : (p.assunto || '—'),
+        tag:tg.t, tagColor:tg.c, tagBg:tg.b, onOpen:open(p.codigo) };
+    });
+    const claraPoints = [
+      { text: total+' conversas de logística na sua caixa', color:'#4327E6' },
+      { text: comProc+' com número de processo identificado', color:'#1F9D6B' },
+      { text: comTrack+' com courier/rastreio detectado', color:'#E8990C' },
+    ];
+    return { kpis:kpis, atencao:atencao, aguardando:aguardando, todos:todos, claraPoints:claraPoints };
   }
 }
 </script>
