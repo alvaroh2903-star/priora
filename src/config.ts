@@ -9,11 +9,13 @@ export const config = {
   azure: {
     // Opcionais: sem eles o servidor sobe normalmente e serve a página; o login
     // com a Microsoft é que fica indisponível até serem preenchidos no .env.
-    clientId: process.env.AZURE_CLIENT_ID || '',
-    clientSecret: process.env.AZURE_CLIENT_SECRET || '',
-    tenantId: process.env.AZURE_TENANT_ID || 'common',
-    redirectUri:
-      process.env.AZURE_REDIRECT_URI || 'http://localhost:3000/auth/callback',
+    // .trim() protege contra espaços/quebras de linha coladas por engano.
+    clientId: (process.env.AZURE_CLIENT_ID || '').trim(),
+    clientSecret: (process.env.AZURE_CLIENT_SECRET || '').trim(),
+    tenantId: (process.env.AZURE_TENANT_ID || 'common').trim(),
+    redirectUri: (
+      process.env.AZURE_REDIRECT_URI || 'http://localhost:3000/auth/callback'
+    ).trim(),
   },
   /**
    * Escopos delegados (atuando em nome do usuário logado).
@@ -36,8 +38,8 @@ export const config = {
    *  rotas de leitura/envio funcionam, mas a análise por IA fica indisponível.
    *  Chave gratuita em https://aistudio.google.com (sem cartão de crédito). */
   ai: {
-    apiKey: process.env.GEMINI_API_KEY || '',
-    model: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+    apiKey: (process.env.GEMINI_API_KEY || '').trim(),
+    model: (process.env.GEMINI_MODEL || 'gemini-2.5-flash').trim(),
   },
   /** Palavras-chave usadas para filtrar e-mails de logística/comércio exterior. */
   logisticsKeywords: (
