@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { requireAuth, AuthedRequest } from '../middleware/requireAuth';
 import { getFullMessage, getConversationFull } from '../graph/graphService';
 import { parseEmail } from '../ai/emailParser';
-import { isAiConfigured } from '../ai/claudeClient';
+import { isAiConfigured } from '../ai/geminiClient';
 
 export const parseRouter = Router();
 
@@ -12,7 +12,7 @@ parseRouter.use(requireAuth);
 parseRouter.use((_req, res, next) => {
   if (!isAiConfigured()) {
     return res.status(503).json({
-      error: 'Recursos de IA indisponíveis. Defina ANTHROPIC_API_KEY no servidor.',
+      error: 'Recursos de IA indisponíveis. Defina GEMINI_API_KEY no servidor.',
     });
   }
   next();

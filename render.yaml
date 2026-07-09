@@ -26,5 +26,5 @@ services:
         sync: false                  # cole no painel do Render
       - key: AZURE_REDIRECT_URI
         sync: false                  # https://SEU-APP.onrender.com/auth/callback
-      - key: ANTHROPIC_API_KEY
-        sync: false                  # opcional (necessário para a Clara/IA)
+      - key: GEMINI_API_KEY
+        sync: false                  # opcional (necessário para a Clara/IA) — grátis em aistudio.google.com

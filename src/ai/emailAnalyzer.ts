@@ -1,7 +1,5 @@
 import { z } from 'zod/v4';
-import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
-import { getClaudeClient } from './claudeClient';
-import { config } from '../config';
+import { generateStructured } from './geminiClient';
 
 /**
  * Esquema da análise que a IA deve retornar para cada conversa.
@@ -68,8 +66,6 @@ export async function analyzeConversation(
   subject: string,
   messages: ThreadMessage[],
 ): Promise<EmailAnalysis> {
-  const client = getClaudeClient();
-
   const transcript = messages
     .map((m, i) => {
       return [
@@ -83,24 +79,10 @@ export async function analyzeConversation(
     })
     .join('\n\n');
 
-  const response = await client.messages.parse({
-    model: config.ai.model,
-    max_tokens: 16000,
-    thinking: { type: 'adaptive' },
-    system: SYSTEM_PROMPT,
-    output_config: { format: zodOutputFormat(AnalysisSchema) },
-    messages: [
-      {
-        role: 'user',
-        content:
-          `Analise a seguinte conversa de e-mail sobre logística/embarque e extraia as informações solicitadas.\n\n` +
-          `Assunto: ${subject}\n\n${transcript}`,
-      },
-    ],
-  });
-
-  if (!response.parsed_output) {
-    throw new Error('A IA não retornou uma análise no formato esperado.');
-  }
-  return response.parsed_output;
+  return generateStructured(
+    AnalysisSchema,
+    SYSTEM_PROMPT,
+    `Analise a seguinte conversa de e-mail sobre logística/embarque e extraia as informações solicitadas.\n\n` +
+      `Assunto: ${subject}\n\n${transcript}`,
+  );
 }

@@ -1,7 +1,5 @@
 import { z } from 'zod/v4';
-import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
-import { getClaudeClient } from './claudeClient';
-import { config } from '../config';
+import { generateStructured } from './geminiClient';
 import { FullEmailMessage } from '../graph/graphService';
 
 /* ------------------------------------------------------------------ *
@@ -155,36 +153,13 @@ export async function parseEmail(
   const subject = message.subject || '';
   const haystack = `${subject}\n\n${bodyText}`;
 
-  const client = getClaudeClient();
-
-  const response = await client.messages.parse({
-    model: config.ai.model,
-    max_tokens: 16000,
-    thinking: { type: 'adaptive' },
-    system: SYSTEM_PROMPT,
-    output_config: { format: zodOutputFormat(ExtractionSchema) },
-    messages: [
-      {
-        role: 'user',
-        content:
-          `Data de recebimento (referência para datas relativas): ${message.receivedDateTime || 'desconhecida'}\n\n` +
-          `Assunto: ${subject}\n\n` +
-          `Corpo do e-mail:\n${bodyText}`,
-      },
-    ],
-  });
-
-  const ai: Extraction = response.parsed_output ?? {
-    tracking: [],
-    processNumbers: [],
-    externalReferences: [],
-    documents: [],
-    hblResolution: null,
-    carrier: null,
-    dates: [],
-    evidences: [],
-    confidence: 0,
-  };
+  const ai: Extraction = await generateStructured(
+    ExtractionSchema,
+    SYSTEM_PROMPT,
+    `Data de recebimento (referência para datas relativas): ${message.receivedDateTime || 'desconhecida'}\n\n` +
+      `Assunto: ${subject}\n\n` +
+      `Corpo do e-mail:\n${bodyText}`,
+  );
 
   // Merge com a extração determinística (padrões rígidos têm prioridade/garantia).
   const det = deterministicExtract(haystack);

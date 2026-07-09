@@ -6,7 +6,7 @@ import {
   LogisticsSummary,
 } from '../graph/graphService';
 import { analyzeConversation, ThreadMessage } from '../ai/emailAnalyzer';
-import { isAiConfigured } from '../ai/claudeClient';
+import { isAiConfigured } from '../ai/geminiClient';
 import { config } from '../config';
 
 export const analysisRouter = Router();
@@ -89,7 +89,7 @@ analysisRouter.post(
       if (!isAiConfigured()) {
         return res.status(503).json({
           error:
-            'Recursos de IA indisponíveis. Defina ANTHROPIC_API_KEY no servidor.',
+            'Recursos de IA indisponíveis. Defina GEMINI_API_KEY no servidor.',
         });
       }
 

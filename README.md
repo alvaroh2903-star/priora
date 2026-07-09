@@ -11,7 +11,7 @@ nome do usuário autenticado.
 - 📥 Listar e ler e-mails da caixa de entrada (`GET /api/emails`, `GET /api/emails/:id`)
 - 📤 Enviar e-mails (`POST /api/emails/send`)
 - 🚢 **Logística + IA**: filtra e-mails por palavras-chave (embarque, contêiner, courier…)
-  e usa a Claude (Anthropic) para **resumir** e **extrair dados estruturados** de cada conversa
+  e usa o **Google Gemini** para **resumir** e **extrair dados estruturados** de cada conversa
 - 🤖 **Clara / Parser (`ParsedEmail`)**: extrai por e-mail tracking, processo Rocket,
   referências externas (`{type,value}`), documentos, resolução do HBL, datas, evidências e confiança
 - 🖥️ UI de demonstração em `/`
@@ -31,7 +31,7 @@ src/
 ├── graph/
 │   └── graphService.ts      # Chamadas ao Microsoft Graph (listar/ler/enviar/buscar)
 ├── ai/
-│   ├── claudeClient.ts      # Cliente Anthropic (Claude)
+│   ├── geminiClient.ts      # Cliente Google Gemini (saída estruturada)
 │   ├── emailAnalyzer.ts     # Resumo + extração estruturada por conversa
 │   └── emailParser.ts       # Parser "Clara" → ParsedEmail (regex + IA)
 └── routes/
@@ -44,12 +44,12 @@ public/
 
 ### Camada de IA
 
-A análise usa a **Claude (Anthropic)** via SDK oficial (`@anthropic-ai/sdk`):
+A análise usa o **Google Gemini** via SDK oficial (`@google/genai`):
 
 - Filtra e-mails de logística com o `$search` do Graph (palavras-chave configuráveis).
 - Agrupa por conversa (`conversationId`) e monta a thread em texto puro.
-- Envia para o modelo (`claude-opus-4-8` por padrão) com **adaptive thinking** e
-  **structured outputs** (esquema Zod), garantindo um JSON válido com `resumo`,
+- Envia para o modelo (`gemini-2.5-flash` por padrão) exigindo **saída JSON**
+  (`responseJsonSchema` gerado do esquema Zod e validado de volta), garantindo `resumo`,
   `categoria`, `dados` (embarcação, contêiner, BL, portos, datas, valores…) e
   `acoes_pendentes`.
 
@@ -138,8 +138,8 @@ Abra `http://localhost:3000`, clique em **Entrar com a Microsoft** e teste.
 **Como funciona:** processo Rocket (`IMxxxx`) e container (ISO 6346) saem por
 **regex** (garantia). O restante — carrier/tracking, `externalReferences` sem
 assumir o tipo, documentos, resolução do HBL, datas relativas, evidências e
-confiança — sai da **Claude** com *structured outputs* (esquema Zod) + *adaptive
-thinking*. Os dois resultados são mesclados e deduplicados.
+confiança — sai do **Gemini** com saída JSON validada por esquema Zod.
+Os dois resultados são mesclados e deduplicados.
 
 Exemplo de envio:
 

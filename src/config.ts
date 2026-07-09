@@ -32,11 +32,12 @@ export const config = {
   ],
   /** Escopos de recurso usados na renovação silenciosa (sem os reservados do OIDC). */
   graphScopes: ['User.Read', 'Mail.Read', 'Mail.Send'],
-  /** Configuração da IA (Anthropic / Claude). A chave é opcional: sem ela, as
-   *  rotas de leitura/envio funcionam, mas a análise por IA fica indisponível. */
+  /** Configuração da IA (Google Gemini). A chave é opcional: sem ela, as
+   *  rotas de leitura/envio funcionam, mas a análise por IA fica indisponível.
+   *  Chave gratuita em https://aistudio.google.com (sem cartão de crédito). */
   ai: {
-    apiKey: process.env.ANTHROPIC_API_KEY || '',
-    model: process.env.ANTHROPIC_MODEL || 'claude-opus-4-8',
+    apiKey: process.env.GEMINI_API_KEY || '',
+    model: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
   },
   /** Palavras-chave usadas para filtrar e-mails de logística/comércio exterior. */
   logisticsKeywords: (
