@@ -143,6 +143,126 @@ function clamp01(n: number): number {
 }
 
 /* ------------------------------------------------------------------ *
+ * Análise de conversa inteira (thread) — 1 chamada de IA por conversa
+ * ------------------------------------------------------------------ */
+
+const ThreadSchema = ExtractionSchema.extend({
+  resumo: z
+    .array(z.string())
+    .describe(
+      'Resumo da conversa em 2 a 4 frases curtas (uma por item), em português, no tom "análise da Clara".',
+    ),
+});
+
+export interface ParsedThread {
+  conversationId: string;
+  subject: string;
+  participants: string[];
+  firstDate?: string;
+  lastDate?: string;
+  attachments: Array<{ name: string; contentType: string }>;
+  resumo: string[];
+  tracking: Tracking[];
+  processNumbers: string[];
+  externalReferences: ExternalReference[];
+  documents: string[];
+  hblResolution: string | null;
+  carrier: string | null;
+  dates: DateMention[];
+  evidences: Evidence[];
+  confidence: number;
+}
+
+/** Analisa a conversa inteira com a Clara e mescla com a extração por regex. */
+export async function parseThread(
+  messages: FullEmailMessage[],
+): Promise<ParsedThread> {
+  const ordered = [...messages].sort((a, b) =>
+    (a.receivedDateTime || '') < (b.receivedDateTime || '') ? -1 : 1,
+  );
+  const latest = ordered[ordered.length - 1];
+  const subject = ordered[0]?.subject || latest?.subject || '';
+
+  const transcript = ordered
+    .map((m, i) =>
+      [
+        `--- Mensagem ${i + 1} ---`,
+        `De: ${m.from?.emailAddress.address || 'desconhecido'}`,
+        `Data: ${m.receivedDateTime || m.sentDateTime || ''}`,
+        `Assunto: ${m.subject || subject}`,
+        m.attachments && m.attachments.length
+          ? `Anexos: ${m.attachments.map((a) => a.name).join(', ')}`
+          : '',
+        '',
+        (m.body?.content || m.bodyPreview || '').trim(),
+      ]
+        .filter(Boolean)
+        .join('\n'),
+    )
+    .join('\n\n');
+
+  const ai = await generateStructured(
+    ThreadSchema,
+    SYSTEM_PROMPT +
+      '\n\nNesta tarefa você receberá uma CONVERSA inteira (várias mensagens da mesma thread). Analise o conjunto e preencha também "resumo": 2 a 4 frases curtas explicando o que está acontecendo e o que falta.',
+    `Data da mensagem mais recente (referência para datas relativas): ${latest?.receivedDateTime || 'desconhecida'}\n\n` +
+      `Assunto: ${subject}\n\nConversa completa:\n${transcript}`,
+  );
+
+  const haystack = `${subject}\n\n${ordered
+    .map((m) => m.body?.content || m.bodyPreview || '')
+    .join('\n\n')}`;
+  const det = deterministicExtract(haystack);
+
+  const attachments: Array<{ name: string; contentType: string }> = [];
+  const seenAtt = new Set<string>();
+  for (const m of ordered) {
+    for (const a of m.attachments || []) {
+      if (!seenAtt.has(a.name)) {
+        seenAtt.add(a.name);
+        attachments.push({ name: a.name, contentType: a.contentType });
+      }
+    }
+  }
+
+  const participants = Array.from(
+    new Set(
+      ordered
+        .map((m) => m.from?.emailAddress.address)
+        .filter((x): x is string => Boolean(x)),
+    ),
+  );
+
+  return {
+    conversationId: latest?.conversationId || '',
+    subject,
+    participants,
+    firstDate: ordered[0]?.receivedDateTime,
+    lastDate: latest?.receivedDateTime,
+    attachments,
+    resumo: ai.resumo,
+    tracking: dedupe(ai.tracking, (t) => `${t.carrier}|${t.number}`),
+    processNumbers: dedupe(
+      [...det.processNumbers, ...ai.processNumbers.map((p) => p.toUpperCase())],
+      (p) => p,
+    ),
+    externalReferences: dedupe(
+      [
+        ...det.containers.map((value) => ({ type: 'container', value })),
+        ...ai.externalReferences,
+      ],
+      (r) => `${r.value}`.toUpperCase(),
+    ),
+    documents: dedupe(ai.documents, (d) => d.toLowerCase()),
+    hblResolution: ai.hblResolution,
+    carrier: ai.carrier,
+    dates: ai.dates,
+    evidences: ai.evidences,
+    confidence: clamp01(ai.confidence),
+  };
+}
+
+/* ------------------------------------------------------------------ *
  * Parser principal
  * ------------------------------------------------------------------ */
 

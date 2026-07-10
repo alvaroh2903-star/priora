@@ -7,6 +7,7 @@ import { emailRouter } from './routes/emailRoutes';
 import { analysisRouter } from './routes/analysisRoutes';
 import { parseRouter } from './routes/parseRoutes';
 import { processRouter } from './routes/processRoutes';
+import { courierRouter } from './routes/courierRoutes';
 
 const app = express();
 
@@ -48,6 +49,7 @@ app.use('/api/emails', emailRouter);
 app.use('/api/analysis', analysisRouter);
 app.use('/api/parse', parseRouter);
 app.use('/api/processes', processRouter);
+app.use('/api/couriers', courierRouter);
 
 /** Estado de autenticação do usuário atual (para a UI). */
 app.get('/api/me', (req, res) => {

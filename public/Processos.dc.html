@@ -123,13 +123,13 @@
               <div style="position:relative;width:52px;height:52px;border-radius:50%;background:radial-gradient(circle at 50% 35%,#EDE9FF,#F6F4FF);display:flex;align-items:flex-end;justify-content:center;overflow:hidden;flex-shrink:0;box-shadow:0 6px 16px -8px rgba(67,39,230,.4);border:1px solid rgba(67,39,230,.14)"><img src="assets/clara.png" alt="Clara" style="position:absolute;width:88px;height:auto;left:-12px;top:4px"></div>
               <div><div style="display:flex;align-items:center;gap:7px"><span style="font-size:14.5px;font-weight:800">Clara</span><span style="font-size:9px;font-weight:700;color:#fff;background:#4327E6;padding:2px 6px;border-radius:20px">IA</span></div><div style="font-size:11.5px;color:#9AA0B4;margin-top:2px">Resumo da carteira</div></div>
             </div>
-            <p style="font-size:13px;color:#3C4258;line-height:1.5;margin-bottom:13px">Analisei os <b>29 processos</b> da sua carteira.</p>
+            <p style="font-size:13px;color:#3C4258;line-height:1.5;margin-bottom:13px">{{ claraIntro }}</p>
             <div style="display:flex;flex-direction:column;gap:9px">
               <sc-for list="{{ claraPoints }}" as="c" hint-placeholder-count="4">
                 <div style="display:flex;align-items:flex-start;gap:9px"><span style="width:8px;height:8px;border-radius:50%;background:{{ c.color }};flex-shrink:0;margin-top:5px"></span><span style="font-size:12.5px;color:#5A6076;line-height:1.4">{{ c.text }}</span></div>
               </sc-for>
             </div>
-            <div style="margin-top:14px;padding-top:13px;border-top:1px solid #EAE7F8"><div style="font-size:11.5px;color:#9AA0B4;font-weight:600">Clara recomenda</div><p style="font-size:13px;font-weight:700;color:#3D34C9;margin-top:4px">Priorize IM2567 e IM2540.</p></div>
+            <div style="margin-top:14px;padding-top:13px;border-top:1px solid #EAE7F8"><div style="font-size:11.5px;color:#9AA0B4;font-weight:600">Clara recomenda</div><p style="font-size:13px;font-weight:700;color:#3D34C9;margin-top:4px">{{ claraRecommend }}</p></div>
           </div>
 
           <div style="background:#fff;border:1px solid #EAEBF4;border-radius:20px;padding:20px 22px">
@@ -283,228 +283,173 @@
 </x-dc>
 <script type="text/x-dc" data-dc-script>
 class Component extends DCLogic {
-  state = { detail:null, live:null };
+  state = { detail:null, live:null, analysis:null, aLoading:false, aError:null };
 
   S = { red:{c:'#C2333A',b:'#FDECEC'}, amber:{c:'#B9760A',b:'#FDF3E0'}, green:{c:'#177D54',b:'#E7F6EF'}, purple:{c:'#3D34C9',b:'#EEEBFE'}, blue:{c:'#1D4ED8',b:'#E7F0FE'}, gray:{c:'#5A6076',b:'#F1F2F8'} };
   TXT = { green:'#177D54', red:'#C2333A', amber:'#B9760A', blue:'#1D4ED8', gray:'#3C4258', purple:'#3D34C9' };
 
   componentDidMount(){
-    this._onFocus = (e)=>{ const dt=e&&e.detail; if(dt && dt.module==='processos' && dt.id) this.openDetail(dt.id, true); };
+    this._cache = {};
+    this._onFocus = (e)=>{ const dt=e&&e.detail; if(dt && dt.module==='processos' && dt.id) this.openByCode(dt.id, true); };
     window.addEventListener('priora:focus', this._onFocus);
     const p = window.PrioraBus && window.PrioraBus.consume('processos');
-    if (p && p.id) this.openDetail(p.id, true);
-    // Puxa os processos reais do Outlook. Em erro/401, mantém os dados de exemplo.
-    try {
-      fetch('/api/processes', { credentials:'same-origin' })
-        .then(function(r){ return r.ok ? r.json() : null; })
-        .then(function(d){ if (d && Array.isArray(d.processes)) this.setState({ live: d.processes }); }.bind(this))
-        .catch(function(){});
-    } catch(e){}
+    this._pendingFocus = (p && p.id) ? p.id : null;
+    fetch('/api/processes', { credentials:'same-origin' })
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(d){
+        var list = (d && Array.isArray(d.processes)) ? d.processes : [];
+        this.setState({ live:list });
+        if (this._pendingFocus){ var id=this._pendingFocus; this._pendingFocus=null; this.openByCode(id, true); }
+      }.bind(this))
+      .catch(function(){ this.setState({ live:[] }); }.bind(this));
   }
   componentWillUnmount(){ window.removeEventListener('priora:focus', this._onFocus); }
 
-  openDetail(code, fromNav){
-    if (this.state.detail === code) { try{ window.scrollTo({top:0,behavior:'smooth'}); }catch(e){} return; }
-    this.setState({ detail: code });
-    try{ window.scrollTo({ top:0, behavior: fromNav ? 'auto' : 'smooth' }); }catch(e){ try{ window.scrollTo(0,0); }catch(_){} }
+  findItem(idOrCode){
+    var live = this.state.live || [];
+    for (var i=0;i<live.length;i++){ var p=live[i]; if (p.codigo===idOrCode || p.conversationId===idOrCode) return p; }
+    return null;
   }
-  closeDetail(){ this.setState({ detail:null }); try{ window.scrollTo({top:0,behavior:'auto'}); }catch(e){} }
+  openByCode(idOrCode, fromNav){ var it=this.findItem(idOrCode); if(it) this.openDetail(it, fromNav); }
+
+  openDetail(item, fromNav){
+    if (this.state.detail && this.state.detail.conversationId===item.conversationId){ try{window.scrollTo(0,0);}catch(e){} return; }
+    var cid = item.conversationId;
+    var cached = this._cache && this._cache[cid];
+    this.setState({ detail:item, analysis:cached||null, aError:null, aLoading:!cached });
+    try{ window.scrollTo({ top:0, behavior: fromNav?'auto':'smooth' }); }catch(e){}
+    if (cached) return;
+    var self=this;
+    fetch('/api/processes/' + encodeURIComponent(cid) + '/analysis', { credentials:'same-origin' })
+      .then(function(r){ return r.json().catch(function(){return null;}).then(function(j){ if(!r.ok) throw new Error((j&&j.error)||('HTTP '+r.status)); return j; }); })
+      .then(function(a){ self._cache[cid]=a; if(self.state.detail && self.state.detail.conversationId===cid) self.setState({ analysis:a, aLoading:false }); })
+      .catch(function(err){ if(self.state.detail && self.state.detail.conversationId===cid) self.setState({ aError:String(err && err.message || err), aLoading:false }); });
+  }
+  closeDetail(){ this.setState({ detail:null, analysis:null, aError:null, aLoading:false }); try{window.scrollTo(0,0);}catch(e){} }
   goModule(module, id){ if(window.PrioraBus) window.PrioraBus.focus(module, id); }
 
-  BASE = {
-    IM2567:{ cliente:'BRA TRADE', analista:'Pedro', armador:'MSC · MSC BRAZIL', eta:'20/06/2026' },
-    IM2540:{ cliente:'ENCANTEX', analista:'Gilmar', armador:'Cosco · COSCO SHIPPING', eta:'18/06/2026' },
-    IM2591:{ cliente:'COBRAX', analista:'Pedro', armador:'Hapag-Lloyd · HAPAG EXPRESS', eta:'30/05/2026' },
-    IM2588:{ cliente:'KLABIN', analista:'Angelina', armador:'MSC · MSC BRAZIL', eta:'24/06/2026' },
-    IM2550:{ cliente:'JBS', analista:'Kaio', armador:'Maersk · MAERSK SELETAR', eta:'22/06/2026' },
-    IM1604:{ cliente:'KLABIN', analista:'Angelina', armador:'CMA CGM · CMA CGM TANYA', eta:'26/06/2026' },
-    IM1402:{ cliente:'VALE DO AÇO', analista:'Samuel', armador:'Evergreen · EVER GOLDEN', eta:'19/06/2026' },
-    IM1388:{ cliente:'SUL COMEX', analista:'Kaio', armador:'ONE · ONE HARMONY', eta:'18/06/2026' },
-  };
+  fmt(iso){ try{ var d=new Date(iso); if(isNaN(d)) return '—'; return d.toLocaleDateString('pt-BR'); }catch(e){ return '—'; } }
 
-  RICH = {
-    IM2567:{ statusPrincipal:'Gerando Demurrage', statusKind:'red',
-      containers:[['FBIU5238915','Em demurrage','red'],['GAOU6159773','Em demurrage','red']],
-      documental:[['Minuta de devolução','Não recebida','red'],['OHBL','Via Telex Release — não aplicável','gray'],['Telex Release','Confirmado pelo cliente','green'],['Retirada física solicitada','Sim','green']],
-      demurrage:{ statusText:'Em demurrage', statusKind:'red', valor:'R$ 1.840', valorKind:'red', note:'2 containers fora do free time há 4 dias · R$ 460/dia.' },
-      courier:{ tracking:'DHL 77889911', statusText:'Recebido', statusKind:'green', rota:'Shanghai → Itajaí' },
-      liberacao:{ statusText:'Apto', statusKind:'green', note:'Documentação completa. Sem impedimentos para a liberação.' },
-      clara:['Processo IM2567 para BRA TRADE.','Container retirado pelo cliente e não devolvido — gerando demurrage.','Telex Release confirmado pelo cliente.'],
-      timeline:[['Processo registrado no sistema','02/05',0],['Courier recebido','08/05',0],['Telex confirmado','13/05',0],['Demurrage iniciada','16/05',1]] },
-    IM2540:{ statusPrincipal:'Conflito documental', statusKind:'red',
-      containers:[['CAIU7781234','Atracado','amber']],
-      documental:[['Termo de responsabilidade','Recebido','green'],['OHBL','Informado como físico pelo agente','amber'],['Telex Release','Selecionado pelo cliente','amber'],['Conflito','Telex vs. HBL Original','red']],
-      demurrage:null,
-      courier:{ tracking:'DHL 55667788', statusText:'Em trânsito', statusKind:'purple', rota:'Ningbo → Itajaí' },
-      liberacao:{ statusText:'Aguardando decisão', statusKind:'red', note:'Conflito de evidências — precisa de validação humana na Fila de Decisões.' },
-      clara:['Processo IM2540 para ENCANTEX.','Cliente selecionou Telex Release, mas o agente informou envio de HBL Original físico.','Recomendo revisar o conflito antes de liberar.'],
-      timeline:[['Processo registrado no sistema','30/05',0],['Documentação básica recebida','04/06',0],['Agente informou HBL físico','06/06',0],['Conflito identificado pela Clara','07/06',1]] },
-    IM2591:{ statusPrincipal:'Aguardando validação do Telex', statusKind:'amber',
-      containers:[['HLXU3345678','A caminho','gray']],
-      documental:[['Termo de responsabilidade','Recebido','green'],['OHBL','Via Telex Release','green'],['Telex Release','Confirmado pelo cliente','green']],
-      demurrage:null,
-      courier:null,
-      liberacao:{ statusText:'Aguardando validação', statusKind:'amber', note:'HBL liberado eletronicamente via Telex Release. Aguardando validação do analista na Fila de Decisões.' },
-      clara:['Processo IM2591 para COBRAX.','Cliente marcou Telex Release no portal — HBL liberado eletronicamente.','Não há HBL físico nem courier esperado — aguarda apenas a validação do analista.'],
-      timeline:[['Processo registrado no sistema','20/05',0],['Cliente marcou Telex Release no portal','27/05',0],['HBL liberado eletronicamente','28/05',0],['Aguardando validação do analista','29/05',1]] },
-    IM2588:{ statusPrincipal:'Risco de demurrage', statusKind:'amber',
-      containers:[['TCLU7887654','Free time: 3 dias','amber'],['MSKU2233445','Free time: 3 dias','amber']],
-      documental:[['Minuta de devolução','Pendente','amber'],['OHBL','Recebido','green'],['Telex Release','Não aplicável','gray']],
-      demurrage:{ statusText:'Risco iminente', statusKind:'amber', valor:'R$ 1.840', valorKind:'amber', note:'Restam 3 dias de free time. Custo potencial caso não haja devolução.' },
-      courier:{ tracking:'DHL 55667788', statusText:'Em trânsito', statusKind:'purple', rota:'Ningbo → Itajaí' },
-      liberacao:{ statusText:'Apto', statusKind:'green', note:'Liberado — o foco agora é a devolução dentro do free time.' },
-      clara:['Processo IM2588 para KLABIN.','2 containers com 3 dias de free time restante.','Recomendo contatar o cliente para antecipar a devolução.'],
-      timeline:[['Processo registrado no sistema','28/05',0],['Containers retirados','04/06',0],['Free time próximo do fim','21/06',1]] },
-    IM2550:{ statusPrincipal:'Aguardando minuta', statusKind:'purple',
-      containers:[['MSCU1234567','Devolvido','green']],
-      documental:[['Minuta de devolução','Não localizada','red'],['OHBL','Recebido','green'],['Telex Release','Confirmado','green']],
-      demurrage:{ statusText:'Devolvido — sem custo', statusKind:'green', valor:'R$ 0', valorKind:'green', note:'Container devolvido em 15/06. Aguardando comprovante (minuta) do cliente.' },
-      courier:{ tracking:'FedEx 55110022', statusText:'Recebido', statusKind:'green', rota:'Xangai → Santos' },
-      liberacao:{ statusText:'Liberado', statusKind:'green', note:'Processo liberado. Pendência apenas documental (minuta).' },
-      clara:['Processo IM2550 para JBS.','Container devolvido, mas minuta não localizada.','Recomendo solicitar a confirmação ao cliente para encerrar a pendência.'],
-      timeline:[['Processo registrado no sistema','25/05',0],['Liberado','10/06',0],['Container devolvido','15/06',0],['Aguardando minuta do cliente','16/06',1]] },
-    IM1604:{ statusPrincipal:'Pendência com o cliente', statusKind:'amber',
-      containers:[],
-      documental:[['Termo de responsabilidade','Pendente','amber'],['OHBL','Aguardando courier','amber'],['Telex Release','Não aplicável','gray']],
-      demurrage:null,
-      courier:{ tracking:'DHL 55667788', statusText:'Em trânsito', statusKind:'purple', rota:'Ningbo → Itajaí' },
-      liberacao:{ statusText:'Aguardando cliente', statusKind:'amber', note:'Pendência documental com o cliente KLABIN.' },
-      clara:['Processo IM1604 para KLABIN.','Aguardando documentação do cliente.','Courier ainda em trânsito.'],
-      timeline:[['Processo registrado no sistema','01/06',0],['Cobrança enviada ao cliente','12/06',1]] },
-    IM1402:{ statusPrincipal:'Liberado', statusKind:'green',
-      containers:[['EGHU9088776','Liberado','green']],
-      documental:[['Termo de responsabilidade','Recebido','green'],['OHBL','Validado','green'],['Telex Release','Confirmado','green']],
-      demurrage:null,
-      courier:{ tracking:'FedEx 33221100', statusText:'Recebido', statusKind:'green', rota:'Xangai → Santos' },
-      liberacao:{ statusText:'Liberado', statusKind:'green', note:'Processo liberado e atracado. Sem pendências.' },
-      clara:['Processo IM1402 para VALE DO AÇO.','Documentação completa e processo liberado.','Nenhuma ação pendente.'],
-      timeline:[['Processo registrado no sistema','20/05',0],['Documentação validada','10/06',0],['Liberado','16/06',1]] },
-    IM1388:{ statusPrincipal:'Liberado', statusKind:'green',
-      containers:[['SEGU5566778','Liberado','green']],
-      documental:[['Termo de responsabilidade','Recebido','green'],['OHBL','Validado','green'],['Telex Release','Confirmado','green']],
-      demurrage:null,
-      courier:{ tracking:'DHL 99887766', statusText:'Recebido', statusKind:'green', rota:'Ningbo → Itajaí' },
-      liberacao:{ statusText:'Liberado', statusKind:'green', note:'Processo liberado e atracado.' },
-      clara:['Processo IM1388 para SUL COMEX.','Processo liberado sem pendências.'],
-      timeline:[['Processo registrado no sistema','18/05',0],['Liberado','14/06',1]] },
-  };
+  buildDetail(item){
+    var S=this.S, TXT=this.TXT;
+    var a=this.state.analysis, loading=this.state.aLoading, err=this.state.aError;
 
-  genericRich(code){
-    return { statusPrincipal:'Em acompanhamento', statusKind:'gray',
-      containers:[], documental:[['Documentação','Em análise','gray']],
-      demurrage:null, courier:null,
-      liberacao:{ statusText:'Em processamento', statusKind:'gray', note:'Processo em acompanhamento pela equipe.' },
-      clara:['Processo '+code+' em acompanhamento.','Sem pendências críticas identificadas no momento.'],
-      timeline:[['Processo registrado no sistema','—',0],['Em acompanhamento','—',1]] };
-  }
+    var statusPrincipal, statusKind;
+    if (loading){ statusPrincipal='Clara analisando…'; statusKind='purple'; }
+    else if (err){ statusPrincipal='Análise indisponível'; statusKind='amber'; }
+    else if (a && a.hblResolution){ statusPrincipal=a.hblResolution; statusKind='green'; }
+    else if (a){ statusPrincipal='Analisado pela Clara'; statusKind='blue'; }
+    else { statusPrincipal='—'; statusKind='gray'; }
+    var sp=S[statusKind]||S.gray;
 
-  buildDetail(code){
-    const base = this.BASE[code] || { cliente:'Processo', analista:'—', armador:'—', eta:'—' };
-    const r = this.RICH[code] || this.genericRich(code);
-    const S = this.S, TXT = this.TXT;
-    const sp = S[r.statusKind] || S.gray;
-    const d = {
-      code, cliente:base.cliente, analista:base.analista, armador:base.armador, eta:base.eta,
-      statusPrincipal:r.statusPrincipal, statusColor:sp.c, statusBg:sp.b,
-      hasContainers:r.containers.length>0, noContainers:r.containers.length===0,
-      containers:r.containers.map(c=>({ numero:c[0], status:c[1], statusColor:S[c[2]].c, statusBg:S[c[2]].b })),
-      documental:r.documental.map(x=>({ label:x[0], value:x[1], valueColor:TXT[x[2]]||'#3C4258' })),
-      clara:r.clara,
-      timeline:r.timeline.map((t,i,arr)=>({ label:t[0], date:t[1], labelColor: t[2]?'#161A2E':'#3C4258', dot: t[2]?'#4327E6':'#C7CBDA', ring: t[2]?'0 0 0 4px rgba(67,39,230,.14)':'none', line: i===arr.length-1?'transparent':'#E6E8F2' })),
-      onBack:()=>this.closeDetail(),
-      hasDemurrage:false, hasCourier:false, hasLiberacao:false,
-    };
-    if (r.demurrage){ const st=S[r.demurrage.statusKind]||S.gray; d.hasDemurrage=true; d.demStatus=r.demurrage.statusText; d.demStatusColor=st.c; d.demStatusBg=st.b; d.demValor=r.demurrage.valor; d.demValorColor=(TXT[r.demurrage.valorKind]||'#161A2E'); d.demNote=r.demurrage.note; d.onDemurrage=()=>this.goModule('demurrage', code); }
-    if (r.courier){ const st=S[r.courier.statusKind]||S.gray; const cid=String(r.courier.tracking).split(' ').pop(); d.hasCourier=true; d.couStatus=r.courier.statusText; d.couStatusColor=st.c; d.couStatusBg=st.b; d.couTracking=r.courier.tracking; d.couRota=r.courier.rota; d.onCourier=()=>this.goModule('couriers', cid); }
-    if (r.liberacao){ const st=S[r.liberacao.statusKind]||S.gray; d.hasLiberacao=true; d.libStatus=r.liberacao.statusText; d.libStatusColor=st.c; d.libStatusBg=st.b; d.libNote=r.liberacao.note; d.onLiberacao=()=>this.goModule('liberacao', code); }
+    var refs=(a && a.externalReferences)||[];
+    var containers=refs.filter(function(r){ return String(r.type||'').toLowerCase().indexOf('container')>=0; })
+      .map(function(r){ return { numero:r.value, status:'Citado no e-mail', statusColor:S.blue.c, statusBg:S.blue.b }; });
+
+    var documental=[];
+    if (loading) documental=[{label:'Clara está lendo a conversa…', value:'aguarde', valueColor:'#7A8099'}];
+    else if (err) documental=[{label:'Análise da Clara', value:'indisponível', valueColor:TXT.amber}];
+    else if (a){
+      (a.documents||[]).forEach(function(doc){ documental.push({ label:doc, value:'Citado na conversa', valueColor:TXT.blue }); });
+      if (a.hblResolution) documental.push({ label:'Resolução do HBL', value:a.hblResolution, valueColor:TXT.green });
+      refs.filter(function(r){ return String(r.type||'').toLowerCase().indexOf('container')<0; }).slice(0,5)
+        .forEach(function(r){ documental.push({ label:'Ref. '+(r.type||'externa'), value:r.value, valueColor:TXT.gray }); });
+      if (a.attachments && a.attachments.length) documental.push({ label:'Anexos', value:a.attachments.map(function(x){return x.name;}).join(', '), valueColor:TXT.gray });
+      if (!documental.length) documental=[{label:'Documentos', value:'Nenhum citado na conversa', valueColor:'#7A8099'}];
+    }
+    else documental=[{label:'Documentos', value:'—', valueColor:'#7A8099'}];
+
+    var clara;
+    if (loading) clara=['Estou lendo a conversa completa no Outlook…','Já volto com documentos, HBL, datas e evidências.'];
+    else if (err) clara=['Não consegui analisar esta conversa agora.', err];
+    else if (a){
+      clara=(a.resumo && a.resumo.length ? a.resumo.slice(0,4) : ['Análise concluída.']);
+      (a.evidences||[]).slice(0,3).forEach(function(ev){ clara.push(ev.conclusion+' — \u201C'+String(ev.snippet||'').slice(0,90)+'\u201D'); });
+      if (typeof a.confidence==='number') clara.push('Confiança da extração: '+Math.round(a.confidence*100)+'%');
+    }
+    else clara=['Sem análise.'];
+
+    var tl=[];
+    if (a && a.dates && a.dates.length) tl=a.dates.slice(0,6).map(function(d){ return [d.text, d.normalized||'—']; });
+    if (!tl.length) tl=[['E-mail mais recente', this.fmt(item.data)]];
+    var timeline=tl.map(function(t,i,arr){ var last=(i===arr.length-1); return { label:t[0], date:t[1], labelColor:last?'#161A2E':'#3C4258', dot:last?'#4327E6':'#C7CBDA', ring:last?'0 0 0 4px rgba(67,39,230,.14)':'none', line:last?'transparent':'#E6E8F2' }; });
+
+    var self=this;
+    var d={ code:item.codigo, cliente:item.cliente, analista:'—', armador:'—', eta:this.fmt(item.data),
+      statusPrincipal:statusPrincipal, statusColor:sp.c, statusBg:sp.b,
+      hasContainers:containers.length>0, noContainers:containers.length===0,
+      containers:containers, documental:documental, clara:clara, timeline:timeline,
+      onBack:function(){ self.closeDetail(); },
+      hasDemurrage:false, hasCourier:false, hasLiberacao:false };
+
+    var trk=(a && a.tracking && a.tracking[0]) || null;
+    if (!trk && item.tracking){ var parts=String(item.tracking).split(' '); trk={ carrier:parts[0], number:parts.slice(1).join('') }; }
+    if (trk && trk.number){
+      d.hasCourier=true; d.couStatus='Detectado no e-mail'; d.couStatusColor=S.blue.c; d.couStatusBg=S.blue.b;
+      d.couTracking=((trk.carrier?trk.carrier+' ':'')+trk.number); d.couRota=(a && a.carrier)||trk.carrier||'—';
+      d.onCourier=function(){ self.goModule('couriers', trk.number); };
+    }
+    if (a && a.hblResolution){
+      d.hasLiberacao=true; d.libStatus=a.hblResolution; d.libStatusColor=S.green.c; d.libStatusBg=S.green.b;
+      var ev=(a.evidences||[]).filter(function(e){ return /hbl|telex/i.test(String(e.conclusion)+String(e.snippet)); })[0];
+      d.libNote= ev ? ('\u201C'+ev.snippet+'\u201D') : 'Detectado pela Clara na conversa.';
+      d.onLiberacao=function(){ self.goModule('liberacao', item.codigo); };
+    }
     return d;
   }
 
-  renderVals(){
-    const open = (code)=>()=>this.openDetail(code);
-    const kpis = [
-      { label:'Exigem atenção', value:'4', color:'#E5484D', valColor:'#C2333A' },
-      { label:'Pendências externas', value:'7', color:'#E8990C', valColor:'#161A2E' },
-      { label:'Liberados', value:'18', color:'#1F9D6B', valColor:'#161A2E' },
-      { label:'Total de processos', value:'29', color:'#4327E6', valColor:'#161A2E' },
-    ];
-    const atencao = [
-      { codigo:'IM2567', cliente:'BRA TRADE', armador:'MSC', eta:'20/06', analista:'Pedro', problema:'2 containers gerando demurrage há 4 dias.', impacto:'Custo de R$ 460/dia ao cliente.', onOpen:open('IM2567') },
-      { codigo:'IM2540', cliente:'ENCANTEX', armador:'Cosco', eta:'18/06', analista:'Gilmar', problema:'Conflito documental: Telex vs. HBL Original.', impacto:'Carga atracada aguardando definição.', onOpen:open('IM2540') },
-      { codigo:'IM2591', cliente:'COBRAX', armador:'Hapag', eta:'30/05', analista:'Pedro', problema:'Telex Release marcado pelo cliente — HBL liberado eletronicamente.', impacto:'Aguarda validação do analista para liberar.', onOpen:open('IM2591') },
-    ];
-    const aguardando = [
-      { codigo:'IM1604', cliente:'KLABIN', status:'Pendência com o cliente', onOpen:open('IM1604') },
-      { codigo:'IM2588', cliente:'KLABIN', status:'Aguardando devolução de container', onOpen:open('IM2588') },
-      { codigo:'IM2550', cliente:'JBS', status:'Aguardando minuta do cliente', onOpen:open('IM2550') },
-    ];
-    const TAG = { dem:{t:'Demurrage',c:'#C2333A',b:'#FDECEC'}, dec:{t:'Decisão',c:'#3D34C9',b:'#EEEBFE'}, ag:{t:'Aguardando',c:'#B9760A',b:'#FDF3E0'}, lib:{t:'Liberado',c:'#177D54',b:'#E7F6EF'} };
-    const todosRaw = [
-      ['IM2567','BRA TRADE','Pedro','Gerando demurrage','dem'],
-      ['IM2588','KLABIN','Angelina','Próximo do vencimento','ag'],
-      ['IM2550','JBS','Kaio','Aguardando minuta','ag'],
-      ['IM2540','ENCANTEX','Gilmar','Possível responsabilidade Rocket','dec'],
-      ['IM2591','COBRAX','Pedro','Aguardando Telex','dec'],
-      ['IM1604','KLABIN','Angelina','Pendência cliente','ag'],
-      ['IM1402','VALE DO AÇO','Samuel','Liberado — atracado','lib'],
-      ['IM1388','SUL COMEX','Kaio','Liberado — atracado','lib'],
-    ];
-    const todos = todosRaw.map(r=>({ codigo:r[0], cliente:r[1], analista:r[2], status:r[3], tag:TAG[r[4]].t, tagColor:TAG[r[4]].c, tagBg:TAG[r[4]].b, onOpen:open(r[0]) }));
-    const claraPoints = [
-      { text:'2 processos com risco de atraso na liberação', color:'#E5484D' },
-      { text:'1 courier sem rastreamento atualizado', color:'#E5484D' },
-      { text:'4 processos aguardando ação do cliente', color:'#E8990C' },
-      { text:'18 processos sem pendências', color:'#1F9D6B' },
-    ];
-    const atividades = [
-      { label:'Processo liberado', sub:'IM2531 — AMBEV', time:'Há 1h', bg:'#E7F6EF', color:'#1F9D6B', iconPath:'M12 3 4 7v10l8 4 8-4V7Z M9 12l2 2 4-4' },
-      { label:'Pendência aberta', sub:'IM1604 — KLABIN', time:'Há 3h', bg:'#FDF3E0', color:'#B9760A', iconPath:'M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z' },
-      { label:'Novo processo', sub:'IM2610 — JBS', time:'Ontem', bg:'#EEEBFE', color:'#4327E6', iconPath:'M12 5v14M5 12h14' },
-      { label:'ETA atualizada', sub:'IM2588 — KLABIN', time:'Ontem', bg:'#E7F0FE', color:'#2563EB', iconPath:'M3 17h18M5 17V9l7-5 7 5v8' },
-    ];
-    const detail = this.state.detail;
-    // Sempre usa dados reais do Outlook (sem exemplos). Enquanto carrega ou se
-    // não houver e-mails, as listas ficam vazias — nunca dados fictícios.
-    const base = { atividades: [] };
-    Object.assign(base, this.liveLists(this.state.live || [], open));
-    return Object.assign(base, {
-      listView: !detail, detailView: !!detail, d: detail ? this.buildDetail(detail) : {}
-    });
-  }
-
-  // Converte os processos reais (/api/processes) para a mesma estrutura da UI.
   liveLists(live, open){
-    const fmt = (iso)=>{ try{ return new Date(iso).toLocaleDateString('pt-BR'); }catch(e){ return ''; } };
-    const total = live.length;
-    const comProc = live.filter(function(p){ return p.codigo && p.codigo !== '—'; }).length;
-    const comTrack = live.filter(function(p){ return !!p.tracking; }).length;
-    const kpis = [
+    var fmt=this.fmt;
+    var loading = (this.state.live===null);
+    var total=live.length;
+    var comProc=live.filter(function(p){ return p.codigo && p.codigo!=='—'; }).length;
+    var comTrack=live.filter(function(p){ return !!p.tracking; }).length;
+    var kpis=[
       { label:'Conversas de logística', value:String(total), color:'#4327E6', valColor:'#161A2E' },
       { label:'Com nº de processo', value:String(comProc), color:'#1F9D6B', valColor:'#161A2E' },
       { label:'Com courier/tracking', value:String(comTrack), color:'#E8990C', valColor:'#161A2E' },
       { label:'Fonte', value:'Outlook', color:'#2563EB', valColor:'#161A2E' },
     ];
-    const atencao = live.slice(0,3).map(function(p){
+    var atencao=live.slice(0,3).map(function(p){
       return { codigo:p.codigo, cliente:p.cliente, armador:'—', eta:fmt(p.data), analista:'—',
-        problema:p.assunto, impacto: p.tracking ? ('Courier: '+p.tracking) : (p.count+' mensagem(ns) na conversa'),
-        onOpen:open(p.codigo) };
+        problema:p.assunto, impacto: p.tracking?('Courier: '+p.tracking):(p.count+' mensagem(ns) na conversa'), onOpen:open(p) };
     });
-    const aguardando = live.slice(3,7).map(function(p){
-      return { codigo:p.codigo, cliente:p.cliente, status:p.assunto, onOpen:open(p.codigo) };
-    });
-    const TAGL = { tracking:{t:'Courier',c:'#3D34C9',b:'#EEEBFE'}, plain:{t:'Logística',c:'#B9760A',b:'#FDF3E0'} };
-    const todos = live.map(function(p){
-      var tg = p.tracking ? TAGL.tracking : TAGL.plain;
+    var aguardando=live.slice(3,7).map(function(p){ return { codigo:p.codigo, cliente:p.cliente, status:p.assunto, onOpen:open(p) }; });
+    var TAGL={ tracking:{t:'Courier',c:'#3D34C9',b:'#EEEBFE'}, plain:{t:'Logística',c:'#B9760A',b:'#FDF3E0'} };
+    var todos=live.map(function(p){
+      var tg=p.tracking?TAGL.tracking:TAGL.plain;
       return { codigo:p.codigo, cliente:p.cliente, analista:fmt(p.data),
-        status: p.tracking ? ('Courier: '+p.tracking) : (p.assunto || '—'),
-        tag:tg.t, tagColor:tg.c, tagBg:tg.b, onOpen:open(p.codigo) };
+        status:p.tracking?('Courier: '+p.tracking):(p.assunto||'—'),
+        tag:tg.t, tagColor:tg.c, tagBg:tg.b, onOpen:open(p) };
     });
-    const claraPoints = [
-      { text: total+' conversas de logística na sua caixa', color:'#4327E6' },
-      { text: comProc+' com número de processo identificado', color:'#1F9D6B' },
-      { text: comTrack+' com courier/rastreio detectado', color:'#E8990C' },
-    ];
-    return { kpis:kpis, atencao:atencao, aguardando:aguardando, todos:todos, claraPoints:claraPoints };
+    var claraPoints, claraIntro, claraRecommend;
+    if (loading){
+      claraIntro='Buscando seus e-mails no Outlook…';
+      claraPoints=[{ text:'Conectando à sua caixa de entrada.', color:'#4327E6' }];
+      claraRecommend='Um instante.';
+    } else if (!total){
+      claraIntro='Não encontrei e-mails na caixa conectada.';
+      claraPoints=[{ text:'Verifique se esta conta recebe os e-mails de logística.', color:'#E8990C' }];
+      claraRecommend='Conecte a conta que recebe os e-mails da operação.';
+    } else {
+      claraIntro='Analisei '+total+' conversa'+(total===1?'':'s')+' da sua caixa do Outlook.';
+      claraPoints=[
+        { text: comProc+' com número de processo identificado', color:'#1F9D6B' },
+        { text: comTrack+' com courier/rastreio detectado', color:'#E8990C' },
+        { text:'Abra um processo para eu ler a conversa e extrair documentos, HBL e datas.', color:'#4327E6' },
+      ];
+      claraRecommend='Clique em "Abrir processo" para a análise completa.';
+    }
+    return { kpis:kpis, atencao:atencao, aguardando:aguardando, todos:todos, claraPoints:claraPoints, claraIntro:claraIntro, claraRecommend:claraRecommend };
+  }
+
+  renderVals(){
+    var self=this;
+    var open=function(item){ return function(){ self.openDetail(item); }; };
+    var base={ atividades:[] };
+    Object.assign(base, this.liveLists(this.state.live||[], open));
+    var detail=this.state.detail;
+    return Object.assign(base, { listView:!detail, detailView:!!detail, d: detail?this.buildDetail(detail):{} });
   }
 }
 </script>

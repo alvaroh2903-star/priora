@@ -3,8 +3,11 @@ import { requireAuth, AuthedRequest } from '../middleware/requireAuth';
 import {
   searchLogisticsMessages,
   listRecentSummaries,
+  getConversationFull,
   LogisticsSummary,
 } from '../graph/graphService';
+import { parseThread } from '../ai/emailParser';
+import { isAiConfigured } from '../ai/geminiClient';
 import { config } from '../config';
 
 export const processRouter = Router();
@@ -84,3 +87,34 @@ processRouter.get('/', async (req: AuthedRequest, res, next) => {
     next(err);
   }
 });
+
+/**
+ * GET /api/processes/:conversationId/analysis — a Clara lê a conversa inteira
+ * no Outlook (corpos completos) e devolve documentos citados, resolução do HBL,
+ * tracking, datas, evidências e um resumo. 1 chamada de IA por conversa.
+ */
+processRouter.get(
+  '/:conversationId/analysis',
+  async (req: AuthedRequest, res, next) => {
+    try {
+      if (!isAiConfigured()) {
+        return res.status(503).json({
+          error:
+            'Recursos de IA indisponíveis. Defina GEMINI_API_KEY no servidor.',
+        });
+      }
+      const messages = await getConversationFull(
+        req.accessToken!,
+        req.params.conversationId,
+        { top: 50 },
+      );
+      if (messages.length === 0) {
+        return res.status(404).json({ error: 'Conversa não encontrada.' });
+      }
+      const analysis = await parseThread(messages);
+      res.json(analysis);
+    } catch (err) {
+      next(err);
+    }
+  },
+);

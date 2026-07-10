@@ -14,24 +14,145 @@
   *{box-sizing:border-box;margin:0;padding:0}
   body{font-family:'Plus Jakarta Sans',sans-serif;-webkit-font-smoothing:antialiased;background:#F4F5FB}
   @keyframes pageIn{from{transform:translateY(12px)}to{transform:translateY(0)}}
+  .row-hover{transition:background .15s}.row-hover:hover{background:#FAFAFE!important}
 </style>
 </helmet>
 <main style="flex:1;min-width:0;display:flex;flex-direction:column">
     <dc-import name="Topbar" title="Couriers" subtitle="O ativo é o documento, não o transporte. Cada courier agrupa os processos do mesmo envelope." icon-path="M3 5h18v14H3z M3 8l9 6 9-6" hint-size="100%,110px"></dc-import>
-    <div style="flex:1;display:flex;align-items:center;justify-content:center;padding:40px;animation:pageIn .35s ease both">
-      <div style="text-align:center;max-width:440px;background:#fff;border:1px solid #E6E8F2;border-radius:16px;padding:44px 34px">
-        <div style="width:58px;height:58px;border-radius:15px;background:#EEEBFE;display:flex;align-items:center;justify-content:center;margin:0 auto 18px">
-          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+
+    <div style="padding:22px 36px 40px 36px;animation:pageIn .35s ease both">
+
+      <!-- KPIs -->
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px;margin-bottom:22px">
+        <sc-for list="{{ kpis }}" as="k" hint-placeholder-count="4">
+          <div style="background:#fff;border:1px solid #EAEBF4;border-radius:16px;padding:17px 19px">
+            <div style="display:flex;align-items:center;gap:8px"><span style="width:8px;height:8px;border-radius:50%;background:{{ k.color }}"></span><span style="font-size:12px;font-weight:600;color:#7A8099">{{ k.label }}</span></div>
+            <div style="font-size:26px;font-weight:800;color:{{ k.valColor }};margin-top:8px">{{ k.value }}</div>
+          </div>
+        </sc-for>
+      </div>
+
+      <div style="display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:20px;align-items:start">
+        <!-- LISTA -->
+        <div style="min-width:0">
+          <sc-if value="{{ loadingView }}" hint-placeholder-val="{{ false }}">
+            <div style="background:#fff;border:1px solid #EAEBF4;border-radius:18px;padding:44px;text-align:center">
+              <div style="font-size:14px;font-weight:700;color:#3C4258">Buscando couriers no Outlook…</div>
+              <div style="font-size:12.5px;color:#9AA0B4;margin-top:6px">Procurando números de rastreio (DHL, FedEx, UPS…) nos seus e-mails.</div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ emptyView }}" hint-placeholder-val="{{ false }}">
+            <div style="background:#fff;border:1px solid #EAEBF4;border-radius:18px;padding:44px;text-align:center">
+              <div style="font-size:14px;font-weight:700;color:#3C4258">Nenhum courier detectado</div>
+              <div style="font-size:12.5px;color:#9AA0B4;margin-top:6px;line-height:1.5">Não encontrei números de rastreio (DHL, FedEx, UPS, Sedex…) nos e-mails desta caixa.<br>Assim que chegar um e-mail com tracking, ele aparece aqui.</div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ listReady }}" hint-placeholder-val="{{ true }}">
+            <div style="background:#fff;border:1px solid #EAEBF4;border-radius:18px;overflow:hidden">
+              <div style="overflow-x:auto"><div style="min-width:700px">
+                <div style="display:grid;grid-template-columns:170px 110px 1.3fr 1fr 100px 120px;gap:14px;padding:13px 22px;background:#FAFAFE;border-bottom:1px solid #EEEFF6;font-size:11.5px;font-weight:700;color:#9AA0B4;text-transform:uppercase;letter-spacing:.04em">
+                  <span>Tracking</span><span>Transportadora</span><span>Assunto</span><span>Remetente</span><span>Data</span><span>Processo</span>
+                </div>
+                <sc-for list="{{ rows }}" as="r" hint-placeholder-count="5">
+                  <div class="row-hover" style="display:grid;grid-template-columns:170px 110px 1.3fr 1fr 100px 120px;gap:14px;align-items:center;padding:14px 22px;border-bottom:1px solid #F2F3F9;background:{{ r.rowBg }}">
+                    <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px;font-weight:700;color:#161A2E;word-break:break-all">{{ r.tracking }}</span>
+                    <span><span style="font-size:11px;font-weight:700;color:#1D4ED8;background:#E7F0FE;padding:3px 9px;border-radius:7px;white-space:nowrap">{{ r.carrier }}</span></span>
+                    <span style="font-size:12.5px;color:#3C4258;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.assunto }}</span>
+                    <span style="font-size:12.5px;color:#7A8099;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.cliente }}</span>
+                    <span style="font-size:12px;color:#7A8099">{{ r.data }}</span>
+                    <span>
+                      <sc-if value="{{ r.hasProcesso }}" hint-placeholder-val="{{ true }}">
+                        <button onClick="{{ r.onProcesso }}" style="background:#EEEBFE;color:#3D34C9;border:1px solid #DDD6FB;border-radius:9px;padding:6px 11px;font-family:'JetBrains Mono',monospace;font-size:11.5px;font-weight:700;cursor:pointer;white-space:nowrap">{{ r.processo }}</button>
+                      </sc-if>
+                      <sc-if value="{{ r.noProcesso }}" hint-placeholder-val="{{ false }}">
+                        <span style="font-size:12px;color:#C7CBDA">—</span>
+                      </sc-if>
+                    </span>
+                  </div>
+                </sc-for>
+              </div></div>
+            </div>
+          </sc-if>
         </div>
-        <div style="font-size:19px;font-weight:800;color:#161A2E;margin-bottom:9px">Em construção</div>
-        <div style="font-size:14px;line-height:1.6;color:#6B7192">Esta tela será conectada aos seus dados reais do Outlook em breve.<br>Por enquanto, use a aba <b style="color:#4327E6">Processos</b> — já funcionando com seus e-mails.</div>
+
+        <!-- RIGHT: Clara -->
+        <div style="position:sticky;top:22px">
+          <div style="background:linear-gradient(150deg,#fff 60%,#F3F1FE);border:1px solid #E4E1FA;border-radius:20px;padding:20px 22px">
+            <div style="display:flex;align-items:center;gap:11px;margin-bottom:13px">
+              <div style="position:relative;width:52px;height:52px;border-radius:50%;background:radial-gradient(circle at 50% 35%,#EDE9FF,#F6F4FF);display:flex;align-items:flex-end;justify-content:center;overflow:hidden;flex-shrink:0;box-shadow:0 6px 16px -8px rgba(67,39,230,.4);border:1px solid rgba(67,39,230,.14)"><img src="assets/clara.png" alt="Clara" style="position:absolute;width:88px;height:auto;left:-12px;top:4px"></div>
+              <div><div style="display:flex;align-items:center;gap:7px"><span style="font-size:14.5px;font-weight:800">Clara</span><span style="font-size:9px;font-weight:700;color:#fff;background:#4327E6;padding:2px 6px;border-radius:20px">IA</span></div><div style="font-size:11.5px;color:#9AA0B4;margin-top:2px">Couriers detectados</div></div>
+            </div>
+            <p style="font-size:13px;color:#3C4258;line-height:1.5;margin-bottom:13px">{{ claraIntro }}</p>
+            <div style="display:flex;flex-direction:column;gap:9px">
+              <sc-for list="{{ claraPoints }}" as="c" hint-placeholder-count="3">
+                <div style="display:flex;align-items:flex-start;gap:9px"><span style="width:8px;height:8px;border-radius:50%;background:{{ c.color }};flex-shrink:0;margin-top:5px"></span><span style="font-size:12.5px;color:#5A6076;line-height:1.4">{{ c.text }}</span></div>
+              </sc-for>
+            </div>
+            <div style="margin-top:14px;padding-top:13px;border-top:1px solid #EAE7F8"><div style="font-size:11.5px;color:#9AA0B4;font-weight:600">Como funciona</div><p style="font-size:12.5px;color:#5A6076;line-height:1.5;margin-top:4px">Cada courier é detectado nos e-mails e vinculado ao processo citado na mesma conversa. Clique no processo para ver a análise completa.</p></div>
+          </div>
+        </div>
       </div>
     </div>
 </main>
 </x-dc>
 <script type="text/x-dc" data-dc-script>
 class Component extends DCLogic {
-  renderVals(){ return {}; }
+  state = { couriers:null, focusId:null };
+
+  componentDidMount(){
+    this._onFocus = (e)=>{ const dt=e&&e.detail; if(dt && dt.module==='couriers' && dt.id) this.setState({ focusId:String(dt.id) }); };
+    window.addEventListener('priora:focus', this._onFocus);
+    const p = window.PrioraBus && window.PrioraBus.consume('couriers');
+    if (p && p.id) this.setState({ focusId:String(p.id) });
+    fetch('/api/couriers', { credentials:'same-origin' })
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(d){ this.setState({ couriers:(d && Array.isArray(d.couriers)) ? d.couriers : [] }); }.bind(this))
+      .catch(function(){ this.setState({ couriers:[] }); }.bind(this));
+  }
+  componentWillUnmount(){ window.removeEventListener('priora:focus', this._onFocus); }
+
+  fmt(iso){ try{ var d=new Date(iso); if(isNaN(d)) return '—'; return d.toLocaleDateString('pt-BR'); }catch(e){ return '—'; } }
+
+  renderVals(){
+    var self=this;
+    var list=this.state.couriers;
+    var loading=(list===null);
+    var rows=(list||[]).map(function(c){
+      var proc=(c.processos && c.processos[0]) || null;
+      var focused = self.state.focusId && String(c.tracking).indexOf(self.state.focusId)>=0;
+      return {
+        tracking:c.tracking, carrier:c.carrier,
+        assunto:c.assunto, cliente:c.cliente, data:self.fmt(c.data),
+        rowBg: focused ? '#F3F1FE' : 'transparent',
+        hasProcesso:!!proc, noProcesso:!proc, processo:proc||'',
+        onProcesso:function(){ if(window.PrioraBus && proc) window.PrioraBus.focus('processos', proc); }
+      };
+    });
+    var total=rows.length;
+    var comProc=(list||[]).filter(function(c){ return c.processos && c.processos.length; }).length;
+    var carriers={}; (list||[]).forEach(function(c){ carriers[c.carrier]=1; });
+    var nCarriers=Object.keys(carriers).length;
+    var kpis=[
+      { label:'Couriers detectados', value:String(total), color:'#4327E6', valColor:'#161A2E' },
+      { label:'Com processo vinculado', value:String(comProc), color:'#1F9D6B', valColor:'#161A2E' },
+      { label:'Transportadoras', value:String(nCarriers), color:'#E8990C', valColor:'#161A2E' },
+      { label:'Fonte', value:'Outlook', color:'#2563EB', valColor:'#161A2E' },
+    ];
+    var claraIntro, claraPoints;
+    if (loading){ claraIntro='Procurando números de rastreio nos seus e-mails…'; claraPoints=[{text:'Um instante.',color:'#4327E6'}]; }
+    else if (!total){ claraIntro='Nenhum courier encontrado nesta caixa.'; claraPoints=[{text:'Quando chegar um e-mail com tracking (DHL, FedEx, UPS…), ele aparece aqui automaticamente.',color:'#E8990C'}]; }
+    else {
+      claraIntro='Detectei '+total+' courier'+(total===1?'':'s')+' nos seus e-mails.';
+      claraPoints=[
+        { text: comProc+' vinculado'+(comProc===1?'':'s')+' a um processo IMxxxx', color:'#1F9D6B' },
+        { text: nCarriers+' transportadora'+(nCarriers===1?'':'s'), color:'#E8990C' },
+        { text:'Clique no processo de um courier para eu analisar a conversa.', color:'#4327E6' },
+      ];
+    }
+    return { kpis:kpis, rows:rows, loadingView:loading, emptyView:(!loading && !total), listReady:(!loading && total>0), claraIntro:claraIntro, claraPoints:claraPoints };
+  }
 }
 </script>
 </body>
