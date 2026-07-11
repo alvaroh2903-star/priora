@@ -32,6 +32,34 @@
         </sc-for>
       </div>
 
+      <!-- Rastrear qualquer número manualmente -->
+      <div style="background:#fff;border:1px solid #EAEBF4;border-radius:16px;padding:16px 18px;margin-bottom:22px">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <span style="font-size:13px;font-weight:700;color:#3C4258;white-space:nowrap">Rastrear nº FedEx</span>
+          <input id="trkq" type="text" placeholder="ex.: 874196421241" style="flex:1;min-width:180px;background:#F7F8FC;border:1px solid #E6E8F2;border-radius:10px;padding:10px 13px;font-family:'JetBrains Mono',monospace;font-size:13px;color:#161A2E">
+          <button class="trk-btn" onClick="{{ onManualTrack }}" style="display:flex;align-items:center;gap:7px;background:#4327E6;color:#fff;border:none;border-radius:10px;padding:11px 18px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>Rastrear</button>
+        </div>
+        <sc-if value="{{ manual.showTrack }}" hint-placeholder-val="{{ false }}">
+          <div style="margin-top:13px;padding-top:13px;border-top:1px dashed #E6E8F2">
+            <sc-if value="{{ manual.trkLoading }}" hint-placeholder-val="{{ false }}"><div style="font-size:12.5px;color:#7A8099">Consultando a FedEx…</div></sc-if>
+            <sc-if value="{{ manual.trkError }}" hint-placeholder-val="{{ false }}"><div style="font-size:12.5px;color:#C2333A">{{ manual.trkErrorMsg }}</div></sc-if>
+            <sc-if value="{{ manual.trkDone }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+                <span style="font-size:14px;font-weight:800;color:{{ manual.trkStatusColor }}">{{ manual.trkStatus }}</span>
+                <sc-if value="{{ manual.trkHasLoc }}" hint-placeholder-val="{{ true }}"><span style="font-size:12.5px;color:#5A6076">📍 {{ manual.trkLocation }}</span></sc-if>
+                <sc-if value="{{ manual.trkHasEta }}" hint-placeholder-val="{{ false }}"><span style="font-size:12px;color:#7A8099">Previsão: {{ manual.trkEta }}</span></sc-if>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:6px">
+                <sc-for list="{{ manual.trkEvents }}" as="ev" hint-placeholder-count="3">
+                  <div style="display:flex;gap:9px;align-items:flex-start"><span style="width:6px;height:6px;border-radius:50%;background:#4327E6;flex-shrink:0;margin-top:6px"></span><span style="font-size:12px;color:#5A6076;line-height:1.4">{{ ev.text }}</span></div>
+                </sc-for>
+              </div>
+            </sc-if>
+          </div>
+        </sc-if>
+      </div>
+
       <div style="display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:20px;align-items:start">
         <!-- LISTA (cards) -->
         <div style="min-width:0">
@@ -126,7 +154,7 @@
 </x-dc>
 <script type="text/x-dc" data-dc-script>
 class Component extends DCLogic {
-  state = { couriers:null, focusId:null, tracking:{} };
+  state = { couriers:null, focusId:null, tracking:{}, manualNumber:'' };
 
   componentDidMount(){
     this._onFocus = (e)=>{ const dt=e&&e.detail; if(dt && dt.module==='couriers' && dt.id) this.setState({ focusId:String(dt.id) }); };
@@ -142,6 +170,29 @@ class Component extends DCLogic {
 
   fmt(iso){ try{ var d=new Date(iso); if(isNaN(d)) return '—'; return d.toLocaleDateString('pt-BR'); }catch(e){ return '—'; } }
   fmtDT(iso){ try{ var d=new Date(iso); if(isNaN(d)) return iso||''; return d.toLocaleString('pt-BR'); }catch(e){ return iso||''; } }
+
+  trackView(number){
+    var self=this;
+    var STC={ delivered:'#177D54', transit:'#1D4ED8', default:'#3C4258' };
+    var tk = number ? this.state.tracking[number] : null;
+    var v={ showTrack:!!tk, trkLoading:(tk&&tk.state==='loading'), trkError:(tk&&tk.state==='error'),
+      trkDone:(tk&&tk.state==='done'), trkErrorMsg:(tk&&tk.error)||'',
+      trkStatus:'', trkStatusColor:STC.default, trkLocation:'', trkHasLoc:false,
+      trkEta:'', trkHasEta:false, trkEvents:[] };
+    if (tk && tk.state==='done'){
+      var d=tk.data||{};
+      if (d.found){
+        v.trkStatus=d.status||'Status indisponível';
+        v.trkStatusColor=/entreg|deliver/i.test(v.trkStatus)?STC.delivered:STC.transit;
+        v.trkLocation=d.location||''; v.trkHasLoc=!!d.location;
+        v.trkEta=this.fmtDT(d.estimatedDelivery); v.trkHasEta=!!d.estimatedDelivery;
+        v.trkEvents=(d.events||[]).map(function(ev){ return { text:(self.fmtDT(ev.time))+' — '+ev.description+(ev.location?(' ('+ev.location+')'):'') }; });
+      } else {
+        v.trkStatus=d.error||'Não encontrado'; v.trkStatusColor='#C2333A';
+      }
+    }
+    return v;
+  }
 
   doTrack(number){
     var self=this;
@@ -170,24 +221,9 @@ class Component extends DCLogic {
         onProcesso:function(){ if(window.PrioraBus && proc) window.PrioraBus.focus('processos', proc); },
         canTrack:isFedex, noTrack:!isFedex,
         trackLabel: (tk && tk.state==='done') ? 'Atualizar' : 'Rastrear',
-        onTrack:function(){ self.doTrack(c.tracking); },
-        showTrack:!!tk, trkLoading:(tk&&tk.state==='loading'), trkError:(tk&&tk.state==='error'),
-        trkDone:(tk&&tk.state==='done'), trkErrorMsg:(tk&&tk.error)||'',
-        trkStatus:'', trkStatusColor:STC.default, trkLocation:'', trkHasLoc:false,
-        trkEta:'', trkHasEta:false, trkEvents:[]
+        onTrack:function(){ self.doTrack(c.tracking); }
       };
-      if (tk && tk.state==='done'){
-        var d=tk.data||{};
-        if (d.found){
-          row.trkStatus=d.status||'Status indisponível';
-          row.trkStatusColor = /entreg|deliver/i.test(row.trkStatus) ? STC.delivered : STC.transit;
-          row.trkLocation=d.location||''; row.trkHasLoc=!!d.location;
-          row.trkEta=self.fmtDT(d.estimatedDelivery); row.trkHasEta=!!d.estimatedDelivery;
-          row.trkEvents=(d.events||[]).map(function(ev){ return { text:(self.fmtDT(ev.time))+' — '+ev.description+(ev.location?(' ('+ev.location+')'):'') }; });
-        } else {
-          row.trkStatus=d.error||'Não encontrado'; row.trkStatusColor='#C2333A';
-        }
-      }
+      Object.assign(row, self.trackView(c.tracking));
       return row;
     });
 
@@ -212,7 +248,15 @@ class Component extends DCLogic {
         { text:'Cada courier é vinculado ao processo citado na mesma conversa.', color:'#4327E6' },
       ];
     }
-    return { kpis:kpis, rows:rows, loadingView:loading, emptyView:(!loading && !total), listReady:(!loading && total>0), claraIntro:claraIntro, claraPoints:claraPoints };
+    var onManualTrack=function(){
+      var el=document.getElementById('trkq');
+      var num=((el&&el.value)||'').replace(/[^A-Za-z0-9]/g,'');
+      if(!num) return;
+      self.setState({ manualNumber:num });
+      self.doTrack(num);
+    };
+    var manual=self.trackView(self.state.manualNumber);
+    return { kpis:kpis, rows:rows, loadingView:loading, emptyView:(!loading && !total), listReady:(!loading && total>0), claraIntro:claraIntro, claraPoints:claraPoints, onManualTrack:onManualTrack, manual:manual };
   }
 }
 </script>
