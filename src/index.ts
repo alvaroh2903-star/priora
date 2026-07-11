@@ -8,6 +8,7 @@ import { analysisRouter } from './routes/analysisRoutes';
 import { parseRouter } from './routes/parseRoutes';
 import { processRouter } from './routes/processRoutes';
 import { courierRouter } from './routes/courierRoutes';
+import { trackingRouter } from './routes/trackingRoutes';
 
 const app = express();
 
@@ -50,6 +51,7 @@ app.use('/api/analysis', analysisRouter);
 app.use('/api/parse', parseRouter);
 app.use('/api/processes', processRouter);
 app.use('/api/couriers', courierRouter);
+app.use('/api/tracking', trackingRouter);
 
 /** Estado de autenticação do usuário atual (para a UI). */
 app.get('/api/me', (req, res) => {

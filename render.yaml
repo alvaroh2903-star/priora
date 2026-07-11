@@ -28,3 +28,11 @@ services:
         sync: false                  # https://SEU-APP.onrender.com/auth/callback
       - key: GEMINI_API_KEY
         sync: false                  # opcional (necessário para a Clara/IA) — grátis em aistudio.google.com
+      - key: FEDEX_API_KEY
+        sync: false                  # opcional (rastreio FedEx) — client_id
+      - key: FEDEX_SECRET_KEY
+        sync: false                  # opcional (rastreio FedEx) — client_secret
+      - key: FEDEX_ACCOUNT
+        sync: false
+      - key: FEDEX_BASE_URL
+        value: https://apis-sandbox.fedex.com

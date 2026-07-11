@@ -15,6 +15,7 @@
   body{font-family:'Plus Jakarta Sans',sans-serif;-webkit-font-smoothing:antialiased;background:#F4F5FB}
   @keyframes pageIn{from{transform:translateY(12px)}to{transform:translateY(0)}}
   .row-hover{transition:background .15s}.row-hover:hover{background:#FAFAFE!important}
+  .trk-btn{transition:background .15s,border-color .15s}.trk-btn:hover{background:#D8E6FC!important}
 </style>
 </helmet>
 <main style="flex:1;min-width:0;display:flex;flex-direction:column">
@@ -22,7 +23,6 @@
 
     <div style="padding:22px 36px 40px 36px;animation:pageIn .35s ease both">
 
-      <!-- KPIs -->
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px;margin-bottom:22px">
         <sc-for list="{{ kpis }}" as="k" hint-placeholder-count="4">
           <div style="background:#fff;border:1px solid #EAEBF4;border-radius:16px;padding:17px 19px">
@@ -32,8 +32,8 @@
         </sc-for>
       </div>
 
-      <div style="display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:20px;align-items:start">
-        <!-- LISTA -->
+      <div style="display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:20px;align-items:start">
+        <!-- LISTA (cards) -->
         <div style="min-width:0">
           <sc-if value="{{ loadingView }}" hint-placeholder-val="{{ false }}">
             <div style="background:#fff;border:1px solid #EAEBF4;border-radius:18px;padding:44px;text-align:center">
@@ -50,29 +50,56 @@
           </sc-if>
 
           <sc-if value="{{ listReady }}" hint-placeholder-val="{{ true }}">
-            <div style="background:#fff;border:1px solid #EAEBF4;border-radius:18px;overflow:hidden">
-              <div style="overflow-x:auto"><div style="min-width:700px">
-                <div style="display:grid;grid-template-columns:170px 110px 1.3fr 1fr 100px 120px;gap:14px;padding:13px 22px;background:#FAFAFE;border-bottom:1px solid #EEEFF6;font-size:11.5px;font-weight:700;color:#9AA0B4;text-transform:uppercase;letter-spacing:.04em">
-                  <span>Tracking</span><span>Transportadora</span><span>Assunto</span><span>Remetente</span><span>Data</span><span>Processo</span>
-                </div>
-                <sc-for list="{{ rows }}" as="r" hint-placeholder-count="5">
-                  <div class="row-hover" style="display:grid;grid-template-columns:170px 110px 1.3fr 1fr 100px 120px;gap:14px;align-items:center;padding:14px 22px;border-bottom:1px solid #F2F3F9;background:{{ r.rowBg }}">
-                    <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px;font-weight:700;color:#161A2E;word-break:break-all">{{ r.tracking }}</span>
-                    <span><span style="font-size:11px;font-weight:700;color:#1D4ED8;background:#E7F0FE;padding:3px 9px;border-radius:7px;white-space:nowrap">{{ r.carrier }}</span></span>
-                    <span style="font-size:12.5px;color:#3C4258;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.assunto }}</span>
-                    <span style="font-size:12.5px;color:#7A8099;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.cliente }}</span>
-                    <span style="font-size:12px;color:#7A8099">{{ r.data }}</span>
-                    <span>
+            <div style="display:flex;flex-direction:column;gap:12px">
+              <sc-for list="{{ rows }}" as="r" hint-placeholder-count="4">
+                <div style="background:#fff;border:1px solid #EAEBF4;border-radius:16px;padding:16px 18px;border-left:4px solid {{ r.accent }}">
+                  <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap">
+                    <div style="min-width:0">
+                      <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap">
+                        <span style="font-size:11px;font-weight:700;color:#1D4ED8;background:#E7F0FE;padding:3px 9px;border-radius:7px">{{ r.carrier }}</span>
+                        <span style="font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:700;color:#161A2E;word-break:break-all">{{ r.tracking }}</span>
+                      </div>
+                      <div style="font-size:12.5px;color:#7A8099;margin-top:6px;overflow:hidden;text-overflow:ellipsis">{{ r.assunto }} · {{ r.cliente }} · {{ r.data }}</div>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
                       <sc-if value="{{ r.hasProcesso }}" hint-placeholder-val="{{ true }}">
-                        <button onClick="{{ r.onProcesso }}" style="background:#EEEBFE;color:#3D34C9;border:1px solid #DDD6FB;border-radius:9px;padding:6px 11px;font-family:'JetBrains Mono',monospace;font-size:11.5px;font-weight:700;cursor:pointer;white-space:nowrap">{{ r.processo }}</button>
+                        <button onClick="{{ r.onProcesso }}" style="background:#EEEBFE;color:#3D34C9;border:1px solid #DDD6FB;border-radius:9px;padding:8px 12px;font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">{{ r.processo }}</button>
                       </sc-if>
-                      <sc-if value="{{ r.noProcesso }}" hint-placeholder-val="{{ false }}">
-                        <span style="font-size:12px;color:#C7CBDA">—</span>
+                      <sc-if value="{{ r.canTrack }}" hint-placeholder-val="{{ true }}">
+                        <button class="trk-btn" onClick="{{ r.onTrack }}" style="display:flex;align-items:center;gap:7px;background:#E7F0FE;color:#1D4ED8;border:1px solid #CBDBF8;border-radius:9px;padding:8px 13px;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer;white-space:nowrap">
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>{{ r.trackLabel }}</button>
                       </sc-if>
-                    </span>
+                      <sc-if value="{{ r.noTrack }}" hint-placeholder-val="{{ false }}">
+                        <span style="font-size:11px;color:#9AA0B4;white-space:nowrap">rastreio via {{ r.carrier }} em breve</span>
+                      </sc-if>
+                    </div>
                   </div>
-                </sc-for>
-              </div></div>
+
+                  <!-- resultado do rastreio, inline -->
+                  <sc-if value="{{ r.showTrack }}" hint-placeholder-val="{{ false }}">
+                    <div style="margin-top:13px;padding-top:13px;border-top:1px dashed #E6E8F2">
+                      <sc-if value="{{ r.trkLoading }}" hint-placeholder-val="{{ false }}">
+                        <div style="font-size:12.5px;color:#7A8099">Consultando a FedEx…</div>
+                      </sc-if>
+                      <sc-if value="{{ r.trkError }}" hint-placeholder-val="{{ false }}">
+                        <div style="font-size:12.5px;color:#C2333A">{{ r.trkErrorMsg }}</div>
+                      </sc-if>
+                      <sc-if value="{{ r.trkDone }}" hint-placeholder-val="{{ false }}">
+                        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+                          <span style="font-size:13.5px;font-weight:800;color:{{ r.trkStatusColor }}">{{ r.trkStatus }}</span>
+                          <sc-if value="{{ r.trkHasLoc }}" hint-placeholder-val="{{ true }}"><span style="font-size:12.5px;color:#5A6076">📍 {{ r.trkLocation }}</span></sc-if>
+                          <sc-if value="{{ r.trkHasEta }}" hint-placeholder-val="{{ false }}"><span style="font-size:12px;color:#7A8099">Previsão: {{ r.trkEta }}</span></sc-if>
+                        </div>
+                        <div style="display:flex;flex-direction:column;gap:6px">
+                          <sc-for list="{{ r.trkEvents }}" as="ev" hint-placeholder-count="3">
+                            <div style="display:flex;gap:9px;align-items:flex-start"><span style="width:6px;height:6px;border-radius:50%;background:#4327E6;flex-shrink:0;margin-top:6px"></span><span style="font-size:12px;color:#5A6076;line-height:1.4">{{ ev.text }}</span></div>
+                          </sc-for>
+                        </div>
+                      </sc-if>
+                    </div>
+                  </sc-if>
+                </div>
+              </sc-for>
             </div>
           </sc-if>
         </div>
@@ -90,7 +117,7 @@
                 <div style="display:flex;align-items:flex-start;gap:9px"><span style="width:8px;height:8px;border-radius:50%;background:{{ c.color }};flex-shrink:0;margin-top:5px"></span><span style="font-size:12.5px;color:#5A6076;line-height:1.4">{{ c.text }}</span></div>
               </sc-for>
             </div>
-            <div style="margin-top:14px;padding-top:13px;border-top:1px solid #EAE7F8"><div style="font-size:11.5px;color:#9AA0B4;font-weight:600">Como funciona</div><p style="font-size:12.5px;color:#5A6076;line-height:1.5;margin-top:4px">Cada courier é detectado nos e-mails e vinculado ao processo citado na mesma conversa. Clique no processo para ver a análise completa.</p></div>
+            <div style="margin-top:14px;padding-top:13px;border-top:1px solid #EAE7F8"><div style="font-size:11.5px;color:#9AA0B4;font-weight:600">Rastreio ao vivo</div><p style="font-size:12.5px;color:#5A6076;line-height:1.5;margin-top:4px">Clique em <b>Rastrear</b> num courier FedEx: a Priora consulta a FedEx e mostra a posição atual do envelope aqui mesmo.</p></div>
           </div>
         </div>
       </div>
@@ -99,7 +126,7 @@
 </x-dc>
 <script type="text/x-dc" data-dc-script>
 class Component extends DCLogic {
-  state = { couriers:null, focusId:null };
+  state = { couriers:null, focusId:null, tracking:{} };
 
   componentDidMount(){
     this._onFocus = (e)=>{ const dt=e&&e.detail; if(dt && dt.module==='couriers' && dt.id) this.setState({ focusId:String(dt.id) }); };
@@ -114,22 +141,56 @@ class Component extends DCLogic {
   componentWillUnmount(){ window.removeEventListener('priora:focus', this._onFocus); }
 
   fmt(iso){ try{ var d=new Date(iso); if(isNaN(d)) return '—'; return d.toLocaleDateString('pt-BR'); }catch(e){ return '—'; } }
+  fmtDT(iso){ try{ var d=new Date(iso); if(isNaN(d)) return iso||''; return d.toLocaleString('pt-BR'); }catch(e){ return iso||''; } }
+
+  doTrack(number){
+    var self=this;
+    var t=Object.assign({}, this.state.tracking); t[number]={ state:'loading' }; this.setState({ tracking:t });
+    fetch('/api/tracking/'+encodeURIComponent(number), { credentials:'same-origin' })
+      .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ if(!r.ok) throw new Error(j.error||('HTTP '+r.status)); return j; }); })
+      .then(function(res){ var tt=Object.assign({}, self.state.tracking); tt[number]={ state:'done', data:res }; self.setState({ tracking:tt }); })
+      .catch(function(e){ var tt=Object.assign({}, self.state.tracking); tt[number]={ state:'error', error:String(e && e.message || e) }; self.setState({ tracking:tt }); });
+  }
 
   renderVals(){
     var self=this;
     var list=this.state.couriers;
     var loading=(list===null);
+    var STC={ delivered:'#177D54', transit:'#1D4ED8', default:'#3C4258' };
+
     var rows=(list||[]).map(function(c){
       var proc=(c.processos && c.processos[0]) || null;
+      var isFedex=/fedex/i.test(c.carrier||'');
       var focused = self.state.focusId && String(c.tracking).indexOf(self.state.focusId)>=0;
-      return {
-        tracking:c.tracking, carrier:c.carrier,
-        assunto:c.assunto, cliente:c.cliente, data:self.fmt(c.data),
-        rowBg: focused ? '#F3F1FE' : 'transparent',
-        hasProcesso:!!proc, noProcesso:!proc, processo:proc||'',
-        onProcesso:function(){ if(window.PrioraBus && proc) window.PrioraBus.focus('processos', proc); }
+      var tk=self.state.tracking[c.tracking];
+      var row={
+        carrier:c.carrier, tracking:c.tracking, assunto:c.assunto, cliente:c.cliente, data:self.fmt(c.data),
+        accent: focused ? '#4327E6' : '#E7F0FE',
+        hasProcesso:!!proc, processo:proc||'',
+        onProcesso:function(){ if(window.PrioraBus && proc) window.PrioraBus.focus('processos', proc); },
+        canTrack:isFedex, noTrack:!isFedex,
+        trackLabel: (tk && tk.state==='done') ? 'Atualizar' : 'Rastrear',
+        onTrack:function(){ self.doTrack(c.tracking); },
+        showTrack:!!tk, trkLoading:(tk&&tk.state==='loading'), trkError:(tk&&tk.state==='error'),
+        trkDone:(tk&&tk.state==='done'), trkErrorMsg:(tk&&tk.error)||'',
+        trkStatus:'', trkStatusColor:STC.default, trkLocation:'', trkHasLoc:false,
+        trkEta:'', trkHasEta:false, trkEvents:[]
       };
+      if (tk && tk.state==='done'){
+        var d=tk.data||{};
+        if (d.found){
+          row.trkStatus=d.status||'Status indisponível';
+          row.trkStatusColor = /entreg|deliver/i.test(row.trkStatus) ? STC.delivered : STC.transit;
+          row.trkLocation=d.location||''; row.trkHasLoc=!!d.location;
+          row.trkEta=self.fmtDT(d.estimatedDelivery); row.trkHasEta=!!d.estimatedDelivery;
+          row.trkEvents=(d.events||[]).map(function(ev){ return { text:(self.fmtDT(ev.time))+' — '+ev.description+(ev.location?(' ('+ev.location+')'):'') }; });
+        } else {
+          row.trkStatus=d.error||'Não encontrado'; row.trkStatusColor='#C2333A';
+        }
+      }
+      return row;
     });
+
     var total=rows.length;
     var comProc=(list||[]).filter(function(c){ return c.processos && c.processos.length; }).length;
     var carriers={}; (list||[]).forEach(function(c){ carriers[c.carrier]=1; });
@@ -147,8 +208,8 @@ class Component extends DCLogic {
       claraIntro='Detectei '+total+' courier'+(total===1?'':'s')+' nos seus e-mails.';
       claraPoints=[
         { text: comProc+' vinculado'+(comProc===1?'':'s')+' a um processo IMxxxx', color:'#1F9D6B' },
-        { text: nCarriers+' transportadora'+(nCarriers===1?'':'s'), color:'#E8990C' },
-        { text:'Clique no processo de um courier para eu analisar a conversa.', color:'#4327E6' },
+        { text:'Couriers FedEx podem ser rastreados ao vivo no botão Rastrear.', color:'#1D4ED8' },
+        { text:'Cada courier é vinculado ao processo citado na mesma conversa.', color:'#4327E6' },
       ];
     }
     return { kpis:kpis, rows:rows, loadingView:loading, emptyView:(!loading && !total), listReady:(!loading && total>0), claraIntro:claraIntro, claraPoints:claraPoints };

@@ -41,6 +41,16 @@ export const config = {
     apiKey: (process.env.GEMINI_API_KEY || '').trim(),
     model: (process.env.GEMINI_MODEL || 'gemini-2.5-flash').trim(),
   },
+  /** FedEx Track API (OAuth2 client_credentials). Opcional: sem as chaves, o
+   *  rastreio ao vivo fica indisponível, mas o resto do app funciona. */
+  fedex: {
+    apiKey: (process.env.FEDEX_API_KEY || '').trim(), // client_id
+    secretKey: (process.env.FEDEX_SECRET_KEY || '').trim(), // client_secret
+    account: (process.env.FEDEX_ACCOUNT || '').trim(),
+    baseUrl: (
+      process.env.FEDEX_BASE_URL || 'https://apis-sandbox.fedex.com'
+    ).trim(),
+  },
   /** Palavras-chave usadas para filtrar e-mails de logística/comércio exterior. */
   logisticsKeywords: (
     process.env.LOGISTICS_KEYWORDS ||
