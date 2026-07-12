@@ -51,6 +51,12 @@ export const config = {
       process.env.FEDEX_BASE_URL || 'https://apis-sandbox.fedex.com'
     ).trim(),
   },
+  /** DHL Unified Shipment Tracking API (auth por header DHL-API-Key). */
+  dhl: {
+    apiKey: (process.env.DHL_API_KEY || '').trim(),
+    apiSecret: (process.env.DHL_API_SECRET || '').trim(), // reservado (outras APIs DHL usam OAuth)
+    baseUrl: (process.env.DHL_BASE_URL || 'https://api-eu.dhl.com').trim(),
+  },
   /** Palavras-chave usadas para filtrar e-mails de logística/comércio exterior. */
   logisticsKeywords: (
     process.env.LOGISTICS_KEYWORDS ||

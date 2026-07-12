@@ -1,4 +1,5 @@
 import { config } from '../config';
+import { TrackingResult } from '../tracking/types';
 
 /** Indica se a FedEx está configurada (API Key + Secret Key). */
 export function isFedexConfigured(): boolean {
@@ -40,24 +41,6 @@ async function getToken(): Promise<string> {
     expiresAt: Date.now() + (data.expires_in || 3600) * 1000,
   };
   return cachedToken.token;
-}
-
-export interface TrackingEvent {
-  time: string;
-  description: string;
-  location: string | null;
-}
-
-export interface TrackingResult {
-  trackingNumber: string;
-  carrier: 'FedEx';
-  found: boolean;
-  status: string | null;
-  statusCode: string | null;
-  location: string | null;
-  estimatedDelivery: string | null;
-  events: TrackingEvent[];
-  error: string | null;
 }
 
 function fmtLocation(loc: any): string | null {

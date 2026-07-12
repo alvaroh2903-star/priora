@@ -35,8 +35,9 @@
       <!-- Rastrear qualquer número manualmente -->
       <div style="background:#fff;border:1px solid #EAEBF4;border-radius:16px;padding:16px 18px;margin-bottom:22px">
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-          <span style="font-size:13px;font-weight:700;color:#3C4258;white-space:nowrap">Rastrear nº FedEx</span>
-          <input id="trkq" type="text" placeholder="ex.: 874196421241" style="flex:1;min-width:180px;background:#F7F8FC;border:1px solid #E6E8F2;border-radius:10px;padding:10px 13px;font-family:'JetBrains Mono',monospace;font-size:13px;color:#161A2E">
+          <span style="font-size:13px;font-weight:700;color:#3C4258;white-space:nowrap">Rastrear</span>
+          <select id="trkcarrier" style="background:#F7F8FC;border:1px solid #E6E8F2;border-radius:10px;padding:10px 11px;font-size:13px;color:#161A2E;font-family:inherit"><option value="fedex">FedEx</option><option value="dhl">DHL</option></select>
+          <input id="trkq" type="text" placeholder="cole o nº de rastreio" style="flex:1;min-width:170px;background:#F7F8FC;border:1px solid #E6E8F2;border-radius:10px;padding:10px 13px;font-family:'JetBrains Mono',monospace;font-size:13px;color:#161A2E">
           <button class="trk-btn" onClick="{{ onManualTrack }}" style="display:flex;align-items:center;gap:7px;background:#4327E6;color:#fff;border:none;border-radius:10px;padding:11px 18px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>Rastrear</button>
         </div>
@@ -194,10 +195,11 @@ class Component extends DCLogic {
     return v;
   }
 
-  doTrack(number){
+  doTrack(number, carrier){
     var self=this;
     var t=Object.assign({}, this.state.tracking); t[number]={ state:'loading' }; this.setState({ tracking:t });
-    fetch('/api/tracking/'+encodeURIComponent(number), { credentials:'same-origin' })
+    var q = carrier ? ('?carrier='+encodeURIComponent(carrier)) : '';
+    fetch('/api/tracking/'+encodeURIComponent(number)+q, { credentials:'same-origin' })
       .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ if(!r.ok) throw new Error(j.error||('HTTP '+r.status)); return j; }); })
       .then(function(res){ var tt=Object.assign({}, self.state.tracking); tt[number]={ state:'done', data:res }; self.setState({ tracking:tt }); })
       .catch(function(e){ var tt=Object.assign({}, self.state.tracking); tt[number]={ state:'error', error:String(e && e.message || e) }; self.setState({ tracking:tt }); });
@@ -212,6 +214,9 @@ class Component extends DCLogic {
     var rows=(list||[]).map(function(c){
       var proc=(c.processos && c.processos[0]) || null;
       var isFedex=/fedex/i.test(c.carrier||'');
+      var isDhl=/dhl/i.test(c.carrier||'');
+      var cparam = isDhl ? 'dhl' : 'fedex';
+      var canTrack = isFedex || isDhl;
       var focused = self.state.focusId && String(c.tracking).indexOf(self.state.focusId)>=0;
       var tk=self.state.tracking[c.tracking];
       var row={
@@ -219,9 +224,9 @@ class Component extends DCLogic {
         accent: focused ? '#4327E6' : '#E7F0FE',
         hasProcesso:!!proc, processo:proc||'',
         onProcesso:function(){ if(window.PrioraBus && proc) window.PrioraBus.focus('processos', proc); },
-        canTrack:isFedex, noTrack:!isFedex,
+        canTrack:canTrack, noTrack:!canTrack,
         trackLabel: (tk && tk.state==='done') ? 'Atualizar' : 'Rastrear',
-        onTrack:function(){ self.doTrack(c.tracking); }
+        onTrack:function(){ self.doTrack(c.tracking, cparam); }
       };
       Object.assign(row, self.trackView(c.tracking));
       return row;
@@ -244,16 +249,18 @@ class Component extends DCLogic {
       claraIntro='Detectei '+total+' courier'+(total===1?'':'s')+' nos seus e-mails.';
       claraPoints=[
         { text: comProc+' vinculado'+(comProc===1?'':'s')+' a um processo IMxxxx', color:'#1F9D6B' },
-        { text:'Couriers FedEx podem ser rastreados ao vivo no botão Rastrear.', color:'#1D4ED8' },
+        { text:'Couriers FedEx e DHL podem ser rastreados ao vivo no botão Rastrear.', color:'#1D4ED8' },
         { text:'Cada courier é vinculado ao processo citado na mesma conversa.', color:'#4327E6' },
       ];
     }
     var onManualTrack=function(){
       var el=document.getElementById('trkq');
+      var sel=document.getElementById('trkcarrier');
       var num=((el&&el.value)||'').replace(/[^A-Za-z0-9]/g,'');
+      var carrier=(sel&&sel.value)||'fedex';
       if(!num) return;
       self.setState({ manualNumber:num });
-      self.doTrack(num);
+      self.doTrack(num, carrier);
     };
     var manual=self.trackView(self.state.manualNumber);
     return { kpis:kpis, rows:rows, loadingView:loading, emptyView:(!loading && !total), listReady:(!loading && total>0), claraIntro:claraIntro, claraPoints:claraPoints, onManualTrack:onManualTrack, manual:manual };
