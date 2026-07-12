@@ -23,6 +23,8 @@ authRouter.get('/login', async (req, res, next) => {
       scopes: config.loginScopes,
       redirectUri: config.azure.redirectUri,
       state,
+      // Força a tela de escolha de conta (evita SSO automático na conta errada).
+      prompt: 'select_account',
     });
     res.redirect(url);
   } catch (err) {
