@@ -1,5 +1,6 @@
 import { ConfidentialClientApplication, LogLevel } from '@azure/msal-node';
 import { config, authority, isAzureConfigured } from '../config';
+import { cachePlugin } from './tokenCache';
 
 /**
  * Cliente confidencial do MSAL, construído sob demanda.
@@ -25,6 +26,8 @@ export function getMsalClient(): ConfidentialClientApplication {
         authority,
         clientSecret: config.azure.clientSecret,
       },
+      // Persiste os tokens em disco para sobreviver a reinícios do processo.
+      cache: { cachePlugin },
       system: {
         loggerOptions: {
           loggerCallback(_level, message) {

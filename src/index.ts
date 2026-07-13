@@ -2,6 +2,7 @@ import path from 'path';
 import express, { NextFunction, Request, Response } from 'express';
 import session from 'express-session';
 import { config } from './config';
+import { createFileSessionStore } from './auth/fileSessionStore';
 import { authRouter } from './auth/authRoutes';
 import { emailRouter } from './routes/emailRoutes';
 import { analysisRouter } from './routes/analysisRoutes';
@@ -26,10 +27,15 @@ app.use(
     secret: config.sessionSecret,
     resave: false,
     saveUninitialized: false,
+    // Sessões em disco: sobrevivem a reinícios do processo (a instância
+    // gratuita do Render "dorme" por inatividade e reinicia sozinha).
+    store: createFileSessionStore(path.join(config.dataDir, 'sessions')),
     cookie: {
       httpOnly: true,
       sameSite: 'lax',
       secure: config.isProduction, // exige HTTPS em produção
+      // maxAge mantém o login após fechar o navegador (senão o cookie some).
+      maxAge: config.sessionMaxAgeMs,
     },
   }),
 );

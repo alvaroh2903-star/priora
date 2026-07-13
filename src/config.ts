@@ -6,6 +6,15 @@ export const config = {
   port: parseInt(process.env.PORT || '3000', 10),
   isProduction: process.env.NODE_ENV === 'production',
   sessionSecret: process.env.SESSION_SECRET || 'dev-insecure-secret-change-me',
+  /**
+   * Pasta local onde persistimos sessões e o cache de tokens do MSAL, para que
+   * o login sobreviva a reinícios do processo (ex.: quando o Render "dorme" a
+   * instância gratuita por inatividade). Configurável via DATA_DIR.
+   */
+  dataDir: (process.env.DATA_DIR || '.data').trim(),
+  /** Quanto tempo o cookie de login dura no navegador (padrão: 30 dias). */
+  sessionMaxAgeMs:
+    parseInt(process.env.SESSION_MAX_AGE_DAYS || '30', 10) * 24 * 60 * 60 * 1000,
   azure: {
     // Opcionais: sem eles o servidor sobe normalmente e serve a página; o login
     // com a Microsoft é que fica indisponível até serem preenchidos no .env.

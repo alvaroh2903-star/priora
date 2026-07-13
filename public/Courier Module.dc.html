@@ -37,13 +37,13 @@
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
           <span style="font-size:13px;font-weight:700;color:#3C4258;white-space:nowrap">Rastrear</span>
           <select id="trkcarrier" style="background:#F7F8FC;border:1px solid #E6E8F2;border-radius:10px;padding:10px 11px;font-size:13px;color:#161A2E;font-family:inherit"><option value="dhl" selected>DHL</option><option value="fedex">FedEx</option></select>
-          <input id="trkq" type="text" value="1545389300" placeholder="cole o nº de rastreio" style="flex:1;min-width:170px;background:#F7F8FC;border:1px solid #E6E8F2;border-radius:10px;padding:10px 13px;font-family:'JetBrains Mono',monospace;font-size:13px;color:#161A2E">
+          <input id="trkq" type="text" value="" placeholder="cole o nº de rastreio" style="flex:1;min-width:170px;background:#F7F8FC;border:1px solid #E6E8F2;border-radius:10px;padding:10px 13px;font-family:'JetBrains Mono',monospace;font-size:13px;color:#161A2E">
           <button class="trk-btn" onClick="{{ onManualTrack }}" style="display:flex;align-items:center;gap:7px;background:#4327E6;color:#fff;border:none;border-radius:10px;padding:11px 18px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>Rastrear</button>
         </div>
         <sc-if value="{{ manual.showTrack }}" hint-placeholder-val="{{ false }}">
           <div style="margin-top:13px;padding-top:13px;border-top:1px dashed #E6E8F2">
-            <sc-if value="{{ manual.trkLoading }}" hint-placeholder-val="{{ false }}"><div style="font-size:12.5px;color:#7A8099">Consultando a FedEx…</div></sc-if>
+            <sc-if value="{{ manual.trkLoading }}" hint-placeholder-val="{{ false }}"><div style="font-size:12.5px;color:#7A8099">Consultando a transportadora…</div></sc-if>
             <sc-if value="{{ manual.trkError }}" hint-placeholder-val="{{ false }}"><div style="font-size:12.5px;color:#C2333A">{{ manual.trkErrorMsg }}</div></sc-if>
             <sc-if value="{{ manual.trkDone }}" hint-placeholder-val="{{ false }}">
               <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
@@ -108,7 +108,7 @@
                   <sc-if value="{{ r.showTrack }}" hint-placeholder-val="{{ false }}">
                     <div style="margin-top:13px;padding-top:13px;border-top:1px dashed #E6E8F2">
                       <sc-if value="{{ r.trkLoading }}" hint-placeholder-val="{{ false }}">
-                        <div style="font-size:12.5px;color:#7A8099">Consultando a FedEx…</div>
+                        <div style="font-size:12.5px;color:#7A8099">Consultando a transportadora…</div>
                       </sc-if>
                       <sc-if value="{{ r.trkError }}" hint-placeholder-val="{{ false }}">
                         <div style="font-size:12.5px;color:#C2333A">{{ r.trkErrorMsg }}</div>
@@ -166,9 +166,6 @@ class Component extends DCLogic {
       .then(function(r){ return r.ok ? r.json() : null; })
       .then(function(d){ this.setState({ couriers:(d && Array.isArray(d.couriers)) ? d.couriers : [] }); }.bind(this))
       .catch(function(){ this.setState({ couriers:[] }); }.bind(this));
-    // TEMP (teste): rastreia automaticamente um número DHL ao abrir. Remover depois.
-    this.setState({ manualNumber:'1545389300' });
-    this.doTrack('1545389300', 'dhl');
   }
   componentWillUnmount(){ window.removeEventListener('priora:focus', this._onFocus); }
 

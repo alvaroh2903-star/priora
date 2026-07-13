@@ -144,26 +144,49 @@ class Component extends DCLogic {
 }
 </script>
 <script>
-/* Porta de entrada: se o usuário não estiver logado no Outlook, mostra uma
-   tela de conexão por cima do painel. Vanilla JS — não interfere no runtime. */
+/* Porta de entrada: se o usuário não estiver logado no Outlook (ou a sessão
+   tiver expirado), mostra uma tela de conexão por cima do painel.
+   Vanilla JS — não interfere no runtime do DesignCode. */
 (function(){
-  function showConnect(){
+  function showConnect(expired){
     if (document.getElementById('priora-connect')) return;
+    var msg = expired
+      ? 'Sua sessão expirou. Entre de novo com a Microsoft para continuar vendo seus processos, couriers e a análise da Clara.'
+      : 'Conecte sua conta do Outlook para ver seus processos, couriers, documentos e a análise da Clara com seus e-mails reais.';
     var o = document.createElement('div');
     o.id = 'priora-connect';
     o.style.cssText = 'position:fixed;inset:0;z-index:99999;background:#0D1227;display:flex;align-items:center;justify-content:center;font-family:sans-serif;padding:24px';
     o.innerHTML =
       '<div style="text-align:center;color:#fff;max-width:400px">'
       + '<div style="font-size:28px;font-weight:800;margin-bottom:12px">Priora</div>'
-      + '<div style="font-size:15px;line-height:1.5;color:#AEB4CC;margin-bottom:26px">Conecte sua conta do Outlook para ver seus processos, couriers, documentos e a análise da Clara com seus e-mails reais.</div>'
+      + '<div style="font-size:15px;line-height:1.5;color:#AEB4CC;margin-bottom:26px">' + msg + '</div>'
       + '<a href="/auth/login" style="display:inline-block;background:#4327E6;color:#fff;text-decoration:none;padding:14px 24px;border-radius:12px;font-weight:700;font-size:15px">Entrar com a Microsoft</a>'
       + '</div>';
     document.body.appendChild(o);
   }
+  // Exposto para os módulos poderem reagir a um 401 se precisarem.
+  window.PrioraAuth = { showConnect: showConnect };
+
+  /* Guarda global: qualquer chamada a /api/* que volte 401 (sessão ausente ou
+     expirada) abre a tela de login em vez de deixar o erro cru "Não autenticado"
+     vazar para dentro do painel. Vale para processos, couriers, rastreio, etc. */
+  var origFetch = window.fetch ? window.fetch.bind(window) : null;
+  if (origFetch) {
+    window.fetch = function(input, init){
+      return origFetch(input, init).then(function(res){
+        try {
+          var url = (typeof input === 'string') ? input : (input && input.url) || '';
+          if (res && res.status === 401 && url.indexOf('/api/') >= 0) showConnect(true);
+        } catch(e){}
+        return res;
+      });
+    };
+  }
+
   function check(){
     fetch('/api/me', { credentials:'same-origin' })
       .then(function(r){ return r.json(); })
-      .then(function(d){ if (!d || !d.authenticated) showConnect(); })
+      .then(function(d){ if (!d || !d.authenticated) showConnect(false); })
       .catch(function(){});
   }
   if (document.readyState === 'loading') window.addEventListener('DOMContentLoaded', function(){ setTimeout(check, 400); });
