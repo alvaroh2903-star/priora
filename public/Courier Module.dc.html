@@ -13,9 +13,14 @@
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
   body{font-family:'Plus Jakarta Sans',sans-serif;-webkit-font-smoothing:antialiased;background:#F4F5FB}
+  ::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:#D7DAE8;border-radius:8px;border:2px solid #F4F5FB}::-webkit-scrollbar-track{background:transparent}
   @keyframes pageIn{from{transform:translateY(12px)}to{transform:translateY(0)}}
+  @keyframes expandIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
+  .cou-card{transition:box-shadow .2s,border-color .2s}.cou-card:hover{box-shadow:0 16px 34px -24px rgba(31,38,80,.35)}
+  .chip-btn{transition:background .15s,border-color .15s}.chip-btn:hover{background:#E2DBFB!important}
+  .act-btn{transition:transform .15s,filter .15s}.act-btn:hover{transform:translateY(-1px);filter:brightness(1.03)}
   .row-hover{transition:background .15s}.row-hover:hover{background:#FAFAFE!important}
-  .trk-btn{transition:background .15s,border-color .15s}.trk-btn:hover{background:#D8E6FC!important}
+  .trk-btn{transition:background .15s}.trk-btn:hover{background:#D8E6FC!important}
 </style>
 </helmet>
 <main style="flex:1;min-width:0;display:flex;flex-direction:column">
@@ -23,106 +28,191 @@
 
     <div style="padding:22px 36px 40px 36px;animation:pageIn .35s ease both">
 
+      <!-- ===================== CLARA BANNER ===================== -->
+      <div style="background:linear-gradient(150deg,#fff 55%,#F3F1FE);border:1px solid #E4E1FA;border-radius:20px;padding:20px 24px;margin-bottom:20px">
+        <div style="display:flex;align-items:flex-start;gap:24px;flex-wrap:wrap">
+          <div style="display:flex;align-items:flex-start;gap:14px;flex:1;min-width:280px">
+            <div style="position:relative;width:56px;height:56px;border-radius:50%;background:radial-gradient(circle at 50% 35%,#EDE9FF,#F6F4FF);display:flex;align-items:flex-end;justify-content:center;overflow:hidden;flex-shrink:0;box-shadow:0 6px 16px -8px rgba(67,39,230,.4);border:1px solid rgba(67,39,230,.14)"><img src="assets/clara.png" alt="Clara" style="position:absolute;width:94px;height:auto;left:-13px;top:5px"></div>
+            <div style="min-width:0">
+              <div style="display:flex;align-items:center;gap:8px"><span style="font-size:16px;font-weight:800">Clara</span><span style="font-size:9px;font-weight:700;color:#fff;background:#4327E6;padding:2px 7px;border-radius:20px">IA</span><span style="font-size:12px;color:#9AA0B4">· {{ claraSub }}</span></div>
+              <p style="font-size:14px;color:#3C4258;line-height:1.5;margin-top:7px;max-width:640px">{{ claraIntro }}</p>
+            </div>
+          </div>
+          <div style="min-width:230px;background:#fff;border:1px solid #EFE7E7;border-radius:14px;padding:14px 16px">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px"><span style="width:9px;height:9px;border-radius:50%;background:{{ atICon }}"></span><span style="font-size:12px;font-weight:700;color:#7A8099">{{ atTitulo }}</span></div>
+            <sc-for list="{{ atencao }}" as="a" hint-placeholder-count="2">
+              <div class="row-hover" onClick="{{ a.onOpen }}" style="padding:7px 8px;border-radius:9px;margin:0 -8px;cursor:pointer">
+                <div style="display:flex;align-items:center;gap:8px"><span style="font-size:10px;font-weight:700;color:{{ a.tagColor }};background:{{ a.tagBg }};padding:2px 7px;border-radius:6px">{{ a.tag }}</span><span style="font-family:'JetBrains Mono',monospace;font-size:12.5px;font-weight:700;color:#161A2E">{{ a.tracking }}</span></div>
+                <div style="font-size:11.5px;color:#7A8099;margin-top:3px">{{ a.motivo }}</div>
+              </div>
+            </sc-for>
+            <sc-if value="{{ semAtencao }}" hint-placeholder-val="{{ false }}">
+              <div style="font-size:12px;color:#5A6076;line-height:1.45">{{ atCalmMsg }}</div>
+            </sc-if>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===================== KPIs ===================== -->
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px;margin-bottom:22px">
         <sc-for list="{{ kpis }}" as="k" hint-placeholder-count="4">
           <div style="background:#fff;border:1px solid #EAEBF4;border-radius:16px;padding:17px 19px">
             <div style="display:flex;align-items:center;gap:8px"><span style="width:8px;height:8px;border-radius:50%;background:{{ k.color }}"></span><span style="font-size:12px;font-weight:600;color:#7A8099">{{ k.label }}</span></div>
             <div style="font-size:26px;font-weight:800;color:{{ k.valColor }};margin-top:8px">{{ k.value }}</div>
+            <div style="font-size:11px;color:#9AA0B4;margin-top:4px">{{ k.hint }}</div>
           </div>
         </sc-for>
       </div>
 
-      <!-- Rastrear qualquer número manualmente -->
-      <div style="background:#fff;border:1px solid #EAEBF4;border-radius:16px;padding:16px 18px;margin-bottom:22px">
-        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-          <span style="font-size:13px;font-weight:700;color:#3C4258;white-space:nowrap">Rastrear</span>
-          <select id="trkcarrier" style="background:#F7F8FC;border:1px solid #E6E8F2;border-radius:10px;padding:10px 11px;font-size:13px;color:#161A2E;font-family:inherit"><option value="dhl" selected>DHL</option><option value="fedex">FedEx</option></select>
-          <input id="trkq" type="text" value="" placeholder="cole o nº de rastreio" style="flex:1;min-width:170px;background:#F7F8FC;border:1px solid #E6E8F2;border-radius:10px;padding:10px 13px;font-family:'JetBrains Mono',monospace;font-size:13px;color:#161A2E">
-          <button class="trk-btn" onClick="{{ onManualTrack }}" style="display:flex;align-items:center;gap:7px;background:#4327E6;color:#fff;border:none;border-radius:10px;padding:11px 18px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>Rastrear</button>
-        </div>
-        <sc-if value="{{ manual.showTrack }}" hint-placeholder-val="{{ false }}">
-          <div style="margin-top:13px;padding-top:13px;border-top:1px dashed #E6E8F2">
-            <sc-if value="{{ manual.trkLoading }}" hint-placeholder-val="{{ false }}"><div style="font-size:12.5px;color:#7A8099">Consultando a transportadora…</div></sc-if>
-            <sc-if value="{{ manual.trkError }}" hint-placeholder-val="{{ false }}"><div style="font-size:12.5px;color:#C2333A">{{ manual.trkErrorMsg }}</div></sc-if>
-            <sc-if value="{{ manual.trkDone }}" hint-placeholder-val="{{ false }}">
-              <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
-                <span style="font-size:14px;font-weight:800;color:{{ manual.trkStatusColor }}">{{ manual.trkStatus }}</span>
-                <sc-if value="{{ manual.trkHasLoc }}" hint-placeholder-val="{{ true }}"><span style="font-size:12.5px;color:#5A6076">📍 {{ manual.trkLocation }}</span></sc-if>
-                <sc-if value="{{ manual.trkHasEta }}" hint-placeholder-val="{{ false }}"><span style="font-size:12px;color:#7A8099">Previsão: {{ manual.trkEta }}</span></sc-if>
-              </div>
-              <div style="display:flex;flex-direction:column;gap:6px">
-                <sc-for list="{{ manual.trkEvents }}" as="ev" hint-placeholder-count="3">
-                  <div style="display:flex;gap:9px;align-items:flex-start"><span style="width:6px;height:6px;border-radius:50%;background:#4327E6;flex-shrink:0;margin-top:6px"></span><span style="font-size:12px;color:#5A6076;line-height:1.4">{{ ev.text }}</span></div>
-                </sc-for>
-              </div>
-            </sc-if>
-          </div>
-        </sc-if>
-      </div>
-
       <div style="display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:20px;align-items:start">
-        <!-- LISTA (cards) -->
+        <!-- ===================== COURIER LIST ===================== -->
         <div style="min-width:0">
           <sc-if value="{{ loadingView }}" hint-placeholder-val="{{ false }}">
             <div style="background:#fff;border:1px solid #EAEBF4;border-radius:18px;padding:44px;text-align:center">
-              <div style="font-size:14px;font-weight:700;color:#3C4258">Buscando couriers no Outlook…</div>
-              <div style="font-size:12.5px;color:#9AA0B4;margin-top:6px">Procurando números de rastreio (DHL, FedEx, UPS…) nos seus e-mails.</div>
+              <div style="font-size:14px;font-weight:700;color:#3C4258">Reconstruindo couriers a partir do Outlook…</div>
+              <div style="font-size:12.5px;color:#9AA0B4;margin-top:6px">Procurando trackings (DHL, FedEx, UPS…) e agrupando os processos do mesmo envelope.</div>
             </div>
           </sc-if>
 
           <sc-if value="{{ emptyView }}" hint-placeholder-val="{{ false }}">
             <div style="background:#fff;border:1px solid #EAEBF4;border-radius:18px;padding:44px;text-align:center">
-              <div style="font-size:14px;font-weight:700;color:#3C4258">Nenhum courier detectado</div>
-              <div style="font-size:12.5px;color:#9AA0B4;margin-top:6px;line-height:1.5">Não encontrei números de rastreio (DHL, FedEx, UPS, Sedex…) nos e-mails desta caixa.<br>Assim que chegar um e-mail com tracking, ele aparece aqui.</div>
+              <div style="font-size:14px;font-weight:700;color:#3C4258">Nenhum courier identificado</div>
+              <div style="font-size:12.5px;color:#9AA0B4;margin-top:6px;line-height:1.5">Não encontrei trackings de courier nos e-mails desta caixa.<br>Quando um agente informar um tracking (DHL, FedEx…), o courier nasce aqui automaticamente.</div>
             </div>
           </sc-if>
 
           <sc-if value="{{ listReady }}" hint-placeholder-val="{{ true }}">
-            <div style="display:flex;flex-direction:column;gap:12px">
+            <div style="display:flex;flex-direction:column;gap:13px">
               <sc-for list="{{ rows }}" as="r" hint-placeholder-count="4">
-                <div style="background:#fff;border:1px solid #EAEBF4;border-radius:16px;padding:16px 18px;border-left:4px solid {{ r.accent }}">
-                  <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap">
-                    <div style="min-width:0">
-                      <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap">
-                        <span style="font-size:11px;font-weight:700;color:#1D4ED8;background:#E7F0FE;padding:3px 9px;border-radius:7px">{{ r.carrier }}</span>
-                        <span style="font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:700;color:#161A2E;word-break:break-all">{{ r.tracking }}</span>
+                <div class="cou-card" style="background:#fff;border:1px solid #EAEBF4;border-radius:16px;border-left:4px solid {{ r.accent }};overflow:hidden">
+
+                  <!-- HEADER (clickable) -->
+                  <div class="row-hover" onClick="{{ r.onToggle }}" style="padding:16px 18px;cursor:pointer">
+                    <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap">
+                      <div style="min-width:0;flex:1">
+                        <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap">
+                          <span style="font-size:11px;font-weight:700;color:#1D4ED8;background:#E7F0FE;padding:3px 9px;border-radius:7px">{{ r.carrier }}</span>
+                          <span style="font-family:'JetBrains Mono',monospace;font-size:15px;font-weight:700;color:#161A2E;word-break:break-all">{{ r.tracking }}</span>
+                          <span style="font-size:10.5px;font-weight:700;color:{{ r.estColor }};background:{{ r.estBg }};padding:3px 9px;border-radius:20px">{{ r.estado }}</span>
+                          <sc-if value="{{ r.precisaRevisao }}" hint-placeholder-val="{{ false }}"><span style="font-size:10px;font-weight:700;color:#C2333A;background:#FDECEC;padding:3px 8px;border-radius:6px">revisão humana</span></sc-if>
+                        </div>
+                        <div style="display:flex;align-items:center;gap:14px;margin-top:8px;font-size:12px;color:#7A8099;flex-wrap:wrap">
+                          <span style="font-weight:700;color:#3D34C9">{{ r.procLabel }}</span>
+                          <span>Agente: {{ r.agente }}</span>
+                          <span>{{ r.data }}</span>
+                        </div>
                       </div>
-                      <div style="font-size:12.5px;color:#7A8099;margin-top:6px;overflow:hidden;text-overflow:ellipsis">{{ r.assunto }} · {{ r.cliente }} · {{ r.data }}</div>
+                      <div style="display:flex;align-items:center;gap:10px;flex-shrink:0">
+                        <span style="font-size:12px;color:#9AA0B4">{{ r.toggleLabel }}</span>
+                        <span style="display:inline-block;transition:transform .2s;transform:{{ r.caret }}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#9AA0B4" stroke-width="2.4"><path d="m6 9 6 6 6-6"/></svg></span>
+                      </div>
                     </div>
-                    <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
-                      <sc-if value="{{ r.hasProcesso }}" hint-placeholder-val="{{ true }}">
-                        <button onClick="{{ r.onProcesso }}" style="background:#EEEBFE;color:#3D34C9;border:1px solid #DDD6FB;border-radius:9px;padding:8px 12px;font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">{{ r.processo }}</button>
-                      </sc-if>
-                      <sc-if value="{{ r.canTrack }}" hint-placeholder-val="{{ true }}">
-                        <button class="trk-btn" onClick="{{ r.onTrack }}" style="display:flex;align-items:center;gap:7px;background:#E7F0FE;color:#1D4ED8;border:1px solid #CBDBF8;border-radius:9px;padding:8px 13px;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer;white-space:nowrap">
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>{{ r.trackLabel }}</button>
-                      </sc-if>
-                      <sc-if value="{{ r.noTrack }}" hint-placeholder-val="{{ false }}">
-                        <span style="font-size:11px;color:#9AA0B4;white-space:nowrap">rastreio via {{ r.carrier }} em breve</span>
-                      </sc-if>
-                    </div>
+                    <!-- process chips -->
+                    <sc-if value="{{ r.hasChips }}" hint-placeholder-val="{{ true }}">
+                      <div style="display:flex;gap:7px;flex-wrap:wrap;margin-top:11px">
+                        <sc-for list="{{ r.chips }}" as="c" hint-placeholder-count="2">
+                          <button class="chip-btn" onClick="{{ c.onOpen }}" style="background:#EEEBFE;color:#3D34C9;border:1px solid #DDD6FB;border-radius:8px;padding:5px 10px;font-family:'JetBrains Mono',monospace;font-size:11.5px;font-weight:700;cursor:pointer">{{ c.codigo }}</button>
+                        </sc-for>
+                      </div>
+                    </sc-if>
                   </div>
 
-                  <!-- resultado do rastreio, inline -->
-                  <sc-if value="{{ r.showTrack }}" hint-placeholder-val="{{ false }}">
-                    <div style="margin-top:13px;padding-top:13px;border-top:1px dashed #E6E8F2">
-                      <sc-if value="{{ r.trkLoading }}" hint-placeholder-val="{{ false }}">
-                        <div style="font-size:12.5px;color:#7A8099">Consultando a transportadora…</div>
-                      </sc-if>
-                      <sc-if value="{{ r.trkError }}" hint-placeholder-val="{{ false }}">
-                        <div style="font-size:12.5px;color:#C2333A">{{ r.trkErrorMsg }}</div>
-                      </sc-if>
-                      <sc-if value="{{ r.trkDone }}" hint-placeholder-val="{{ false }}">
-                        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
-                          <span style="font-size:13.5px;font-weight:800;color:{{ r.trkStatusColor }}">{{ r.trkStatus }}</span>
-                          <sc-if value="{{ r.trkHasLoc }}" hint-placeholder-val="{{ true }}"><span style="font-size:12.5px;color:#5A6076">📍 {{ r.trkLocation }}</span></sc-if>
-                          <sc-if value="{{ r.trkHasEta }}" hint-placeholder-val="{{ false }}"><span style="font-size:12px;color:#7A8099">Previsão: {{ r.trkEta }}</span></sc-if>
-                        </div>
-                        <div style="display:flex;flex-direction:column;gap:6px">
-                          <sc-for list="{{ r.trkEvents }}" as="ev" hint-placeholder-count="3">
-                            <div style="display:flex;gap:9px;align-items:flex-start"><span style="width:6px;height:6px;border-radius:50%;background:#4327E6;flex-shrink:0;margin-top:6px"></span><span style="font-size:12px;color:#5A6076;line-height:1.4">{{ ev.text }}</span></div>
-                          </sc-for>
+                  <!-- EXPANDED DETAIL -->
+                  <sc-if value="{{ r.expanded }}" hint-placeholder-val="{{ false }}">
+                    <div style="padding:4px 18px 18px 18px;border-top:1px solid #F0F1F7;animation:expandIn .22s ease both">
+
+                      <!-- operator actions -->
+                      <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin:14px 0 6px 0">
+                        <span style="font-size:11px;color:#9AA0B4;font-weight:600">Ação do operador:</span>
+                        <sc-for list="{{ r.acoes }}" as="ac" hint-placeholder-count="2">
+                          <button class="act-btn" onClick="{{ ac.onClick }}" style="background:{{ ac.bg }};color:{{ ac.color }};border:1px solid {{ ac.border }};border-radius:9px;padding:8px 13px;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer">{{ ac.label }}</button>
+                        </sc-for>
+                        <sc-if value="{{ r.semAcoes }}" hint-placeholder-val="{{ false }}"><span style="font-size:12px;color:#5A6076">{{ r.semAcoesMsg }}</span></sc-if>
+                      </div>
+
+                      <!-- Conteúdo Esperado do Envelope (Clara) -->
+                      <div style="margin-top:14px">
+                        <div style="display:flex;align-items:center;gap:8px;margin-bottom:9px"><span style="width:26px;height:26px;border-radius:8px;background:#E7F0FE;display:flex;align-items:center;justify-content:center"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#2563EB" stroke-width="2"><path d="M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/></svg></span><h4 style="font-size:13.5px;font-weight:800">Conteúdo esperado do envelope</h4></div>
+
+                        <sc-if value="{{ r.aLoading }}" hint-placeholder-val="{{ false }}"><div style="font-size:12.5px;color:#7A8099;padding:6px 0">Clara está lendo a conversa completa no Outlook…</div></sc-if>
+                        <sc-if value="{{ r.aError }}" hint-placeholder-val="{{ false }}"><div style="font-size:12.5px;color:#C2333A;padding:6px 0">{{ r.aErrorMsg }}</div></sc-if>
+
+                        <sc-if value="{{ r.aReady }}" hint-placeholder-val="{{ false }}">
+                          <div style="background:#FAFAFE;border:1px solid #F0F1F7;border-radius:12px;overflow:hidden">
+                            <div style="display:grid;grid-template-columns:120px 1fr 150px;gap:12px;padding:10px 15px;background:#F4F5FB;border-bottom:1px solid #EEEFF6;font-size:10.5px;font-weight:700;color:#9AA0B4;text-transform:uppercase;letter-spacing:.04em">
+                              <span>Processo</span><span>Documentos esperados</span><span>Situação</span>
+                            </div>
+                            <sc-for list="{{ r.envelope }}" as="e" hint-placeholder-count="2">
+                              <div style="display:grid;grid-template-columns:120px 1fr 150px;gap:12px;padding:11px 15px;border-bottom:1px solid #F2F3F9;align-items:center">
+                                <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px;font-weight:700;color:#161A2E">{{ e.codigo }}</span>
+                                <span style="font-size:12px;color:#5A6076;line-height:1.5">{{ e.docs }}</span>
+                                <span><span style="font-size:10.5px;font-weight:700;color:{{ e.sitColor }};background:{{ e.sitBg }};padding:3px 9px;border-radius:7px">{{ e.situacao }}</span></span>
+                              </div>
+                            </sc-for>
+                          </div>
+
+                          <!-- doc chips w/ confidence -->
+                          <sc-if value="{{ r.hasDocs }}" hint-placeholder-val="{{ false }}">
+                            <div style="display:flex;gap:7px;flex-wrap:wrap;margin-top:11px">
+                              <sc-for list="{{ r.docChips }}" as="d" hint-placeholder-count="3">
+                                <span style="display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:700;color:{{ d.color }};background:{{ d.bg }};padding:5px 10px;border-radius:8px">{{ d.nome }}<span style="font-size:9.5px;font-weight:700;opacity:.85">{{ d.tag }}</span></span>
+                              </sc-for>
+                            </div>
+                          </sc-if>
+
+                          <!-- observações (regras Telex/Wave/etc.) -->
+                          <sc-if value="{{ r.hasObs }}" hint-placeholder-val="{{ false }}">
+                            <div style="display:flex;flex-direction:column;gap:5px;margin-top:11px">
+                              <sc-for list="{{ r.observacoes }}" as="o" hint-placeholder-count="1">
+                                <div style="display:flex;gap:8px;align-items:flex-start"><span style="color:#177D54;font-weight:800;font-size:12px;margin-top:1px">›</span><span style="font-size:12px;color:#3C4258;line-height:1.45">{{ o }}</span></div>
+                              </sc-for>
+                            </div>
+                          </sc-if>
+
+                          <!-- evidências -->
+                          <sc-if value="{{ r.hasEvid }}" hint-placeholder-val="{{ false }}">
+                            <div style="margin-top:13px">
+                              <div style="font-size:11px;font-weight:700;color:#9AA0B4;margin-bottom:6px">Evidências (trechos dos e-mails)</div>
+                              <div style="display:flex;flex-direction:column;gap:7px">
+                                <sc-for list="{{ r.evidencias }}" as="ev" hint-placeholder-count="2">
+                                  <div style="background:#F4F5FB;border-left:3px solid #4327E6;border-radius:0 8px 8px 0;padding:8px 12px"><div style="font-size:11.5px;font-weight:700;color:#3D34C9">{{ ev.conclusion }}</div><div style="font-size:11.5px;color:#5A6076;line-height:1.45;margin-top:2px;font-style:italic">“{{ ev.snippet }}”</div></div>
+                                </sc-for>
+                              </div>
+                            </div>
+                          </sc-if>
+
+                          <!-- referências + confiança -->
+                          <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:13px;font-size:11.5px;color:#7A8099">
+                            <sc-if value="{{ r.hasRefs }}" hint-placeholder-val="{{ false }}"><span>Referências: <b style="color:#3C4258;font-family:'JetBrains Mono',monospace">{{ r.refsText }}</b></span></sc-if>
+                            <span>Confiança da Clara: <b style="color:{{ r.confColor }}">{{ r.confText }}</b></span>
+                            <span>{{ r.conversasText }}</span>
+                          </div>
+
+                          <!-- revisão humana -->
+                          <sc-if value="{{ r.hasRevisao }}" hint-placeholder-val="{{ false }}">
+                            <div style="margin-top:11px;background:#FDF6EC;border:1px solid #F6E4C7;border-radius:10px;padding:10px 13px">
+                              <div style="font-size:11.5px;font-weight:700;color:#B9760A;margin-bottom:4px">Necessita revisão humana</div>
+                              <sc-for list="{{ r.revisao }}" as="rv" hint-placeholder-count="1"><div style="font-size:11.5px;color:#7A5A20;line-height:1.45">• {{ rv }}</div></sc-for>
+                            </div>
+                          </sc-if>
+                        </sc-if>
+                      </div>
+
+                      <!-- rastreio na transportadora (secundário/opcional) -->
+                      <sc-if value="{{ r.canTrack }}" hint-placeholder-val="{{ false }}">
+                        <div style="margin-top:14px;padding-top:12px;border-top:1px dashed #ECEDF4">
+                          <button class="trk-btn" onClick="{{ r.onTrack }}" style="display:inline-flex;align-items:center;gap:7px;background:#E7F0FE;color:#1D4ED8;border:1px solid #CBDBF8;border-radius:9px;padding:8px 13px;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>{{ r.trackLabel }}</button>
+                          <span style="font-size:10.5px;color:#9AA0B4;margin-left:8px">dado da transportadora — não afeta a conferência documental</span>
+                          <sc-if value="{{ r.trkShow }}" hint-placeholder-val="{{ false }}">
+                            <div style="margin-top:10px">
+                              <sc-if value="{{ r.trkLoading }}" hint-placeholder-val="{{ false }}"><div style="font-size:12px;color:#7A8099">Consultando {{ r.carrier }}…</div></sc-if>
+                              <sc-if value="{{ r.trkError }}" hint-placeholder-val="{{ false }}"><div style="font-size:12px;color:#C2333A">{{ r.trkErrorMsg }}</div></sc-if>
+                              <sc-if value="{{ r.trkDone }}" hint-placeholder-val="{{ false }}">
+                                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:7px"><span style="font-size:13px;font-weight:800;color:{{ r.trkStatusColor }}">{{ r.trkStatus }}</span><sc-if value="{{ r.trkHasLoc }}" hint-placeholder-val="{{ false }}"><span style="font-size:12px;color:#5A6076">📍 {{ r.trkLocation }}</span></sc-if></div>
+                                <div style="display:flex;flex-direction:column;gap:5px"><sc-for list="{{ r.trkEvents }}" as="tev" hint-placeholder-count="2"><div style="display:flex;gap:8px;align-items:flex-start"><span style="width:5px;height:5px;border-radius:50%;background:#4327E6;flex-shrink:0;margin-top:6px"></span><span style="font-size:11.5px;color:#5A6076;line-height:1.4">{{ tev.text }}</span></div></sc-for></div>
+                              </sc-if>
+                            </div>
+                          </sc-if>
                         </div>
                       </sc-if>
                     </div>
@@ -133,20 +223,65 @@
           </sc-if>
         </div>
 
-        <!-- RIGHT: Clara -->
-        <div style="position:sticky;top:22px">
-          <div style="background:linear-gradient(150deg,#fff 60%,#F3F1FE);border:1px solid #E4E1FA;border-radius:20px;padding:20px 22px">
-            <div style="display:flex;align-items:center;gap:11px;margin-bottom:13px">
-              <div style="position:relative;width:52px;height:52px;border-radius:50%;background:radial-gradient(circle at 50% 35%,#EDE9FF,#F6F4FF);display:flex;align-items:flex-end;justify-content:center;overflow:hidden;flex-shrink:0;box-shadow:0 6px 16px -8px rgba(67,39,230,.4);border:1px solid rgba(67,39,230,.14)"><img src="assets/clara.png" alt="Clara" style="position:absolute;width:88px;height:auto;left:-12px;top:4px"></div>
-              <div><div style="display:flex;align-items:center;gap:7px"><span style="font-size:14.5px;font-weight:800">Clara</span><span style="font-size:9px;font-weight:700;color:#fff;background:#4327E6;padding:2px 6px;border-radius:20px">IA</span></div><div style="font-size:11.5px;color:#9AA0B4;margin-top:2px">Couriers detectados</div></div>
+        <!-- ===================== RIGHT SIDEBAR ===================== -->
+        <div style="display:flex;flex-direction:column;gap:18px;position:sticky;top:22px">
+          <!-- Processos sem courier -->
+          <div style="background:#fff;border:1px solid #EAEBF4;border-radius:20px;padding:18px 20px">
+            <div style="display:flex;align-items:center;gap:9px;margin-bottom:5px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#E5484D" stroke-width="2.2"><path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg><h3 style="font-size:14px;font-weight:800">Processos sem courier</h3><span style="font-size:11px;font-weight:700;color:#C2333A;background:#FDECEC;padding:2px 8px;border-radius:20px">{{ semCount }}</span></div>
+            <p style="font-size:11.5px;color:#9AA0B4;line-height:1.4;margin-bottom:12px">Processos citados nos e-mails que ainda não têm um courier informado.</p>
+            <sc-if value="{{ temSemCourier }}" hint-placeholder-val="{{ true }}">
+              <div style="display:flex;flex-direction:column;gap:9px">
+                <sc-for list="{{ semCourier }}" as="s" hint-placeholder-count="3">
+                  <div class="row-hover" onClick="{{ s.onOpen }}" style="border:1px solid #F0F1F7;border-radius:12px;padding:11px 13px;cursor:pointer">
+                    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px"><span style="font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;color:#161A2E">{{ s.codigo }}</span><span style="font-size:10.5px;color:#9AA0B4">{{ s.data }}</span></div>
+                    <div style="font-size:11.5px;color:#7A8099;margin-top:4px;overflow:hidden;text-overflow:ellipsis">{{ s.agente }}</div>
+                  </div>
+                </sc-for>
+              </div>
+            </sc-if>
+            <sc-if value="{{ nenhumSemCourier }}" hint-placeholder-val="{{ false }}">
+              <div style="font-size:12px;color:#5A6076;line-height:1.45">Todos os processos citados já têm um courier vinculado.</div>
+            </sc-if>
+          </div>
+
+          <!-- Atividades recentes -->
+          <div style="background:#fff;border:1px solid #EAEBF4;border-radius:20px;padding:18px 20px">
+            <h3 style="font-size:14px;font-weight:800;margin-bottom:13px">Atividades recentes</h3>
+            <sc-if value="{{ temAtividades }}" hint-placeholder-val="{{ true }}">
+              <div style="display:flex;flex-direction:column;gap:2px">
+                <sc-for list="{{ atividades }}" as="a" hint-placeholder-count="4">
+                  <div style="display:flex;align-items:flex-start;gap:11px;padding:9px 8px;border-radius:11px;margin:0 -8px">
+                    <span style="width:28px;height:28px;border-radius:9px;background:{{ a.bg }};display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="{{ a.color }}" stroke-width="2.2"><path d="{{ a.icon }}"></path></svg></span>
+                    <div style="flex:1;min-width:0"><div style="font-size:12px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ a.label }}</div><div style="font-size:11px;color:#9AA0B4;margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ a.sub }}</div></div>
+                    <span style="font-size:10px;color:#9AA0B4;flex-shrink:0">{{ a.time }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </sc-if>
+            <sc-if value="{{ semAtividades }}" hint-placeholder-val="{{ false }}">
+              <div style="font-size:12px;color:#9AA0B4">Sem atividades recentes.</div>
+            </sc-if>
+          </div>
+
+          <!-- Rastreio manual (opcional) -->
+          <div style="background:#fff;border:1px solid #EAEBF4;border-radius:20px;padding:18px 20px">
+            <h3 style="font-size:13px;font-weight:800;margin-bottom:4px">Rastrear na transportadora</h3>
+            <p style="font-size:11px;color:#9AA0B4;line-height:1.4;margin-bottom:11px">Opcional. Dado da transportadora (DHL/FedEx), separado da conferência documental.</p>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <select id="trkcarrier" style="background:#F7F8FC;border:1px solid #E6E8F2;border-radius:10px;padding:9px 10px;font-size:12.5px;color:#161A2E;font-family:inherit"><option value="dhl" selected>DHL</option><option value="fedex">FedEx</option></select>
+              <input id="trkq" type="text" value="" placeholder="nº de rastreio" style="flex:1;min-width:120px;background:#F7F8FC;border:1px solid #E6E8F2;border-radius:10px;padding:9px 12px;font-family:'JetBrains Mono',monospace;font-size:12.5px;color:#161A2E">
             </div>
-            <p style="font-size:13px;color:#3C4258;line-height:1.5;margin-bottom:13px">{{ claraIntro }}</p>
-            <div style="display:flex;flex-direction:column;gap:9px">
-              <sc-for list="{{ claraPoints }}" as="c" hint-placeholder-count="3">
-                <div style="display:flex;align-items:flex-start;gap:9px"><span style="width:8px;height:8px;border-radius:50%;background:{{ c.color }};flex-shrink:0;margin-top:5px"></span><span style="font-size:12.5px;color:#5A6076;line-height:1.4">{{ c.text }}</span></div>
-              </sc-for>
-            </div>
-            <div style="margin-top:14px;padding-top:13px;border-top:1px solid #EAE7F8"><div style="font-size:11.5px;color:#9AA0B4;font-weight:600">Rastreio ao vivo</div><p style="font-size:12.5px;color:#5A6076;line-height:1.5;margin-top:4px">Clique em <b>Rastrear</b> num courier FedEx: a Priora consulta a FedEx e mostra a posição atual do envelope aqui mesmo.</p></div>
+            <button class="trk-btn" onClick="{{ onManualTrack }}" style="width:100%;margin-top:9px;display:flex;align-items:center;justify-content:center;gap:7px;background:#4327E6;color:#fff;border:none;border-radius:10px;padding:10px;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer">Rastrear</button>
+            <sc-if value="{{ manual.showTrack }}" hint-placeholder-val="{{ false }}">
+              <div style="margin-top:11px;padding-top:11px;border-top:1px dashed #ECEDF4">
+                <sc-if value="{{ manual.trkLoading }}" hint-placeholder-val="{{ false }}"><div style="font-size:12px;color:#7A8099">Consultando…</div></sc-if>
+                <sc-if value="{{ manual.trkError }}" hint-placeholder-val="{{ false }}"><div style="font-size:12px;color:#C2333A">{{ manual.trkErrorMsg }}</div></sc-if>
+                <sc-if value="{{ manual.trkDone }}" hint-placeholder-val="{{ false }}">
+                  <div style="font-size:13px;font-weight:800;color:{{ manual.trkStatusColor }}">{{ manual.trkStatus }}</div>
+                  <sc-if value="{{ manual.trkHasLoc }}" hint-placeholder-val="{{ false }}"><div style="font-size:12px;color:#5A6076;margin-top:3px">📍 {{ manual.trkLocation }}</div></sc-if>
+                </sc-if>
+              </div>
+            </sc-if>
           </div>
         </div>
       </div>
@@ -155,44 +290,65 @@
 </x-dc>
 <script type="text/x-dc" data-dc-script>
 class Component extends DCLogic {
-  state = { couriers:null, focusId:null, tracking:{}, manualNumber:'' };
+  state = { resp:null, expandedId:null, analysis:{}, aStatus:{}, estados:{}, tracking:{}, manualNumber:'', focusId:null };
+
+  EST = {
+    'Identificado':{ c:'#1D4ED8', b:'#E7F0FE', accent:'#93B4F5' },
+    'Recebido':{ c:'#177D54', b:'#E7F6EF', accent:'#7FD3AC' },
+    'Em Conferência':{ c:'#B9760A', b:'#FDF3E0', accent:'#F0C97A' },
+    'Divergência':{ c:'#C2333A', b:'#FDECEC', accent:'#F09AA0' },
+    'Concluído':{ c:'#5A6076', b:'#F1F2F8', accent:'#C7CBDA' }
+  };
 
   componentDidMount(){
     this._onFocus = (e)=>{ const dt=e&&e.detail; if(dt && dt.module==='couriers' && dt.id) this.setState({ focusId:String(dt.id) }); };
     window.addEventListener('priora:focus', this._onFocus);
     const p = window.PrioraBus && window.PrioraBus.consume('couriers');
     if (p && p.id) this.setState({ focusId:String(p.id) });
-    fetch('/api/couriers', { credentials:'same-origin' })
-      .then(function(r){ return r.ok ? r.json() : null; })
-      .then(function(d){ this.setState({ couriers:(d && Array.isArray(d.couriers)) ? d.couriers : [] }); }.bind(this))
-      .catch(function(){ this.setState({ couriers:[] }); }.bind(this));
+    this.load();
   }
   componentWillUnmount(){ window.removeEventListener('priora:focus', this._onFocus); }
 
+  load(){
+    var self=this;
+    fetch('/api/couriers', { credentials:'same-origin' })
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(d){ self.setState({ resp: d || { couriers:[], processosSemCourier:[], atividades:[] } }); })
+      .catch(function(){ self.setState({ resp:{ couriers:[], processosSemCourier:[], atividades:[] } }); });
+  }
+
   fmt(iso){ try{ var d=new Date(iso); if(isNaN(d)) return '—'; return d.toLocaleDateString('pt-BR'); }catch(e){ return '—'; } }
   fmtDT(iso){ try{ var d=new Date(iso); if(isNaN(d)) return iso||''; return d.toLocaleString('pt-BR'); }catch(e){ return iso||''; } }
+  keyOf(t){ return String(t||'').replace(/[^A-Za-z0-9]/g,'').toUpperCase(); }
+  estadoDe(c){ var o=this.state.estados[this.keyOf(c.tracking)]; return o || c.estado || 'Identificado'; }
 
-  trackView(number){
+  toggle(courier){
+    var id=courier.tracking;
+    if (this.state.expandedId===id){ this.setState({ expandedId:null }); return; }
+    this.setState({ expandedId:id });
+    this.ensureAnalysis(courier);
+  }
+
+  ensureAnalysis(courier){
+    var cid=courier.conversationId;
+    if (!cid) return;
+    if (this.state.analysis[cid] || this.state.aStatus[cid]==='loading') return;
     var self=this;
-    var STC={ delivered:'#177D54', transit:'#1D4ED8', default:'#3C4258' };
-    var tk = number ? this.state.tracking[number] : null;
-    var v={ showTrack:!!tk, trkLoading:(tk&&tk.state==='loading'), trkError:(tk&&tk.state==='error'),
-      trkDone:(tk&&tk.state==='done'), trkErrorMsg:(tk&&tk.error)||'',
-      trkStatus:'', trkStatusColor:STC.default, trkLocation:'', trkHasLoc:false,
-      trkEta:'', trkHasEta:false, trkEvents:[] };
-    if (tk && tk.state==='done'){
-      var d=tk.data||{};
-      if (d.found){
-        v.trkStatus=d.status||'Status indisponível';
-        v.trkStatusColor=/entreg|deliver/i.test(v.trkStatus)?STC.delivered:STC.transit;
-        v.trkLocation=d.location||''; v.trkHasLoc=!!d.location;
-        v.trkEta=this.fmtDT(d.estimatedDelivery); v.trkHasEta=!!d.estimatedDelivery;
-        v.trkEvents=(d.events||[]).map(function(ev){ return { text:(self.fmtDT(ev.time))+' — '+ev.description+(ev.location?(' ('+ev.location+')'):'') }; });
-      } else {
-        v.trkStatus=d.error||'Não encontrado'; v.trkStatusColor='#C2333A';
-      }
-    }
-    return v;
+    var st=Object.assign({}, this.state.aStatus); st[cid]='loading'; this.setState({ aStatus:st });
+    fetch('/api/couriers/'+encodeURIComponent(cid)+'/analysis', { credentials:'same-origin' })
+      .then(function(r){ return r.json().catch(function(){return null;}).then(function(j){ if(!r.ok) throw new Error((j&&j.error)||('HTTP '+r.status)); return j; }); })
+      .then(function(a){ var an=Object.assign({}, self.state.analysis); an[cid]=a; var s2=Object.assign({}, self.state.aStatus); s2[cid]='done'; self.setState({ analysis:an, aStatus:s2 }); })
+      .catch(function(err){ var s2=Object.assign({}, self.state.aStatus); s2[cid]='error:'+String(err && err.message || err); self.setState({ aStatus:s2 }); });
+  }
+
+  act(courier, estado){
+    var self=this, tk=this.keyOf(courier.tracking);
+    var es=Object.assign({}, this.state.estados); es[tk]=estado; this.setState({ estados:es });
+    fetch('/api/couriers/'+encodeURIComponent(courier.tracking)+'/estado', {
+      method:'POST', credentials:'same-origin', headers:{ 'Content-Type':'application/json' }, body:JSON.stringify({ estado:estado })
+    }).then(function(r){ return r.json().catch(function(){return null;}); })
+      .then(function(){ if (estado==='Concluído') self.load(); })
+      .catch(function(){});
   }
 
   doTrack(number, carrier){
@@ -205,65 +361,175 @@ class Component extends DCLogic {
       .catch(function(e){ var tt=Object.assign({}, self.state.tracking); tt[number]={ state:'error', error:String(e && e.message || e) }; self.setState({ tracking:tt }); });
   }
 
+  trackView(number){
+    var self=this;
+    var tk = number ? this.state.tracking[number] : null;
+    var v={ trkShow:!!tk, showTrack:!!tk, trkLoading:(tk&&tk.state==='loading'), trkError:(tk&&tk.state==='error'),
+      trkDone:(tk&&tk.state==='done'), trkErrorMsg:(tk&&tk.error)||'', trkStatus:'', trkStatusColor:'#3C4258',
+      trkLocation:'', trkHasLoc:false, trkEvents:[] };
+    if (tk && tk.state==='done'){
+      var d=tk.data||{};
+      if (d.found){
+        v.trkStatus=d.status||'Status indisponível';
+        v.trkStatusColor=/entreg|deliver/i.test(v.trkStatus)?'#177D54':'#1D4ED8';
+        v.trkLocation=d.location||''; v.trkHasLoc=!!d.location;
+        v.trkEvents=(d.events||[]).slice(0,4).map(function(ev){ return { text:(self.fmtDT(ev.time))+' — '+ev.description+(ev.location?(' ('+ev.location+')'):'') }; });
+      } else { v.trkStatus=d.error||'Não encontrado'; v.trkStatusColor='#C2333A'; }
+    }
+    return v;
+  }
+
+  situacaoDe(estado){
+    switch(estado){
+      case 'Recebido': return { t:'Disponível p/ conferência', c:'#177D54', b:'#E7F6EF' };
+      case 'Em Conferência': return { t:'Em conferência', c:'#B9760A', b:'#FDF3E0' };
+      case 'Divergência': return { t:'Divergência', c:'#C2333A', b:'#FDECEC' };
+      case 'Concluído': return { t:'Conferido', c:'#5A6076', b:'#F1F2F8' };
+      default: return { t:'Aguardando envelope', c:'#1D4ED8', b:'#E7F0FE' };
+    }
+  }
+
+  acoesDe(courier, estado){
+    var self=this;
+    var mk=function(label, alvo, kind){
+      var C={ solid:{bg:'#4327E6',color:'#fff',border:'#4327E6'}, green:{bg:'#E7F6EF',color:'#177D54',border:'#BFE6D2'},
+        amber:{bg:'#FDF3E0',color:'#B9760A',border:'#F0DBB0'}, red:{bg:'#FDECEC',color:'#C2333A',border:'#F3CFD0'}, gray:{bg:'#F1F2F8',color:'#5A6076',border:'#E3E5EF'} };
+      var c=C[kind]||C.gray;
+      return { label:label, bg:c.bg, color:c.color, border:c.border, onClick:function(){ self.act(courier, alvo); } };
+    };
+    if (estado==='Identificado') return [ mk('Marcar como recebido','Recebido','solid') ];
+    if (estado==='Recebido') return [ mk('Iniciar conferência','Em Conferência','amber'), mk('Finalizar courier','Concluído','green') ];
+    if (estado==='Em Conferência') return [ mk('Registrar divergência','Divergência','red'), mk('Finalizar courier','Concluído','green') ];
+    if (estado==='Divergência') return [ mk('Divergência resolvida — finalizar','Concluído','green') ];
+    return [];
+  }
+
+  buildRow(courier){
+    var self=this, EST=this.EST;
+    var estado=this.estadoDe(courier);
+    var e=EST[estado]||EST['Identificado'];
+    var expanded=(this.state.expandedId===courier.tracking);
+    var focused=this.state.focusId && this.keyOf(courier.tracking).indexOf(this.keyOf(this.state.focusId))>=0;
+    var procs=courier.processos||[];
+    var isFedex=/fedex/i.test(courier.carrier||''), isDhl=/dhl/i.test(courier.carrier||'');
+    var cparam=isDhl?'dhl':'fedex';
+
+    var row={
+      carrier:courier.carrier, tracking:courier.tracking, agente:courier.agente, data:this.fmt(courier.data),
+      accent: focused ? '#4327E6' : e.accent,
+      estado:estado, estColor:e.c, estBg:e.b, precisaRevisao:!!courier.precisaRevisao,
+      procLabel: procs.length ? (procs.length+' processo'+(procs.length===1?'':'s')+' no envelope') : 'nenhum processo vinculado',
+      hasChips: procs.length>0,
+      chips: procs.map(function(p){ return { codigo:p, onOpen:function(ev){ if(ev&&ev.stopPropagation)ev.stopPropagation(); if(window.PrioraBus) window.PrioraBus.focus('processos', p); } }; }),
+      expanded:expanded,
+      toggleLabel: expanded ? 'fechar' : 'ver envelope',
+      caret: expanded ? 'rotate(180deg)' : 'rotate(0deg)',
+      onToggle:function(){ self.toggle(courier); },
+      canTrack: (isFedex||isDhl),
+      onTrack:function(ev){ if(ev&&ev.stopPropagation)ev.stopPropagation(); self.doTrack(courier.tracking, cparam); },
+      trackLabel: (self.state.tracking[courier.tracking] && self.state.tracking[courier.tracking].state==='done') ? 'Atualizar rastreio' : 'Ver rastreio na transportadora'
+    };
+    Object.assign(row, this.trackView(courier.tracking));
+
+    // operator actions
+    var acoes=this.acoesDe(courier, estado);
+    row.acoes=acoes; row.semAcoes=(acoes.length===0);
+    row.semAcoesMsg=(estado==='Concluído')?'Courier concluído.':'—';
+
+    // analysis / expectativa
+    var cid=courier.conversationId, a=this.state.analysis[cid], stt=this.state.aStatus[cid]||'';
+    row.aLoading=(stt==='loading'); row.aError=(stt.indexOf('error')===0);
+    row.aErrorMsg=row.aError?('Não consegui analisar: '+stt.slice(6)):'';
+    row.aReady=!!a;
+
+    if (a){
+      var exp=a.expectativa||{ documentos:[], observacoes:[], revisao:[] };
+      var sit=this.situacaoDe(estado);
+      var docsResumo = exp.documentos.length ? exp.documentos.map(function(d){ return d.nome; }).join(', ') : 'Nenhum documento específico citado';
+      var envRows = (procs.length ? procs : ['(processo não identificado)']).map(function(p){
+        return { codigo:p, docs:docsResumo, situacao:sit.t, sitColor:sit.c, sitBg:sit.b };
+      });
+      row.envelope=envRows;
+      row.docChips=exp.documentos.map(function(d){
+        var baixa=(d.confianca==='baixa');
+        return { nome:d.nome, tag: baixa?'· revisar':'· ok', color: baixa?'#B9760A':'#177D54', bg: baixa?'#FDF3E0':'#E7F6EF' };
+      });
+      row.hasDocs=exp.documentos.length>0;
+      row.observacoes=exp.observacoes||[]; row.hasObs=(row.observacoes.length>0);
+      row.evidencias=(a.evidences||[]).slice(0,3).map(function(ev){ return { conclusion:ev.conclusion, snippet:String(ev.snippet||'').slice(0,140) }; });
+      row.hasEvid=row.evidencias.length>0;
+      var refs=(courier.referencias||[]).concat(((a.externalReferences||[]).map(function(r){ return r.value; })));
+      refs=refs.filter(function(v,i,arr){ return v && arr.indexOf(v)===i; }).slice(0,5);
+      row.refsText=refs.join(', '); row.hasRefs=refs.length>0;
+      var conf=(typeof a.confidence==='number')?a.confidence:0;
+      row.confText=Math.round(conf*100)+'%'; row.confColor= conf>=0.6?'#177D54':'#B9760A';
+      row.conversasText=(courier.conversas||1)+' conversa'+((courier.conversas||1)===1?'':'s')+' · '+(courier.mensagens||1)+' e-mail'+((courier.mensagens||1)===1?'':'s');
+      row.revisao=exp.revisao||[]; row.hasRevisao=(row.revisao.length>0);
+    } else {
+      row.envelope=[]; row.docChips=[]; row.hasDocs=false; row.observacoes=[]; row.hasObs=false;
+      row.evidencias=[]; row.hasEvid=false; row.refsText=''; row.hasRefs=false;
+      row.confText='—'; row.confColor='#7A8099'; row.conversasText=''; row.revisao=[]; row.hasRevisao=false;
+    }
+    return row;
+  }
+
   renderVals(){
     var self=this;
-    var list=this.state.couriers;
-    var loading=(list===null);
-    var STC={ delivered:'#177D54', transit:'#1D4ED8', default:'#3C4258' };
+    var resp=this.state.resp;
+    var loading=(resp===null);
+    var couriers=(resp && resp.couriers)||[];
+    var sem=(resp && resp.processosSemCourier)||[];
+    var ativ=(resp && resp.atividades)||[];
 
-    var rows=(list||[]).map(function(c){
-      var proc=(c.processos && c.processos[0]) || null;
-      var isFedex=/fedex/i.test(c.carrier||'');
-      var isDhl=/dhl/i.test(c.carrier||'');
-      var cparam = isDhl ? 'dhl' : 'fedex';
-      var canTrack = isFedex || isDhl;
-      var focused = self.state.focusId && String(c.tracking).indexOf(self.state.focusId)>=0;
-      var tk=self.state.tracking[c.tracking];
-      var row={
-        carrier:c.carrier, tracking:c.tracking, assunto:c.assunto, cliente:c.cliente, data:self.fmt(c.data),
-        accent: focused ? '#4327E6' : '#E7F0FE',
-        hasProcesso:!!proc, processo:proc||'',
-        onProcesso:function(){ if(window.PrioraBus && proc) window.PrioraBus.focus('processos', proc); },
-        canTrack:canTrack, noTrack:!canTrack,
-        trackLabel: (tk && tk.state==='done') ? 'Atualizar' : 'Rastrear',
-        onTrack:function(){ self.doTrack(c.tracking, cparam); }
-      };
-      Object.assign(row, self.trackView(c.tracking));
-      return row;
-    });
+    var rows=couriers.map(function(c){ return self.buildRow(c); });
 
-    var total=rows.length;
-    var comProc=(list||[]).filter(function(c){ return c.processos && c.processos.length; }).length;
-    var carriers={}; (list||[]).forEach(function(c){ carriers[c.carrier]=1; });
-    var nCarriers=Object.keys(carriers).length;
+    // KPIs (honestos, fonte: Outlook)
+    var procSet={}; couriers.forEach(function(c){ (c.processos||[]).forEach(function(p){ procSet[p]=1; }); });
+    var nProc=Object.keys(procSet).length;
+    var nRevisar=couriers.filter(function(c){ return c.precisaRevisao || self.estadoDe(c)==='Divergência'; }).length;
     var kpis=[
-      { label:'Couriers detectados', value:String(total), color:'#4327E6', valColor:'#161A2E' },
-      { label:'Com processo vinculado', value:String(comProc), color:'#1F9D6B', valColor:'#161A2E' },
-      { label:'Transportadoras', value:String(nCarriers), color:'#E8990C', valColor:'#161A2E' },
-      { label:'Fonte', value:'Outlook', color:'#2563EB', valColor:'#161A2E' },
+      { label:'Couriers identificados', value:String(couriers.length), color:'#4327E6', valColor:'#161A2E', hint:'um por tracking' },
+      { label:'Processos agrupados', value:String(nProc), color:'#1F9D6B', valColor:'#161A2E', hint:'vinculados a um envelope' },
+      { label:'Processos sem courier', value:String(sem.length), color:'#E8990C', valColor:'#161A2E', hint:'aguardam tracking' },
+      { label:'Precisam de revisão', value:String(nRevisar), color:'#E5484D', valColor:'#161A2E', hint:'baixa confiança / divergência' }
     ];
-    var claraIntro, claraPoints;
-    if (loading){ claraIntro='Procurando números de rastreio nos seus e-mails…'; claraPoints=[{text:'Um instante.',color:'#4327E6'}]; }
-    else if (!total){ claraIntro='Nenhum courier encontrado nesta caixa.'; claraPoints=[{text:'Quando chegar um e-mail com tracking (DHL, FedEx, UPS…), ele aparece aqui automaticamente.',color:'#E8990C'}]; }
+
+    // Clara banner
+    var claraSub='Couriers reconstruídos do Outlook';
+    var claraIntro, atencao=[], semAtencao=false, atCalmMsg='', atTitulo='Exige atenção', atICon='#E5484D';
+    if (loading){ claraIntro='Estou lendo seus e-mails e reconstruindo os couriers…'; atTitulo='Analisando'; atICon='#4327E6'; semAtencao=true; atCalmMsg='Um instante.'; }
+    else if (!couriers.length){ claraIntro='Não encontrei trackings de courier nesta caixa. Assim que um agente informar um tracking, o courier aparece aqui.'; semAtencao=true; atCalmMsg='Nada para revisar por enquanto.'; }
     else {
-      claraIntro='Detectei '+total+' courier'+(total===1?'':'s')+' nos seus e-mails.';
-      claraPoints=[
-        { text: comProc+' vinculado'+(comProc===1?'':'s')+' a um processo IMxxxx', color:'#1F9D6B' },
-        { text:'Couriers FedEx e DHL podem ser rastreados ao vivo no botão Rastrear.', color:'#1D4ED8' },
-        { text:'Cada courier é vinculado ao processo citado na mesma conversa.', color:'#4327E6' },
-      ];
+      claraIntro='Reconstruí '+couriers.length+' courier'+(couriers.length===1?'':'s')+' a partir dos seus e-mails — '+nProc+' processo'+(nProc===1?'':'s')+' agrupado'+(nProc===1?'':'s')+(sem.length?(', e '+sem.length+' processo'+(sem.length===1?'':'s')+' ainda sem courier.'):'.');
+      var criticos=couriers.filter(function(c){ return c.precisaRevisao || self.estadoDe(c)==='Divergência'; }).slice(0,3);
+      atencao=criticos.map(function(c){
+        var div=(self.estadoDe(c)==='Divergência');
+        return { tracking:c.tracking, tag:div?'Divergência':'Revisar', tagColor:div?'#C2333A':'#B9760A', tagBg:div?'#FDECEC':'#FDF3E0',
+          motivo: div?'Divergência aberta — bloqueia o encerramento.':'Tracking sem processo vinculado.',
+          onOpen:function(){ self.toggle(c); try{window.scrollTo(0,0);}catch(e){} } };
+      });
+      if (!atencao.length){ semAtencao=true; atTitulo='Tudo em ordem'; atICon='#1F9D6B'; atCalmMsg='Nenhuma pendência crítica. Todos os couriers têm processo vinculado.'; }
     }
-    var onManualTrack=function(){
-      var el=document.getElementById('trkq');
-      var sel=document.getElementById('trkcarrier');
-      var num=((el&&el.value)||'').replace(/[^A-Za-z0-9]/g,'');
-      var carrier=(sel&&sel.value)||'fedex';
-      if(!num) return;
-      self.setState({ manualNumber:num });
-      self.doTrack(num, carrier);
+
+    // Processos sem courier
+    var semCourier=sem.map(function(s){ return { codigo:s.codigo, agente:s.agente, data:self.fmt(s.data),
+      onOpen:function(){ if(window.PrioraBus) window.PrioraBus.focus('processos', s.codigo); } }; });
+
+    // Atividades
+    var ICON={ courier:{ bg:'#E7F0FE', color:'#1D4ED8', icon:'M3 5h18v14H3z M3 8l9 6 9-6' },
+      processo:{ bg:'#EEEBFE', color:'#4327E6', icon:'M12 3 4 7v10l8 4 8-4V7Z M4 7l8 4 8-4' },
+      email:{ bg:'#E7F6EF', color:'#177D54', icon:'M4 4h16v16H4z M4 7l8 5 8-5' } };
+    var atividades=ativ.map(function(a){ var ic=ICON[a.tipo]||ICON.email; return { label:a.label, sub:a.sub, time:self.fmt(a.time), bg:ic.bg, color:ic.color, icon:ic.icon }; });
+
+    return {
+      loadingView:loading, emptyView:(!loading && !couriers.length), listReady:(!loading && couriers.length>0),
+      rows:rows, kpis:kpis,
+      claraSub:claraSub, claraIntro:claraIntro, atencao:atencao, semAtencao:semAtencao, atCalmMsg:atCalmMsg, atTitulo:atTitulo, atICon:atICon,
+      semCourier:semCourier, semCount:String(sem.length), temSemCourier:(semCourier.length>0), nenhumSemCourier:(!loading && semCourier.length===0),
+      atividades:atividades, temAtividades:(atividades.length>0), semAtividades:(!loading && atividades.length===0),
+      onManualTrack:function(){ var el=document.getElementById('trkq'); var sel=document.getElementById('trkcarrier'); var num=((el&&el.value)||'').replace(/[^A-Za-z0-9]/g,''); var carrier=(sel&&sel.value)||'dhl'; if(!num) return; self.setState({ manualNumber:num }); self.doTrack(num, carrier); },
+      manual:self.trackView(self.state.manualNumber)
     };
-    var manual=self.trackView(self.state.manualNumber);
-    return { kpis:kpis, rows:rows, loadingView:loading, emptyView:(!loading && !total), listReady:(!loading && total>0), claraIntro:claraIntro, claraPoints:claraPoints, onManualTrack:onManualTrack, manual:manual };
   }
 }
 </script>
