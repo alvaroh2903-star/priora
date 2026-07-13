@@ -119,82 +119,123 @@
 
                   <!-- EXPANDED DETAIL -->
                   <sc-if value="{{ r.expanded }}" hint-placeholder-val="{{ false }}">
-                    <div style="padding:4px 18px 18px 18px;border-top:1px solid #F0F1F7;animation:expandIn .22s ease both">
+                    <div style="padding:6px 18px 18px 18px;border-top:1px solid #F0F1F7;animation:expandIn .22s ease both">
 
-                      <!-- operator actions -->
-                      <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin:14px 0 6px 0">
-                        <span style="font-size:11px;color:#9AA0B4;font-weight:600">Ação do operador:</span>
-                        <sc-for list="{{ r.acoes }}" as="ac" hint-placeholder-count="2">
-                          <button class="act-btn" onClick="{{ ac.onClick }}" style="background:{{ ac.bg }};color:{{ ac.color }};border:1px solid {{ ac.border }};border-radius:9px;padding:8px 13px;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer">{{ ac.label }}</button>
-                        </sc-for>
-                        <sc-if value="{{ r.semAcoes }}" hint-placeholder-val="{{ false }}"><span style="font-size:12px;color:#5A6076">{{ r.semAcoesMsg }}</span></sc-if>
-                      </div>
+                      <!-- Conteúdo esperado do envelope -->
+                      <div style="margin-top:12px">
+                        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px"><span style="width:26px;height:26px;border-radius:8px;background:#E7F0FE;display:flex;align-items:center;justify-content:center"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#2563EB" stroke-width="2"><path d="M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/></svg></span><h4 style="font-size:13.5px;font-weight:800">Conteúdo esperado do envelope</h4></div>
 
-                      <!-- Conteúdo Esperado do Envelope (Clara) -->
-                      <div style="margin-top:14px">
-                        <div style="display:flex;align-items:center;gap:8px;margin-bottom:9px"><span style="width:26px;height:26px;border-radius:8px;background:#E7F0FE;display:flex;align-items:center;justify-content:center"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#2563EB" stroke-width="2"><path d="M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/></svg></span><h4 style="font-size:13.5px;font-weight:800">Conteúdo esperado do envelope</h4></div>
-
-                        <sc-if value="{{ r.aLoading }}" hint-placeholder-val="{{ false }}"><div style="font-size:12.5px;color:#7A8099;padding:6px 0">Clara está lendo a conversa completa no Outlook…</div></sc-if>
-                        <sc-if value="{{ r.aError }}" hint-placeholder-val="{{ false }}"><div style="font-size:12.5px;color:#C2333A;padding:6px 0">{{ r.aErrorMsg }}</div></sc-if>
-
-                        <sc-if value="{{ r.aReady }}" hint-placeholder-val="{{ false }}">
-                          <div style="background:#FAFAFE;border:1px solid #F0F1F7;border-radius:12px;overflow:hidden">
-                            <div style="display:grid;grid-template-columns:120px 1fr 150px;gap:12px;padding:10px 15px;background:#F4F5FB;border-bottom:1px solid #EEEFF6;font-size:10.5px;font-weight:700;color:#9AA0B4;text-transform:uppercase;letter-spacing:.04em">
-                              <span>Processo</span><span>Documentos esperados</span><span>Situação</span>
-                            </div>
-                            <sc-for list="{{ r.envelope }}" as="e" hint-placeholder-count="2">
-                              <div style="display:grid;grid-template-columns:120px 1fr 150px;gap:12px;padding:11px 15px;border-bottom:1px solid #F2F3F9;align-items:center">
-                                <span style="font-family:'JetBrains Mono',monospace;font-size:12.5px;font-weight:700;color:#161A2E">{{ e.codigo }}</span>
-                                <span style="font-size:12px;color:#5A6076;line-height:1.5">{{ e.docs }}</span>
-                                <span><span style="font-size:10.5px;font-weight:700;color:{{ e.sitColor }};background:{{ e.sitBg }};padding:3px 9px;border-radius:7px">{{ e.situacao }}</span></span>
+                        <sc-if value="{{ r.hasEnvelope }}" hint-placeholder-val="{{ true }}">
+                          <div style="border:1px solid #F0F1F7;border-radius:12px;overflow:hidden;background:#fff">
+                            <div style="overflow-x:auto"><div style="min-width:660px">
+                              <div style="display:grid;grid-template-columns:1.5fr .7fr 1.3fr 1.4fr .9fr 30px;gap:12px;padding:11px 16px;background:#FAFAFE;border-bottom:1px solid #EEEFF6;font-size:10px;font-weight:700;color:#9AA0B4;text-transform:uppercase;letter-spacing:.04em">
+                                <span>Processo</span><span>ETA</span><span>MBL</span><span>HBL Original</span><span>Status</span><span></span>
                               </div>
+                              <sc-for list="{{ r.envelope }}" as="e" hint-placeholder-count="2">
+                                <div>
+                                  <div style="display:grid;grid-template-columns:1.5fr .7fr 1.3fr 1.4fr .9fr 30px;gap:12px;padding:12px 16px;border-bottom:1px solid #F2F3F9;align-items:center">
+                                    <div style="min-width:0"><span style="font-family:'JetBrains Mono',monospace;font-size:12.5px;font-weight:700;color:#4327E6">{{ e.codigo }}</span><span style="font-size:11px;color:#9AA0B4"> — {{ e.agente }}</span></div>
+                                    <span style="font-size:12px;color:#5A6076">{{ e.eta }}</span>
+                                    <!-- MBL -->
+                                    <div>
+                                      <sc-if value="{{ e.mbl.wait }}" hint-placeholder-val="{{ true }}"><span style="font-size:11.5px;color:#9AA0B4;font-style:italic">Aguardando courier</span></sc-if>
+                                      <sc-if value="{{ e.mbl.resolved }}" hint-placeholder-val="{{ false }}"><span style="font-size:12px;font-weight:700;color:#177D54">{{ e.mbl.text }}</span></sc-if>
+                                      <sc-if value="{{ e.mbl.conf }}" hint-placeholder-val="{{ false }}">
+                                        <div style="display:flex;flex-direction:column;gap:5px">
+                                          <span onClick="{{ e.mbl.onRecebido }}" style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:11.5px;color:#3C4258"><span style="width:14px;height:14px;border-radius:50%;border:2px solid {{ e.mbl.recBorder }};background:{{ e.mbl.recBg }};flex-shrink:0"></span>Recebido</span>
+                                          <span onClick="{{ e.mbl.onNao }}" style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:11.5px;color:#7A8099"><span style="width:14px;height:14px;border-radius:50%;border:2px solid {{ e.mbl.naoBorder }};background:{{ e.mbl.naoBg }};flex-shrink:0"></span>Não recebido</span>
+                                        </div>
+                                      </sc-if>
+                                    </div>
+                                    <!-- HBL Original -->
+                                    <div>
+                                      <sc-if value="{{ e.hbl.wait }}" hint-placeholder-val="{{ true }}"><span style="font-size:11.5px;color:#9AA0B4;font-style:italic">Aguardando courier</span></sc-if>
+                                      <sc-if value="{{ e.hbl.resolved }}" hint-placeholder-val="{{ false }}"><span style="font-size:12px;font-weight:700;color:#177D54">{{ e.hbl.text }}</span></sc-if>
+                                      <sc-if value="{{ e.hbl.conf }}" hint-placeholder-val="{{ false }}">
+                                        <div style="display:flex;flex-direction:column;gap:5px">
+                                          <span onClick="{{ e.hbl.onRecebido }}" style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:11.5px;color:#3C4258"><span style="width:14px;height:14px;border-radius:50%;border:2px solid {{ e.hbl.recBorder }};background:{{ e.hbl.recBg }};flex-shrink:0"></span>Recebido</span>
+                                          <span onClick="{{ e.hbl.onNao }}" style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:11.5px;color:#7A8099"><span style="width:14px;height:14px;border-radius:50%;border:2px solid {{ e.hbl.naoBorder }};background:{{ e.hbl.naoBg }};flex-shrink:0"></span>Não recebido</span>
+                                        </div>
+                                      </sc-if>
+                                    </div>
+                                    <!-- Status -->
+                                    <span><span style="font-size:10.5px;font-weight:700;color:{{ e.stColor }};background:{{ e.stBg }};padding:3px 9px;border-radius:7px;white-space:nowrap">{{ e.stLabel }}</span></span>
+                                    <!-- chevron -->
+                                    <span onClick="{{ e.onToggleProc }}" style="cursor:pointer;display:inline-flex;transition:transform .2s;transform:{{ e.caret }}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#9AA0B4" stroke-width="2.4"><path d="m6 9 6 6 6-6"/></svg></span>
+                                  </div>
+                                  <sc-if value="{{ e.procExpanded }}" hint-placeholder-val="{{ false }}">
+                                    <div style="padding:13px 16px;background:#F8F9FE;border-bottom:1px solid #F2F3F9;display:flex;gap:18px;flex-wrap:wrap;animation:expandIn .2s ease both">
+                                      <div style="flex:1;min-width:190px">
+                                        <div style="font-size:10.5px;font-weight:700;color:#9AA0B4;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">Documentos esperados</div>
+                                        <sc-for list="{{ e.docsEsperados }}" as="de" hint-placeholder-count="2">
+                                          <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px"><span style="width:6px;height:6px;border-radius:50%;background:{{ de.color }}"></span><span style="font-size:12px;color:#5A6076">{{ de.label }} — <b style="color:{{ de.color }}">{{ de.status }}</b></span></div>
+                                        </sc-for>
+                                      </div>
+                                      <div style="flex:1;min-width:220px;background:#fff;border:1px solid #EAE7F8;border-radius:10px;padding:11px 13px;display:flex;gap:9px;align-items:flex-start">
+                                        <span style="width:22px;height:22px;border-radius:6px;background:#EEEBFE;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="2"><path d="M12 3 4 7v10l8 4 8-4V7Z"/></svg></span>
+                                        <span style="font-size:12px;color:#5A6076;line-height:1.45"><b style="color:#3D34C9">Clara</b> {{ e.claraNote }}</span>
+                                      </div>
+                                    </div>
+                                  </sc-if>
+                                </div>
+                              </sc-for>
+                            </div></div>
+                          </div>
+                        </sc-if>
+                        <sc-if value="{{ r.noEnvelope }}" hint-placeholder-val="{{ false }}">
+                          <div style="font-size:12.5px;color:#9AA0B4;padding:8px 0">Nenhum processo identificado neste courier ainda — necessita revisão humana.</div>
+                        </sc-if>
+
+                        <!-- footer: gate / banner -->
+                        <sc-if value="{{ r.footWait }}" hint-placeholder-val="{{ true }}">
+                          <div style="margin-top:12px;background:#EAF1FE;border:1px solid #CFE0FB;border-radius:12px;padding:12px 15px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+                            <span style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:#2C4A7C"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#2563EB" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 11h1v5"/></svg>A conferência só pode ser feita após o recebimento do courier.</span>
+                            <button class="act-btn" onClick="{{ r.onMarcarRecebido }}" style="background:#4327E6;color:#fff;border:none;border-radius:10px;padding:10px 16px;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer;box-shadow:0 10px 22px -12px rgba(67,39,230,.7)">Marcar como recebido</button>
+                          </div>
+                        </sc-if>
+                        <sc-if value="{{ r.footOk }}" hint-placeholder-val="{{ false }}">
+                          <div style="margin-top:12px;background:#E7F6EF;border:1px solid #BFE6D2;border-radius:12px;padding:12px 15px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+                            <span style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:#177D54;font-weight:600"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#177D54" stroke-width="2.4"><path d="M20 6 9 17l-5-5"/></svg>Courier recebido. Documentos disponíveis para conferência.</span>
+                            <button class="act-btn" onClick="{{ r.onFinalizar }}" style="background:#177D54;color:#fff;border:none;border-radius:10px;padding:10px 16px;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer">Finalizar courier</button>
+                          </div>
+                        </sc-if>
+                        <sc-if value="{{ r.footDiv }}" hint-placeholder-val="{{ false }}">
+                          <div style="margin-top:12px;background:#FDECEC;border:1px solid #F3CFD0;border-radius:12px;padding:12px 15px;display:flex;align-items:center;gap:8px">
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#C2333A" stroke-width="2.2"><path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
+                            <span style="font-size:12.5px;color:#C2333A">Divergência: há documento não recebido. Resolva antes de concluir o courier.</span>
+                          </div>
+                        </sc-if>
+
+                        <!-- análise da Clara (assíncrona) -->
+                        <sc-if value="{{ r.aLoading }}" hint-placeholder-val="{{ false }}"><div style="font-size:12px;color:#7A8099;padding:10px 0 2px">Clara está lendo a conversa para detalhar documentos e resolução do HBL…</div></sc-if>
+                        <sc-if value="{{ r.aError }}" hint-placeholder-val="{{ false }}"><div style="font-size:12px;color:#C2333A;padding:10px 0 2px">{{ r.aErrorMsg }}</div></sc-if>
+                        <sc-if value="{{ r.hasObs }}" hint-placeholder-val="{{ false }}">
+                          <div style="display:flex;flex-direction:column;gap:5px;margin-top:12px">
+                            <sc-for list="{{ r.observacoes }}" as="o" hint-placeholder-count="1">
+                              <div style="display:flex;gap:8px;align-items:flex-start"><span style="color:#177D54;font-weight:800;font-size:12px;margin-top:1px">›</span><span style="font-size:12px;color:#3C4258;line-height:1.45">{{ o }}</span></div>
                             </sc-for>
                           </div>
-
-                          <!-- doc chips w/ confidence -->
-                          <sc-if value="{{ r.hasDocs }}" hint-placeholder-val="{{ false }}">
-                            <div style="display:flex;gap:7px;flex-wrap:wrap;margin-top:11px">
-                              <sc-for list="{{ r.docChips }}" as="d" hint-placeholder-count="3">
-                                <span style="display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:700;color:{{ d.color }};background:{{ d.bg }};padding:5px 10px;border-radius:8px">{{ d.nome }}<span style="font-size:9.5px;font-weight:700;opacity:.85">{{ d.tag }}</span></span>
+                        </sc-if>
+                        <sc-if value="{{ r.hasEvid }}" hint-placeholder-val="{{ false }}">
+                          <div style="margin-top:13px">
+                            <div style="font-size:11px;font-weight:700;color:#9AA0B4;margin-bottom:6px">Evidências (trechos dos e-mails)</div>
+                            <div style="display:flex;flex-direction:column;gap:7px">
+                              <sc-for list="{{ r.evidencias }}" as="ev" hint-placeholder-count="2">
+                                <div style="background:#F4F5FB;border-left:3px solid #4327E6;border-radius:0 8px 8px 0;padding:8px 12px"><div style="font-size:11.5px;font-weight:700;color:#3D34C9">{{ ev.conclusion }}</div><div style="font-size:11.5px;color:#5A6076;line-height:1.45;margin-top:2px;font-style:italic">“{{ ev.snippet }}”</div></div>
                               </sc-for>
                             </div>
-                          </sc-if>
-
-                          <!-- observações (regras Telex/Wave/etc.) -->
-                          <sc-if value="{{ r.hasObs }}" hint-placeholder-val="{{ false }}">
-                            <div style="display:flex;flex-direction:column;gap:5px;margin-top:11px">
-                              <sc-for list="{{ r.observacoes }}" as="o" hint-placeholder-count="1">
-                                <div style="display:flex;gap:8px;align-items:flex-start"><span style="color:#177D54;font-weight:800;font-size:12px;margin-top:1px">›</span><span style="font-size:12px;color:#3C4258;line-height:1.45">{{ o }}</span></div>
-                              </sc-for>
-                            </div>
-                          </sc-if>
-
-                          <!-- evidências -->
-                          <sc-if value="{{ r.hasEvid }}" hint-placeholder-val="{{ false }}">
-                            <div style="margin-top:13px">
-                              <div style="font-size:11px;font-weight:700;color:#9AA0B4;margin-bottom:6px">Evidências (trechos dos e-mails)</div>
-                              <div style="display:flex;flex-direction:column;gap:7px">
-                                <sc-for list="{{ r.evidencias }}" as="ev" hint-placeholder-count="2">
-                                  <div style="background:#F4F5FB;border-left:3px solid #4327E6;border-radius:0 8px 8px 0;padding:8px 12px"><div style="font-size:11.5px;font-weight:700;color:#3D34C9">{{ ev.conclusion }}</div><div style="font-size:11.5px;color:#5A6076;line-height:1.45;margin-top:2px;font-style:italic">“{{ ev.snippet }}”</div></div>
-                                </sc-for>
-                              </div>
-                            </div>
-                          </sc-if>
-
-                          <!-- referências + confiança -->
-                          <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:13px;font-size:11.5px;color:#7A8099">
-                            <sc-if value="{{ r.hasRefs }}" hint-placeholder-val="{{ false }}"><span>Referências: <b style="color:#3C4258;font-family:'JetBrains Mono',monospace">{{ r.refsText }}</b></span></sc-if>
-                            <span>Confiança da Clara: <b style="color:{{ r.confColor }}">{{ r.confText }}</b></span>
-                            <span>{{ r.conversasText }}</span>
                           </div>
-
-                          <!-- revisão humana -->
-                          <sc-if value="{{ r.hasRevisao }}" hint-placeholder-val="{{ false }}">
-                            <div style="margin-top:11px;background:#FDF6EC;border:1px solid #F6E4C7;border-radius:10px;padding:10px 13px">
-                              <div style="font-size:11.5px;font-weight:700;color:#B9760A;margin-bottom:4px">Necessita revisão humana</div>
-                              <sc-for list="{{ r.revisao }}" as="rv" hint-placeholder-count="1"><div style="font-size:11.5px;color:#7A5A20;line-height:1.45">• {{ rv }}</div></sc-for>
-                            </div>
-                          </sc-if>
+                        </sc-if>
+                        <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:13px;font-size:11.5px;color:#7A8099">
+                          <sc-if value="{{ r.hasRefs }}" hint-placeholder-val="{{ false }}"><span>Referências: <b style="color:#3C4258;font-family:'JetBrains Mono',monospace">{{ r.refsText }}</b></span></sc-if>
+                          <span>Confiança da Clara: <b style="color:{{ r.confColor }}">{{ r.confText }}</b></span>
+                          <span>{{ r.conversasText }}</span>
+                        </div>
+                        <sc-if value="{{ r.hasRevisao }}" hint-placeholder-val="{{ false }}">
+                          <div style="margin-top:11px;background:#FDF6EC;border:1px solid #F6E4C7;border-radius:10px;padding:10px 13px">
+                            <div style="font-size:11.5px;font-weight:700;color:#B9760A;margin-bottom:4px">Necessita revisão humana</div>
+                            <sc-for list="{{ r.revisao }}" as="rv" hint-placeholder-count="1"><div style="font-size:11.5px;color:#7A5A20;line-height:1.45">• {{ rv }}</div></sc-for>
+                          </div>
                         </sc-if>
                       </div>
 
@@ -290,7 +331,7 @@
 </x-dc>
 <script type="text/x-dc" data-dc-script>
 class Component extends DCLogic {
-  state = { resp:null, expandedId:null, analysis:{}, aStatus:{}, estados:{}, tracking:{}, manualNumber:'', focusId:null };
+  state = { resp:null, expandedId:null, expandedRow:null, analysis:{}, aStatus:{}, estados:{}, conf:{}, tracking:{}, manualNumber:'', focusId:null };
 
   EST = {
     'Identificado':{ c:'#1D4ED8', b:'#E7F0FE', accent:'#93B4F5' },
@@ -349,6 +390,28 @@ class Component extends DCLogic {
     }).then(function(r){ return r.json().catch(function(){return null;}); })
       .then(function(){ if (estado==='Concluído') self.load(); })
       .catch(function(){});
+  }
+
+  confDe(courier, proc){
+    var tk=this.keyOf(courier.tracking);
+    var base=(courier.conferencia && courier.conferencia[proc]) || {};
+    var ov=(this.state.conf[tk] && this.state.conf[tk][proc]) || {};
+    var merged=Object.assign({}, base);
+    Object.keys(ov).forEach(function(k){ if(ov[k]===null) delete merged[k]; else merged[k]=ov[k]; });
+    return merged;
+  }
+
+  doConf(courier, proc, docKey, status){
+    var self=this, tk=this.keyOf(courier.tracking);
+    var cur=this.confDe(courier, proc)[docKey] || null;
+    var newVal=(cur===status)?null:status;   // clicar de novo desmarca
+    var conf=Object.assign({}, this.state.conf);
+    var t=Object.assign({}, conf[tk]||{}); var p=Object.assign({}, t[proc]||{});
+    p[docKey]=newVal; t[proc]=p; conf[tk]=t; this.setState({ conf:conf });
+    fetch('/api/couriers/'+encodeURIComponent(courier.tracking)+'/conferencia', {
+      method:'POST', credentials:'same-origin', headers:{ 'Content-Type':'application/json' },
+      body:JSON.stringify({ processo:proc, documento:docKey, status:newVal })
+    }).catch(function(){});
   }
 
   doTrack(number, carrier){
@@ -431,45 +494,91 @@ class Component extends DCLogic {
     };
     Object.assign(row, this.trackView(courier.tracking));
 
-    // operator actions
-    var acoes=this.acoesDe(courier, estado);
-    row.acoes=acoes; row.semAcoes=(acoes.length===0);
-    row.semAcoesMsg=(estado==='Concluído')?'Courier concluído.':'—';
-
-    // analysis / expectativa
+    // ---- análise da Clara (assíncrona) ----
     var cid=courier.conversationId, a=this.state.analysis[cid], stt=this.state.aStatus[cid]||'';
     row.aLoading=(stt==='loading'); row.aError=(stt.indexOf('error')===0);
     row.aErrorMsg=row.aError?('Não consegui analisar: '+stt.slice(6)):'';
-    row.aReady=!!a;
 
+    // resolução do HBL/MBL detectada pela Clara (regras do Manual)
+    var hblRaw=((a && a.hblResolution) || '').toLowerCase();
+    var fTelex=/telex/.test(hblRaw), fWave=/wave/.test(hblRaw),
+        fDestino=/destino|destination/.test(hblRaw),
+        fImport=/consignee|client|cliente|importer|importador/.test(hblRaw);
+    var hblText = fTelex?'Via Telex Release': fImport?'Enviado ao importador': fDestino?'Emitido no destino': fWave?'Via Wave BL': null;
+    var mblText = fWave?'Via Wave BL': fDestino?'Emitido no destino': null;
+
+    var received = (estado==='Recebido' || estado==='Em Conferência' || estado==='Divergência');
+    var eta=this.fmt(courier.data);
+    var anyDiv=false;
+
+    // ---- tabela "conteúdo esperado do envelope": uma linha por processo ----
+    row.envelope=(procs||[]).map(function(proc){
+      var val=self.confDe(courier, proc);
+      var cell=function(docKey, resolvedText){
+        if (resolvedText) return { wait:false, resolved:true, conf:false, text:resolvedText };
+        if (!received) return { wait:true, resolved:false, conf:false, text:'' };
+        var v=val[docKey], recSel=(v==='recebido'), naoSel=(v==='nao_recebido');
+        return { wait:false, resolved:false, conf:true, text:'',
+          recBorder: recSel?'#177D54':'#C7CBDA', recBg: recSel?'#177D54':'transparent',
+          naoBorder: naoSel?'#C2333A':'#C7CBDA', naoBg: naoSel?'#C2333A':'transparent',
+          onRecebido:function(){ self.doConf(courier, proc, docKey, 'recebido'); },
+          onNao:function(){ self.doConf(courier, proc, docKey, 'nao_recebido'); } };
+      };
+      var mbl=cell('mbl', mblText), hbl=cell('hbl', hblText);
+      var st;
+      if (estado==='Identificado'){ st={label:'Em trânsito', color:'#3D34C9', bg:'#EEEBFE'}; }
+      else {
+        var phys=[]; if(!mblText) phys.push(val.mbl); if(!hblText) phys.push(val.hbl);
+        if (phys.indexOf('nao_recebido')>=0){ st={label:'Divergência', color:'#C2333A', bg:'#FDECEC'}; anyDiv=true; }
+        else if (phys.length && phys.every(function(x){ return x==='recebido'; })){ st={label:'Conferido', color:'#177D54', bg:'#E7F6EF'}; }
+        else { st={label:'Recebido', color:'#177D54', bg:'#E7F6EF'}; }
+      }
+      var docLine=function(label, docKey, resolvedText){
+        if (resolvedText) return { label:label, status:resolvedText, color:'#177D54' };
+        var v=val[docKey];
+        if (v==='recebido') return { label:label, status:'Recebido', color:'#177D54' };
+        if (v==='nao_recebido') return { label:label, status:'Não recebido', color:'#C2333A' };
+        return { label:label, status:'Não recebido', color:'#9AA0B4' };
+      };
+      var claraNote = (estado==='Identificado') ? 'depende da chegada do envelope para conferência documental.'
+        : (estado==='Divergência') ? 'registrou divergência — verifique os documentos marcados como não recebidos.'
+        : 'liberou a conferência: confirme cada documento recebido no envelope.';
+      var rowKey=courier.tracking+'|'+proc;
+      return { codigo:proc, agente:courier.agente, eta:eta, mbl:mbl, hbl:hbl,
+        stLabel:st.label, stColor:st.color, stBg:st.bg,
+        docsEsperados:[ docLine('MBL','mbl',mblText), docLine('HBL Original','hbl',hblText) ],
+        claraNote:claraNote,
+        procExpanded:(self.state.expandedRow===rowKey),
+        caret:(self.state.expandedRow===rowKey)?'rotate(180deg)':'rotate(0deg)',
+        onToggleProc:function(){ self.setState({ expandedRow:(self.state.expandedRow===rowKey)?null:rowKey }); } };
+    });
+    row.hasEnvelope=(procs.length>0); row.noEnvelope=(procs.length===0);
+
+    // ---- rodapé: portão de recebimento / conferência ----
+    row.footWait=(estado==='Identificado');
+    row.footDiv=(received && anyDiv);
+    row.footOk=(received && !anyDiv);
+    row.onMarcarRecebido=function(){ self.act(courier, 'Recebido'); };
+    row.onFinalizar=function(){ self.act(courier, 'Concluído'); };
+
+    // ---- extras da análise da Clara ----
     if (a){
       var exp=a.expectativa||{ documentos:[], observacoes:[], revisao:[] };
-      var sit=this.situacaoDe(estado);
-      var docsResumo = exp.documentos.length ? exp.documentos.map(function(d){ return d.nome; }).join(', ') : 'Nenhum documento específico citado';
-      var envRows = (procs.length ? procs : ['(processo não identificado)']).map(function(p){
-        return { codigo:p, docs:docsResumo, situacao:sit.t, sitColor:sit.c, sitBg:sit.b };
-      });
-      row.envelope=envRows;
-      row.docChips=exp.documentos.map(function(d){
-        var baixa=(d.confianca==='baixa');
-        return { nome:d.nome, tag: baixa?'· revisar':'· ok', color: baixa?'#B9760A':'#177D54', bg: baixa?'#FDF3E0':'#E7F6EF' };
-      });
-      row.hasDocs=exp.documentos.length>0;
       row.observacoes=exp.observacoes||[]; row.hasObs=(row.observacoes.length>0);
       row.evidencias=(a.evidences||[]).slice(0,3).map(function(ev){ return { conclusion:ev.conclusion, snippet:String(ev.snippet||'').slice(0,140) }; });
       row.hasEvid=row.evidencias.length>0;
-      var refs=(courier.referencias||[]).concat(((a.externalReferences||[]).map(function(r){ return r.value; })));
+      var refs=(courier.referencias||[]).concat(((a.externalReferences||[]).map(function(r2){ return r2.value; })));
       refs=refs.filter(function(v,i,arr){ return v && arr.indexOf(v)===i; }).slice(0,5);
       row.refsText=refs.join(', '); row.hasRefs=refs.length>0;
-      var conf=(typeof a.confidence==='number')?a.confidence:0;
-      row.confText=Math.round(conf*100)+'%'; row.confColor= conf>=0.6?'#177D54':'#B9760A';
-      row.conversasText=(courier.conversas||1)+' conversa'+((courier.conversas||1)===1?'':'s')+' · '+(courier.mensagens||1)+' e-mail'+((courier.mensagens||1)===1?'':'s');
+      var conf2=(typeof a.confidence==='number')?a.confidence:0;
+      row.confText=Math.round(conf2*100)+'%'; row.confColor= conf2>=0.6?'#177D54':'#B9760A';
       row.revisao=exp.revisao||[]; row.hasRevisao=(row.revisao.length>0);
     } else {
-      row.envelope=[]; row.docChips=[]; row.hasDocs=false; row.observacoes=[]; row.hasObs=false;
-      row.evidencias=[]; row.hasEvid=false; row.refsText=''; row.hasRefs=false;
-      row.confText='—'; row.confColor='#7A8099'; row.conversasText=''; row.revisao=[]; row.hasRevisao=false;
+      row.observacoes=[]; row.hasObs=false; row.evidencias=[]; row.hasEvid=false;
+      row.refsText=(courier.referencias||[]).join(', '); row.hasRefs=(courier.referencias||[]).length>0;
+      row.confText='—'; row.confColor='#7A8099'; row.revisao=[]; row.hasRevisao=false;
     }
+    row.conversasText=(courier.conversas||1)+' conversa'+((courier.conversas||1)===1?'':'s')+' · '+(courier.mensagens||1)+' e-mail'+((courier.mensagens||1)===1?'':'s');
     return row;
   }
 

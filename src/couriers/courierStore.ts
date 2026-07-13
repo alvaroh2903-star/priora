@@ -95,3 +95,71 @@ export function setEstado(
   persist();
   return registro;
 }
+
+/* ------------------------------------------------------------------ *
+ * Conferência documental (Etapa 7 do Manual): o operador marca, por
+ * processo, se cada documento esperado chegou. Também é ação humana —
+ * persistida separadamente das conclusões da Clara.
+ * ------------------------------------------------------------------ */
+
+/** Documentos conferíveis no card (os dois que definem a liberação). */
+export type DocKey = 'mbl' | 'hbl';
+export type DocStatus = 'recebido' | 'nao_recebido';
+/** Conferência de um processo: status por documento. */
+export type ProcConferencia = Partial<Record<DocKey, DocStatus>>;
+/** Conferência de um courier: por código de processo (IMxxxx). */
+export type CourierConferencia = Record<string, ProcConferencia>;
+
+const CONF_PATH = path.join(config.dataDir, 'courier-conferencia.json');
+
+let confCache: Record<string, CourierConferencia> | null = null;
+
+function loadConf(): Record<string, CourierConferencia> {
+  if (confCache) return confCache;
+  try {
+    confCache = JSON.parse(fs.readFileSync(CONF_PATH, 'utf8'));
+  } catch {
+    confCache = {};
+  }
+  return confCache!;
+}
+
+function persistConf(): void {
+  try {
+    fs.mkdirSync(path.dirname(CONF_PATH), { recursive: true });
+    fs.writeFileSync(CONF_PATH, JSON.stringify(confCache || {}, null, 2));
+  } catch (err) {
+    console.error('[courierStore] falha ao gravar conferência:', err);
+  }
+}
+
+/** Conferência atual de um courier (por processo). */
+export function getConferencia(tracking: string): CourierConferencia {
+  return loadConf()[trackingKey(tracking)] || {};
+}
+
+/** Todas as conferências (para mesclar na lista). */
+export function getAllConferencias(): Record<string, CourierConferencia> {
+  return { ...loadConf() };
+}
+
+/** Marca (ou desmarca, com status null) um documento de um processo. */
+export function setConferenciaDoc(
+  tracking: string,
+  processo: string,
+  documento: DocKey,
+  status: DocStatus | null,
+): CourierConferencia {
+  const store = loadConf();
+  const key = trackingKey(tracking);
+  const proc = processo.toUpperCase();
+  if (!store[key]) store[key] = {};
+  if (!store[key][proc]) store[key][proc] = {};
+  if (status === null) {
+    delete store[key][proc][documento];
+  } else {
+    store[key][proc][documento] = status;
+  }
+  persistConf();
+  return store[key];
+}

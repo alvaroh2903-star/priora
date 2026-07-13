@@ -11,9 +11,13 @@ import { isAiConfigured } from '../ai/geminiClient';
 import {
   getAllEstados,
   setEstado,
+  getAllConferencias,
+  setConferenciaDoc,
   trackingKey,
   ESTADOS_VALIDOS,
   CourierEstado,
+  DocKey,
+  DocStatus,
 } from '../couriers/courierStore';
 import { config } from '../config';
 
@@ -167,6 +171,7 @@ courierRouter.get('/', async (req: AuthedRequest, res, next) => {
     for (const p of processosComCourier) processosSemCourier.delete(p);
 
     const estados = getAllEstados();
+    const conferencias = getAllConferencias();
 
     const couriersAll = Array.from(byTracking.values()).map((c) => {
       const reg = estados[trackingKey(c.tracking)];
@@ -185,6 +190,7 @@ courierRouter.get('/', async (req: AuthedRequest, res, next) => {
         conversationId: c.conversationId,
         estado,
         nota: reg?.nota || null,
+        conferencia: conferencias[trackingKey(c.tracking)] || {},
         // "necessita revisão humana": tracking sem nenhum processo resolvido.
         precisaRevisao: c.processos.length === 0,
       };
@@ -328,4 +334,31 @@ courierRouter.post('/:tracking/estado', (req: AuthedRequest, res) => {
   }
   const registro = setEstado(req.params.tracking, estado, req.body?.nota);
   res.json({ tracking: req.params.tracking, ...registro });
+});
+
+/**
+ * POST /api/couriers/:tracking/conferencia — o OPERADOR marca, na conferência,
+ * se um documento (MBL/HBL) de um processo chegou. body: { processo, documento,
+ * status }. status null desmarca. Só faz sentido após o courier ser "Recebido".
+ */
+courierRouter.post('/:tracking/conferencia', (req: AuthedRequest, res) => {
+  const processo = String(req.body?.processo || '').trim();
+  const documento = String(req.body?.documento || '') as DocKey;
+  const rawStatus = req.body?.status;
+  const status: DocStatus | null =
+    rawStatus === 'recebido' || rawStatus === 'nao_recebido' ? rawStatus : null;
+
+  if (!processo) {
+    return res.status(400).json({ error: 'Informe o processo.' });
+  }
+  if (documento !== 'mbl' && documento !== 'hbl') {
+    return res.status(400).json({ error: 'Documento inválido (use "mbl" ou "hbl").' });
+  }
+  const conferencia = setConferenciaDoc(
+    req.params.tracking,
+    processo,
+    documento,
+    status,
+  );
+  res.json({ tracking: req.params.tracking, conferencia });
 });
