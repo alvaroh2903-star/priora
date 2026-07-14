@@ -238,6 +238,36 @@ courierRouter.get('/', async (req: AuthedRequest, res, next) => {
   }
 });
 
+/**
+ * Mapeia, LINHA A LINHA (Regra 4 do Manual), qual documento cada processo
+ * espera. Nas listas dos agentes cada linha traz ...OMBL/OHBL... IMxxxx, então
+ * dá para saber, por processo, se o esperado é o MBL (master) e/ou o HBL (house).
+ * Detecta OHBL/HBL e OMBL/MBL de forma independente (OMBL não casa com HBL).
+ */
+function mapProcessDocs(
+  messages: Awaited<ReturnType<typeof getConversationFull>>,
+): Array<{ codigo: string; mbl: boolean; hbl: boolean }> {
+  const text = messages
+    .map((m) => m.body?.content || m.bodyPreview || '')
+    .join('\n');
+  const RE_IM = /\bIM\d{3,6}\b/gi;
+  const map = new Map<string, { mbl: boolean; hbl: boolean }>();
+  for (const line of text.split(/\r?\n/)) {
+    const procs = line.match(RE_IM);
+    if (!procs) continue;
+    const hbl = /\bO?HBL\b/i.test(line);
+    const mbl = /\bO?MBL\b/i.test(line);
+    for (const p of procs) {
+      const k = p.toUpperCase();
+      const e = map.get(k) || { mbl: false, hbl: false };
+      if (mbl) e.mbl = true;
+      if (hbl) e.hbl = true;
+      map.set(k, e);
+    }
+  }
+  return Array.from(map.entries()).map(([codigo, v]) => ({ codigo, ...v }));
+}
+
 /* ------------------------------------------------------------------ *
  * Derivação da "expectativa documental" a partir da análise da Clara
  * (aplica as regras do Manual: Telex/Wave/Emissão no destino, etc.)
@@ -313,7 +343,11 @@ courierRouter.get(
         return res.status(404).json({ error: 'Conversa não encontrada.' });
       }
       const analysis = await parseThread(messages);
-      res.json({ ...analysis, expectativa: derivarExpectativa(analysis) });
+      res.json({
+        ...analysis,
+        expectativa: derivarExpectativa(analysis),
+        processosDetalhe: mapProcessDocs(messages),
+      });
     } catch (err) {
       next(err);
     }

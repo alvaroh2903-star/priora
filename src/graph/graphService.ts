@@ -150,18 +150,23 @@ export async function getConversation(
   // Escapa aspas simples para o filtro OData.
   const safeId = conversationId.replace(/'/g, "''");
 
+  // IMPORTANTE: o Microsoft Graph NÃO aceita $filter por conversationId junto
+  // com $orderby ("The restriction or sort order is too complex for this
+  // operation"). Buscamos sem ordenar e ordenamos no cliente.
   const response = await client
     .api('/me/messages')
     .header('Prefer', 'outlook.body-content-type="text"')
     .filter(`conversationId eq '${safeId}'`)
-    .orderby('receivedDateTime asc')
     .top(top)
     .select(
       'id,conversationId,subject,from,toRecipients,receivedDateTime,body,bodyPreview',
     )
     .get();
 
-  return response.value as ConversationMessage[];
+  const msgs = response.value as ConversationMessage[];
+  return msgs.sort((a, b) =>
+    (a.receivedDateTime || '') < (b.receivedDateTime || '') ? -1 : 1,
+  );
 }
 
 export interface EmailAttachmentMeta {
@@ -220,16 +225,20 @@ export async function getConversationFull(
 ): Promise<FullEmailMessage[]> {
   const client = getGraphClient(accessToken);
   const safeId = conversationId.replace(/'/g, "''");
+  // O Graph rejeita $filter (conversationId) + $orderby juntos. Ordenamos no
+  // cliente (o parser da Clara também reordena, mas mantemos consistente aqui).
   const response = await client
     .api('/me/messages')
     .header('Prefer', 'outlook.body-content-type="text"')
     .filter(`conversationId eq '${safeId}'`)
-    .orderby('receivedDateTime asc')
     .top(opts.top ?? 50)
     .select(FULL_FIELDS)
     .expand(ATTACHMENT_EXPAND)
     .get();
-  return response.value as FullEmailMessage[];
+  const msgs = response.value as FullEmailMessage[];
+  return msgs.sort((a, b) =>
+    (a.receivedDateTime || '') < (b.receivedDateTime || '') ? -1 : 1,
+  );
 }
 
 export interface SendMailInput {
