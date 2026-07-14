@@ -35,7 +35,7 @@ services:
       - key: FEDEX_ACCOUNT
         sync: false
       - key: FEDEX_BASE_URL
-        value: https://apis-sandbox.fedex.com
+        value: https://apis.fedex.com          # produção (sandbox: https://apis-sandbox.fedex.com)
       - key: DHL_API_KEY
         sync: false                  # opcional (rastreio DHL) — header DHL-API-Key
       - key: DHL_API_SECRET
