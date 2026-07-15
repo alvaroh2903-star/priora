@@ -108,24 +108,30 @@
                   <sc-if value="{{ r.expanded }}" hint-placeholder-val="{{ false }}">
                     <div style="padding:6px 18px 18px 18px;border-top:1px solid #F0F1F7;animation:expandIn .22s ease both">
 
-                      <!-- Timeline do trajeto do envelope (origem -> destino FINAL). NÃO usa eventos do carrier. -->
-                      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;background:#FAFBFE;border:1px solid #F0F1F7;border-radius:12px;padding:14px 18px;margin-top:12px">
-                        <div style="min-width:82px">
-                          <div style="font-size:13.5px;font-weight:800;color:{{ r.tlOrigemColor }}">{{ r.tlOrigem }}</div>
-                          <div style="font-size:11px;color:#9AA0B4;margin-top:2px">Saída · {{ r.tlSaida }}</div>
+                      <!-- Timeline superior: dados REAIS da transportadora. Origem, localização atual e destino final são coisas distintas. -->
+                      <div style="background:#FAFBFE;border:1px solid #F0F1F7;border-radius:12px;padding:14px 18px;margin-top:12px">
+                        <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+                          <div style="min-width:96px">
+                            <div style="font-size:13.5px;font-weight:800;color:{{ r.tlOrigemColor }}">{{ r.tlOrigem }}</div>
+                            <div style="font-size:9.5px;color:#9AA0B4;margin-top:2px;text-transform:uppercase;letter-spacing:.04em">Origem</div>
+                          </div>
+                          <div style="flex:1;display:flex;flex-direction:column;align-items:center;min-width:120px">
+                            <span style="font-size:12px;font-weight:800;color:{{ r.tlStatusColor }};margin-bottom:5px;text-align:center">{{ r.tlStatus }}</span>
+                            <div style="width:100%;display:flex;align-items:center">
+                              <div style="flex:1;border-top:1.5px dashed #D7DAE8"></div>
+                              <span style="width:30px;height:30px;border-radius:50%;background:#EEEBFE;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin:0 5px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="2"><path d="M4 5h16v14H4z M4 8l8 5 8-5"/></svg></span>
+                              <div style="flex:1;border-top:1.5px dashed #D7DAE8"></div>
+                            </div>
+                          </div>
+                          <div style="min-width:96px;text-align:right">
+                            <div style="font-size:13.5px;font-weight:800;color:{{ r.tlDestinoColor }}">{{ r.tlDestino }}</div>
+                            <div style="font-size:9.5px;color:#9AA0B4;margin-top:2px;text-transform:uppercase;letter-spacing:.04em">Destino final</div>
+                          </div>
                         </div>
-                        <div style="flex:1;display:flex;align-items:center;min-width:60px">
-                          <div style="flex:1;border-top:1.5px dashed #D7DAE8"></div>
-                          <span style="width:32px;height:32px;border-radius:50%;background:#EEEBFE;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin:0 5px"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="2"><path d="M4 5h16v14H4z M4 8l8 5 8-5"/></svg></span>
-                          <div style="flex:1;border-top:1.5px dashed #D7DAE8"></div>
-                        </div>
-                        <div style="min-width:96px;text-align:right">
-                          <div style="font-size:13.5px;font-weight:800;color:{{ r.tlDestinoColor }}">{{ r.tlDestino }}</div>
-                          <div style="font-size:11px;color:#9AA0B4;margin-top:2px">Chegada · {{ r.tlChegada }}</div>
-                        </div>
-                        <div style="min-width:110px;text-align:right;border-left:1px solid #EEEFF6;padding-left:14px">
-                          <div style="font-size:9.5px;color:#9AA0B4;text-transform:uppercase;letter-spacing:.04em">Agente</div>
-                          <div style="font-size:12.5px;font-weight:700;color:#3C4258;margin-top:3px">{{ r.agente }}</div>
+                        <div style="display:flex;gap:20px;flex-wrap:wrap;margin-top:12px;padding-top:11px;border-top:1px solid #EEEFF6">
+                          <sc-if value="{{ r.tlHasUltima }}" hint-placeholder-val="{{ true }}"><div><span style="font-size:9.5px;color:#9AA0B4;text-transform:uppercase;letter-spacing:.04em">Última atualização</span><div style="font-size:12px;color:#3C4258;font-weight:600;margin-top:2px">📍 {{ r.tlUltimaText }}</div></div></sc-if>
+                          <sc-if value="{{ r.tlHasPrevisao }}" hint-placeholder-val="{{ false }}"><div><span style="font-size:9.5px;color:#9AA0B4;text-transform:uppercase;letter-spacing:.04em">Previsão de entrega</span><div style="font-size:12px;color:#3C4258;font-weight:600;margin-top:2px">{{ r.tlPrevisao }}</div></div></sc-if>
+                          <div style="margin-left:auto;text-align:right"><span style="font-size:9.5px;color:#9AA0B4;text-transform:uppercase;letter-spacing:.04em">Agente</span><div style="font-size:12px;color:#3C4258;font-weight:600;margin-top:2px">{{ r.agente }}</div></div>
                         </div>
                       </div>
 
@@ -395,6 +401,33 @@ class Component extends DCLogic {
     if (this.state.expandedId===id){ this.setState({ expandedId:null }); return; }
     this.setState({ expandedId:id });
     this.ensureAnalysis(courier);
+    // Puxa o rastreamento para ALIMENTAR A TIMELINE SUPERIOR (status/origem/
+    // localização/previsão). O histórico completo fica no accordion sob demanda.
+    this.ensureTracking(courier);
+  }
+
+  // Normaliza o TrackingResult do backend numa estrutura única para a timeline.
+  trackNorm(courier){
+    var tk=this.state.tracking[courier.tracking];
+    var loading=!!(tk && tk.state==='loading');
+    var data=(tk && tk.state==='done' && tk.data && tk.data.found) ? tk.data : null;
+    var errored=!!(tk && (tk.state==='error' || (tk.state==='done' && tk.data && !tk.data.found)));
+    var evs=data ? (data.events||[]) : [];
+    // Ordena por tempo asc para achar origem (mais antigo) e atual (mais recente),
+    // independente da ordem que a transportadora devolveu.
+    var asc=evs.slice().sort(function(a,b){ return (a.time||'')<(b.time||'')?-1:1; });
+    var latest=asc.length?asc[asc.length-1]:null;
+    return {
+      loading:loading, errored:errored, has:!!data,
+      status: data ? (data.status||null) : null,
+      origin: asc.length ? (asc[0].location||null) : null,
+      // destino final NÃO existe no contrato atual do backend (TrackingResult).
+      // Consumimos data.destination/courier.destino se um dia existirem; senão null.
+      destination: (data && data.destination) || courier.destino || null,
+      latestLocation: data ? (data.location || (latest && latest.location) || null) : null,
+      estimatedDelivery: data ? (data.estimatedDelivery||null) : null,
+      lastUpdatedAt: latest ? (latest.time||null) : null
+    };
   }
 
   // Rastreamento é SOB DEMANDA: só consulta quando o operador pede (accordion).
@@ -554,22 +587,36 @@ class Component extends DCLogic {
     };
     Object.assign(row, this.trackView(courier.tracking));
 
-    // ---- cabeçalho: rota (origem -> destino FINAL) + ETA + timeline ----
-    // IMPORTANTE: o trajeto do envelope NÃO vem dos eventos da transportadora
-    // (Memphis/Oakland etc. pertencem ao rastreamento de baixo). Vem do
-    // embarque/backend. Enquanto o backend não enviar esses campos, mostramos
-    // placeholders — nunca cidades do rastreamento nem valores fictícios.
-    var origem = courier.origem || null;
-    var destino = courier.destino || null;
-    var saida = courier.saida ? this.fmt(courier.saida) : null;
-    var chegada = (courier.eta || courier.chegada) ? this.fmt(courier.eta || courier.chegada) : null;
+    // ---- timeline superior: alimentada pelos dados REAIS da transportadora ----
+    // Três coisas DISTINTAS: origem (1º evento), localização atual (evento mais
+    // recente) e destino final (entrega). Memphis/Oakland são localização, nunca
+    // destino. Nada mockado; onde o backend não fornece, placeholder claro.
+    var nt = this.trackNorm(courier);
     row.procCount = procs.length ? (procs.length + ' processo' + (procs.length === 1 ? '' : 's')) : 'sem processos';
-    row.rotaText = (origem && destino) ? (origem + ' → ' + destino) : 'Trajeto a definir';
-    row.etaHeader = chegada || '—';
-    row.tlOrigem = origem || 'Aguardando informação'; row.tlOrigemColor = origem ? '#161A2E' : '#9AA0B4';
-    row.tlSaida = saida || '—';
-    row.tlDestino = destino || 'Aguardando informação'; row.tlDestinoColor = destino ? '#161A2E' : '#9AA0B4';
-    row.tlChegada = chegada || '—';
+
+    // cabeçalho
+    row.etaHeader = nt.estimatedDelivery ? this.fmt(nt.estimatedDelivery) : '—';
+    row.rotaText = nt.origin
+      ? (nt.origin + ' → ' + (nt.destination || 'destino a definir'))
+      : 'Trajeto a definir';
+
+    // origem (1º evento válido)
+    row.tlOrigem = nt.origin || (nt.loading ? 'Consultando…' : (row.canTrack ? 'Aguardando informação' : '—'));
+    row.tlOrigemColor = nt.origin ? '#161A2E' : '#9AA0B4';
+    // status atual (centro da linha)
+    row.tlStatus = nt.status || (nt.loading ? 'Consultando transportadora…' : (row.canTrack ? (nt.errored ? 'Sem dados de rastreio' : 'Rastreio disponível') : 'Rastreio indisponível'));
+    row.tlStatusColor = nt.status ? (/entreg|deliver/i.test(nt.status) ? '#177D54' : '#1D4ED8') : '#9AA0B4';
+    // destino final (entrega). Não é a última localização.
+    row.tlDestino = nt.destination || 'A definir';
+    row.tlDestinoColor = nt.destination ? '#161A2E' : '#9AA0B4';
+    // localização atual + última atualização (contexto secundário)
+    row.tlHasUltima = !!nt.latestLocation;
+    row.tlUltimaText = nt.latestLocation
+      ? (nt.latestLocation + (nt.lastUpdatedAt ? (' — ' + this.fmtDT(nt.lastUpdatedAt)) : ''))
+      : '';
+    // previsão de entrega
+    row.tlHasPrevisao = !!nt.estimatedDelivery;
+    row.tlPrevisao = nt.estimatedDelivery ? this.fmt(nt.estimatedDelivery) : '';
 
     // ---- estado da análise da Clara ----
     row.aLoading=(stt==='loading'); row.aError=(stt.indexOf('error')===0);
