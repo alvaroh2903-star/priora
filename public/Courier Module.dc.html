@@ -134,8 +134,8 @@
                               <sc-for list="{{ r.envelope }}" as="e" hint-placeholder-count="2">
                                 <div>
                                   <div style="display:grid;grid-template-columns:1.5fr .7fr 1.3fr 1.4fr .9fr 30px;gap:12px;padding:12px 16px;border-bottom:1px solid #F2F3F9;align-items:center">
-                                    <div style="min-width:0"><span style="font-family:'JetBrains Mono',monospace;font-size:12.5px;font-weight:700;color:#4327E6">{{ e.codigo }}</span><span style="font-size:11px;color:#9AA0B4"> — {{ e.agente }}</span></div>
-                                    <span style="font-size:12px;color:#5A6076">{{ e.eta }}</span>
+                                    <div style="min-width:0"><span style="font-family:'JetBrains Mono',monospace;font-size:12.5px;font-weight:700;color:#4327E6">{{ e.codigo }}</span></div>
+                                    <span style="font-size:12px;color:#9AA0B4">{{ e.eta }}</span>
                                     <!-- MBL -->
                                     <div>
                                       <sc-if value="{{ e.mbl.na }}" hint-placeholder-val="{{ false }}"><span style="font-size:11.5px;color:#B4B9C9">Não aplicável</span></sc-if>
@@ -208,53 +208,71 @@
                           </div>
                         </sc-if>
 
-                        <!-- análise da Clara (assíncrona) -->
-                        <sc-if value="{{ r.aLoading }}" hint-placeholder-val="{{ false }}"><div style="font-size:12px;color:#7A8099;padding:10px 0 2px">Clara está lendo a conversa para detalhar documentos e resolução do HBL…</div></sc-if>
-                        <sc-if value="{{ r.aError }}" hint-placeholder-val="{{ false }}"><div style="font-size:12px;color:#C2333A;padding:10px 0 2px">{{ r.aErrorMsg }}</div></sc-if>
-                        <sc-if value="{{ r.hasObs }}" hint-placeholder-val="{{ false }}">
-                          <div style="display:flex;flex-direction:column;gap:5px;margin-top:12px">
-                            <sc-for list="{{ r.observacoes }}" as="o" hint-placeholder-count="1">
-                              <div style="display:flex;gap:8px;align-items:flex-start"><span style="color:#177D54;font-weight:800;font-size:12px;margin-top:1px">›</span><span style="font-size:12px;color:#3C4258;line-height:1.45">{{ o }}</span></div>
-                            </sc-for>
+                        <!-- Painel de Análise da Clara -->
+                        <div style="margin-top:16px;background:linear-gradient(150deg,#fff 62%,#F6F4FF);border:1px solid #E7E3FB;border-radius:14px;padding:14px 16px">
+                          <div style="display:flex;align-items:center;gap:9px;margin-bottom:11px">
+                            <span style="position:relative;width:34px;height:34px;border-radius:50%;background:radial-gradient(circle at 50% 35%,#EDE9FF,#F6F4FF);display:flex;align-items:flex-end;justify-content:center;overflow:hidden;flex-shrink:0"><img src="assets/clara.png" alt="Clara" style="position:absolute;width:56px;height:auto;left:-9px;top:3px"></span>
+                            <span style="font-size:13.5px;font-weight:800">Análise da Clara</span>
+                            <span style="font-size:9px;font-weight:700;color:#fff;background:#4327E6;padding:2px 6px;border-radius:20px">IA</span>
                           </div>
-                        </sc-if>
-                        <sc-if value="{{ r.hasEvid }}" hint-placeholder-val="{{ false }}">
-                          <div style="margin-top:13px">
-                            <div style="font-size:11px;font-weight:700;color:#9AA0B4;margin-bottom:6px">Evidências (trechos dos e-mails)</div>
-                            <div style="display:flex;flex-direction:column;gap:7px">
-                              <sc-for list="{{ r.evidencias }}" as="ev" hint-placeholder-count="2">
-                                <div style="background:#F4F5FB;border-left:3px solid #4327E6;border-radius:0 8px 8px 0;padding:8px 12px"><div style="font-size:11.5px;font-weight:700;color:#3D34C9">{{ ev.conclusion }}</div><div style="font-size:11.5px;color:#5A6076;line-height:1.45;margin-top:2px;font-style:italic">“{{ ev.snippet }}”</div></div>
-                              </sc-for>
+
+                          <sc-if value="{{ r.aIdle }}" hint-placeholder-val="{{ true }}"><div style="font-size:12.5px;color:#7A8099">Aguardando análise da Clara.</div></sc-if>
+                          <sc-if value="{{ r.aLoading }}" hint-placeholder-val="{{ false }}"><div style="font-size:12.5px;color:#7A8099">Clara está analisando a conversa…</div></sc-if>
+                          <sc-if value="{{ r.aError }}" hint-placeholder-val="{{ false }}"><div style="font-size:12.5px;color:#C2333A">{{ r.aErrorMsg }}</div></sc-if>
+
+                          <sc-if value="{{ r.aDone }}" hint-placeholder-val="{{ false }}">
+                            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:12px">
+                              <div style="background:#fff;border:1px solid #EEEBF9;border-radius:10px;padding:9px 11px"><div style="font-size:10px;color:#9AA0B4;font-weight:600">Confiança</div><div style="font-size:16px;font-weight:800;color:{{ r.confColor }};margin-top:2px">{{ r.confText }}</div></div>
+                              <div style="background:#fff;border:1px solid #EEEBF9;border-radius:10px;padding:9px 11px"><div style="font-size:10px;color:#9AA0B4;font-weight:600">E-mails na conversa</div><div style="font-size:16px;font-weight:800;color:#161A2E;margin-top:2px">{{ r.emailsConversa }}</div></div>
+                              <div style="background:#fff;border:1px solid #EEEBF9;border-radius:10px;padding:9px 11px"><div style="font-size:10px;color:#9AA0B4;font-weight:600">Evidências</div><div style="font-size:16px;font-weight:800;color:#161A2E;margin-top:2px">{{ r.evidCount }}</div></div>
                             </div>
-                          </div>
-                        </sc-if>
-                        <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:13px;font-size:11.5px;color:#7A8099">
-                          <sc-if value="{{ r.hasRefs }}" hint-placeholder-val="{{ false }}"><span>Referências: <b style="color:#3C4258;font-family:'JetBrains Mono',monospace">{{ r.refsText }}</b></span></sc-if>
-                          <span>Confiança da Clara: <b style="color:{{ r.confColor }}">{{ r.confText }}</b></span>
-                          <span>{{ r.conversasText }}</span>
+
+                            <sc-if value="{{ r.hasConclusoes }}" hint-placeholder-val="{{ true }}">
+                              <div style="font-size:11px;font-weight:700;color:#9AA0B4;margin-bottom:6px">Principais conclusões</div>
+                              <div style="display:flex;flex-direction:column;gap:5px;margin-bottom:10px">
+                                <sc-for list="{{ r.conclusoes }}" as="cc" hint-placeholder-count="2"><div style="display:flex;gap:8px;align-items:flex-start"><span style="width:6px;height:6px;border-radius:50%;background:#4327E6;flex-shrink:0;margin-top:6px"></span><span style="font-size:12.5px;color:#3C4258;line-height:1.45">{{ cc }}</span></div></sc-for>
+                              </div>
+                            </sc-if>
+
+                            <sc-if value="{{ r.hasObs }}" hint-placeholder-val="{{ false }}">
+                              <div style="display:flex;flex-direction:column;gap:5px;margin-bottom:10px">
+                                <sc-for list="{{ r.observacoes }}" as="o" hint-placeholder-count="1"><div style="display:flex;gap:8px;align-items:flex-start"><span style="color:#177D54;font-weight:800;font-size:12px;margin-top:1px">›</span><span style="font-size:12px;color:#3C4258;line-height:1.45">{{ o }}</span></div></sc-for>
+                              </div>
+                            </sc-if>
+
+                            <sc-if value="{{ r.hasEvid }}" hint-placeholder-val="{{ false }}">
+                              <div style="font-size:11px;font-weight:700;color:#9AA0B4;margin-bottom:6px">Evidências (trechos dos e-mails)</div>
+                              <div style="display:flex;flex-direction:column;gap:7px">
+                                <sc-for list="{{ r.evidencias }}" as="ev" hint-placeholder-count="2"><div style="background:#fff;border-left:3px solid #4327E6;border-radius:0 8px 8px 0;padding:8px 12px"><div style="font-size:11.5px;font-weight:700;color:#3D34C9">{{ ev.conclusion }}</div><div style="font-size:11.5px;color:#5A6076;line-height:1.45;margin-top:2px;font-style:italic">“{{ ev.snippet }}”</div></div></sc-for>
+                              </div>
+                            </sc-if>
+
+                            <sc-if value="{{ r.hasRefs }}" hint-placeholder-val="{{ false }}"><div style="font-size:11px;color:#7A8099;margin-top:10px">Referências: <b style="color:#3C4258;font-family:'JetBrains Mono',monospace">{{ r.refsText }}</b></div></sc-if>
+
+                            <sc-if value="{{ r.hasRevisao }}" hint-placeholder-val="{{ false }}">
+                              <div style="margin-top:11px;background:#FDF6EC;border:1px solid #F6E4C7;border-radius:10px;padding:10px 13px">
+                                <div style="font-size:11.5px;font-weight:700;color:#B9760A;margin-bottom:4px">Necessita revisão humana</div>
+                                <sc-for list="{{ r.revisao }}" as="rv" hint-placeholder-count="1"><div style="font-size:11.5px;color:#7A5A20;line-height:1.45">• {{ rv }}</div></sc-for>
+                              </div>
+                            </sc-if>
+                          </sc-if>
                         </div>
-                        <sc-if value="{{ r.hasRevisao }}" hint-placeholder-val="{{ false }}">
-                          <div style="margin-top:11px;background:#FDF6EC;border:1px solid #F6E4C7;border-radius:10px;padding:10px 13px">
-                            <div style="font-size:11.5px;font-weight:700;color:#B9760A;margin-bottom:4px">Necessita revisão humana</div>
-                            <sc-for list="{{ r.revisao }}" as="rv" hint-placeholder-count="1"><div style="font-size:11.5px;color:#7A5A20;line-height:1.45">• {{ rv }}</div></sc-for>
-                          </div>
-                        </sc-if>
                       </div>
 
-                      <!-- rastreio na transportadora (secundário/opcional) -->
+                      <!-- Rastreamento da transportadora (dado do carrier; NUNCA se mistura com a conferência) -->
                       <sc-if value="{{ r.canTrack }}" hint-placeholder-val="{{ false }}">
-                        <div style="margin-top:14px;padding-top:12px;border-top:1px dashed #ECEDF4">
-                          <button class="trk-btn" onClick="{{ r.onTrack }}" style="display:inline-flex;align-items:center;gap:7px;background:#E7F0FE;color:#1D4ED8;border:1px solid #CBDBF8;border-radius:9px;padding:8px 13px;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>{{ r.trackLabel }}</button>
-                          <span style="font-size:10.5px;color:#9AA0B4;margin-left:8px">dado da transportadora — não afeta a conferência documental</span>
-                          <sc-if value="{{ r.trkShow }}" hint-placeholder-val="{{ false }}">
-                            <div style="margin-top:10px">
-                              <sc-if value="{{ r.trkLoading }}" hint-placeholder-val="{{ false }}"><div style="font-size:12px;color:#7A8099">Consultando {{ r.carrier }}…</div></sc-if>
-                              <sc-if value="{{ r.trkError }}" hint-placeholder-val="{{ false }}"><div style="font-size:12px;color:#C2333A">{{ r.trkErrorMsg }}</div></sc-if>
-                              <sc-if value="{{ r.trkDone }}" hint-placeholder-val="{{ false }}">
-                                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:7px"><span style="font-size:13px;font-weight:800;color:{{ r.trkStatusColor }}">{{ r.trkStatus }}</span><sc-if value="{{ r.trkHasLoc }}" hint-placeholder-val="{{ false }}"><span style="font-size:12px;color:#5A6076">📍 {{ r.trkLocation }}</span></sc-if></div>
-                                <div style="display:flex;flex-direction:column;gap:5px"><sc-for list="{{ r.trkEvents }}" as="tev" hint-placeholder-count="2"><div style="display:flex;gap:8px;align-items:flex-start"><span style="width:5px;height:5px;border-radius:50%;background:#4327E6;flex-shrink:0;margin-top:6px"></span><span style="font-size:11.5px;color:#5A6076;line-height:1.4">{{ tev.text }}</span></div></sc-for></div>
-                              </sc-if>
-                            </div>
+                        <div style="margin-top:16px;border:1px solid #E6E8F2;border-radius:14px;padding:14px 16px">
+                          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:4px">
+                            <div style="display:flex;align-items:center;gap:8px"><span style="width:26px;height:26px;border-radius:8px;background:#E7F0FE;display:flex;align-items:center;justify-content:center"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#1D4ED8" stroke-width="2"><path d="M3 6h11v9H3z M14 9h4l3 3v3h-7 M6.5 19a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3 M17.5 19a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3"/></svg></span><h4 style="font-size:13px;font-weight:800">Rastreamento da transportadora</h4></div>
+                            <button class="trk-btn" onClick="{{ r.onTrack }}" style="display:inline-flex;align-items:center;gap:6px;background:#E7F0FE;color:#1D4ED8;border:1px solid #CBDBF8;border-radius:9px;padding:7px 12px;font-family:inherit;font-size:11.5px;font-weight:700;cursor:pointer"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>{{ r.trackLabel }}</button>
+                          </div>
+                          <div style="font-size:10.5px;color:#9AA0B4;margin-bottom:11px">Dado do carrier ({{ r.carrier }}). Não é conferência documental — "Delivered" não significa "documento conferido".</div>
+                          <sc-if value="{{ r.trkIdle }}" hint-placeholder-val="{{ true }}"><div style="font-size:12px;color:#9AA0B4">Aguardando informação da transportadora.</div></sc-if>
+                          <sc-if value="{{ r.trkLoading }}" hint-placeholder-val="{{ false }}"><div style="font-size:12px;color:#7A8099">Consultando {{ r.carrier }}…</div></sc-if>
+                          <sc-if value="{{ r.trkError }}" hint-placeholder-val="{{ false }}"><div style="font-size:12px;color:#C2333A">{{ r.trkErrorMsg }}</div></sc-if>
+                          <sc-if value="{{ r.trkDone }}" hint-placeholder-val="{{ false }}">
+                            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px"><span style="font-size:13px;font-weight:800;color:{{ r.trkStatusColor }}">{{ r.trkStatus }}</span><sc-if value="{{ r.trkHasLoc }}" hint-placeholder-val="{{ false }}"><span style="font-size:12px;color:#5A6076">📍 {{ r.trkLocation }}</span></sc-if></div>
+                            <div style="display:flex;flex-direction:column;gap:6px"><sc-for list="{{ r.trkEvents }}" as="tev" hint-placeholder-count="2"><div style="display:flex;gap:8px;align-items:flex-start"><span style="width:5px;height:5px;border-radius:50%;background:#1D4ED8;flex-shrink:0;margin-top:6px"></span><span style="font-size:11.5px;color:#5A6076;line-height:1.4">{{ tev.text }}</span></div></sc-for></div>
                           </sc-if>
                         </div>
                       </sc-if>
@@ -500,8 +518,9 @@ class Component extends DCLogic {
     var procs=(courier.processos||[]).map(function(p){ return String(p).toUpperCase(); });
     if (a && a.processNumbers) a.processNumbers.forEach(function(p){ var u=String(p).toUpperCase(); if(procs.indexOf(u)<0) procs.push(u); });
 
+    var agenteReal=(courier.agente && !/desconhecid/i.test(courier.agente)) ? courier.agente : null;
     var row={
-      carrier:courier.carrier, tracking:courier.tracking, agente:courier.agente, data:this.fmt(courier.data),
+      carrier:courier.carrier, tracking:courier.tracking, agente: agenteReal || 'Aguardando identificação', data:this.fmt(courier.data),
       accent: focused ? '#4327E6' : e.accent,
       estado:estado, estColor:e.c, estBg:e.b, precisaRevisao:!!courier.precisaRevisao,
       procLabel: procs.length ? (procs.length+' processo'+(procs.length===1?'':'s')+' no envelope') : 'nenhum processo vinculado',
@@ -530,7 +549,9 @@ class Component extends DCLogic {
     var mblText = fWave?'Via Wave BL': fDestino?'Emitido no destino': null;
 
     var received = (estado==='Recebido' || estado==='Em Conferência' || estado==='Divergência');
-    var eta=this.fmt(courier.data);
+    // ETA por processo: o backend ainda não fornece uma data de chegada real por
+    // processo. Não inventamos a data do e-mail como ETA — fica "—" até existir.
+    var eta='—';
     var anyDiv=false;
 
     // ---- tabela "conteúdo esperado do envelope": uma linha por processo ----
@@ -572,7 +593,7 @@ class Component extends DCLogic {
         : (estado==='Divergência') ? 'registrou divergência — verifique os documentos marcados como não recebidos.'
         : 'liberou a conferência: confirme cada documento recebido no envelope.';
       var rowKey=courier.tracking+'|'+proc;
-      return { codigo:proc, agente:courier.agente, eta:eta, mbl:mbl, hbl:hbl,
+      return { codigo:proc, eta:eta, mbl:mbl, hbl:hbl,
         stLabel:st.label, stColor:st.color, stBg:st.bg,
         docsEsperados:[ docLine('MBL',flags.mbl,'mbl',mblText), docLine('HBL Original',flags.hbl,'hbl',hblText) ],
         claraNote:claraNote,
@@ -589,12 +610,21 @@ class Component extends DCLogic {
     row.onMarcarRecebido=function(){ self.act(courier, 'Recebido'); };
     row.onFinalizar=function(){ self.act(courier, 'Concluído'); };
 
-    // ---- extras da análise da Clara ----
+    // rastreamento: aguardando (ainda não buscou) x com dados
+    row.trkIdle = !!row.canTrack && !row.trkShow;
+
+    // ---- painel de análise da Clara ----
+    row.aDone=!!a;
+    row.aIdle=(!a && !row.aLoading && !row.aError);
+    row.emailsConversa=String(courier.mensagens||0);
+    row.conversasCount=String(courier.conversas||0);
     if (a){
       var exp=a.expectativa||{ documentos:[], observacoes:[], revisao:[] };
       row.observacoes=exp.observacoes||[]; row.hasObs=(row.observacoes.length>0);
       row.evidencias=(a.evidences||[]).slice(0,3).map(function(ev){ return { conclusion:ev.conclusion, snippet:String(ev.snippet||'').slice(0,140) }; });
       row.hasEvid=row.evidencias.length>0;
+      row.evidCount=String((a.evidences||[]).length);
+      row.conclusoes=(a.resumo||[]); row.hasConclusoes=(row.conclusoes.length>0);
       var refs=(courier.referencias||[]).concat(((a.externalReferences||[]).map(function(r2){ return r2.value; })));
       refs=refs.filter(function(v,i,arr){ return v && arr.indexOf(v)===i; }).slice(0,5);
       row.refsText=refs.join(', '); row.hasRefs=refs.length>0;
@@ -602,11 +632,11 @@ class Component extends DCLogic {
       row.confText=Math.round(conf2*100)+'%'; row.confColor= conf2>=0.6?'#177D54':'#B9760A';
       row.revisao=exp.revisao||[]; row.hasRevisao=(row.revisao.length>0);
     } else {
-      row.observacoes=[]; row.hasObs=false; row.evidencias=[]; row.hasEvid=false;
+      row.observacoes=[]; row.hasObs=false; row.evidencias=[]; row.hasEvid=false; row.evidCount='0';
+      row.conclusoes=[]; row.hasConclusoes=false;
       row.refsText=(courier.referencias||[]).join(', '); row.hasRefs=(courier.referencias||[]).length>0;
       row.confText='—'; row.confColor='#7A8099'; row.revisao=[]; row.hasRevisao=false;
     }
-    row.conversasText=(courier.conversas||1)+' conversa'+((courier.conversas||1)===1?'':'s')+' · '+(courier.mensagens||1)+' e-mail'+((courier.mensagens||1)===1?'':'s');
     return row;
   }
 
