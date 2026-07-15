@@ -43,6 +43,55 @@ async function getToken(): Promise<string> {
   return cachedToken.token;
 }
 
+/**
+ * Diagnóstico: testa SÓ a autenticação (client_credentials) contra a URL atual
+ * e devolve um resultado claro. Não usa cache — reflete as credenciais que
+ * estão no ambiente agora. Serve para confirmar produção x sandbox no Render.
+ */
+export async function checkFedexAuth(): Promise<{
+  ok: boolean;
+  baseUrl: string;
+  status?: number;
+  error?: string;
+}> {
+  if (!isFedexConfigured()) {
+    return {
+      ok: false,
+      baseUrl: config.fedex.baseUrl,
+      error: 'FEDEX_API_KEY/FEDEX_SECRET_KEY não definidos no servidor.',
+    };
+  }
+  try {
+    const res = await fetch(`${config.fedex.baseUrl}/oauth/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'client_credentials',
+        client_id: config.fedex.apiKey,
+        client_secret: config.fedex.secretKey,
+      }),
+    });
+    const data: any = await res.json().catch(() => ({}));
+    if (res.ok && data.access_token) {
+      return { ok: true, baseUrl: config.fedex.baseUrl, status: res.status };
+    }
+    return {
+      ok: false,
+      baseUrl: config.fedex.baseUrl,
+      status: res.status,
+      error: data.errors
+        ? JSON.stringify(data.errors)
+        : data.error_description || data.error || `HTTP ${res.status}`,
+    };
+  } catch (err: any) {
+    return {
+      ok: false,
+      baseUrl: config.fedex.baseUrl,
+      error: err?.message || 'Falha de rede ao contatar a FedEx.',
+    };
+  }
+}
+
 function fmtLocation(loc: any): string | null {
   if (!loc) return null;
   const parts = [loc.city, loc.stateOrProvinceCode, loc.countryCode].filter(

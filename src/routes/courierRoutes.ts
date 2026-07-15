@@ -19,19 +19,25 @@ import {
   DocKey,
   DocStatus,
 } from '../couriers/courierStore';
+import {
+  evaluateCourierEmail,
+  CourierFilterResult,
+} from '../couriers/courierFilters';
 import { config } from '../config';
 
 export const courierRouter = Router();
 
 courierRouter.use(requireAuth);
 
-// Transportadora + número de rastreio próximo dela (courier).
-const RE_TRACK_G = /\b(DHL|FedEx|Fed Ex|UPS|Sedex|TNT|Correios)\b[^\d]{0,15}(\d[\d\s-]{6,}\d)/gi;
-const RE_TRACK = /\b(DHL|FedEx|Fed Ex|UPS|Sedex|TNT|Correios)\b[^\d]{0,15}(\d[\d\s-]{6,}\d)/i;
-// Processo Rocket IMxxxx.
-const RE_PROCESS_G = /\bIM\d{3,6}\b/gi;
-// Container ISO 6346 (4 letras + 7 dígitos) — usado só como referência do processo.
-const RE_CONTAINER_G = /\b[A-Z]{4}\d{7}\b/g;
+/** Normaliza o carrier detectado pelo filtro para exibição no card. */
+function displayCarrier(c: string | null): string {
+  if (!c) return 'Courier';
+  const u = c.toUpperCase();
+  if (u.includes('FEDEX')) return 'FedEx';
+  if (u.includes('DHL')) return 'DHL';
+  if (u.includes('SEDEX')) return 'Sedex';
+  return c;
+}
 
 interface CourierItem {
   carrier: string;
@@ -45,6 +51,8 @@ interface CourierItem {
   conversationId: string;
   conversationIds: string[];
   mensagens: number;
+  score: number;
+  nivel: string;
 }
 
 interface ProcessoSemCourier {
@@ -85,6 +93,18 @@ courierRouter.get('/', async (req: AuthedRequest, res, next) => {
       source = 'inbox';
     }
 
+    // Filtro determinístico (courierFilters): Graph só entrega os e-mails; aqui
+    // pontuamos e classificamos cada um. Só candidatos seguem adiante.
+    const evalDe = (m: LogisticsSummary): CourierFilterResult =>
+      evaluateCourierEmail({
+        id: m.id,
+        conversationId: m.conversationId || m.id,
+        subject: m.subject,
+        bodyPreview: m.bodyPreview,
+        senderAddress: m.from?.emailAddress.address,
+        receivedDateTime: m.receivedDateTime,
+      });
+
     // Agrupa por conversa para vincular tracking <-> processo <-> agente.
     const groups = new Map<string, LogisticsSummary[]>();
     for (const m of messages) {
@@ -96,21 +116,42 @@ courierRouter.get('/', async (req: AuthedRequest, res, next) => {
     const byTracking = new Map<string, CourierItem>();
     const processosSemCourier = new Map<string, ProcessoSemCourier>();
     const processosComCourier = new Set<string>();
+    const candidateRecords: Array<{ m: LogisticsSummary; ev: CourierFilterResult }> = [];
 
     for (const [cid, msgs] of groups) {
       msgs.sort((a, b) => (a.receivedDateTime < b.receivedDateTime ? 1 : -1));
       const latest = msgs[0];
       const oldest = msgs[msgs.length - 1];
-      const hay = msgs.map((m) => `${m.subject} ${m.bodyPreview}`).join(' ');
 
+      // Roda o filtro por mensagem; só as candidatas contam.
+      const cand = msgs
+        .map((m) => ({ m, ev: evalDe(m) }))
+        .filter((x) => x.ev.isCandidate);
+      if (cand.length === 0) continue;
+      candidateRecords.push(...cand);
+
+      // Agrega os sinais extraídos das mensagens candidatas da conversa.
       const processos = Array.from(
-        new Set((hay.match(RE_PROCESS_G) || []).map((p) => p.toUpperCase())),
+        new Set(cand.flatMap((x) => x.ev.extracted.processNumbers)),
       );
-      const containers = Array.from(new Set(hay.match(RE_CONTAINER_G) || []));
-      const trackMatches = Array.from(hay.matchAll(RE_TRACK_G));
+      const containers = Array.from(
+        new Set(cand.flatMap((x) => x.ev.extracted.containerNumbers)),
+      );
+      // tracking por número normalizado (mesmo número = mesmo courier),
+      // preferindo o candidato que traz uma transportadora conhecida.
+      const trkMap = new Map<string, string | null>();
+      for (const x of cand)
+        for (const t of x.ev.extracted.trackingCandidates) {
+          if (!trkMap.has(t.normalized) || (!trkMap.get(t.normalized) && t.carrier))
+            trkMap.set(t.normalized, t.carrier || trkMap.get(t.normalized) || null);
+        }
+      const maxScore = Math.max(...cand.map((x) => x.ev.score));
+      const nivel = cand.some((x) => x.ev.level === 'HIGH_PROBABILITY')
+        ? 'HIGH_PROBABILITY'
+        : 'POSSIBLE_COURIER';
 
-      if (trackMatches.length === 0) {
-        // Conversa sem tracking: pode conter processos "sem courier".
+      if (trkMap.size === 0) {
+        // Candidato sem tracking: pode conter processos "sem courier".
         for (const p of processos) {
           if (!processosSemCourier.has(p)) {
             processosSemCourier.set(p, {
@@ -127,11 +168,9 @@ courierRouter.get('/', async (req: AuthedRequest, res, next) => {
 
       for (const p of processos) processosComCourier.add(p);
 
-      for (const match of trackMatches) {
-        const carrier = match[1].replace(/fed ex/i, 'FedEx');
-        const number = match[2].replace(/[\s-]/g, '');
-        const key = number;
-        const existing = byTracking.get(key);
+      for (const [number, carrierRaw] of trkMap) {
+        const carrier = displayCarrier(carrierRaw);
+        const existing = byTracking.get(number);
         if (existing) {
           for (const p of processos)
             if (!existing.processos.includes(p)) existing.processos.push(p);
@@ -139,6 +178,8 @@ courierRouter.get('/', async (req: AuthedRequest, res, next) => {
             if (!existing.referencias.includes(c)) existing.referencias.push(c);
           if (!existing.conversationIds.includes(cid))
             existing.conversationIds.push(cid);
+          if (carrier !== 'Courier' && existing.carrier === 'Courier')
+            existing.carrier = carrier;
           if (latest.receivedDateTime > existing.data) {
             existing.data = latest.receivedDateTime;
             existing.assunto = latest.subject || existing.assunto;
@@ -148,8 +189,10 @@ courierRouter.get('/', async (req: AuthedRequest, res, next) => {
           if (oldest.receivedDateTime < existing.primeiraData)
             existing.primeiraData = oldest.receivedDateTime;
           existing.mensagens += msgs.length;
+          existing.score = Math.max(existing.score, maxScore);
+          if (nivel === 'HIGH_PROBABILITY') existing.nivel = nivel;
         } else {
-          byTracking.set(key, {
+          byTracking.set(number, {
             carrier,
             tracking: number,
             processos: [...processos],
@@ -161,6 +204,8 @@ courierRouter.get('/', async (req: AuthedRequest, res, next) => {
             conversationId: cid,
             conversationIds: [cid],
             mensagens: msgs.length,
+            score: maxScore,
+            nivel,
           });
         }
       }
@@ -191,6 +236,8 @@ courierRouter.get('/', async (req: AuthedRequest, res, next) => {
         estado,
         nota: reg?.nota || null,
         conferencia: conferencias[trackingKey(c.tracking)] || {},
+        score: c.score,
+        nivel: c.nivel,
         // "necessita revisão humana": tracking sem nenhum processo resolvido.
         precisaRevisao: c.processos.length === 0,
       };
@@ -202,21 +249,26 @@ courierRouter.get('/', async (req: AuthedRequest, res, next) => {
       .sort((a, b) => (a.data < b.data ? 1 : -1));
     const concluidos = couriersAll.filter((c) => c.estado === 'Concluído').length;
 
-    // Atividades recentes: derivadas dos e-mails mais recentes (fonte: Outlook).
-    const atividades = messages
+    // Atividades recentes: derivadas dos e-mails CANDIDATOS mais recentes.
+    const seenAtiv = new Set<string>();
+    const atividades = candidateRecords
       .slice()
-      .sort((a, b) => (a.receivedDateTime < b.receivedDateTime ? 1 : -1))
+      .sort((a, b) => (a.m.receivedDateTime < b.m.receivedDateTime ? 1 : -1))
+      .filter((x) => {
+        if (seenAtiv.has(x.m.id)) return false;
+        seenAtiv.add(x.m.id);
+        return true;
+      })
       .slice(0, 6)
-      .map((m) => {
-        const hay = `${m.subject} ${m.bodyPreview}`;
-        const trk = hay.match(RE_TRACK);
-        const proc = (hay.match(RE_PROCESS_G) || [])[0];
+      .map(({ m, ev }) => {
+        const trk = ev.extracted.trackingCandidates[0];
+        const proc = ev.extracted.processNumbers[0];
         return {
           tipo: trk ? 'courier' : proc ? 'processo' : 'email',
           label: trk
-            ? `Courier ${trk[1].replace(/fed ex/i, 'FedEx')} ${trk[2].replace(/[\s-]/g, '')}`
+            ? `Courier ${displayCarrier(trk.carrier)} ${trk.normalized}`
             : proc
-              ? `Processo ${proc.toUpperCase()}`
+              ? `Processo ${proc}`
               : m.subject || '(sem assunto)',
           sub: agenteDe(m),
           time: m.receivedDateTime,

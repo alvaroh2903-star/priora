@@ -3,12 +3,38 @@ import { requireAuth, AuthedRequest } from '../middleware/requireAuth';
 import {
   trackNumber as trackFedex,
   isFedexConfigured,
+  checkFedexAuth,
 } from '../fedex/fedexClient';
 import { trackNumber as trackDhl, isDhlConfigured } from '../dhl/dhlClient';
+import { config } from '../config';
 
 export const trackingRouter = Router();
 
 trackingRouter.use(requireAuth);
+
+/**
+ * GET /api/tracking/health — diagnóstico das transportadoras. Diz se as chaves
+ * estão configuradas, qual URL está em uso (produção x sandbox) e se a
+ * autenticação da FedEx funciona AGORA. Não expõe segredos.
+ */
+trackingRouter.get('/health', async (_req, res) => {
+  const fedexAuth = isFedexConfigured()
+    ? await checkFedexAuth()
+    : { ok: false, baseUrl: config.fedex.baseUrl, error: 'não configurada' };
+  res.json({
+    fedex: {
+      configured: isFedexConfigured(),
+      baseUrl: config.fedex.baseUrl,
+      ambiente: /sandbox/.test(config.fedex.baseUrl) ? 'sandbox' : 'produção',
+      autenticacao: fedexAuth.ok ? 'ok' : 'falhou',
+      erro: fedexAuth.ok ? null : fedexAuth.error,
+    },
+    dhl: {
+      configured: isDhlConfigured(),
+      baseUrl: config.dhl.baseUrl,
+    },
+  });
+});
 
 /**
  * GET /api/tracking/:number?carrier=fedex|dhl

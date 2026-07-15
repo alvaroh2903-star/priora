@@ -370,6 +370,16 @@ class Component extends DCLogic {
     if (this.state.expandedId===id){ this.setState({ expandedId:null }); return; }
     this.setState({ expandedId:id });
     this.ensureAnalysis(courier);
+    this.ensureTracking(courier);
+  }
+
+  // Rastreio automático: ao abrir um courier FedEx/DHL, já consulta a
+  // transportadora (uma vez) e mostra a posição no card.
+  ensureTracking(courier){
+    var isFedex=/fedex/i.test(courier.carrier||''), isDhl=/dhl/i.test(courier.carrier||'');
+    if(!isFedex && !isDhl) return;
+    if(this.state.tracking[courier.tracking]) return;
+    this.doTrack(courier.tracking, isDhl?'dhl':'fedex');
   }
 
   ensureAnalysis(courier){
