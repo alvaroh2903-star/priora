@@ -10,12 +10,11 @@ import { config } from '../config';
 
 export const trackingRouter = Router();
 
-trackingRouter.use(requireAuth);
-
 /**
- * GET /api/tracking/health — diagnóstico das transportadoras. Diz se as chaves
- * estão configuradas, qual URL está em uso (produção x sandbox) e se a
- * autenticação da FedEx funciona AGORA. Não expõe segredos.
+ * GET /api/tracking/health — diagnóstico das transportadoras. PÚBLICO (não
+ * exige login): diz se as chaves estão configuradas, qual URL está em uso
+ * (produção x sandbox) e se a autenticação da FedEx funciona AGORA. Não expõe
+ * segredos — só status e a mensagem de erro da transportadora.
  */
 trackingRouter.get('/health', async (_req, res) => {
   const fedexAuth = isFedexConfigured()
@@ -35,6 +34,9 @@ trackingRouter.get('/health', async (_req, res) => {
     },
   });
 });
+
+// A partir daqui, tudo exige login.
+trackingRouter.use(requireAuth);
 
 /**
  * GET /api/tracking/:number?carrier=fedex|dhl
