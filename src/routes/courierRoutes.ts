@@ -47,6 +47,42 @@ function displayCarrier(c: string | null): string {
   return c;
 }
 
+/** Base do processo, sem o sufixo de ano (-NN). "IM2151-26" e "IM2151" são o mesmo. */
+function processBase(p: string): string {
+  return p.replace(/-\d{2}$/, '');
+}
+
+/**
+ * Deduplica processos que são o MESMO (IM2151 e IM2151-26). Mantém a variante
+ * COM o sufixo de ano (mais específica) quando ambas aparecem.
+ */
+function dedupeProcessos(procs: string[]): string[] {
+  const byBase = new Map<string, string>();
+  for (const p of procs) {
+    const base = processBase(p);
+    const cur = byBase.get(base);
+    if (!cur || (/-\d{2}$/.test(p) && !/-\d{2}$/.test(cur))) byBase.set(base, p);
+  }
+  return Array.from(byBase.values());
+}
+
+// Citação de documento nos e-mails (define a EXPECTATIVA documental do envelope).
+// "OMBL"/"MBL"/"Master B/L" e "OHBL"/"HBL"/"House B/L" — o "O" (Original) é opcional.
+const RE_MBL_CITE = /\b(?:O?MBL|MASTER\s*B\/?L)\b/i;
+const RE_HBL_CITE = /\b(?:O?HBL|HOUSE\s*B\/?L)\b/i;
+
+/**
+ * Expectativa documental do courier a partir do que os e-mails CITAM. Se o
+ * agente só menciona OMBL, o OHBL não é esperado (e vice-versa). Nada é
+ * inventado: `anySeen=false` (nenhum documento citado) → o front mantém ambos
+ * conferíveis, pois não há sinal para excluir nenhum.
+ */
+function docExpectFromText(text: string): { mbl: boolean; hbl: boolean; anySeen: boolean } {
+  const mbl = RE_MBL_CITE.test(text);
+  const hbl = RE_HBL_CITE.test(text);
+  return { mbl, hbl, anySeen: mbl || hbl };
+}
+
 interface CourierItem {
   carrier: string;
   tracking: string;
@@ -255,8 +291,14 @@ courierRouter.get('/', async (req: AuthedRequest, res, next) => {
     }
 
     // Processos que aparecem sem courier mas JÁ têm courier em outra conversa
-    // não são "sem courier" — removemos para evitar falso alerta.
-    for (const p of processosComCourier) processosSemCourier.delete(p);
+    // não são "sem courier" — removemos para evitar falso alerta. Compara por
+    // BASE (IM2151 == IM2151-26) para não deixar a variante sem ano órfã.
+    const basesComCourier = new Set(
+      Array.from(processosComCourier).map(processBase),
+    );
+    for (const p of Array.from(processosSemCourier.keys())) {
+      if (basesComCourier.has(processBase(p))) processosSemCourier.delete(p);
+    }
 
     const estados = getAllEstados();
     const conferencias = getAllConferencias();
@@ -278,8 +320,15 @@ courierRouter.get('/', async (req: AuthedRequest, res, next) => {
         candidatos = r.candidatos.filter((x) => !autoSet.has(x.processo));
       }
       // Processos "efetivos": citados diretamente + resolvidos automaticamente.
-      const processosEfetivos = Array.from(
-        new Set([...c.processos, ...resolvidos.map((x) => x.processo)]),
+      // Deduplica IM2151 vs IM2151-26 (mesmo processo — o "-26" é o ano).
+      const processosEfetivos = dedupeProcessos([
+        ...c.processos,
+        ...resolvidos.map((x) => x.processo),
+      ]);
+
+      // Expectativa documental do courier (o que os e-mails citam: OMBL/OHBL).
+      const docExpect = docExpectFromText(
+        (textByTracking.get(c.tracking) || []).join('\n'),
       );
 
       return {
@@ -287,8 +336,9 @@ courierRouter.get('/', async (req: AuthedRequest, res, next) => {
         tracking: c.tracking,
         agente: c.agente,
         processos: processosEfetivos,
-        processosDiretos: c.processos,
+        processosDiretos: dedupeProcessos(c.processos),
         referencias: c.referencias,
+        docExpect,
         // Resolução por referência: transparência de "como" o processo foi achado.
         resolucao: { resolvidos, candidatos },
         assunto: c.assunto,

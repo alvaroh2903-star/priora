@@ -154,7 +154,7 @@
                                     <span style="font-size:12px;color:#9AA0B4">{{ e.eta }}</span>
                                     <!-- MBL -->
                                     <div>
-                                      <sc-if value="{{ e.mbl.na }}" hint-placeholder-val="{{ false }}"><span style="font-size:11.5px;color:#B4B9C9">Não aplicável</span></sc-if>
+                                      <sc-if value="{{ e.mbl.na }}" hint-placeholder-val="{{ false }}"><span style="font-size:11.5px;color:#B4B9C9">Não esperado</span></sc-if>
                                       <sc-if value="{{ e.mbl.wait }}" hint-placeholder-val="{{ true }}"><span style="font-size:11.5px;color:#9AA0B4;font-style:italic">Aguardando courier</span></sc-if>
                                       <sc-if value="{{ e.mbl.resolved }}" hint-placeholder-val="{{ false }}"><span style="font-size:12px;font-weight:700;color:#177D54">{{ e.mbl.text }}</span></sc-if>
                                       <sc-if value="{{ e.mbl.conf }}" hint-placeholder-val="{{ false }}">
@@ -166,7 +166,7 @@
                                     </div>
                                     <!-- HBL Original -->
                                     <div>
-                                      <sc-if value="{{ e.hbl.na }}" hint-placeholder-val="{{ false }}"><span style="font-size:11.5px;color:#B4B9C9">Não aplicável</span></sc-if>
+                                      <sc-if value="{{ e.hbl.na }}" hint-placeholder-val="{{ false }}"><span style="font-size:11.5px;color:#B4B9C9">Não esperado</span></sc-if>
                                       <sc-if value="{{ e.hbl.wait }}" hint-placeholder-val="{{ true }}"><span style="font-size:11.5px;color:#9AA0B4;font-style:italic">Aguardando courier</span></sc-if>
                                       <sc-if value="{{ e.hbl.resolved }}" hint-placeholder-val="{{ false }}"><span style="font-size:12px;font-weight:700;color:#177D54">{{ e.hbl.text }}</span></sc-if>
                                       <sc-if value="{{ e.hbl.conf }}" hint-placeholder-val="{{ false }}">
@@ -657,8 +657,14 @@ class Component extends DCLogic {
     // ---- tabela "conteúdo esperado do envelope": uma linha por processo ----
     row.envelope=(procs||[]).map(function(proc){
       var val=self.confDe(courier, proc);
-      // documento esperado por processo (OMBL/OHBL lidos pela Clara). Sem info → ambos conferíveis.
-      var flags=docMap[proc]||{ mbl:true, hbl:true };
+      // Expectativa documental. Prioridade: (1) o que a Clara leu linha a linha
+      // (docMap, mais preciso); (2) o que os e-mails do courier CITAM (docExpect
+      // do backend — se só citam OMBL, o OHBL não é esperado); (3) sem nenhum
+      // sinal, ambos permanecem conferíveis. Nada é inventado.
+      var de=courier.docExpect||{ mbl:true, hbl:true, anySeen:false };
+      var defFlags=de.anySeen?{ mbl:!!de.mbl, hbl:!!de.hbl }:{ mbl:true, hbl:true };
+      var flags=docMap[proc]||defFlags;
+      if (!flags.mbl && !flags.hbl) flags=de.anySeen?defFlags:{ mbl:true, hbl:true };
       if (!flags.mbl && !flags.hbl) flags={ mbl:true, hbl:true };
       var cell=function(docKey, expected, resolvedText){
         if (!expected) return { na:true, wait:false, resolved:false, conf:false, text:'' };
@@ -682,7 +688,7 @@ class Component extends DCLogic {
         else { st={label:'Recebido', color:'#177D54', bg:'#E7F6EF'}; }
       }
       var docLine=function(label, expected, docKey, resolvedText){
-        if (!expected) return { label:label, status:'Não aplicável', color:'#9AA0B4' };
+        if (!expected) return { label:label, status:'Não esperado', color:'#9AA0B4' };
         if (resolvedText) return { label:label, status:resolvedText, color:'#177D54' };
         var v=val[docKey];
         if (v==='recebido') return { label:label, status:'Recebido', color:'#177D54' };
