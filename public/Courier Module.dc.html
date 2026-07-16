@@ -640,11 +640,15 @@ class Component extends DCLogic {
     row.aLoading=(stt==='loading'); row.aError=(stt.indexOf('error')===0);
     row.aErrorMsg=row.aError?('Não consegui analisar: '+stt.slice(6)):'';
 
-    // resolução do HBL/MBL detectada pela Clara (regras do Manual)
+    // Resolução do HBL/MBL. Combina o que a Clara leu (a.hblResolution) com a
+    // detecção DETERMINÍSTICA do backend (courier.docResolution) — assim o motivo
+    // (ex.: "Via Telex Release") aparece mesmo sem a análise da IA ter rodado.
     var hblRaw=((a && a.hblResolution) || '').toLowerCase();
-    var fTelex=/telex/.test(hblRaw), fWave=/wave/.test(hblRaw),
-        fDestino=/destino|destination/.test(hblRaw),
-        fImport=/consignee|client|cliente|importer|importador/.test(hblRaw);
+    var dr=courier.docResolution||{};
+    var fTelex=/telex/.test(hblRaw) || !!dr.telex,
+        fWave=/wave/.test(hblRaw) || !!dr.wave,
+        fDestino=/destino|destination/.test(hblRaw) || !!dr.destino,
+        fImport=/consignee|client|cliente|importer|importador/.test(hblRaw) || !!dr.importador;
     var hblText = fTelex?'Via Telex Release': fImport?'Enviado ao importador': fDestino?'Emitido no destino': fWave?'Via Wave BL': null;
     var mblText = fWave?'Via Wave BL': fDestino?'Emitido no destino': null;
 
@@ -667,8 +671,10 @@ class Component extends DCLogic {
       if (!flags.mbl && !flags.hbl) flags=de.anySeen?defFlags:{ mbl:true, hbl:true };
       if (!flags.mbl && !flags.hbl) flags={ mbl:true, hbl:true };
       var cell=function(docKey, expected, resolvedText){
-        if (!expected) return { na:true, wait:false, resolved:false, conf:false, text:'' };
+        // Resolução conhecida (ex.: Telex Release) vem ANTES de "não esperado":
+        // é mais informativo dizer o motivo do que só omitir o documento.
         if (resolvedText) return { na:false, wait:false, resolved:true, conf:false, text:resolvedText };
+        if (!expected) return { na:true, wait:false, resolved:false, conf:false, text:'' };
         if (!received) return { na:false, wait:true, resolved:false, conf:false, text:'' };
         var v=val[docKey], recSel=(v==='recebido'), naoSel=(v==='nao_recebido');
         return { na:false, wait:false, resolved:false, conf:true, text:'',
@@ -688,8 +694,8 @@ class Component extends DCLogic {
         else { st={label:'Recebido', color:'#177D54', bg:'#E7F6EF'}; }
       }
       var docLine=function(label, expected, docKey, resolvedText){
-        if (!expected) return { label:label, status:'Não esperado', color:'#9AA0B4' };
         if (resolvedText) return { label:label, status:resolvedText, color:'#177D54' };
+        if (!expected) return { label:label, status:'Não esperado', color:'#9AA0B4' };
         var v=val[docKey];
         if (v==='recebido') return { label:label, status:'Recebido', color:'#177D54' };
         if (v==='nao_recebido') return { label:label, status:'Não recebido', color:'#C2333A' };

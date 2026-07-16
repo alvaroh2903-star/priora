@@ -83,6 +83,32 @@ function docExpectFromText(text: string): { mbl: boolean; hbl: boolean; anySeen:
   return { mbl, hbl, anySeen: mbl || hbl };
 }
 
+/**
+ * Resolução documental detectada DETERMINISTICAMENTE no texto dos e-mails do
+ * courier (sem depender da IA). Ex.: "HBL send via TELEX RELEASE" → não há HBL
+ * físico a receber. O front informa o motivo ("Via Telex Release") em vez de um
+ * genérico "Não esperado". Cobre também Wave BL, emissão no destino e envio ao
+ * importador (regras do Manual).
+ */
+function docResolutionFromText(text: string): {
+  telex: boolean;
+  wave: boolean;
+  destino: boolean;
+  importador: boolean;
+} {
+  const t = text || '';
+  return {
+    telex: /telex\s*release|\btelex\b/i.test(t),
+    wave: /wave\s*b\/?l|\bwave\s*release\b/i.test(t),
+    destino:
+      /destination\s+issuance|(?:emitid[oa]|issued)[^.\n]{0,30}(?:destino|destination)/i.test(
+        t,
+      ),
+    importador:
+      /(?:enviad[oa]|sent)[^.\n]{0,40}(?:importador|importer|consignee)/i.test(t),
+  };
+}
+
 interface CourierItem {
   carrier: string;
   tracking: string;
@@ -183,6 +209,10 @@ courierRouter.get('/', async (req: AuthedRequest, res, next) => {
     // Texto completo dos e-mails de cada tracking — usado para extrair as
     // referências (HBL/MBL/Booking) e resolver o processo pelo índice global.
     const textByTracking = new Map<string, string[]>();
+    // Texto por PROCESSO (base, sem ano). Um sinal documental (ex.: "HBL via
+    // Telex Release") pode chegar numa thread SEM tracking; assim ele ainda
+    // alcança o card do courier que contém aquele processo.
+    const textByProcess = new Map<string, string[]>();
 
     // ÍNDICE GLOBAL de referências: alimentado por TODOS os e-mails que citam um
     // processo IMxxxx (os "elos"), inclusive os que não são candidatos a courier
@@ -223,6 +253,17 @@ courierRouter.get('/', async (req: AuthedRequest, res, next) => {
         ? 'HIGH_PROBABILITY'
         : 'POSSIBLE_COURIER';
 
+      // Texto das mensagens candidatas desta conversa (para resolução por ref. e
+      // expectativa/resolução documental). Indexado por processo (base) mesmo
+      // quando a conversa não tem tracking.
+      const convText = cand.map((x) => fullTextOf(x.m)).join('\n');
+      for (const p of processos) {
+        const b = processBase(p);
+        const arr = textByProcess.get(b) || [];
+        arr.push(convText);
+        textByProcess.set(b, arr);
+      }
+
       if (trkMap.size === 0) {
         // Candidato sem tracking: pode conter processos "sem courier".
         for (const p of processos) {
@@ -240,9 +281,6 @@ courierRouter.get('/', async (req: AuthedRequest, res, next) => {
       }
 
       for (const p of processos) processosComCourier.add(p);
-
-      // Texto das mensagens candidatas desta conversa (para resolução por ref.).
-      const convText = cand.map((x) => fullTextOf(x.m)).join('\n');
 
       for (const [number, carrierRaw] of trkMap) {
         const arr = textByTracking.get(number) || [];
@@ -326,10 +364,19 @@ courierRouter.get('/', async (req: AuthedRequest, res, next) => {
         ...resolvidos.map((x) => x.processo),
       ]);
 
-      // Expectativa documental do courier (o que os e-mails citam: OMBL/OHBL).
-      const docExpect = docExpectFromText(
-        (textByTracking.get(c.tracking) || []).join('\n'),
+      // Expectativa documental do courier (o que os e-mails citam: OMBL/OHBL)
+      // e a resolução detectada (Telex/Wave/destino/importador). Junta o texto
+      // do tracking com o de CADA processo do envelope — assim um sinal vindo de
+      // outra thread (ex.: SHIPPING INSTRUCTIONS sem tracking) também conta.
+      const procTexts = processosEfetivos.flatMap(
+        (p) => textByProcess.get(processBase(p)) || [],
       );
+      const courierText = [
+        ...(textByTracking.get(c.tracking) || []),
+        ...procTexts,
+      ].join('\n');
+      const docExpect = docExpectFromText(courierText);
+      const docResolution = docResolutionFromText(courierText);
 
       return {
         carrier: c.carrier,
@@ -339,6 +386,7 @@ courierRouter.get('/', async (req: AuthedRequest, res, next) => {
         processosDiretos: dedupeProcessos(c.processos),
         referencias: c.referencias,
         docExpect,
+        docResolution,
         // Resolução por referência: transparência de "como" o processo foi achado.
         resolucao: { resolvidos, candidatos },
         assunto: c.assunto,
