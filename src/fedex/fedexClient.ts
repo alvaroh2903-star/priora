@@ -109,6 +109,7 @@ function normalize(json: any, trackingNumber: string): TrackingResult {
     status: null,
     statusCode: null,
     location: null,
+    origin: null,
     destination: null,
     estimatedDelivery: null,
     events: [],
@@ -133,6 +134,12 @@ function normalize(json: any, trackingNumber: string): TrackingResult {
   base.statusCode = latest.code || null;
   base.location = fmtLocation(latest.scanLocation);
 
+  // Origem do envio (não confundir com o 1º hub do rastreio).
+  base.origin =
+    fmtLocation(result.originLocation?.locationContactAndAddress?.address) ||
+    fmtLocation(result.shipperInformation?.address) ||
+    null;
+
   // Destino final da entrega (não confundir com a localização atual do scan).
   // Tenta os campos que a Track API v1 pode devolver, em ordem de confiança.
   base.destination =
@@ -147,7 +154,7 @@ function normalize(json: any, trackingNumber: string): TrackingResult {
   );
   base.estimatedDelivery = eta?.dateTime || null;
 
-  base.events = (result.scanEvents || []).slice(0, 8).map((e: any) => ({
+  base.events = (result.scanEvents || []).slice(0, 40).map((e: any) => ({
     time: e.date || '',
     description: e.eventDescription || e.derivedStatus || '',
     location: fmtLocation(e.scanLocation),

@@ -22,6 +22,7 @@ function normalize(json: any, trackingNumber: string): TrackingResult {
     status: null,
     statusCode: null,
     location: null,
+    origin: null,
     destination: null,
     estimatedDelivery: null,
     events: [],
@@ -40,10 +41,11 @@ function normalize(json: any, trackingNumber: string): TrackingResult {
   base.status = st.description || st.status || null;
   base.statusCode = st.statusCode || null;
   base.location = fmtLocation(st.location);
-  // Destino final: a DHL Unified Tracking devolve shipment.destination.
+  // Origem e destino final: a DHL Unified Tracking devolve shipment.origin/destination.
+  base.origin = fmtLocation(shipment.origin);
   base.destination = fmtLocation(shipment.destination);
   base.estimatedDelivery = shipment.estimatedTimeOfDelivery || null;
-  base.events = (shipment.events || []).slice(0, 8).map((e: any) => ({
+  base.events = (shipment.events || []).slice(0, 40).map((e: any) => ({
     time: e.timestamp || '',
     description: e.description || e.status || '',
     location: fmtLocation(e.location),

@@ -132,6 +132,9 @@
                             <div style="font-size:12.5px;font-weight:700;color:#3C4258;margin-top:3px">{{ r.agente }}</div>
                           </div>
                         </div>
+                        <sc-if value="{{ r.tlHasUltima }}" hint-placeholder-val="{{ false }}">
+                          <div style="margin-top:11px;padding-top:10px;border-top:1px solid #EEEFF6;font-size:11.5px;color:#7A8099"><span style="text-transform:uppercase;letter-spacing:.04em;font-size:9.5px;color:#9AA0B4">Última atualização</span> <span style="color:#3C4258;font-weight:600">📍 {{ r.tlUltimaText }}</span></div>
+                        </sc-if>
                       </div>
 
                       <!-- Conteúdo esperado do envelope -->
@@ -392,22 +395,25 @@ class Component extends DCLogic {
     var data=(tk && tk.state==='done' && tk.data && tk.data.found) ? tk.data : null;
     var errored=!!(tk && (tk.state==='error' || (tk.state==='done' && tk.data && !tk.data.found)));
     var evs=data ? (data.events||[]) : [];
-    // Ordena por tempo asc para achar origem (mais antigo) e atual (mais recente),
-    // independente da ordem que a transportadora devolveu.
-    var asc=evs.slice().sort(function(a,b){ return (a.time||'')<(b.time||'')?-1:1; });
-    var latest=asc.length?asc[asc.length-1]:null;
+    // Ordena por DATA real (parseada) — offsets de fuso variam entre eventos, então
+    // comparar string quebra a ordem. Assim achamos o 1º e o último corretos.
+    var asc=evs.slice().sort(function(a,b){ return (new Date(a.time||0).getTime()||0)-(new Date(b.time||0).getTime()||0); });
+    var withLoc=asc.filter(function(e){ return e.location; });
+    var firstLoc=withLoc.length?withLoc[0]:null;   // 1º evento COM localização
+    var latest=asc.length?asc[asc.length-1]:null;   // evento mais recente
     return {
       loading:loading, errored:errored, has:!!data,
       status: data ? (data.status||null) : null,
-      origin: asc.length ? (asc[0].location||null) : null,
-      // destino final NÃO existe no contrato atual do backend (TrackingResult).
-      // Consumimos data.destination/courier.destino se um dia existirem; senão null.
+      // Origem REAL da transportadora (originLocation/shipment.origin); fallback: 1º evento.
+      origin: (data && data.origin) || (firstLoc ? firstLoc.location : null),
       destination: (data && data.destination) || courier.destino || null,
       latestLocation: data ? (data.location || (latest && latest.location) || null) : null,
       estimatedDelivery: data ? (data.estimatedDelivery||null) : null,
+      // Última atualização = evento mais recente (descrição + local + data).
       lastUpdatedAt: latest ? (latest.time||null) : null,
-      // Saída = data do 1º evento (mais antigo). Chegada = previsão de entrega.
-      departedAt: asc.length ? (asc[0].time||null) : null
+      lastUpdateDesc: latest ? (latest.description||null) : null,
+      // Saída = data do 1º evento com localização (a coleta na origem).
+      departedAt: firstLoc ? (firstLoc.time||null) : (asc.length ? (asc[0].time||null) : null)
     };
   }
 
@@ -593,6 +599,12 @@ class Component extends DCLogic {
     // Saída (data do 1º evento) embaixo da origem; Chegada (previsão) embaixo do destino.
     row.tlSaida = nt.departedAt ? this.fmt(nt.departedAt) : '—';
     row.tlChegada = nt.estimatedDelivery ? this.fmt(nt.estimatedDelivery) : '—';
+    // Última atualização: só o que rolou (descrição + local) e o dia. Nada mais.
+    var ultParts=[];
+    if (nt.lastUpdateDesc) ultParts.push(nt.lastUpdateDesc);
+    if (nt.latestLocation) ultParts.push(nt.latestLocation);
+    row.tlHasUltima = (ultParts.length>0);
+    row.tlUltimaText = ultParts.join(' · ') + (nt.lastUpdatedAt ? (' — ' + this.fmt(nt.lastUpdatedAt)) : '');
 
     // ---- estado da análise da Clara ----
     row.aLoading=(stt==='loading'); row.aError=(stt.indexOf('error')===0);
