@@ -4,6 +4,7 @@ import {
   searchLogisticsMessages,
   listRecentSummaries,
   getConversationFull,
+  getItemAttachmentTexts,
   LogisticsSummary,
 } from '../graph/graphService';
 import { parseThread } from '../ai/emailParser';
@@ -93,6 +94,24 @@ courierRouter.get('/', async (req: AuthedRequest, res, next) => {
       source = 'inbox';
     }
 
+    // E-mails ENCAMINHADOS COMO ANEXO: o conteúdo real fica dentro do anexo
+    // (itemAttachment). Buscamos esse texto para as mensagens que têm anexo
+    // (limitado, em paralelo) e o incluímos na filtragem/extração.
+    const withAtt = messages.filter((m) => m.hasAttachments).slice(0, 25);
+    const attMap = new Map<string, string>();
+    await Promise.all(
+      withAtt.map(async (m) => {
+        const texts = await getItemAttachmentTexts(req.accessToken!, m.id);
+        if (texts.length) attMap.set(m.id, texts.join('\n\n'));
+      }),
+    );
+
+    // Texto completo por e-mail: assunto + corpo inteiro + e-mails anexados.
+    const fullTextOf = (m: LogisticsSummary): string =>
+      [m.bodyPreview || '', m.body?.content || '', attMap.get(m.id) || '']
+        .filter(Boolean)
+        .join('\n');
+
     // Filtro determinístico (courierFilters): Graph só entrega os e-mails; aqui
     // pontuamos e classificamos cada um. Só candidatos seguem adiante.
     const evalDe = (m: LogisticsSummary): CourierFilterResult =>
@@ -101,6 +120,7 @@ courierRouter.get('/', async (req: AuthedRequest, res, next) => {
         conversationId: m.conversationId || m.id,
         subject: m.subject,
         bodyPreview: m.bodyPreview,
+        bodyText: fullTextOf(m),
         senderAddress: m.from?.emailAddress.address,
         receivedDateTime: m.receivedDateTime,
       });
@@ -394,6 +414,25 @@ courierRouter.get(
       if (messages.length === 0) {
         return res.status(404).json({ error: 'Conversa não encontrada.' });
       }
+
+      // E-mails encaminhados como ANEXO: injeta o conteúdo do e-mail aninhado no
+      // corpo, para a Clara ler o que foi encaminhado (senão fica invisível).
+      await Promise.all(
+        messages
+          .filter((m) => m.hasAttachments)
+          .map(async (m) => {
+            const texts = await getItemAttachmentTexts(req.accessToken!, m.id);
+            if (texts.length) {
+              const extra =
+                '\n\n--- E-mail encaminhado (anexo) ---\n' + texts.join('\n\n');
+              m.body = {
+                contentType: m.body?.contentType || 'text',
+                content: (m.body?.content || '') + extra,
+              };
+            }
+          }),
+      );
+
       const analysis = await parseThread(messages);
       res.json({
         ...analysis,

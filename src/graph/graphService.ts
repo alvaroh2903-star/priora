@@ -78,6 +78,8 @@ export interface LogisticsSummary {
   from?: { emailAddress: { name?: string; address: string } };
   receivedDateTime: string;
   bodyPreview: string;
+  /** Corpo completo (texto) — usado na filtragem/extração além do bodyPreview. */
+  body?: { contentType: string; content: string };
   isRead: boolean;
   hasAttachments: boolean;
   webLink: string;
@@ -98,10 +100,11 @@ export async function searchLogisticsMessages(
 
   const response = await client
     .api('/me/messages')
+    .header('Prefer', 'outlook.body-content-type="text"')
     .search(searchQuery)
     .top(top)
     .select(
-      'id,conversationId,subject,from,receivedDateTime,bodyPreview,isRead,hasAttachments,webLink',
+      'id,conversationId,subject,from,receivedDateTime,bodyPreview,body,isRead,hasAttachments,webLink',
     )
     .get();
 
@@ -116,13 +119,47 @@ export async function listRecentSummaries(
   const client = getGraphClient(accessToken);
   const response = await client
     .api('/me/mailFolders/inbox/messages')
+    .header('Prefer', 'outlook.body-content-type="text"')
     .top(opts.top ?? 40)
     .select(
-      'id,conversationId,subject,from,receivedDateTime,bodyPreview,isRead,hasAttachments,webLink',
+      'id,conversationId,subject,from,receivedDateTime,bodyPreview,body,isRead,hasAttachments,webLink',
     )
     .orderby('receivedDateTime DESC')
     .get();
   return response.value as LogisticsSummary[];
+}
+
+/**
+ * Lê o CONTEÚDO de e-mails encaminhados como ANEXO (itemAttachment). O Graph
+ * devolve o e-mail aninhado quando pedimos o $expand do item — sem isso, o texto
+ * do encaminhado fica invisível. Devolve os textos (assunto + corpo) de cada
+ * e-mail anexado. Defensivo: qualquer falha retorna [] (não quebra a listagem).
+ */
+export async function getItemAttachmentTexts(
+  accessToken: string,
+  messageId: string,
+): Promise<string[]> {
+  try {
+    const client = getGraphClient(accessToken);
+    const res = await client
+      .api(`/me/messages/${messageId}/attachments`)
+      .header('Prefer', 'outlook.body-content-type="text"')
+      .expand('microsoft.graph.itemAttachment/item')
+      .get();
+    const texts: string[] = [];
+    for (const att of (res.value as any[]) || []) {
+      if (att['@odata.type'] === '#microsoft.graph.itemAttachment' && att.item) {
+        const it = att.item;
+        const subject = it.subject || '';
+        const body = it.body?.content || it.bodyPreview || '';
+        const joined = `${subject}\n${body}`.trim();
+        if (joined) texts.push(joined);
+      }
+    }
+    return texts;
+  } catch {
+    return [];
+  }
 }
 
 export interface ConversationMessage {
