@@ -24,6 +24,13 @@ import {
   evaluateCourierEmail,
   CourierFilterResult,
 } from '../couriers/courierFilters';
+import {
+  buildRefIndex,
+  tokenize,
+  resolveRefs,
+  RefIndex,
+  Resolution,
+} from '../couriers/referenceResolver';
 import { config } from '../config';
 
 export const courierRouter = Router();
@@ -137,6 +144,16 @@ courierRouter.get('/', async (req: AuthedRequest, res, next) => {
     const processosSemCourier = new Map<string, ProcessoSemCourier>();
     const processosComCourier = new Set<string>();
     const candidateRecords: Array<{ m: LogisticsSummary; ev: CourierFilterResult }> = [];
+    // Texto completo dos e-mails de cada tracking — usado para extrair as
+    // referências (HBL/MBL/Booking) e resolver o processo pelo índice global.
+    const textByTracking = new Map<string, string[]>();
+
+    // ÍNDICE GLOBAL de referências: alimentado por TODOS os e-mails que citam um
+    // processo IMxxxx (os "elos"), inclusive os que não são candidatos a courier
+    // (ex.: SHIPPING INSTRUCTIONS sem tracking). É a memória que resolve órfãos.
+    const refIndex: RefIndex = buildRefIndex(
+      messages.map((m) => ({ subject: m.subject || '', body: fullTextOf(m) })),
+    );
 
     for (const [cid, msgs] of groups) {
       msgs.sort((a, b) => (a.receivedDateTime < b.receivedDateTime ? 1 : -1));
@@ -188,7 +205,13 @@ courierRouter.get('/', async (req: AuthedRequest, res, next) => {
 
       for (const p of processos) processosComCourier.add(p);
 
+      // Texto das mensagens candidatas desta conversa (para resolução por ref.).
+      const convText = cand.map((x) => fullTextOf(x.m)).join('\n');
+
       for (const [number, carrierRaw] of trkMap) {
+        const arr = textByTracking.get(number) || [];
+        arr.push(convText);
+        textByTracking.set(number, arr);
         const carrier = displayCarrier(carrierRaw);
         const existing = byTracking.get(number);
         if (existing) {
@@ -241,12 +264,33 @@ courierRouter.get('/', async (req: AuthedRequest, res, next) => {
     const couriersAll = Array.from(byTracking.values()).map((c) => {
       const reg = estados[trackingKey(c.tracking)];
       const estado: CourierEstado = reg?.estado || 'Identificado';
+
+      // Resolução por REFERÊNCIA (só para órfãos: tracking sem IM no e-mail).
+      // Extrai HBL/MBL/Booking do texto do courier e busca no índice global.
+      let resolvidos: Resolution[] = [];
+      let candidatos: Resolution[] = [];
+      if (c.processos.length === 0) {
+        const tok = tokenize('', (textByTracking.get(c.tracking) || []).join('\n'));
+        const r = resolveRefs(tok.refs, refIndex);
+        resolvidos = r.resolvidos;
+        // Candidatos que já viraram "resolvidos" não se repetem na revisão.
+        const autoSet = new Set(resolvidos.map((x) => x.processo));
+        candidatos = r.candidatos.filter((x) => !autoSet.has(x.processo));
+      }
+      // Processos "efetivos": citados diretamente + resolvidos automaticamente.
+      const processosEfetivos = Array.from(
+        new Set([...c.processos, ...resolvidos.map((x) => x.processo)]),
+      );
+
       return {
         carrier: c.carrier,
         tracking: c.tracking,
         agente: c.agente,
-        processos: c.processos,
+        processos: processosEfetivos,
+        processosDiretos: c.processos,
         referencias: c.referencias,
+        // Resolução por referência: transparência de "como" o processo foi achado.
+        resolucao: { resolvidos, candidatos },
         assunto: c.assunto,
         data: c.data,
         primeiraData: c.primeiraData,
@@ -258,8 +302,9 @@ courierRouter.get('/', async (req: AuthedRequest, res, next) => {
         conferencia: conferencias[trackingKey(c.tracking)] || {},
         score: c.score,
         nivel: c.nivel,
-        // "necessita revisão humana": tracking sem nenhum processo resolvido.
-        precisaRevisao: c.processos.length === 0,
+        // Revisão humana: nenhum processo (direto ou auto-resolvido). Um courier
+        // com apenas candidatos 1:N também precisa de revisão.
+        precisaRevisao: processosEfetivos.length === 0,
       };
     });
 

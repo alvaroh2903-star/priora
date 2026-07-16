@@ -150,7 +150,7 @@
                               <sc-for list="{{ r.envelope }}" as="e" hint-placeholder-count="2">
                                 <div>
                                   <div style="display:grid;grid-template-columns:1.5fr .7fr 1.3fr 1.4fr .9fr 30px;gap:12px;padding:12px 16px;border-bottom:1px solid #F2F3F9;align-items:center">
-                                    <div style="min-width:0"><span onClick="{{ e.onProcesso }}" style="font-family:'JetBrains Mono',monospace;font-size:12.5px;font-weight:700;color:#4327E6;cursor:pointer">{{ e.codigo }}</span></div>
+                                    <div style="min-width:0"><span onClick="{{ e.onProcesso }}" style="font-family:'JetBrains Mono',monospace;font-size:12.5px;font-weight:700;color:#4327E6;cursor:pointer">{{ e.codigo }}</span><sc-if value="{{ e.hasResolvido }}" hint-placeholder-val="{{ false }}"><div style="display:inline-flex;align-items:center;gap:4px;margin-top:4px;font-size:9.5px;font-weight:700;color:#177D54;background:#E7F6EF;border:1px solid #C6E9D5;padding:2px 7px;border-radius:6px"><svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="#177D54" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg>{{ e.resolvidoVia }}</div></sc-if></div>
                                     <span style="font-size:12px;color:#9AA0B4">{{ e.eta }}</span>
                                     <!-- MBL -->
                                     <div>
@@ -202,6 +202,30 @@
                         </sc-if>
                         <sc-if value="{{ r.noEnvelope }}" hint-placeholder-val="{{ false }}">
                           <div style="font-size:12.5px;color:#9AA0B4;padding:8px 0">Nenhum processo identificado neste courier ainda — necessita revisão humana.</div>
+                        </sc-if>
+
+                        <!-- Possível processo — revisar: referências 1:N (MBL/Booking compartilhado) -->
+                        <sc-if value="{{ r.hasCandidatos }}" hint-placeholder-val="{{ false }}">
+                          <div style="margin-top:12px;background:#FDF8EE;border:1px solid #F4E4C4;border-radius:12px;padding:13px 15px">
+                            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+                              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#B9760A" stroke-width="2.2"><path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
+                              <span style="font-size:12.5px;font-weight:800;color:#B9760A">Possível processo — revisar</span>
+                            </div>
+                            <div style="font-size:11.5px;color:#7A5A20;line-height:1.45;margin-bottom:10px">Estas referências apontam para mais de um processo (MBL/Booking compartilhado). Confirme manualmente qual pertence a este envelope.</div>
+                            <div style="display:flex;flex-direction:column;gap:8px">
+                              <sc-for list="{{ r.candidatos }}" as="cd" hint-placeholder-count="1">
+                                <div style="background:#fff;border:1px solid #F1E6CC;border-radius:10px;padding:9px 12px">
+                                  <div style="font-size:10px;font-weight:700;color:#9AA0B4;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Referência: <span style="font-family:'JetBrains Mono',monospace;color:#3C4258">{{ cd.referencia }}</span></div>
+                                  <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap">
+                                    <span style="font-size:11px;color:#7A8099">Possíveis processos:</span>
+                                    <sc-for list="{{ cd.processos }}" as="cp" hint-placeholder-count="2">
+                                      <span onClick="{{ cp.onOpen }}" style="font-family:'JetBrains Mono',monospace;font-size:11.5px;font-weight:700;color:#4327E6;background:#EEEBFE;padding:3px 9px;border-radius:7px;cursor:pointer">{{ cp.codigo }}</span>
+                                    </sc-for>
+                                  </div>
+                                </div>
+                              </sc-for>
+                            </div>
+                          </div>
                         </sc-if>
 
                         <!-- footer: gate / banner -->
@@ -556,6 +580,12 @@ class Component extends DCLogic {
     var procs=(courier.processos||[]).map(function(p){ return String(p).toUpperCase(); });
     if (a && a.processNumbers) a.processNumbers.forEach(function(p){ var u=String(p).toUpperCase(); if(procs.indexOf(u)<0) procs.push(u); });
 
+    // Resolução por REFERÊNCIA (backend): processos achados via HBL/MBL/Booking.
+    // resolvMap: processo -> método ("HBL SH26040055"); candidatos 1:N à parte.
+    var resol=courier.resolucao||{ resolvidos:[], candidatos:[] };
+    var resolvMap={};
+    (resol.resolvidos||[]).forEach(function(x){ resolvMap[String(x.processo).toUpperCase()]=x; });
+
     var agenteReal=(courier.agente && !/desconhecid/i.test(courier.agente)) ? courier.agente : null;
     var row={
       carrier:courier.carrier, tracking:courier.tracking, agente: agenteReal || 'Aguardando identificação', data:this.fmt(courier.data),
@@ -663,7 +693,9 @@ class Component extends DCLogic {
         : (estado==='Divergência') ? 'registrou divergência — verifique os documentos marcados como não recebidos.'
         : 'liberou a conferência: confirme cada documento recebido no envelope.';
       var rowKey=courier.tracking+'|'+proc;
+      var rr=resolvMap[proc];
       return { codigo:proc, eta:eta, mbl:mbl, hbl:hbl,
+        hasResolvido:!!rr, resolvidoVia: rr ? ('Resolvido via '+rr.metodo) : '',
         onProcesso:function(ev){ if(ev&&ev.stopPropagation)ev.stopPropagation(); if(window.PrioraBus) window.PrioraBus.focus('processos', proc); },
         stLabel:st.label, stColor:st.color, stBg:st.bg,
         docsEsperados:[ docLine('MBL',flags.mbl,'mbl',mblText), docLine('HBL Original',flags.hbl,'hbl',hblText) ],
@@ -673,6 +705,22 @@ class Component extends DCLogic {
         onToggleProc:function(){ self.setState({ expandedRow:(self.state.expandedRow===rowKey)?null:rowKey }); } };
     });
     row.hasEnvelope=(procs.length>0); row.noEnvelope=(procs.length===0);
+
+    // ---- candidatos 1:N (MBL/Booking compartilhado): "Possível processo — revisar" ----
+    var candByRef={};
+    (resol.candidatos||[]).forEach(function(x){
+      var k=x.metodo;
+      if(!candByRef[k]) candByRef[k]={ referencia:x.metodo, processos:[] };
+      var up=String(x.processo).toUpperCase();
+      if(candByRef[k].processos.indexOf(up)<0) candByRef[k].processos.push(up);
+    });
+    row.candidatos=Object.keys(candByRef).map(function(k){
+      var c=candByRef[k];
+      return { referencia:c.referencia, processos:c.processos.map(function(p){
+        return { codigo:p, onOpen:function(ev){ if(ev&&ev.stopPropagation)ev.stopPropagation(); if(window.PrioraBus) window.PrioraBus.focus('processos', p); } };
+      }) };
+    });
+    row.hasCandidatos=(row.candidatos.length>0);
 
     // ---- rodapé: portão de recebimento / conferência ----
     row.footWait=(estado==='Identificado');
