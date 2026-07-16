@@ -11,7 +11,10 @@ export interface TrackingResult {
   found: boolean;
   status: string | null;
   statusCode: string | null;
+  /** Localização atual (último evento de scan). */
   location: string | null;
+  /** Destino final da entrega (cidade/UF/país), quando a transportadora informa. */
+  destination: string | null;
   estimatedDelivery: string | null;
   events: TrackingEvent[];
   error: string | null;
