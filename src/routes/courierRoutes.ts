@@ -369,11 +369,14 @@ function derivarExpectativa(a: Awaited<ReturnType<typeof parseThread>>) {
   const documentos = (a.documents || []).map((nome) => {
     const ev = evidenciaDe(nome);
     const generico = /^documents?$/i.test(nome);
+    // Baixa confiança apenas quando o documento é GENÉRICO ("Documents") ou a
+    // confiança GERAL da extração é baixa. Não rebaixamos um documento só porque
+    // não achamos uma evidência com o nome dele — as evidências da Clara são do
+    // nível da conversa, não documento a documento (evitando falso "revisão").
     return {
       nome,
-      // baixa confiança: documento genérico OU confiança geral baixa OU sem evidência
       confianca:
-        generico || a.confidence < 0.6 || !ev ? ('baixa' as const) : ('alta' as const),
+        generico || a.confidence < 0.6 ? ('baixa' as const) : ('alta' as const),
       evidencia: ev,
     };
   });
