@@ -291,6 +291,7 @@
     "containerIso": "\\b[A-Z]{4}\\d{7}\\b",
     "carrierNearTracking": "\\b(DHL|FEDEX|FED\\s*EX|SEDEX)\\b[^\\r\\n]{0,30}?([0-9][0-9\\s-]{7,24}[0-9])\\b",
     "trackingTermNearNumber": "\\b(?:TRACKING(?:\\s*(?:NUMBER|NO\\.?|#))?|COURIER(?:\\s*(?:NUMBER|NO\\.?|#))?|AWB|AIR\\s+WAYBILL|WAYBILL|SHIPMENT(?:\\s*(?:NUMBER|NO\\.?|#))?)\\b[^\\r\\n]{0,30}?([0-9][0-9\\s-]{7,24}[0-9])\\b",
+    "correiosObject": "\\b([A-Z]{2}\\d{9}[A-Z]{2})\\b",
     "bookingLabel": "\\bBOOKING\\s*(?:NUMBER|NO\\.?|#)?\\s*[:#-]?\\s*([A-Z0-9][A-Z0-9._/-]{4,30})\\b",
     "etaLabel": "\\b(?:ETA|EXPECTED\\s+ARRIVAL|ARRIVAL)\\s*[:#-]?\\s*([^\\r\\n]{3,30})"
   },

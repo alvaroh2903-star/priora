@@ -130,13 +130,18 @@ function extractTrackingCandidates(originalText: string): Array<{
     normalized: string;
   }> = [];
 
+  // ARMADILHA (Parte 4 do spec): número de CONTA de cobrança (DHL/FedEx Account)
+  // ou de FATURA não é tracking. Se o trecho casado contém esse contexto, ignora.
+  const isBillingContext = (span: string): boolean =>
+    /\b(account|acct|conta|invoice|fatura|billing)\b/i.test(span);
+
   const carrierRegex = new RegExp(courierFilters.regex.carrierNearTracking, 'gi');
 
   for (const match of originalText.matchAll(carrierRegex)) {
     const carrier = (match[1] ?? '').replace(/\s+/g, '').toUpperCase();
     const raw = match[2] ?? '';
 
-    if (raw) {
+    if (raw && !isBillingContext(match[0])) {
       results.push({
         carrier,
         raw,
@@ -153,11 +158,26 @@ function extractTrackingCandidates(originalText: string): Array<{
   for (const match of originalText.matchAll(trackingTermRegex)) {
     const raw = match[1] ?? '';
 
-    if (raw) {
+    if (raw && !isBillingContext(match[0])) {
       results.push({
         carrier: null,
         raw,
         normalized: normalizeTracking(raw),
+      });
+    }
+  }
+
+  // Correios/Sedex: objeto no formato PB123456789BR (2 letras + 9 dígitos +
+  // 2 letras). Não casa com as regex numéricas acima; é um padrão próprio e
+  // bem específico (baixo risco de falso positivo).
+  const correiosRegex = new RegExp(courierFilters.regex.correiosObject, 'gi');
+  for (const match of originalText.matchAll(correiosRegex)) {
+    const raw = match[1] ?? '';
+    if (raw) {
+      results.push({
+        carrier: 'CORREIOS',
+        raw,
+        normalized: normalizeTracking(raw).toUpperCase(),
       });
     }
   }

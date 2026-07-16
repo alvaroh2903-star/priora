@@ -43,7 +43,7 @@ function displayCarrier(c: string | null): string {
   const u = c.toUpperCase();
   if (u.includes('FEDEX')) return 'FedEx';
   if (u.includes('DHL')) return 'DHL';
-  if (u.includes('SEDEX')) return 'Sedex';
+  if (u.includes('CORREIOS') || u.includes('SEDEX')) return 'Correios';
   return c;
 }
 
@@ -213,6 +213,10 @@ courierRouter.get('/', async (req: AuthedRequest, res, next) => {
     // Telex Release") pode chegar numa thread SEM tracking; assim ele ainda
     // alcança o card do courier que contém aquele processo.
     const textByProcess = new Map<string, string[]>();
+    // Conversas por PROCESSO (base): um mesmo courier costuma se espalhar por
+    // VÁRIAS threads. Ligamos ao card toda conversa que cita um processo do
+    // envelope, para a contagem e a análise da Clara cobrirem tudo.
+    const convsByProcess = new Map<string, Set<string>>();
 
     // ÍNDICE GLOBAL de referências: alimentado por TODOS os e-mails que citam um
     // processo IMxxxx (os "elos"), inclusive os que não são candidatos a courier
@@ -262,6 +266,9 @@ courierRouter.get('/', async (req: AuthedRequest, res, next) => {
         const arr = textByProcess.get(b) || [];
         arr.push(convText);
         textByProcess.set(b, arr);
+        const cset = convsByProcess.get(b) || new Set<string>();
+        cset.add(cid);
+        convsByProcess.set(b, cset);
       }
 
       if (trkMap.size === 0) {
@@ -378,6 +385,16 @@ courierRouter.get('/', async (req: AuthedRequest, res, next) => {
       const docExpect = docExpectFromText(courierText);
       const docResolution = docResolutionFromText(courierText);
 
+      // Multi-conversa: liga ao courier TODA thread que cita um de seus
+      // processos (o envelope se espalha por várias conversas). A conversa
+      // principal continua sendo a que traz o tracking; as demais enriquecem
+      // a contagem e alimentam a análise da Clara (varre todas).
+      const linkedConvs = new Set<string>(c.conversationIds);
+      for (const p of processosEfetivos)
+        for (const cv of convsByProcess.get(processBase(p)) || [])
+          linkedConvs.add(cv);
+      const conversationIds = Array.from(linkedConvs);
+
       return {
         carrier: c.carrier,
         tracking: c.tracking,
@@ -392,7 +409,8 @@ courierRouter.get('/', async (req: AuthedRequest, res, next) => {
         assunto: c.assunto,
         data: c.data,
         primeiraData: c.primeiraData,
-        conversas: c.conversationIds.length,
+        conversas: conversationIds.length,
+        conversationIds,
         mensagens: c.mensagens,
         conversationId: c.conversationId,
         estado,
@@ -539,9 +557,13 @@ function derivarExpectativa(a: Awaited<ReturnType<typeof parseThread>>) {
 }
 
 /**
- * GET /api/couriers/:conversationId/analysis — a Clara lê a conversa inteira e
+ * GET /api/couriers/:conversationId/analysis — a Clara lê o courier INTEIRO e
  * devolve a expectativa documental do envelope, com evidências e confiança.
- * 1 chamada de IA por conversa. Sob demanda (ao expandir o courier).
+ *
+ * Multi-conversa: um mesmo courier costuma se espalhar por várias threads. O
+ * front passa as demais conversas em `?ids=cid2,cid3` (as ligadas por processo)
+ * e aqui mesclamos todas as mensagens numa única análise. Sob demanda (ao
+ * expandir o courier). 1 chamada de IA, cobrindo todas as threads.
  */
 courierRouter.get(
   '/:conversationId/analysis',
@@ -552,10 +574,28 @@ courierRouter.get(
           error: 'Recursos de IA indisponíveis. Defina GEMINI_API_KEY no servidor.',
         });
       }
-      const messages = await getConversationFull(
-        req.accessToken!,
-        req.params.conversationId,
-        { top: 50 },
+
+      // Conversa principal + as ligadas por processo (multi-thread). Limita para
+      // não estourar tempo/tokens: no máx. 6 threads por courier.
+      const extraIds = String(req.query.ids || '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const convIds = Array.from(
+        new Set([req.params.conversationId, ...extraIds]),
+      ).slice(0, 6);
+
+      const perThread = await Promise.all(
+        convIds.map((cid) =>
+          getConversationFull(req.accessToken!, cid, { top: 50 }).catch(() => []),
+        ),
+      );
+      // Mescla e deduplica por id de mensagem; ordena cronologicamente.
+      const byId = new Map<string, (typeof perThread)[number][number]>();
+      for (const thread of perThread)
+        for (const m of thread) if (!byId.has(m.id)) byId.set(m.id, m);
+      const messages = Array.from(byId.values()).sort((a, b) =>
+        (a.receivedDateTime || '') < (b.receivedDateTime || '') ? -1 : 1,
       );
       if (messages.length === 0) {
         return res.status(404).json({ error: 'Conversa não encontrada.' });

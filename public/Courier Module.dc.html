@@ -468,7 +468,11 @@ class Component extends DCLogic {
     if (this.state.analysis[cid] || this.state.aStatus[cid]==='loading') return;
     var self=this;
     var st=Object.assign({}, this.state.aStatus); st[cid]='loading'; this.setState({ aStatus:st });
-    fetch('/api/couriers/'+encodeURIComponent(cid)+'/analysis', { credentials:'same-origin' })
+    // Multi-conversa: manda as demais threads ligadas ao courier (por processo)
+    // para a Clara analisar o envelope inteiro, não só a thread principal.
+    var extra=(courier.conversationIds||[]).filter(function(x){ return x && x!==cid; });
+    var qs=extra.length ? ('?ids='+encodeURIComponent(extra.join(','))) : '';
+    fetch('/api/couriers/'+encodeURIComponent(cid)+'/analysis'+qs, { credentials:'same-origin' })
       .then(function(r){ return r.json().catch(function(){return null;}).then(function(j){ if(!r.ok) throw new Error((j&&j.error)||('HTTP '+r.status)); return j; }); })
       .then(function(a){ var an=Object.assign({}, self.state.analysis); an[cid]=a; var s2=Object.assign({}, self.state.aStatus); s2[cid]='done'; self.setState({ analysis:an, aStatus:s2 }); })
       .catch(function(err){ var s2=Object.assign({}, self.state.aStatus); s2[cid]='error:'+String(err && err.message || err); self.setState({ aStatus:s2 }); });
