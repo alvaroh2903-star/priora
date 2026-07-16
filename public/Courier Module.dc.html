@@ -108,12 +108,12 @@
                   <sc-if value="{{ r.expanded }}" hint-placeholder-val="{{ false }}">
                     <div style="padding:6px 18px 18px 18px;border-top:1px solid #F0F1F7;animation:expandIn .22s ease both">
 
-                      <!-- Timeline superior: dados REAIS da transportadora. Origem, localização atual e destino final são coisas distintas. -->
-                      <div style="background:#FAFBFE;border:1px solid #F0F1F7;border-radius:12px;padding:14px 18px;margin-top:12px">
+                      <!-- Timeline superior: dados REAIS da transportadora. Origem/Saída · Destino final/Chegada · Agente. -->
+                      <div style="background:#FAFBFE;border:1px solid #F0F1F7;border-radius:12px;padding:15px 18px;margin-top:12px">
                         <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
                           <div style="min-width:96px">
                             <div style="font-size:13.5px;font-weight:800;color:{{ r.tlOrigemColor }}">{{ r.tlOrigem }}</div>
-                            <div style="font-size:9.5px;color:#9AA0B4;margin-top:2px;text-transform:uppercase;letter-spacing:.04em">Origem</div>
+                            <div style="font-size:11px;color:#9AA0B4;margin-top:2px">Saída · {{ r.tlSaida }}</div>
                           </div>
                           <div style="flex:1;display:flex;flex-direction:column;align-items:center;min-width:120px">
                             <span style="font-size:12px;font-weight:800;color:{{ r.tlStatusColor }};margin-bottom:5px;text-align:center">{{ r.tlStatus }}</span>
@@ -125,13 +125,12 @@
                           </div>
                           <div style="min-width:96px;text-align:right">
                             <div style="font-size:13.5px;font-weight:800;color:{{ r.tlDestinoColor }}">{{ r.tlDestino }}</div>
-                            <div style="font-size:9.5px;color:#9AA0B4;margin-top:2px;text-transform:uppercase;letter-spacing:.04em">Destino final</div>
+                            <div style="font-size:11px;color:#9AA0B4;margin-top:2px">Chegada · {{ r.tlChegada }}</div>
                           </div>
-                        </div>
-                        <div style="display:flex;gap:20px;flex-wrap:wrap;margin-top:12px;padding-top:11px;border-top:1px solid #EEEFF6">
-                          <sc-if value="{{ r.tlHasUltima }}" hint-placeholder-val="{{ true }}"><div><span style="font-size:9.5px;color:#9AA0B4;text-transform:uppercase;letter-spacing:.04em">Última atualização</span><div style="font-size:12px;color:#3C4258;font-weight:600;margin-top:2px">📍 {{ r.tlUltimaText }}</div></div></sc-if>
-                          <sc-if value="{{ r.tlHasPrevisao }}" hint-placeholder-val="{{ false }}"><div><span style="font-size:9.5px;color:#9AA0B4;text-transform:uppercase;letter-spacing:.04em">Previsão de entrega</span><div style="font-size:12px;color:#3C4258;font-weight:600;margin-top:2px">{{ r.tlPrevisao }}</div></div></sc-if>
-                          <div style="margin-left:auto;text-align:right"><span style="font-size:9.5px;color:#9AA0B4;text-transform:uppercase;letter-spacing:.04em">Agente</span><div style="font-size:12px;color:#3C4258;font-weight:600;margin-top:2px">{{ r.agente }}</div></div>
+                          <div style="min-width:110px;text-align:right;border-left:1px solid #EEEFF6;padding-left:14px">
+                            <div style="font-size:9.5px;color:#9AA0B4;text-transform:uppercase;letter-spacing:.04em">Agente</div>
+                            <div style="font-size:12.5px;font-weight:700;color:#3C4258;margin-top:3px">{{ r.agente }}</div>
+                          </div>
                         </div>
                       </div>
 
@@ -269,26 +268,6 @@
                         </div>
                       </div>
 
-                      <!-- Rastreamento: SECUNDÁRIO e sob demanda. Nunca ocupa espaço fixo. -->
-                      <sc-if value="{{ r.canTrack }}" hint-placeholder-val="{{ false }}">
-                        <div style="margin-top:12px">
-                          <button class="trk-btn" onClick="{{ r.onTrackToggle }}" style="display:inline-flex;align-items:center;gap:7px;background:#F4F5FB;color:#5A6076;border:1px solid #E6E8F2;border-radius:9px;padding:8px 13px;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#1D4ED8" stroke-width="2"><path d="M3 6h11v9H3z M14 9h4l3 3v3h-7 M6.5 19a1.5 1.5 0 1 0 0-3 M17.5 19a1.5 1.5 0 1 0 0-3"/></svg>{{ r.trackToggleLabel }}</button>
-                          <sc-if value="{{ r.trkOpen }}" hint-placeholder-val="{{ false }}">
-                            <div style="margin-top:10px;border:1px solid #E6E8F2;border-radius:12px;padding:13px 15px;animation:expandIn .2s ease both">
-                              <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:9px">
-                                <span style="font-size:10.5px;color:#9AA0B4;line-height:1.4">Dado do carrier ({{ r.carrier }}) — não é conferência documental. "Delivered" ≠ "documento conferido".</span>
-                                <button class="trk-btn" onClick="{{ r.onTrack }}" style="display:inline-flex;align-items:center;gap:5px;background:#E7F0FE;color:#1D4ED8;border:1px solid #CBDBF8;border-radius:8px;padding:5px 10px;font-family:inherit;font-size:11px;font-weight:700;cursor:pointer">Atualizar</button>
-                              </div>
-                              <sc-if value="{{ r.trkLoading }}" hint-placeholder-val="{{ true }}"><div style="font-size:12px;color:#7A8099">Consultando {{ r.carrier }}…</div></sc-if>
-                              <sc-if value="{{ r.trkError }}" hint-placeholder-val="{{ false }}"><div style="font-size:12px;color:#C2333A">{{ r.trkErrorMsg }}</div></sc-if>
-                              <sc-if value="{{ r.trkDone }}" hint-placeholder-val="{{ false }}">
-                                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px"><span style="font-size:13px;font-weight:800;color:{{ r.trkStatusColor }}">{{ r.trkStatus }}</span><sc-if value="{{ r.trkHasLoc }}" hint-placeholder-val="{{ false }}"><span style="font-size:12px;color:#5A6076">📍 {{ r.trkLocation }}</span></sc-if></div>
-                                <div style="display:flex;flex-direction:column;gap:6px"><sc-for list="{{ r.trkEvents }}" as="tev" hint-placeholder-count="2"><div style="display:flex;gap:8px;align-items:flex-start"><span style="width:5px;height:5px;border-radius:50%;background:#1D4ED8;flex-shrink:0;margin-top:6px"></span><span style="font-size:11.5px;color:#5A6076;line-height:1.4">{{ tev.text }}</span></div></sc-for></div>
-                              </sc-if>
-                            </div>
-                          </sc-if>
-                        </div>
-                      </sc-if>
                     </div>
                   </sc-if>
                 </div>
@@ -426,7 +405,9 @@ class Component extends DCLogic {
       destination: (data && data.destination) || courier.destino || null,
       latestLocation: data ? (data.location || (latest && latest.location) || null) : null,
       estimatedDelivery: data ? (data.estimatedDelivery||null) : null,
-      lastUpdatedAt: latest ? (latest.time||null) : null
+      lastUpdatedAt: latest ? (latest.time||null) : null,
+      // Saída = data do 1º evento (mais antigo). Chegada = previsão de entrega.
+      departedAt: asc.length ? (asc[0].time||null) : null
     };
   }
 
@@ -609,14 +590,9 @@ class Component extends DCLogic {
     // destino final (entrega). Não é a última localização.
     row.tlDestino = nt.destination || 'A definir';
     row.tlDestinoColor = nt.destination ? '#161A2E' : '#9AA0B4';
-    // localização atual + última atualização (contexto secundário)
-    row.tlHasUltima = !!nt.latestLocation;
-    row.tlUltimaText = nt.latestLocation
-      ? (nt.latestLocation + (nt.lastUpdatedAt ? (' — ' + this.fmtDT(nt.lastUpdatedAt)) : ''))
-      : '';
-    // previsão de entrega
-    row.tlHasPrevisao = !!nt.estimatedDelivery;
-    row.tlPrevisao = nt.estimatedDelivery ? this.fmt(nt.estimatedDelivery) : '';
+    // Saída (data do 1º evento) embaixo da origem; Chegada (previsão) embaixo do destino.
+    row.tlSaida = nt.departedAt ? this.fmt(nt.departedAt) : '—';
+    row.tlChegada = nt.estimatedDelivery ? this.fmt(nt.estimatedDelivery) : '—';
 
     // ---- estado da análise da Clara ----
     row.aLoading=(stt==='loading'); row.aError=(stt.indexOf('error')===0);
