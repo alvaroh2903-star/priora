@@ -60,6 +60,19 @@ export async function listMessages(
   return response.value as MailMessageSummary[];
 }
 
+/** Endereço(s) do usuário logado (para distinguir agente x analista na thread). */
+export async function getMyAddresses(accessToken: string): Promise<string[]> {
+  try {
+    const client = getGraphClient(accessToken);
+    const me = await client.api('/me').select('mail,userPrincipalName').get();
+    return [me?.mail, me?.userPrincipalName]
+      .filter(Boolean)
+      .map((a: string) => a.toLowerCase());
+  } catch {
+    return [];
+  }
+}
+
 /** Retorna uma mensagem completa (incluindo corpo) pelo id. */
 export async function getMessage(accessToken: string, id: string): Promise<unknown> {
   const client = getGraphClient(accessToken);
@@ -276,6 +289,32 @@ export async function getConversationFull(
   return msgs.sort((a, b) =>
     (a.receivedDateTime || '') < (b.receivedDateTime || '') ? -1 : 1,
   );
+}
+
+/**
+ * Cria um RASCUNHO de resposta (reply) de uma mensagem, DENTRO da própria
+ * thread — mesmo assunto ("RE: ..."), mesmos destinatários, mesma conversa.
+ * O comentário (texto do follow-up) entra acima do e-mail citado. NADA é
+ * enviado: o rascunho fica em "Rascunhos" e o analista revisa/envia no Outlook.
+ * Retorna o rascunho criado (id + webLink para abrir direto no Outlook Web).
+ */
+export async function createReplyDraft(
+  accessToken: string,
+  messageId: string,
+  commentText: string,
+): Promise<{ id: string; webLink: string | null }> {
+  const client = getGraphClient(accessToken);
+  // O `comment` é interpretado como HTML pelo Graph — escapamos e preservamos
+  // as quebras de linha do texto para o corpo ficar legível.
+  const html = commentText
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\r?\n/g, '<br>');
+  const draft = await client
+    .api(`/me/messages/${messageId}/createReply`)
+    .post({ comment: html });
+  return { id: draft?.id, webLink: draft?.webLink || null };
 }
 
 export interface SendMailInput {

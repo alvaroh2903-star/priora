@@ -38,9 +38,39 @@ trackingRouter.get('/health', async (_req, res) => {
 // A partir daqui, tudo exige login.
 trackingRouter.use(requireAuth);
 
+/* ------------------------------------------------------------------ *
+ * Cache de rastreio (TTL curto). O módulo Courier consulta TODOS os
+ * trackings ao abrir a página; sem cache, cada recarregamento/expansão
+ * repetiria as chamadas à DHL/FedEx. Aqui: 1 consulta por tracking dentro
+ * da janela de TTL, com DEDUPE de chamadas em voo (várias requisições
+ * simultâneas do mesmo número aguardam a MESMA promessa).
+ * ------------------------------------------------------------------ */
+const TRACK_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutos
+const trackCache = new Map<string, { at: number; data: unknown }>();
+const inFlight = new Map<string, Promise<unknown>>();
+
+async function trackCached(carrier: string, number: string): Promise<unknown> {
+  const key = `${carrier}:${number}`;
+  const hit = trackCache.get(key);
+  if (hit && Date.now() - hit.at < TRACK_CACHE_TTL_MS) return hit.data;
+
+  const flying = inFlight.get(key);
+  if (flying) return flying;
+
+  const p = (carrier === 'dhl' ? trackDhl(number) : trackFedex(number))
+    .then((data) => {
+      trackCache.set(key, { at: Date.now(), data });
+      return data as unknown;
+    })
+    .finally(() => inFlight.delete(key));
+  inFlight.set(key, p);
+  return p;
+}
+
 /**
  * GET /api/tracking/:number?carrier=fedex|dhl
  * Rastreia um número na transportadora indicada (padrão: FedEx).
+ * Resultado cacheado por alguns minutos (ver trackCached).
  */
 trackingRouter.get('/:number', async (req: AuthedRequest, res, next) => {
   try {
@@ -57,7 +87,7 @@ trackingRouter.get('/:number', async (req: AuthedRequest, res, next) => {
           .status(503)
           .json({ error: 'Rastreio DHL indisponível. Defina DHL_API_KEY no servidor.' });
       }
-      return res.json(await trackDhl(number));
+      return res.json(await trackCached('dhl', number));
     }
 
     // Padrão: FedEx
@@ -67,7 +97,7 @@ trackingRouter.get('/:number', async (req: AuthedRequest, res, next) => {
           'Rastreio FedEx indisponível. Defina FEDEX_API_KEY e FEDEX_SECRET_KEY no servidor.',
       });
     }
-    return res.json(await trackFedex(number));
+    return res.json(await trackCached('fedex', number));
   } catch (err: any) {
     res
       .status(502)

@@ -21,6 +21,8 @@
   .act-btn{transition:transform .15s,filter .15s}.act-btn:hover{transform:translateY(-1px);filter:brightness(1.03)}
   .row-hover{transition:background .15s}.row-hover:hover{background:#FAFAFE!important}
   .trk-btn{transition:background .15s}.trk-btn:hover{background:#D8E6FC!important}
+  @keyframes trkShimmer{0%{background-position:-160px 0}100%{background-position:160px 0}}
+  .trk-skel{background:linear-gradient(90deg,#EDEEF6 25%,#F7F8FC 50%,#EDEEF6 75%);background-size:320px 100%;animation:trkShimmer 1.1s linear infinite}
 </style>
 </helmet>
 <main style="flex:1;min-width:0;display:flex;flex-direction:column">
@@ -95,7 +97,9 @@
                         <span style="font-size:10.5px;font-weight:700;color:{{ r.estColor }};background:{{ r.estBg }};padding:3px 9px;border-radius:20px">{{ r.estado }}</span>
                         <span style="font-size:10.5px;font-weight:700;color:#3D34C9;background:#EEEBFE;padding:3px 9px;border-radius:20px">{{ r.procCount }}</span>
                         <sc-if value="{{ r.precisaRevisao }}" hint-placeholder-val="{{ false }}"><span style="font-size:10px;font-weight:700;color:#C2333A;background:#FDECEC;padding:3px 8px;border-radius:6px">revisão humana</span></sc-if>
-                        <span style="font-size:12px;color:#7A8099;margin-left:2px">{{ r.rotaText }}</span>
+                        <sc-if value="{{ r.hasHeaderStatus }}" hint-placeholder-val="{{ false }}"><span style="font-size:10.5px;font-weight:700;color:{{ r.headerStatusColor }};background:#F1F5FE;padding:3px 9px;border-radius:20px">{{ r.headerStatus }}</span></sc-if>
+                        <sc-if value="{{ r.rotaLoading }}" hint-placeholder-val="{{ false }}"><span class="trk-skel" style="display:inline-block;width:150px;height:11px;border-radius:6px;vertical-align:middle"></span></sc-if>
+                        <sc-if value="{{ r.rotaReady }}" hint-placeholder-val="{{ true }}"><span style="font-size:12px;color:#7A8099;margin-left:2px">{{ r.rotaText }}</span></sc-if>
                       </div>
                       <div style="display:flex;align-items:center;gap:16px;flex-shrink:0">
                         <div style="text-align:right"><div style="font-size:9px;color:#9AA0B4;text-transform:uppercase;letter-spacing:.05em">ETA</div><div style="font-size:13px;font-weight:800;color:#161A2E;margin-top:1px">{{ r.etaHeader }}</div></div>
@@ -182,17 +186,50 @@
                                     <span onClick="{{ e.onToggleProc }}" style="cursor:pointer;display:inline-flex;transition:transform .2s;transform:{{ e.caret }}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#9AA0B4" stroke-width="2.4"><path d="m6 9 6 6 6-6"/></svg></span>
                                   </div>
                                   <sc-if value="{{ e.procExpanded }}" hint-placeholder-val="{{ false }}">
-                                    <div style="padding:13px 16px;background:#F8F9FE;border-bottom:1px solid #F2F3F9;display:flex;gap:18px;flex-wrap:wrap;animation:expandIn .2s ease both">
-                                      <div style="flex:1;min-width:190px">
-                                        <div style="font-size:10.5px;font-weight:700;color:#9AA0B4;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">Documentos esperados</div>
-                                        <sc-for list="{{ e.docsEsperados }}" as="de" hint-placeholder-count="2">
-                                          <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px"><span style="width:6px;height:6px;border-radius:50%;background:{{ de.color }}"></span><span style="font-size:12px;color:#5A6076">{{ de.label }} — <b style="color:{{ de.color }}">{{ de.status }}</b></span></div>
+                                    <div style="padding:13px 16px;background:#F8F9FE;border-bottom:1px solid #F2F3F9;animation:expandIn .2s ease both">
+                                      <div style="display:flex;gap:18px;flex-wrap:wrap">
+                                        <div style="flex:1;min-width:190px">
+                                          <div style="font-size:10.5px;font-weight:700;color:#9AA0B4;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">Documentos esperados</div>
+                                          <sc-for list="{{ e.docsEsperados }}" as="de" hint-placeholder-count="2">
+                                            <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px"><span style="width:6px;height:6px;border-radius:50%;background:{{ de.color }}"></span><span style="font-size:12px;color:#5A6076">{{ de.label }} — <b style="color:{{ de.color }}">{{ de.status }}</b></span></div>
+                                          </sc-for>
+                                        </div>
+                                        <div style="flex:1;min-width:220px;background:#fff;border:1px solid #EAE7F8;border-radius:10px;padding:11px 13px;display:flex;gap:9px;align-items:flex-start">
+                                          <span style="width:22px;height:22px;border-radius:6px;background:#EEEBFE;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="2"><path d="M12 3 4 7v10l8 4 8-4V7Z"/></svg></span>
+                                          <span style="font-size:12px;color:#5A6076;line-height:1.45"><b style="color:#3D34C9">Clara</b> {{ e.claraNote }}</span>
+                                        </div>
+                                      </div>
+                                      <!-- Próxima ação recomendada: doc esperado marcado como Não recebido -->
+                                      <sc-if value="{{ e.hasPendencias }}" hint-placeholder-val="{{ false }}">
+                                        <sc-for list="{{ e.pendencias }}" as="pa" hint-placeholder-count="1">
+                                          <div style="margin-top:12px;background:#FDECEC;border:1px solid #F5C9CC;border-radius:10px;padding:12px 14px">
+                                            <div style="display:flex;align-items:center;gap:8px;margin-bottom:2px">
+                                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#C2333A" stroke-width="2.2"><path d="M12 9v4m0 4h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
+                                              <span style="font-size:12.5px;font-weight:800;color:#C2333A">Documento esperado não recebido ({{ pa.docLabel }})</span>
+                                            </div>
+                                            <sc-if value="{{ pa.fupPend }}" hint-placeholder-val="{{ true }}">
+                                              <div style="font-size:10.5px;font-weight:700;color:#9A5B5F;text-transform:uppercase;letter-spacing:.04em;margin:9px 0 8px">Próxima ação recomendada</div>
+                                              <div style="display:flex;gap:9px;flex-wrap:wrap">
+                                                <button onClick="{{ pa.onGerarEmail }}" style="display:inline-flex;align-items:center;gap:7px;background:#3D34C9;color:#fff;border:none;border-radius:9px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer">
+                                                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 6L2 7"/></svg>
+                                                  Gerar e-mail para o agente
+                                                </button>
+                                                <button onClick="{{ pa.onJaRealizei }}" style="display:inline-flex;align-items:center;gap:7px;background:#fff;color:#3C4258;border:1px solid #D8DBE8;border-radius:9px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer">
+                                                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#177D54" stroke-width="2.4"><path d="M20 6 9 17l-5-5"/></svg>
+                                                  Já realizei esta ação
+                                                </button>
+                                              </div>
+                                            </sc-if>
+                                            <sc-if value="{{ pa.fupDone }}" hint-placeholder-val="{{ false }}">
+                                              <div style="margin-top:8px;display:flex;align-items:center;gap:8px">
+                                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#177D54" stroke-width="2.4"><path d="M20 6 9 17l-5-5"/></svg>
+                                                <span style="font-size:12px;color:#177D54;font-weight:700">Follow-up enviado.</span>
+                                                <span style="font-size:12px;color:#7A8099">Aguardando retorno do agente.</span>
+                                              </div>
+                                            </sc-if>
+                                          </div>
                                         </sc-for>
-                                      </div>
-                                      <div style="flex:1;min-width:220px;background:#fff;border:1px solid #EAE7F8;border-radius:10px;padding:11px 13px;display:flex;gap:9px;align-items:flex-start">
-                                        <span style="width:22px;height:22px;border-radius:6px;background:#EEEBFE;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="2"><path d="M12 3 4 7v10l8 4 8-4V7Z"/></svg></span>
-                                        <span style="font-size:12px;color:#5A6076;line-height:1.45"><b style="color:#3D34C9">Clara</b> {{ e.claraNote }}</span>
-                                      </div>
+                                      </sc-if>
                                     </div>
                                   </sc-if>
                                 </div>
@@ -366,11 +403,50 @@
         </div>
       </div>
     </div>
+
+    <!-- ============ MODAL: Responder ao Agente (follow-up de divergência) ============ -->
+    <sc-if value="{{ rm.open }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ rm.onCancelar }}" style="position:fixed;inset:0;background:rgba(22,26,46,.45);z-index:90;display:flex;align-items:center;justify-content:center;padding:24px">
+        <div onClick="{{ rm.stop }}" style="background:#fff;border-radius:18px;width:min(680px,100%);max-height:88vh;display:flex;flex-direction:column;box-shadow:0 30px 70px -30px rgba(22,26,46,.5);animation:expandIn .18s ease both">
+          <div style="padding:18px 22px;border-bottom:1px solid #EFF0F7;display:flex;align-items:center;gap:10px">
+            <span style="width:30px;height:30px;border-radius:9px;background:#EEEBFE;display:flex;align-items:center;justify-content:center"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 6L2 7"/></svg></span>
+            <div style="flex:1;min-width:0">
+              <div style="font-size:14.5px;font-weight:800">Responder ao Agente</div>
+              <div style="font-size:11px;color:#9AA0B4">Revise o e-mail antes de enviar — nada é enviado automaticamente.</div>
+            </div>
+            <span onClick="{{ rm.onCancelar }}" style="cursor:pointer;color:#9AA0B4;font-size:18px;line-height:1;padding:4px">✕</span>
+          </div>
+          <div style="padding:16px 22px;overflow-y:auto;flex:1">
+            <div style="margin-bottom:11px">
+              <div style="font-size:10.5px;font-weight:700;color:#9AA0B4;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px">Assunto <span style="font-weight:500;text-transform:none">(o mesmo da thread — não é alterado)</span></div>
+              <div style="background:#F7F8FC;border:1px solid #E6E8F2;border-radius:9px;padding:9px 12px;font-size:12.5px;color:#3C4258;word-break:break-word">{{ rm.subject }}</div>
+            </div>
+            <div style="margin-bottom:13px">
+              <div style="font-size:10.5px;font-weight:700;color:#9AA0B4;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px">Para <span style="font-weight:500;text-transform:none">(remetente da conversa)</span></div>
+              <div style="background:#F7F8FC;border:1px solid #E6E8F2;border-radius:9px;padding:9px 12px;font-size:12.5px;color:#3C4258;word-break:break-word">{{ rm.toText }}</div>
+            </div>
+            <div>
+              <div style="font-size:10.5px;font-weight:700;color:#9AA0B4;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px">Corpo do e-mail</div>
+              <textarea value="{{ rm.body }}" onChange="{{ rm.onBody }}" onInput="{{ rm.onBody }}" style="width:100%;min-height:280px;background:#FBFBFE;border:1px solid #E6E8F2;border-radius:11px;padding:13px 14px;font-family:'JetBrains Mono',monospace;font-size:12px;line-height:1.55;color:#161A2E;resize:vertical"></textarea>
+            </div>
+            <sc-if value="{{ rm.hasStatus }}" hint-placeholder-val="{{ false }}"><div style="margin-top:9px;font-size:12px;color:#3D34C9;font-weight:600">{{ rm.status }}</div></sc-if>
+          </div>
+          <div style="padding:14px 22px;border-top:1px solid #EFF0F7;display:flex;gap:9px;justify-content:flex-end;flex-wrap:wrap">
+            <button onClick="{{ rm.onCancelar }}" style="background:#fff;color:#5A6076;border:1px solid #D8DBE8;border-radius:9px;padding:9px 16px;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer">Cancelar</button>
+            <button onClick="{{ rm.onCopiar }}" style="background:#F1F0FB;color:#3D34C9;border:1px solid #DCD7F6;border-radius:9px;padding:9px 16px;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer">Copiar texto</button>
+            <button onClick="{{ rm.onOutlook }}" style="display:inline-flex;align-items:center;gap:7px;background:#3D34C9;color:#fff;border:none;border-radius:9px;padding:9px 16px;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14 21 3"/></svg>
+              Abrir resposta no Outlook
+            </button>
+          </div>
+        </div>
+      </div>
+    </sc-if>
 </main>
 </x-dc>
 <script type="text/x-dc" data-dc-script>
 class Component extends DCLogic {
-  state = { resp:null, expandedId:null, expandedRow:null, analysis:{}, aStatus:{}, estados:{}, conf:{}, tracking:{}, claraOpen:{}, trkOpen:{}, manualNumber:'', focusId:null };
+  state = { resp:null, expandedId:null, expandedRow:null, analysis:{}, aStatus:{}, estados:{}, conf:{}, fups:{}, replyModal:null, tracking:{}, claraOpen:{}, trkOpen:{}, manualNumber:'', focusId:null };
 
   EST = {
     'Identificado':{ c:'#1D4ED8', b:'#E7F0FE', accent:'#93B4F5' },
@@ -393,7 +469,16 @@ class Component extends DCLogic {
     var self=this;
     fetch('/api/couriers', { credentials:'same-origin' })
       .then(function(r){ return r.ok ? r.json() : null; })
-      .then(function(d){ self.setState({ resp: d || { couriers:[], processosSemCourier:[], atividades:[] } }); })
+      .then(function(d){
+        var resp=d || { couriers:[], processosSemCourier:[], atividades:[] };
+        self.setState({ resp:resp });
+        // PREFETCH: consulta TODOS os trackings em paralelo assim que a lista
+        // chega — 1 consulta por tracking único (cada card JÁ é um tracking;
+        // os N processos do envelope reutilizam o mesmo resultado). Expandir o
+        // card depois é só visualização: nenhuma consulta externa é disparada.
+        // O servidor ainda cacheia por alguns minutos (evita repetição).
+        self.prefetchTrackings(resp.couriers);
+      })
       .catch(function(){ self.setState({ resp:{ couriers:[], processosSemCourier:[], atividades:[] } }); });
   }
 
@@ -407,8 +492,8 @@ class Component extends DCLogic {
     if (this.state.expandedId===id){ this.setState({ expandedId:null }); return; }
     this.setState({ expandedId:id });
     this.ensureAnalysis(courier);
-    // Puxa o rastreamento para ALIMENTAR A TIMELINE SUPERIOR (status/origem/
-    // localização/previsão). O histórico completo fica no accordion sob demanda.
+    // O tracking já foi PRÉ-CARREGADO no load(); esta chamada é só uma rede de
+    // segurança (no-op se o resultado já está em memória).
     this.ensureTracking(courier);
   }
 
@@ -441,10 +526,11 @@ class Component extends DCLogic {
     };
   }
 
-  // Rastreamento é SOB DEMANDA: só consulta quando o operador pede (accordion).
+  // Garante o rastreamento de um courier em memória (no-op se já consultado
+  // ou em voo). Chamado pelo prefetch do load() e, por segurança, no toggle.
   ensureTracking(courier){
     var isFedex=/fedex/i.test(courier.carrier||''), isDhl=/dhl/i.test(courier.carrier||'');
-    if(!isFedex && !isDhl) return;
+    if(!isFedex && !isDhl) return; // Correios/desconhecidos: sem API configurada
     if(this.state.tracking[courier.tracking]) return;
     this.doTrack(courier.tracking, isDhl?'dhl':'fedex');
   }
@@ -503,21 +589,171 @@ class Component extends DCLogic {
     var newVal=(cur===status)?null:status;   // clicar de novo desmarca
     var conf=Object.assign({}, this.state.conf);
     var t=Object.assign({}, conf[tk]||{}); var p=Object.assign({}, t[proc]||{});
-    p[docKey]=newVal; t[proc]=p; conf[tk]=t; this.setState({ conf:conf });
+    p[docKey]=newVal; t[proc]=p; conf[tk]=t;
+    // Documento esperado marcado como NÃO recebido → expande o processo
+    // automaticamente para mostrar a "Próxima ação recomendada".
+    var st={ conf:conf };
+    if (newVal==='nao_recebido') st.expandedRow=courier.tracking+'|'+proc;
+    this.setState(st);
     fetch('/api/couriers/'+encodeURIComponent(courier.tracking)+'/conferencia', {
       method:'POST', credentials:'same-origin', headers:{ 'Content-Type':'application/json' },
       body:JSON.stringify({ processo:proc, documento:docKey, status:newVal })
     }).catch(function(){});
   }
 
-  doTrack(number, carrier){
+  /* ---------- Follow-up de divergência (próxima ação recomendada) ---------- */
+
+  // Follow-ups do processo: o que veio do backend + ajustes locais da sessão.
+  fupDe(courier, proc){
+    var base=(courier.followups && courier.followups[proc]) || {};
+    var tk=this.keyOf(courier.tracking);
+    var ov=((this.state.fups[tk]||{})[proc]) || {};
+    var merged=Object.assign({}, base);
+    Object.keys(ov).forEach(function(k){ if(ov[k]===null) delete merged[k]; else merged[k]=ov[k]; });
+    return merged;
+  }
+
+  // Registra o follow-up (via: 'draft' quando o rascunho foi criado; 'manual'
+  // no botão "Já realizei esta ação"). NÃO resolve a divergência.
+  doFollowUp(courier, proc, docKey, via){
+    var tk=this.keyOf(courier.tracking);
+    var fups=Object.assign({}, this.state.fups);
+    var t=Object.assign({}, fups[tk]||{}); var p=Object.assign({}, t[proc]||{});
+    p[docKey]={ via:via, at:new Date().toISOString() }; t[proc]=p; fups[tk]=t;
+    this.setState({ fups:fups });
+    fetch('/api/couriers/'+encodeURIComponent(courier.tracking)+'/followup', {
+      method:'POST', credentials:'same-origin', headers:{ 'Content-Type':'application/json' },
+      body:JSON.stringify({ processo:proc, documento:docKey, via:via })
+    }).catch(function(){});
+  }
+
+  // Corpo do e-mail de follow-up (modelos da operação; campos preenchidos com o
+  // que é CONHECIDO dos e-mails — número desconhecido é simplesmente omitido).
+  buildFollowUpBody(courier, proc, docKey){
+    var refs=(courier.refsPorProcesso && courier.refsPorProcesso[proc]) || {};
+    if (docKey==='mbl'){
+      var mblLine='Process: '+proc+(refs.mbl?('\nMBL: '+refs.mbl):'');
+      return 'Dear,\n\n'+
+        'We have received the courier today and completed the document conference.\n\n'+
+        'According to the shipping instructions, the Original MBL (OMBL) for the shipment below was expected to be included in this courier. However, it was not found in the envelope.\n\n'+
+        mblLine+'\n\n'+
+        'Could you please confirm what happened with this document?\n\n'+
+        '• Was it sent separately?\n'+
+        '• Will it be included in a future courier?\n'+
+        '• Or has the release procedure been changed?\n\n'+
+        'We will keep this shipment pending until your confirmation.\n\n'+
+        'Thank you in advance.\n\n'+
+        'Best regards,';
+    }
+    var hblLine='Process: '+proc+(refs.hbl?('\nHBL: '+refs.hbl):'');
+    return 'Dear,\n\n'+
+      'We have received the courier today and completed the document conference.\n\n'+
+      'The Original HBL (OHBL) for the shipment below was expected to be included in the envelope. However, it was not found during our document conference.\n\n'+
+      hblLine+'\n\n'+
+      'Could you please confirm what happened with the OHBL?\n\n'+
+      '• Was it released to the shipper?\n'+
+      '• Will it be released via Telex Release?\n'+
+      '• Or will it be sent in a future courier?\n\n'+
+      'We appreciate your confirmation.\n\n'+
+      'Thank you.\n\n'+
+      'Best regards,';
+  }
+
+  // Abre o modal "Responder ao Agente" com o e-mail pronto para revisão.
+  openReplyModal(courier, proc, docKey){
     var self=this;
+    var modal={ courier:courier, proc:proc, doc:docKey,
+      subject:'Carregando…', toText:'Carregando…',
+      body:this.buildFollowUpBody(courier, proc, docKey), status:'' };
+    this.setState({ replyModal:modal });
+    // Assunto/destinatário REAIS da thread (só visualização; nada é alterado).
+    fetch('/api/couriers/'+encodeURIComponent(courier.conversationId)+'/reply-info', { credentials:'same-origin' })
+      .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ if(!r.ok) throw new Error(j.error||('HTTP '+r.status)); return j; }); })
+      .then(function(info){
+        var m=self.state.replyModal; if(!m) return;
+        var m2=Object.assign({}, m, { subject:info.subject||'(sem assunto)',
+          toText:(info.toName?info.toName+' — ':'')+(info.toAddress||'') });
+        self.setState({ replyModal:m2 });
+      })
+      .catch(function(err){
+        var m=self.state.replyModal; if(!m) return;
+        self.setState({ replyModal:Object.assign({}, m, { subject:'(não foi possível carregar)', toText:String(err&&err.message||err) }) });
+      });
+  }
+
+  closeReplyModal(){ this.setState({ replyModal:null }); }
+
+  copyReplyText(){
+    var m=this.state.replyModal; if(!m) return;
+    var self=this;
+    var done=function(){ self.setState({ replyModal:Object.assign({}, self.state.replyModal||m, { status:'Texto copiado.' }) }); };
+    if (navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(m.body).then(done).catch(done);
+    } else {
+      var ta=document.createElement('textarea'); ta.value=m.body; document.body.appendChild(ta);
+      ta.select(); try{ document.execCommand('copy'); }catch(e){} document.body.removeChild(ta); done();
+    }
+  }
+
+  // Cria o RASCUNHO de resposta NA PRÓPRIA THREAD (mesmo assunto/destinatários)
+  // e abre no Outlook. O envio continua sendo do analista.
+  openReplyInOutlook(){
+    var m=this.state.replyModal; if(!m) return;
+    var self=this;
+    this.setState({ replyModal:Object.assign({}, m, { status:'Criando rascunho na thread…' }) });
+    fetch('/api/couriers/reply-draft', {
+      method:'POST', credentials:'same-origin', headers:{ 'Content-Type':'application/json' },
+      body:JSON.stringify({ conversationId:m.courier.conversationId, body:m.body })
+    })
+      .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ if(!r.ok) throw new Error(j.error||('HTTP '+r.status)); return j; }); })
+      .then(function(res){
+        if (res.webLink) window.open(res.webLink, '_blank');
+        // Rascunho criado = follow-up em andamento; registra e fecha o modal.
+        self.doFollowUp(m.courier, m.proc, m.doc, 'draft');
+        self.setState({ replyModal:null });
+      })
+      .catch(function(err){
+        var cur=self.state.replyModal; if(!cur) return;
+        self.setState({ replyModal:Object.assign({}, cur, { status:'Erro: '+String(err&&err.message||err) }) });
+      });
+  }
+
+  onReplyBodyChange(ev){
+    var m=this.state.replyModal; if(!m) return;
+    this.setState({ replyModal:Object.assign({}, m, { body:ev.target.value }) });
+  }
+
+  doTrack(number, carrier){
     var t=Object.assign({}, this.state.tracking); t[number]={ state:'loading' }; this.setState({ tracking:t });
+    this.fetchTrack(number, carrier);
+  }
+
+  // Só a chamada HTTP + gravação do resultado (o "loading" já deve estar marcado).
+  fetchTrack(number, carrier){
+    var self=this;
     var q = carrier ? ('?carrier='+encodeURIComponent(carrier)) : '';
     fetch('/api/tracking/'+encodeURIComponent(number)+q, { credentials:'same-origin' })
       .then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ if(!r.ok) throw new Error(j.error||('HTTP '+r.status)); return j; }); })
       .then(function(res){ var tt=Object.assign({}, self.state.tracking); tt[number]={ state:'done', data:res }; self.setState({ tracking:tt }); })
       .catch(function(e){ var tt=Object.assign({}, self.state.tracking); tt[number]={ state:'error', error:String(e && e.message || e) }; self.setState({ tracking:tt }); });
+  }
+
+  // PREFETCH de todos os trackings da lista: marca todos como "loading" numa
+  // única atualização de estado (evita corrida entre setStates) e dispara as
+  // consultas em PARALELO — sempre 1 por tracking único, nunca por processo.
+  prefetchTrackings(couriers){
+    var self=this, jobs=[];
+    var t=Object.assign({}, this.state.tracking);
+    (couriers||[]).forEach(function(c){
+      var isFedex=/fedex/i.test(c.carrier||''), isDhl=/dhl/i.test(c.carrier||'');
+      if(!isFedex && !isDhl) return;           // sem API para Correios/desconhecidos
+      if(t[c.tracking]) return;                // já consultado ou em voo
+      t[c.tracking]={ state:'loading' };
+      jobs.push({ number:c.tracking, carrier:isDhl?'dhl':'fedex' });
+    });
+    if(!jobs.length) return;
+    this.setState({ tracking:t });
+    jobs.forEach(function(j){ self.fetchTrack(j.number, j.carrier); });
   }
 
   trackView(number){
@@ -615,11 +851,18 @@ class Component extends DCLogic {
     var nt = this.trackNorm(courier);
     row.procCount = procs.length ? (procs.length + ' processo' + (procs.length === 1 ? '' : 's')) : 'sem processos';
 
-    // cabeçalho
+    // cabeçalho — com o prefetch, o trajeto e o status aparecem SEM expandir.
+    // Enquanto a transportadora responde, um indicador discreto de consulta.
     row.etaHeader = nt.estimatedDelivery ? this.fmt(nt.estimatedDelivery) : '—';
     row.rotaText = nt.origin
       ? (nt.origin + ' → ' + (nt.destination || 'destino a definir'))
-      : 'Trajeto a definir';
+      : (nt.loading ? 'Consultando transportadora…' : 'Trajeto a definir');
+    row.rotaLoading = !!nt.loading;
+    row.rotaReady = !nt.loading;
+    // status curto no header (ex.: "Em trânsito", "Entregue") quando conhecido
+    row.headerStatus = nt.status || '';
+    row.hasHeaderStatus = !!nt.status;
+    row.headerStatusColor = nt.status ? (/entreg|deliver/i.test(nt.status) ? '#177D54' : '#1D4ED8') : '#9AA0B4';
 
     // origem (1º evento válido)
     row.tlOrigem = nt.origin || (nt.loading ? 'Consultando…' : (row.canTrack ? 'Aguardando informação' : '—'));
@@ -710,12 +953,31 @@ class Component extends DCLogic {
         : 'liberou a conferência: confirme cada documento recebido no envelope.';
       var rowKey=courier.tracking+'|'+proc;
       var rr=resolvMap[proc];
+
+      // ---- Próxima ação recomendada: documento ESPERADO e físico marcado como
+      // "Não recebido" gera pendência com follow-up ao agente. Documentos não
+      // esperados/resolvidos (Telex etc.) NUNCA geram ação. ----
+      var fup=self.fupDe(courier, proc);
+      var pendencias=[];
+      var addPend=function(docKey, label){
+        var expected=(docKey==='mbl')?(flags.mbl && !mblText):(flags.hbl && !hblText);
+        if (!expected || val[docKey]!=='nao_recebido') return;
+        var done=!!fup[docKey];
+        pendencias.push({
+          docLabel:label, fupDone:done, fupPend:!done,
+          onGerarEmail:function(ev){ if(ev&&ev.stopPropagation)ev.stopPropagation(); self.openReplyModal(courier, proc, docKey); },
+          onJaRealizei:function(ev){ if(ev&&ev.stopPropagation)ev.stopPropagation(); self.doFollowUp(courier, proc, docKey, 'manual'); }
+        });
+      };
+      addPend('mbl','OMBL'); addPend('hbl','OHBL');
+
       return { codigo:proc, eta:eta, mbl:mbl, hbl:hbl,
         hasResolvido:!!rr, resolvidoVia: rr ? ('Resolvido via '+rr.metodo) : '',
         onProcesso:function(ev){ if(ev&&ev.stopPropagation)ev.stopPropagation(); if(window.PrioraBus) window.PrioraBus.focus('processos', proc); },
         stLabel:st.label, stColor:st.color, stBg:st.bg,
         docsEsperados:[ docLine('MBL',flags.mbl,'mbl',mblText), docLine('HBL Original',flags.hbl,'hbl',hblText) ],
         claraNote:claraNote,
+        pendencias:pendencias, hasPendencias:(pendencias.length>0),
         procExpanded:(self.state.expandedRow===rowKey),
         caret:(self.state.expandedRow===rowKey)?'rotate(180deg)':'rotate(0deg)',
         onToggleProc:function(){ self.setState({ expandedRow:(self.state.expandedRow===rowKey)?null:rowKey }); } };
@@ -857,7 +1119,24 @@ class Component extends DCLogic {
       semCourier:semCourier, semCount:String(sem.length), temSemCourier:(semCourier.length>0), nenhumSemCourier:(!loading && semCourier.length===0),
       atividades:atividades, temAtividades:(atividades.length>0), semAtividades:(!loading && atividades.length===0),
       onManualTrack:function(){ var el=document.getElementById('trkq'); var sel=document.getElementById('trkcarrier'); var num=((el&&el.value)||'').replace(/[^A-Za-z0-9]/g,''); var carrier=(sel&&sel.value)||'dhl'; if(!num) return; self.setState({ manualNumber:num }); self.doTrack(num, carrier); },
-      manual:self.trackView(self.state.manualNumber)
+      manual:self.trackView(self.state.manualNumber),
+      rm:self.replyModalView()
+    };
+  }
+
+  // Bindings do modal "Responder ao Agente".
+  replyModalView(){
+    var m=this.state.replyModal, self=this;
+    if (!m) return { open:false, subject:'', toText:'', body:'', status:'', hasStatus:false,
+      onCancelar:function(){}, onCopiar:function(){}, onOutlook:function(){}, onBody:function(){}, stop:function(){} };
+    return {
+      open:true, subject:m.subject, toText:m.toText, body:m.body,
+      status:m.status||'', hasStatus:!!(m.status),
+      onCancelar:function(){ self.closeReplyModal(); },
+      onCopiar:function(){ self.copyReplyText(); },
+      onOutlook:function(){ self.openReplyInOutlook(); },
+      onBody:function(ev){ self.onReplyBodyChange(ev); },
+      stop:function(ev){ if(ev&&ev.stopPropagation) ev.stopPropagation(); }
     };
   }
 }

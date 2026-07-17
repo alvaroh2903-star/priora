@@ -3,8 +3,11 @@ import { requireAuth, AuthedRequest } from '../middleware/requireAuth';
 import {
   searchLogisticsMessages,
   listRecentSummaries,
+  getConversation,
   getConversationFull,
   getItemAttachmentTexts,
+  createReplyDraft,
+  getMyAddresses,
   LogisticsSummary,
 } from '../graph/graphService';
 import { parseThread } from '../ai/emailParser';
@@ -14,6 +17,8 @@ import {
   setEstado,
   getAllConferencias,
   setConferenciaDoc,
+  getAllFollowUps,
+  setFollowUp,
   trackingKey,
   ESTADOS_VALIDOS,
   CourierEstado,
@@ -347,6 +352,24 @@ courierRouter.get('/', async (req: AuthedRequest, res, next) => {
 
     const estados = getAllEstados();
     const conferencias = getAllConferencias();
+    const followups = getAllFollowUps();
+
+    // Lookup REVERSO do índice de referências: processo (base) -> MBL/HBL
+    // conhecidos (vindos dos e-mails "elo"). Alimenta o e-mail de follow-up
+    // ("Process: IMxxxx / MBL: 268821690"); quando não conhecido, omite-se.
+    const refsByProcBase = new Map<string, { mbl?: string; hbl?: string }>();
+    for (const entry of refIndex.values()) {
+      const isMbl = entry.types.has('MBL');
+      const isHbl = entry.types.has('HBL');
+      if (!isMbl && !isHbl) continue;
+      for (const p of entry.processes) {
+        const b = processBase(p);
+        const e = refsByProcBase.get(b) || {};
+        if (isMbl && !e.mbl) e.mbl = entry.raw;
+        if (isHbl && !e.hbl) e.hbl = entry.raw;
+        refsByProcBase.set(b, e);
+      }
+    }
 
     const couriersAll = Array.from(byTracking.values()).map((c) => {
       const reg = estados[trackingKey(c.tracking)];
@@ -416,6 +439,13 @@ courierRouter.get('/', async (req: AuthedRequest, res, next) => {
         estado,
         nota: reg?.nota || null,
         conferencia: conferencias[trackingKey(c.tracking)] || {},
+        followups: followups[trackingKey(c.tracking)] || {},
+        // MBL/HBL conhecidos por processo (dos e-mails) — para o follow-up.
+        refsPorProcesso: Object.fromEntries(
+          processosEfetivos
+            .map((p) => [p, refsByProcBase.get(processBase(p))])
+            .filter(([, v]) => v) as Array<[string, { mbl?: string; hbl?: string }]>,
+        ),
         score: c.score,
         nivel: c.nivel,
         // Revisão humana: nenhum processo (direto ou auto-resolvido). Um courier
@@ -645,6 +675,106 @@ courierRouter.post('/:tracking/estado', (req: AuthedRequest, res) => {
   }
   const registro = setEstado(req.params.tracking, estado, req.body?.nota);
   res.json({ tracking: req.params.tracking, ...registro });
+});
+
+/**
+ * Escolhe, na thread, a mensagem a responder: a MAIS RECENTE que não foi
+ * enviada pelo próprio analista (ou seja, a última do agente). Se todas forem
+ * do analista, usa a mais recente mesmo. Retorna null se a thread está vazia.
+ */
+async function pickReplyTarget(accessToken: string, conversationId: string) {
+  const [msgs, myAddrs] = await Promise.all([
+    getConversation(accessToken, conversationId, { top: 50 }),
+    getMyAddresses(accessToken),
+  ]);
+  if (msgs.length === 0) return null;
+  const mine = new Set(myAddrs);
+  const fromAgent = msgs.filter((m) => {
+    const addr = (m.from?.emailAddress.address || '').toLowerCase();
+    return addr && !mine.has(addr);
+  });
+  const pool = fromAgent.length ? fromAgent : msgs;
+  return pool[pool.length - 1]; // getConversation devolve em ordem cronológica
+}
+
+/**
+ * GET /api/couriers/:conversationId/reply-info — dados para o modal "Responder
+ * ao Agente": assunto EXATO da thread e destinatário (o agente). Nada é criado
+ * nem enviado aqui; é só leitura para pré-visualização.
+ */
+courierRouter.get(
+  '/:conversationId/reply-info',
+  async (req: AuthedRequest, res, next) => {
+    try {
+      const target = await pickReplyTarget(
+        req.accessToken!,
+        req.params.conversationId,
+      );
+      if (!target) {
+        return res.status(404).json({ error: 'Conversa não encontrada.' });
+      }
+      res.json({
+        messageId: target.id,
+        subject: target.subject || '(sem assunto)',
+        toName: target.from?.emailAddress.name || null,
+        toAddress: target.from?.emailAddress.address || null,
+      });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+/**
+ * POST /api/couriers/reply-draft — cria o RASCUNHO de resposta na própria
+ * thread (mesmo assunto, mesmos destinatários, mesma conversa) com o corpo do
+ * follow-up. NÃO envia: devolve o webLink do rascunho para o analista revisar
+ * e enviar no Outlook. body: { conversationId, body }.
+ */
+courierRouter.post('/reply-draft', async (req: AuthedRequest, res, next) => {
+  try {
+    const conversationId = String(req.body?.conversationId || '').trim();
+    const bodyText = String(req.body?.body || '').trim();
+    if (!conversationId || !bodyText) {
+      return res
+        .status(400)
+        .json({ error: 'Informe conversationId e o corpo do e-mail.' });
+    }
+    const target = await pickReplyTarget(req.accessToken!, conversationId);
+    if (!target) {
+      return res.status(404).json({ error: 'Conversa não encontrada.' });
+    }
+    const draft = await createReplyDraft(req.accessToken!, target.id, bodyText);
+    res.json({
+      draftId: draft.id,
+      webLink: draft.webLink,
+      repliedTo: target.id,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * POST /api/couriers/:tracking/followup — registra que o analista JÁ realizou
+ * o follow-up de um documento não recebido (rascunho criado ou ação manual).
+ * NÃO resolve a divergência — o documento continua pendente. body: { processo,
+ * documento, via? } (via: "draft" | "manual"; null desfaz).
+ */
+courierRouter.post('/:tracking/followup', (req: AuthedRequest, res) => {
+  const processo = String(req.body?.processo || '').trim();
+  const documento = String(req.body?.documento || '') as DocKey;
+  const rawVia = req.body?.via;
+  const via: 'draft' | 'manual' | null =
+    rawVia === 'draft' ? 'draft' : rawVia === null ? null : 'manual';
+  if (!processo) {
+    return res.status(400).json({ error: 'Informe o processo.' });
+  }
+  if (documento !== 'mbl' && documento !== 'hbl') {
+    return res.status(400).json({ error: 'Documento inválido (use "mbl" ou "hbl").' });
+  }
+  const followups = setFollowUp(req.params.tracking, processo, documento, via);
+  res.json({ tracking: req.params.tracking, followups });
 });
 
 /**

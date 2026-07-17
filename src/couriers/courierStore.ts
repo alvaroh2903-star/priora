@@ -163,3 +163,67 @@ export function setConferenciaDoc(
   persistConf();
   return store[key];
 }
+
+/* ------------------------------------------------------------------ *
+ * Follow-up de divergência: registro de que o analista JÁ cobrou o agente
+ * sobre um documento esperado e não recebido. NÃO resolve a divergência —
+ * o documento continua pendente; apenas evita cobrança em duplicidade.
+ * (Futuro: será substituído pela detecção automática da resposta na thread.)
+ * ------------------------------------------------------------------ */
+
+export interface FollowUpRegistro {
+  /** Como foi registrado: rascunho criado no Outlook ou marcado manualmente. */
+  via: 'draft' | 'manual';
+  at: string;
+}
+/** Follow-ups de um courier: por processo -> documento. */
+export type CourierFollowUps = Record<string, Partial<Record<DocKey, FollowUpRegistro>>>;
+
+const FUP_PATH = path.join(config.dataDir, 'courier-followups.json');
+
+let fupCache: Record<string, CourierFollowUps> | null = null;
+
+function loadFup(): Record<string, CourierFollowUps> {
+  if (fupCache) return fupCache;
+  try {
+    fupCache = JSON.parse(fs.readFileSync(FUP_PATH, 'utf8'));
+  } catch {
+    fupCache = {};
+  }
+  return fupCache!;
+}
+
+function persistFup(): void {
+  try {
+    fs.mkdirSync(path.dirname(FUP_PATH), { recursive: true });
+    fs.writeFileSync(FUP_PATH, JSON.stringify(fupCache || {}, null, 2));
+  } catch (err) {
+    console.error('[courierStore] falha ao gravar follow-ups:', err);
+  }
+}
+
+/** Todos os follow-ups (para mesclar na lista de couriers). */
+export function getAllFollowUps(): Record<string, CourierFollowUps> {
+  return { ...loadFup() };
+}
+
+/** Registra o follow-up de um documento (ou remove, com via null). */
+export function setFollowUp(
+  tracking: string,
+  processo: string,
+  documento: DocKey,
+  via: FollowUpRegistro['via'] | null,
+): CourierFollowUps {
+  const store = loadFup();
+  const key = trackingKey(tracking);
+  const proc = processo.toUpperCase();
+  if (!store[key]) store[key] = {};
+  if (!store[key][proc]) store[key][proc] = {};
+  if (via === null) {
+    delete store[key][proc][documento];
+  } else {
+    store[key][proc][documento] = { via, at: new Date().toISOString() };
+  }
+  persistFup();
+  return store[key];
+}

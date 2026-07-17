@@ -30,6 +30,8 @@ export const config = {
    * Escopos delegados (atuando em nome do usuário logado).
    * - User.Read: perfil básico do usuário
    * - Mail.Read: ler/listar e-mails
+   * - Mail.ReadWrite: criar RASCUNHO de resposta na thread (createReply) — o
+   *   follow-up de divergência do Courier prepara a resposta; o envio é manual.
    * - Mail.Send: enviar e-mails
    * openid/profile/offline_access são adicionados para obter o refresh token.
    */
@@ -39,10 +41,11 @@ export const config = {
     'offline_access',
     'User.Read',
     'Mail.Read',
+    'Mail.ReadWrite',
     'Mail.Send',
   ],
   /** Escopos de recurso usados na renovação silenciosa (sem os reservados do OIDC). */
-  graphScopes: ['User.Read', 'Mail.Read', 'Mail.Send'],
+  graphScopes: ['User.Read', 'Mail.Read', 'Mail.ReadWrite', 'Mail.Send'],
   /** Configuração da IA (Google Gemini). A chave é opcional: sem ela, as
    *  rotas de leitura/envio funcionam, mas a análise por IA fica indisponível.
    *  Chave gratuita em https://aistudio.google.com (sem cartão de crédito). */
