@@ -557,17 +557,30 @@ function derivarExpectativa(a: Awaited<ReturnType<typeof parseThread>>) {
     return ev ? ev.snippet : null;
   };
 
-  const documentos = (a.documents || []).map((nome) => {
+  // Entrada GENÉRICA ("Documents", "Docs", "Documentação") não é um documento —
+  // é ruído da extração (o agente escreveu "documents" no meio da frase). Quando
+  // existem documentos ESPECÍFICOS (OMBL, Invoice…), descartamos o genérico em
+  // vez de rebaixar o card inteiro por causa dele. Ele só permanece (com baixa
+  // confiança) quando é a ÚNICA menção — aí o alerta é honesto: "algo documental
+  // foi citado, mas não sabemos o quê".
+  const isGenerico = (nome: string) =>
+    /^(documents?|docs?|documenta[cç][aã]o)$/i.test(nome.trim());
+  const brutos = (a.documents || []).map((n) => String(n).trim()).filter(Boolean);
+  const especificos = brutos.filter((n) => !isGenerico(n));
+  const listaDocs = especificos.length ? especificos : brutos.slice(0, 1);
+
+  const documentos = listaDocs.map((nome) => {
     const ev = evidenciaDe(nome);
-    const generico = /^documents?$/i.test(nome);
-    // Baixa confiança apenas quando o documento é GENÉRICO ("Documents") ou a
-    // confiança GERAL da extração é baixa. Não rebaixamos um documento só porque
-    // não achamos uma evidência com o nome dele — as evidências da Clara são do
-    // nível da conversa, não documento a documento (evitando falso "revisão").
+    // Baixa confiança apenas quando o documento é GENÉRICO (único restante) ou
+    // a confiança GERAL da extração é baixa. Não rebaixamos um documento só
+    // porque não achamos uma evidência com o nome dele — as evidências da Clara
+    // são do nível da conversa, não documento a documento.
     return {
       nome,
       confianca:
-        generico || a.confidence < 0.6 ? ('baixa' as const) : ('alta' as const),
+        isGenerico(nome) || a.confidence < 0.6
+          ? ('baixa' as const)
+          : ('alta' as const),
       evidencia: ev,
     };
   });
