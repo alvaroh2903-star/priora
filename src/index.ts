@@ -10,6 +10,7 @@ import { parseRouter } from './routes/parseRoutes';
 import { processRouter } from './routes/processRoutes';
 import { courierRouter } from './routes/courierRoutes';
 import { trackingRouter } from './routes/trackingRoutes';
+import { demurrageRouter } from './routes/demurrageRoutes';
 
 const app = express();
 
@@ -58,6 +59,7 @@ app.use('/api/parse', parseRouter);
 app.use('/api/processes', processRouter);
 app.use('/api/couriers', courierRouter);
 app.use('/api/tracking', trackingRouter);
+app.use('/api/demurrage', demurrageRouter);
 
 /** Estado de autenticação do usuário atual (para a UI). */
 app.get('/api/me', (req, res) => {
