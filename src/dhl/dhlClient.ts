@@ -69,6 +69,8 @@ export async function trackNumber(
       'DHL-API-Key': config.dhl.apiKey,
       Accept: 'application/json',
     },
+    // Timeout: sem isso um fetch pendurado deixa o card girando pra sempre.
+    signal: AbortSignal.timeout(12000),
   });
 
   const json: any = await res.json().catch(() => ({}));

@@ -27,6 +27,7 @@ async function getToken(): Promise<string> {
       client_id: config.fedex.apiKey,
       client_secret: config.fedex.secretKey,
     }),
+    signal: AbortSignal.timeout(12000),
   });
 
   const data: any = await res.json().catch(() => ({}));
@@ -70,6 +71,7 @@ export async function checkFedexAuth(): Promise<{
         client_id: config.fedex.apiKey,
         client_secret: config.fedex.secretKey,
       }),
+      signal: AbortSignal.timeout(12000),
     });
     const data: any = await res.json().catch(() => ({}));
     if (res.ok && data.access_token) {
@@ -179,6 +181,7 @@ export async function trackNumber(
       includeDetailedScans: true,
       trackingInfo: [{ trackingNumberInfo: { trackingNumber } }],
     }),
+    signal: AbortSignal.timeout(12000),
   });
 
   const json: any = await res.json().catch(() => ({}));

@@ -147,6 +147,21 @@ function agenteDe(msg?: LogisticsSummary): string {
 }
 
 /**
+ * Garante que uma promessa NÃO trave o request para sempre. Se a chamada externa
+ * (Graph) demorar mais que `ms`, rejeita com timeout. Sem isso, uma única
+ * chamada ao Graph pendurada faz o /api/couriers nunca responder — e o front
+ * fica "carregando infinito".
+ */
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`timeout ${label} (${ms}ms)`)), ms),
+    ),
+  ]);
+}
+
+/**
  * GET /api/couriers — reconstrói a visão operacional dos couriers a partir do
  * Outlook (fonte da verdade v1). Sem IA: rápido, só metadados + regex.
  *
@@ -158,24 +173,38 @@ function agenteDe(msg?: LogisticsSummary): string {
  */
 courierRouter.get('/', async (req: AuthedRequest, res, next) => {
   try {
-    let messages = await searchLogisticsMessages(req.accessToken!, {
-      keywords: config.logisticsKeywords,
-      top: 60,
-    });
+    let messages = await withTimeout(
+      searchLogisticsMessages(req.accessToken!, {
+        keywords: config.logisticsKeywords,
+        top: 60,
+      }),
+      20000,
+      'searchLogistics',
+    );
     let source = 'logistica';
     if (messages.length === 0) {
-      messages = await listRecentSummaries(req.accessToken!, { top: 40 });
+      messages = await withTimeout(
+        listRecentSummaries(req.accessToken!, { top: 40 }),
+        20000,
+        'listInbox',
+      );
       source = 'inbox';
     }
 
     // E-mails ENCAMINHADOS COMO ANEXO: o conteúdo real fica dentro do anexo
     // (itemAttachment). Buscamos esse texto para as mensagens que têm anexo
-    // (limitado, em paralelo) e o incluímos na filtragem/extração.
+    // (limitado, em paralelo) e o incluímos na filtragem/extração. Cada chamada
+    // tem timeout próprio e é best-effort: se uma travar/demorar, seguimos sem
+    // ela (nunca penduramos o request inteiro por causa de um anexo).
     const withAtt = messages.filter((m) => m.hasAttachments).slice(0, 25);
     const attMap = new Map<string, string>();
     await Promise.all(
       withAtt.map(async (m) => {
-        const texts = await getItemAttachmentTexts(req.accessToken!, m.id);
+        const texts = await withTimeout(
+          getItemAttachmentTexts(req.accessToken!, m.id),
+          8000,
+          'itemAttachment',
+        ).catch(() => [] as string[]);
         if (texts.length) attMap.set(m.id, texts.join('\n\n'));
       }),
     );
@@ -630,7 +659,11 @@ courierRouter.get(
 
       const perThread = await Promise.all(
         convIds.map((cid) =>
-          getConversationFull(req.accessToken!, cid, { top: 50 }).catch(() => []),
+          withTimeout(
+            getConversationFull(req.accessToken!, cid, { top: 50 }),
+            15000,
+            'getConversationFull',
+          ).catch(() => []),
         ),
       );
       // Mescla e deduplica por id de mensagem; ordena cronologicamente.
@@ -650,7 +683,11 @@ courierRouter.get(
         messages
           .filter((m) => m.hasAttachments)
           .map(async (m) => {
-            const texts = await getItemAttachmentTexts(req.accessToken!, m.id);
+            const texts = await withTimeout(
+              getItemAttachmentTexts(req.accessToken!, m.id),
+              8000,
+              'itemAttachment',
+            ).catch(() => [] as string[]);
             if (texts.length) {
               const extra =
                 '\n\n--- E-mail encaminhado (anexo) ---\n' + texts.join('\n\n');
