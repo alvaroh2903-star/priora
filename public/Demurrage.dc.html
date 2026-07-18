@@ -13,25 +13,449 @@
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
   body{font-family:'Plus Jakarta Sans',sans-serif;-webkit-font-smoothing:antialiased;background:#F4F5FB}
+  ::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:#D7DAE8;border-radius:8px;border:2px solid #F4F5FB}::-webkit-scrollbar-track{background:transparent}
+  @keyframes claraBob{0%,100%{transform:translateY(0)}50%{transform:translateY(-7px)}}
   @keyframes pageIn{from{transform:translateY(12px)}to{transform:translateY(0)}}
+  @keyframes expandIn{from{transform:translateY(-6px)}to{transform:translateY(0)}}
+  @keyframes pulseRing{0%{box-shadow:0 0 0 0 rgba(229,72,77,.5)}70%{box-shadow:0 0 0 9px rgba(229,72,77,0)}100%{box-shadow:0 0 0 0 rgba(229,72,77,0)}}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .chev{transition:transform .25s ease}.chev-open{transform:rotate(180deg)}
+  .solid-btn{transition:transform .15s,box-shadow .2s,background .18s}.solid-btn:hover{transform:translateY(-1px)}
+  .ghost-btn{transition:background .16s,border-color .16s,color .16s}.ghost-btn:hover{background:#F3F1FE!important;border-color:#CFC6FB!important;color:#3D34C9!important}
+  .row-hover{transition:background .15s}.row-hover:hover{background:#FAFAFE!important}
+  .link-btn{transition:color .15s}.link-btn:hover{color:#3D34C9!important}
 </style>
 </helmet>
 <main style="flex:1;min-width:0;display:flex;flex-direction:column">
     <dc-import name="Topbar" title="Demurrage" subtitle="Acompanhe devoluções de containers, riscos e custos em aberto — antes de virarem prejuízo." icon-path="M3 6h11v9H3z M14 9h4l3 3v3h-7 M6.5 19a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3 M17.5 19a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3" hint-size="100%,110px"></dc-import>
-    <div style="flex:1;display:flex;align-items:center;justify-content:center;padding:40px;animation:pageIn .35s ease both">
-      <div style="text-align:center;max-width:440px;background:#fff;border:1px solid #E6E8F2;border-radius:16px;padding:44px 34px">
-        <div style="width:58px;height:58px;border-radius:15px;background:#EEEBFE;display:flex;align-items:center;justify-content:center;margin:0 auto 18px">
-          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+
+    <!-- LOADING -->
+    <sc-if value="{{ showLoading }}" hint-placeholder-val="{{ true }}">
+      <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:60px;gap:16px">
+        <div style="width:38px;height:38px;border:3px solid #E6E8F2;border-top-color:#4327E6;border-radius:50%;animation:spin .8s linear infinite"></div>
+        <div style="font-size:14px;color:#6B7192;font-weight:600">Analisando seus e-mails do Outlook…</div>
+      </div>
+    </sc-if>
+
+    <!-- ERROR -->
+    <sc-if value="{{ showError }}" hint-placeholder-val="{{ false }}">
+      <div style="flex:1;display:flex;align-items:center;justify-content:center;padding:40px">
+        <div style="text-align:center;max-width:440px;background:#fff;border:1px solid #F4DEDE;border-radius:16px;padding:40px 32px">
+          <div style="width:54px;height:54px;border-radius:14px;background:#FDECEC;display:flex;align-items:center;justify-content:center;margin:0 auto 16px"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#E5484D" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg></div>
+          <div style="font-size:18px;font-weight:800;color:#161A2E;margin-bottom:8px">Não foi possível carregar</div>
+          <div style="font-size:13.5px;line-height:1.6;color:#6B7192;margin-bottom:20px">{{ errorMsg }}</div>
+          <button onClick="{{ onReload }}" class="solid-btn" style="background:#0D1227;color:#fff;border:none;border-radius:10px;padding:11px 18px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer">Tentar de novo</button>
         </div>
-        <div style="font-size:19px;font-weight:800;color:#161A2E;margin-bottom:9px">Em construção</div>
-        <div style="font-size:14px;line-height:1.6;color:#6B7192">Esta tela será conectada aos seus dados reais do Outlook em breve.<br>Por enquanto, use a aba <b style="color:#4327E6">Processos</b> — já funcionando com seus e-mails.</div>
+      </div>
+    </sc-if>
+
+    <!-- EMPTY -->
+    <sc-if value="{{ showEmpty }}" hint-placeholder-val="{{ false }}">
+      <div style="flex:1;display:flex;align-items:center;justify-content:center;padding:40px;animation:pageIn .35s ease both">
+        <div style="text-align:center;max-width:460px;background:#fff;border:1px solid #E6E8F2;border-radius:16px;padding:44px 34px">
+          <div style="width:58px;height:58px;border-radius:15px;background:#E7F6EF;display:flex;align-items:center;justify-content:center;margin:0 auto 18px"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#1F9D6B" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg></div>
+          <div style="font-size:19px;font-weight:800;color:#161A2E;margin-bottom:9px">Nenhum demurrage em aberto</div>
+          <div style="font-size:14px;line-height:1.6;color:#6B7192">Não encontrei contêineres com sobreestadia ou risco nos seus e-mails.<br>Assim que chegar um e-mail de free time, devolução ou minuta, ele aparece aqui.</div>
+          <sc-if value="{{ showAiHint }}" hint-placeholder-val="{{ false }}">
+            <div style="margin-top:18px;font-size:12.5px;color:#9AA0B4;background:#F8F7FE;border:1px solid #ECE9FB;border-radius:10px;padding:11px 14px">Dica: conecte a IA (Clara) para extrair datas, free time e diária automaticamente dos e-mails.</div>
+          </sc-if>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- CONTENT -->
+    <sc-if value="{{ showContent }}" hint-placeholder-val="{{ false }}">
+    <div style="padding:22px 36px 40px 36px;animation:pageIn .35s ease both">
+
+      <!-- KPIs -->
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px">
+        <sc-for list="{{ kpis }}" as="k" hint-placeholder-count="4">
+          <div style="background:#fff;border:1px solid #EAEBF4;border-radius:16px;padding:16px 18px">
+            <div style="display:flex;align-items:center;gap:8px"><span style="width:9px;height:9px;border-radius:50%;background:{{ k.color }}"></span><span style="font-size:12.5px;color:#7A8099;font-weight:600">{{ k.label }}</span></div>
+            <div style="font-size:25px;font-weight:800;margin-top:8px;letter-spacing:-.02em;color:{{ k.valColor }}">{{ k.value }}</div>
+            <div style="font-size:11.5px;color:{{ k.subColor }};margin-top:3px;font-weight:600">{{ k.sub }}</div>
+          </div>
+        </sc-for>
+      </div>
+
+      <div style="display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:20px;align-items:start;margin-top:24px">
+        <div style="display:flex;flex-direction:column;gap:18px;min-width:0">
+          <sc-for list="{{ sections }}" as="s" hint-placeholder-count="3">
+            <div style="background:#fff;border:1px solid #EAEBF4;border-radius:20px;padding:20px 22px">
+              <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:15px">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="{{ s.color }}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="{{ s.iconPath }}"></path></svg>
+                <h2 style="font-size:13.5px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:#161A2E">{{ s.title }}</h2>
+                <span style="font-size:12px;color:#9AA0B4">{{ s.hint }}</span>
+                <span style="margin-left:auto;font-size:12px;font-weight:700;color:{{ s.color }};background:{{ s.badgeBg }};padding:3px 10px;border-radius:20px">{{ s.count }}</span>
+              </div>
+
+              <sc-if value="{{ s.empty }}" hint-placeholder-val="{{ false }}">
+                <div style="font-size:12.5px;color:#9AA0B4;padding:6px 2px 2px">{{ s.emptyText }}</div>
+              </sc-if>
+
+              <div style="display:flex;flex-direction:column;gap:12px">
+              <sc-for list="{{ s.cards }}" as="c" hint-placeholder-count="1">
+                <div data-proc="{{ c.id }}" style="position:relative;border:1px solid {{ c.cardBorder }};border-radius:15px;padding:17px 19px 17px 21px;overflow:hidden;box-shadow:{{ c.ring }};transition:box-shadow .3s ease">
+                  <span style="position:absolute;left:0;top:0;bottom:0;width:5px;background:{{ c.accent }}"></span>
+                  <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap">
+                    <div style="display:flex;align-items:flex-start;gap:12px;min-width:0;flex:1">
+                      <span style="width:38px;height:38px;border-radius:11px;background:{{ c.iconBg }};display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="{{ c.accent }}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="{{ c.iconPath }}"></path></svg></span>
+                      <div style="min-width:0">
+                        <p style="font-size:13.5px;font-weight:700;color:{{ c.accent }};line-height:1.35">{{ c.topline }}</p>
+                        <div style="display:flex;align-items:center;gap:9px;margin-top:4px;flex-wrap:wrap"><span style="font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:700;color:#4327E6">{{ c.code }}</span><span style="font-size:13.5px;font-weight:700">— {{ c.cliente }}</span></div>
+                        <div style="display:flex;align-items:center;gap:14px;margin-top:7px;flex-wrap:wrap">
+                          <sc-for list="{{ c.meta }}" as="m" hint-placeholder-count="2"><span style="font-size:11.5px;color:#9AA0B4">{{ m }}</span></sc-for>
+                        </div>
+                      </div>
+                    </div>
+                    <div style="text-align:right;flex-shrink:0">
+                      <div style="font-size:20px;font-weight:800;color:{{ c.bigColor }}">{{ c.big }}</div>
+                      <sc-for list="{{ c.rightLines }}" as="l" hint-placeholder-count="2"><div style="font-size:11px;color:{{ l.color }};margin-top:2px">{{ l.text }}</div></sc-for>
+                    </div>
+                  </div>
+
+                  <!-- expanded -->
+                  <sc-if value="{{ c.open }}" hint-placeholder-val="{{ false }}">
+                    <div style="margin-top:15px;display:flex;flex-direction:column;gap:13px;animation:expandIn .22s ease both">
+                      <sc-if value="{{ c.hasContainers }}" hint-placeholder-val="{{ false }}">
+                        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:11px">
+                          <sc-for list="{{ c.containers }}" as="ct" hint-placeholder-count="2">
+                            <div style="background:#FAFAFE;border:1px solid #F0F1F7;border-radius:11px;padding:12px 14px">
+                              <div style="font-family:'JetBrains Mono',monospace;font-size:12.5px;font-weight:700;color:#161A2E">{{ ct.numero }}</div>
+                              <sc-for list="{{ ct.lines }}" as="ln" hint-placeholder-count="2"><div style="font-size:11px;color:{{ ln.color }};margin-top:4px">{{ ln.text }}</div></sc-for>
+                            </div>
+                          </sc-for>
+                        </div>
+                      </sc-if>
+                      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:11px">
+                        <sc-for list="{{ c.stats }}" as="st" hint-placeholder-count="3">
+                          <div style="background:#FAFAFE;border-radius:11px;padding:12px 14px"><div style="font-size:10px;color:#9AA0B4;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px">{{ st.label }}</div><div style="font-size:14px;font-weight:800;color:{{ st.valueColor }}">{{ st.value }}</div><div style="font-size:11px;color:#9AA0B4;margin-top:1px">{{ st.sub }}</div></div>
+                        </sc-for>
+                      </div>
+                      <div style="display:flex;align-items:flex-start;gap:11px;background:#F8F7FE;border:1px solid #ECE9FB;border-radius:12px;padding:13px 15px">
+                        <span style="width:28px;height:28px;border-radius:9px;background:#EEEBFE;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="2"><path d="M12 3 4 7v10l8 4 8-4V7Z"/></svg></span>
+                        <p style="font-size:12.5px;color:#4A5063;line-height:1.5"><b style="color:#4327E6">Clara</b> {{ c.clara }}</p>
+                      </div>
+                    </div>
+                  </sc-if>
+
+                  <!-- actions -->
+                  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:14px;padding-top:13px;border-top:1px solid #F2F3F9">
+                    <sc-if value="{{ c.canSolicitar }}" hint-placeholder-val="{{ true }}">
+                      <button onClick="{{ c.onSolicitar }}" class="solid-btn" style="display:flex;align-items:center;gap:7px;border:none;border-radius:10px;padding:10px 15px;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer;background:{{ c.solicitarBg }};color:{{ c.solicitarColor }}">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="{{ c.solicitarIcon }}"></path></svg>{{ c.solicitarLabel }}</button>
+                    </sc-if>
+                    <button onClick="{{ c.onToggle }}" class="ghost-btn" style="display:flex;align-items:center;gap:7px;background:#fff;color:#5A6076;border:1px solid #E6E8F2;border-radius:10px;padding:10px 15px;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer">
+                      <svg class="chev {{ c.chevClass }}" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m6 9 6 6 6-6"/></svg>{{ c.toggleLabel }}</button>
+                    <sc-if value="{{ c.hasProcesso }}" hint-placeholder-val="{{ false }}">
+                      <button onClick="{{ c.onVerProcesso }}" class="ghost-btn" style="display:flex;align-items:center;gap:7px;background:#fff;color:#5A6076;border:1px solid #E6E8F2;border-radius:10px;padding:10px 15px;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer">Ver processo</button>
+                    </sc-if>
+                  </div>
+                </div>
+              </sc-for>
+              </div>
+            </div>
+          </sc-for>
+
+          <div style="text-align:center;padding:8px;font-size:13px;color:#9AA0B4;font-style:italic">"Custos não surgem de surpresa. Surgem de falta de acompanhamento."</div>
+        </div>
+
+        <!-- RIGHT RAIL -->
+        <div style="display:flex;flex-direction:column;gap:18px;position:sticky;top:22px">
+          <div style="background:#fff;border:1px solid #EAEBF4;border-radius:20px;padding:20px 22px">
+            <div style="display:flex;align-items:center;gap:9px;margin-bottom:6px"><span style="width:28px;height:28px;border-radius:9px;background:#EEEBFE;display:flex;align-items:center;justify-content:center"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="2.2"><path d="M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></span><h3 style="font-size:14.5px;font-weight:800">Resumo geral</h3></div>
+            <p style="font-size:12.5px;color:#7A8099;margin-bottom:14px">Analisei todos os processos e identifiquei:</p>
+            <div style="display:flex;flex-direction:column;gap:11px">
+              <sc-for list="{{ resumo }}" as="r" hint-placeholder-count="3">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:10px"><div style="display:flex;align-items:center;gap:8px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="{{ r.color }}" stroke-width="2.2"><path d="{{ r.iconPath }}"></path></svg><span style="font-size:12px;color:#5A6076;line-height:1.3">{{ r.label }}</span></div><span style="font-size:12.5px;font-weight:800;color:{{ r.valColor }};white-space:nowrap">{{ r.value }}</span></div>
+              </sc-for>
+            </div>
+            <div style="margin-top:14px;padding-top:13px;border-top:1px solid #F0F1F7;display:flex;align-items:center;justify-content:space-between"><span style="font-size:13.5px;font-weight:800;color:#161A2E">{{ impactoTotal }}</span><span style="font-size:11px;color:#9AA0B4">impacto total estimado</span></div>
+          </div>
+
+          <sc-if value="{{ hasMaiorRisco }}" hint-placeholder-val="{{ false }}">
+          <div style="background:#fff;border:1px solid #F4DEDE;border-radius:20px;padding:20px 22px">
+            <div style="display:flex;align-items:center;gap:9px;margin-bottom:11px"><span style="width:10px;height:10px;border-radius:50%;background:#E5484D;animation:pulseRing 2s infinite"></span><h3 style="font-size:13.5px;font-weight:800;color:#C2333A">Maior risco atual</h3></div>
+            <div style="font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:700">{{ maiorRisco.titulo }}</div>
+            <p style="font-size:12.5px;color:#7A8099;margin-top:5px;line-height:1.5">{{ maiorRisco.sub }}</p>
+            <button onClick="{{ onVerPrioritario }}" class="solid-btn" style="width:100%;display:flex;align-items:center;justify-content:center;gap:8px;margin-top:14px;background:#4327E6;color:#fff;border:none;border-radius:11px;padding:11px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;box-shadow:0 10px 22px -12px rgba(67,39,230,.7)">Ver caso prioritário<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
+          </div>
+          </sc-if>
+
+          <div style="background:#fff;border:1px solid #EAEBF4;border-radius:20px;padding:20px 22px">
+            <h3 style="font-size:14.5px;font-weight:800;margin-bottom:14px">Atividades recentes</h3>
+            <sc-if value="{{ semAtividades }}" hint-placeholder-val="{{ false }}">
+              <div style="font-size:12px;color:#9AA0B4">Sem atividades ainda.</div>
+            </sc-if>
+            <div style="display:flex;flex-direction:column;gap:3px">
+              <sc-for list="{{ atividades }}" as="a" hint-placeholder-count="3">
+                <div class="row-hover" style="display:flex;align-items:flex-start;gap:11px;padding:9px 8px;border-radius:11px;margin:0 -8px">
+                  <span style="width:28px;height:28px;border-radius:9px;background:{{ a.bg }};display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="{{ a.color }}" stroke-width="2.2"><path d="{{ a.iconPath }}"></path></svg></span>
+                  <div style="flex:1;min-width:0"><div style="font-size:12.5px;font-weight:700">{{ a.label }}</div><div style="font-size:11px;color:#9AA0B4;margin-top:1px">{{ a.sub }}</div></div>
+                  <span style="font-size:10.5px;color:#9AA0B4;flex-shrink:0">{{ a.time }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
-</main>
+    </sc-if>
+
+    <sc-if value="{{ toastOn }}" hint-placeholder-val="{{ false }}">
+      <div style="position:fixed;right:24px;bottom:24px;z-index:60;display:flex;align-items:center;gap:12px;background:#fff;border:1px solid #EAEBF4;box-shadow:0 18px 44px -16px rgba(31,38,80,.4);border-radius:14px;padding:14px 18px;max-width:380px;animation:pageIn .3s ease both">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1F9D6B" stroke-width="2.2" style="flex-shrink:0"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg>
+        <p style="font-size:13.5px;color:#161A2E;font-weight:600;line-height:1.4">{{ toastMsg }}</p>
+      </div>
+    </sc-if>
+  </main>
 </x-dc>
 <script type="text/x-dc" data-dc-script>
 class Component extends DCLogic {
-  renderVals(){ return {}; }
+  state = { resp:null, loading:true, error:null, open:{}, busy:{}, toastOn:false, toastMsg:'', highlight:null };
+
+  // Tema visual por bucket (cores/ícones do design).
+  THEME = {
+    custo: { accent:'#E5484D', iconBg:'#FDECEC', cardBorder:'#F4DEDE', valColor:'#C2333A',
+      iconPath:'M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z' },
+    risco: { accent:'#E8990C', iconBg:'#FEF4E1', cardBorder:'#F5E6C8', valColor:'#B9760A',
+      iconPath:'M12 7v5l3 2M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z' },
+    pend:  { accent:'#4327E6', iconBg:'#EEEBFE', cardBorder:'#E4E1FA', valColor:'#4327E6',
+      iconPath:'M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z' },
+    enc:   { accent:'#1F9D6B', iconBg:'#E7F6EF', cardBorder:'#D6EEE2', valColor:'#177D54',
+      iconPath:'M20 6 9 17l-5-5' },
+  };
+  IC = {
+    warn:'M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z',
+    clock:'M12 7v5l3 2M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z',
+    doc:'M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z',
+    check:'M20 6 9 17l-5-5',
+  };
+
+  componentDidMount(){
+    this.load();
+    this._onFocus = (e)=>{ const dt=e&&e.detail; if(dt && dt.module==='demurrage' && dt.id) this.focusProc(dt.id); };
+    window.addEventListener('priora:focus', this._onFocus);
+    const p = window.PrioraBus && window.PrioraBus.consume('demurrage');
+    if (p && p.id) this._pendingFocus = p.id;
+  }
+  componentWillUnmount(){ window.removeEventListener('priora:focus', this._onFocus); clearTimeout(this._t); clearTimeout(this._hl); }
+
+  load(){
+    this.setState({ loading:true, error:null });
+    const self=this;
+    fetch('/api/demurrage', { credentials:'same-origin' })
+      .then(function(r){ return r.json().catch(function(){return null;}).then(function(j){ if(!r.ok) throw new Error((j&&j.error)||('HTTP '+r.status)); return j; }); })
+      .then(function(resp){
+        const open={};
+        const first = resp && resp.sections && resp.sections.custo && resp.sections.custo[0];
+        if (first) open[first.id]=true;
+        self.setState({ resp:resp, loading:false, open:open });
+        if (self._pendingFocus){ const id=self._pendingFocus; self._pendingFocus=null; setTimeout(function(){ self.focusProc(id); }, 120); }
+      })
+      .catch(function(err){ self.setState({ loading:false, error:String(err&&err.message||err) }); });
+  }
+
+  /* ---------- helpers ---------- */
+  moedaSym(m){ return m==='USD'?'US$':(m==='EUR'?'€':'R$'); }
+  fmtMoney(v,m){ if(v==null||isNaN(v)) return null; return this.moedaSym(m)+' '+Math.round(Number(v)).toLocaleString('pt-BR'); }
+  fmtDate(iso){ if(!iso) return null; var d=new Date(iso); if(isNaN(d)) return null; return d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit',timeZone:'UTC'}); }
+  fmtAgo(iso){ var d=new Date(iso); if(isNaN(d)) return ''; var ms=Date.now()-d.getTime(); if(ms<0) ms=0; var h=Math.floor(ms/3600000); if(h<1) return 'Agora'; if(h<24) return 'Há '+h+'h'; var dd=Math.floor(h/24); if(dd===1) return 'Ontem'; return dd+' dias'; }
+  plural(n,s){ return n+' '+s+(n===1?'':'s'); }
+  plCont(n){ return n+' '+(n===1?'contêiner':'contêineres'); }
+  trunc(s,n){ s=String(s||''); return s.length>n?s.slice(0,n-1)+'…':s; }
+
+  toast(msg){ this.setState({toastOn:true,toastMsg:msg}); clearTimeout(this._t); this._t=setTimeout(()=>this.setState({toastOn:false}),2800); }
+
+  focusProc(id){
+    this.setState(s=>({ open:Object.assign({},s.open,{[id]:true}), highlight:id }));
+    if (window.PrioraBus) window.PrioraBus.scrollToSel('[data-proc="'+id+'"]');
+    clearTimeout(this._hl); this._hl=setTimeout(()=>this.setState({highlight:null}), 2800);
+  }
+  toggle(id){ this.setState(s=>({ open:Object.assign({},s.open,{[id]:!s.open[id]}) })); }
+
+  solicitar(card){
+    if (this.state.busy[card.id] || card.minutaSolicitada) return;
+    const self=this;
+    this.setState(s=>({ busy:Object.assign({},s.busy,{[card.id]:true}) }));
+    fetch('/api/demurrage/solicitar-minuta', {
+      method:'POST', credentials:'same-origin', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ processo: card.processo||card.id, conversationId: card.conversationId, cliente: card.cliente||'' }),
+    })
+      .then(function(r){ return r.json().catch(function(){return null;}).then(function(j){ if(!r.ok) throw new Error((j&&j.error)||('HTTP '+r.status)); return j; }); })
+      .then(function(res){
+        var resp=self.state.resp;
+        ['custo','risco','pend'].forEach(function(b){ (resp.sections[b]||[]).forEach(function(c){ if(c.id===card.id) c.minutaSolicitada=true; }); });
+        var busy=Object.assign({},self.state.busy); delete busy[card.id];
+        self.setState({ resp:resp, busy:busy });
+        self.toast(res && res.webLink ? 'Rascunho de solicitação criado no Outlook.' : 'Solicitação de minuta registrada.');
+      })
+      .catch(function(err){ var busy=Object.assign({},self.state.busy); delete busy[card.id]; self.setState({ busy:busy }); self.toast('Não foi possível solicitar: '+String(err&&err.message||err)); });
+  }
+
+  /* ---------- montagem das linhas do container ---------- */
+  containerLines(ct, bucket){
+    var g='#9AA0B4', red='#C2333A', green='#177D54', amber='#B9760A';
+    var lines=[];
+    if (bucket==='custo'){
+      var p1=[]; if(ct.dataRetirada) p1.push('Retirado '+this.fmtDate(ct.dataRetirada)); if(ct.freeTimeDias!=null) p1.push('Free Time '+ct.freeTimeDias+'d');
+      lines.push({ text: p1.length?p1.join(' · '):'Datas a confirmar', color:g });
+      if (ct.demurrageDias!=null){ var v=this.fmtMoney(ct.valor,ct.moeda); lines.push({ text:'Demurrage: '+this.plural(ct.demurrageDias,'dia')+(v?(' · '+v):''), color:red }); }
+      lines.push({ text: ct.minutaRecebida===true?'Minuta: recebida':'Minuta: não recebida', color: ct.minutaRecebida===true?green:red });
+    } else if (bucket==='risco'){
+      lines.push({ text: ct.freeTimeDias!=null?('Free Time '+ct.freeTimeDias+'d'):'Free Time a confirmar', color:g });
+      if (ct.diasRestantes!=null){ var exp=ct.diaria!=null?(' · exposição '+this.fmtMoney(ct.diaria,ct.moeda)+'/dia'):''; lines.push({ text:'Restam '+this.plural(ct.diasRestantes,'dia')+exp, color:amber }); }
+    } else {
+      if (ct.dataDevolucao) lines.push({ text:'Devolvido '+this.fmtDate(ct.dataDevolucao), color:g });
+      lines.push({ text: ct.minutaRecebida===true?'Minuta recebida':'Minuta pendente', color: ct.minutaRecebida===true?green:red });
+      if (ct.valor!=null && ct.valor>0) lines.push({ text: this.fmtMoney(ct.valor,ct.moeda), color:red });
+      else lines.push({ text:'Sem demurrage', color:green });
+    }
+    return lines;
+  }
+
+  cardStats(card, bucket){
+    var red='#C2333A', amber='#B9760A', green='#177D54', ink='#161A2E';
+    var self=this;
+    if (bucket==='custo'){
+      var ft = (card.containers.find(function(c){return c.freeTimeDias!=null;})||{}).freeTimeDias;
+      return [
+        { label:'Free time', value:'Vencido', valueColor:red, sub: ft!=null?(ft+' dias — esgotado'):'esgotado' },
+        { label:'Responsável', value: card.responsavel||'Cliente', valueColor:red, sub: card.cliente||'' },
+        { label:'Motivo', value: card.motivo?this.trunc(card.motivo,18):'Não devolução', valueColor:ink, sub:'Prazo excedido' },
+      ];
+    }
+    if (bucket==='risco'){
+      return [
+        { label:'Free time restante', value: card.diasRestantes!=null?this.plural(card.diasRestantes,'dia'):'a confirmar', valueColor:amber, sub:'Vence em breve' },
+        { label:'Responsável', value: card.responsavel||card.cliente||'Cliente', valueColor:amber, sub: card.cliente||'' },
+        { label:'Custo estimado', value: card.diariaDia!=null?(this.fmtMoney(card.diariaDia,card.moeda)+'/dia'):'a confirmar', valueColor:ink, sub:'se não devolvido' },
+      ];
+    }
+    var enc = card.containers.length>0 && card.containers.every(function(c){return c.status==='encerrado';});
+    var dev = (card.containers.find(function(c){return c.dataDevolucao;})||{}).dataDevolucao;
+    return [
+      { label:'Status', value: enc?'Encerrado':'Devolvido', valueColor:green, sub: dev?this.fmtDate(dev):'' },
+      { label:'Minuta', value: enc?'Recebida':'Não localizada', valueColor: enc?green:red, sub: enc?'':'Pendente do cliente' },
+      { label:'Custo', value: card.valorAcumulado!=null?this.fmtMoney(card.valorAcumulado,card.moeda):'R$ 0', valueColor:ink, sub: card.valorAcumulado?'':'Sem custo ativo' },
+    ];
+  }
+
+  vm(card, bucket){
+    var open = !!this.state.open[card.id];
+    var solic = !!card.minutaSolicitada;
+    var hl = this.state.highlight===card.id;
+    var isEnc = bucket==='pend' && card.containers.length>0 && card.containers.every(function(c){return c.status==='encerrado';});
+    var th = isEnc ? this.THEME.enc : this.THEME[bucket];
+    var n = card.containers.length;
+    var self=this;
+
+    var topline, big, bigColor, rightLines=[], iconPath=th.iconPath;
+    if (bucket==='custo'){
+      topline = card.diariaDia!=null ? ('Cliente acumulando '+this.fmtMoney(card.diariaDia,card.moeda)+'/dia em demurrage') : 'Demurrage em curso — free time vencido';
+      big = card.valorAcumulado!=null ? this.fmtMoney(card.valorAcumulado,card.moeda) : 'a confirmar';
+      bigColor = '#161A2E';
+      rightLines = [{ text:'estimados acumulados', color:'#9AA0B4' }];
+      if (card.diariaDia!=null) rightLines.push({ text:'+ '+this.fmtMoney(card.diariaDia,card.moeda)+'/dia', color:'#C2333A' });
+    } else if (bucket==='risco'){
+      topline = card.diasRestantes!=null ? ('Risco de gerar custo em até '+this.plural(card.diasRestantes,'dia')) : 'Contêiner em acompanhamento';
+      big = card.diasRestantes!=null ? this.plural(card.diasRestantes,'dia') : '—';
+      bigColor = '#B9760A';
+      rightLines = [{ text:'restam de Free Time', color:'#9AA0B4' }];
+    } else {
+      topline = isEnc ? 'Minuta recebida — demurrage encerrada, sem custos' : 'Minuta pendente após devolução';
+      var dev = (card.containers.find(function(c){return c.dataDevolucao;})||{}).dataDevolucao;
+      big = isEnc ? this.fmtMoney(card.valorAcumulado!=null?card.valorAcumulado:0, card.moeda) : (dev?this.fmtDate(dev):'—');
+      bigColor = '#177D54';
+      rightLines = isEnc ? [{text:'sem custo ativo',color:'#9AA0B4'},{text:'encerrado',color:'#177D54'}] : [{text:'devolução realizada',color:'#9AA0B4'},{text:'aguardando minuta',color:'#9AA0B4'}];
+    }
+
+    var meta=[]; var suf = bucket==='custo'?' em demurrage':(bucket==='pend'?(n===1?' devolvido':' devolvidos'):''); meta.push(this.plCont(n)+suf);
+    if (card.cliente) meta.push('Cliente: '+card.cliente);
+
+    var canSolicitar = bucket==='custo' || (bucket==='pend' && !isEnc);
+    return Object.assign({}, card, {
+      accent:th.accent, iconBg:th.iconBg, cardBorder:th.cardBorder, iconPath:iconPath,
+      topline:topline, code: card.processo||card.id, cliente: card.cliente||'—',
+      meta:meta, big:big, bigColor:bigColor, rightLines:rightLines,
+      hasContainers: n>0,
+      containers: card.containers.map(function(ct){ return { numero:ct.numero, lines:self.containerLines(ct,bucket) }; }),
+      stats: this.cardStats(card,bucket),
+      clara: card.clara||'',
+      open:open, chevClass: open?'chev-open':'', toggleLabel: open?'Recolher':'Ver detalhes',
+      ring: hl ? '0 0 0 3px #4327E6, 0 18px 40px -20px rgba(67,39,230,.45)' : 'none',
+      canSolicitar:canSolicitar, hasProcesso: !!card.processo,
+      solicitarBg: solic?'#E7F6EF':'#0D1227', solicitarColor: solic?'#177D54':'#fff',
+      solicitarLabel: solic?'Minuta solicitada':'Solicitar Minuta',
+      solicitarIcon: solic?this.IC.check:this.IC.doc,
+      onToggle:()=>this.toggle(card.id),
+      onSolicitar:()=>this.solicitar(card),
+      onVerProcesso:()=>{ if(window.PrioraBus) window.PrioraBus.focus('processos', card.processo||card.id); },
+    });
+  }
+
+  renderVals(){
+    var st=this.state;
+    var loading=st.loading, error=st.error, resp=st.resp;
+    var base = { showLoading:loading, showError:!!error&&!loading, errorMsg:error||'', onReload:()=>this.load(),
+      showEmpty:false, showContent:false, showAiHint:false, toastOn:st.toastOn, toastMsg:st.toastMsg,
+      kpis:[], sections:[], resumo:[], atividades:[], impactoTotal:'', hasMaiorRisco:false, maiorRisco:{titulo:'',sub:''}, semAtividades:true, onVerPrioritario:()=>{} };
+    if (loading || error || !resp) return base;
+
+    var sec = resp.sections||{custo:[],risco:[],pend:[]};
+    var total = (sec.custo.length+sec.risco.length+sec.pend.length);
+    if (total===0){ base.showEmpty=true; base.showAiHint = resp.aiEnabled===false; return base; }
+    base.showContent=true;
+
+    var self=this;
+    var K=resp.kpis||{}, m=(K.impactoTotal&&K.impactoTotal.moeda)||'BRL';
+    var mm=function(v){ var s=self.fmtMoney(v,m); return s||('—'); };
+    base.kpis=[
+      { label:'Custo ativo ao cliente', value:String((K.custoAtivo&&K.custoAtivo.count)||0), sub: mm((K.custoAtivo&&K.custoAtivo.valor)||0)+' acumulados', subColor:'#C2333A', color:'#E5484D', valColor:'#C2333A' },
+      { label:'Risco iminente', value:String((K.riscoIminente&&K.riscoIminente.count)||0), sub: (K.riscoIminente&&K.riscoIminente.diariaDia)?(mm(K.riscoIminente.diariaDia)+'/dia potencial'):'monitorando', subColor:'#B9760A', color:'#E8990C', valColor:'#161A2E' },
+      { label:'Pendências documentais', value:String((K.pendencias&&K.pendencias.count)||0), sub:'aguardando minuta', subColor:'#9AA0B4', color:'#4327E6', valColor:'#161A2E' },
+      { label:'Impacto total estimado', value: mm((K.impactoTotal&&K.impactoTotal.valor)||0), sub:'custo real acumulado', subColor:'#9AA0B4', color:'#6E59F2', valColor:'#161A2E' },
+    ];
+
+    base.sections=[
+      { key:'custo', title:'Custo ativo ao cliente', hint:'Processos que já estão gerando custos.', color:'#E5484D', badgeBg:'#FDECEC', iconPath:this.IC.warn,
+        count:this.plural(sec.custo.length,'processo'), empty:sec.custo.length===0, emptyText:'Nenhum custo ativo no momento.', cards: sec.custo.map(function(c){ return self.vm(c,'custo'); }) },
+      { key:'risco', title:'Risco iminente', hint:'Podem começar a gerar custos em breve.', color:'#E8990C', badgeBg:'#FEF4E1', iconPath:this.IC.clock,
+        count:this.plural(sec.risco.length,'processo'), empty:sec.risco.length===0, emptyText:'Nenhum contêiner em risco iminente.', cards: sec.risco.map(function(c){ return self.vm(c,'risco'); }) },
+      { key:'pend', title:'Pendências documentais', hint:'Devolvidos, aguardando comprovante do cliente.', color:'#4327E6', badgeBg:'#EEEBFE', iconPath:this.IC.doc,
+        count:this.plural(sec.pend.length,'processo'), empty:sec.pend.length===0, emptyText:'Nenhuma pendência documental.', cards: sec.pend.map(function(c){ return self.vm(c,'pend'); }) },
+    ];
+
+    var R=resp.resumo||{};
+    base.resumo=[
+      { label:this.plural(R.custoCount||0,'processo')+' gerando custos', value: mm(R.custoValor||0), color:'#E5484D', valColor:'#C2333A', iconPath:this.IC.warn },
+      { label:this.plural(R.riscoCount||0,'processo')+' em risco de custo', value: (R.riscoDiaria?mm(R.riscoDiaria)+'/dia':'—'), color:'#E8990C', valColor:'#B9760A', iconPath:this.IC.clock },
+      { label:this.plural(R.pendCount||0,'processo')+' aguardando minuta', value: mm(R.pendValor||0), color:'#4327E6', valColor:'#161A2E', iconPath:this.IC.doc },
+    ];
+    base.impactoTotal = mm(R.impactoTotal||0);
+
+    var mr=resp.maiorRisco;
+    if (mr){
+      base.hasMaiorRisco=true;
+      var titulo=(mr.processo||'—')+(mr.cliente?(' — '+mr.cliente):'');
+      var subParts=[]; if(mr.diariaDia!=null) subParts.push(this.fmtMoney(mr.diariaDia,mr.moeda)+'/dia em demurrage'); subParts.push(this.plCont(mr.containers||0)+(mr.bucket==='custo'?' fora do free time':''));
+      base.maiorRisco={ titulo:titulo, sub:subParts.join(' · ')+'.' };
+      var focusId=mr.processo|| (sec.custo[0]&&sec.custo[0].id) || (sec.risco[0]&&sec.risco[0].id);
+      base.onVerPrioritario=()=>{ if(focusId) this.focusProc(focusId); };
+    }
+
+    var ativ=resp.atividades||[];
+    base.semAtividades = ativ.length===0;
+    var iconByTipo=function(t){
+      if(t==='container_devolvido') return {bg:'#E7F6EF',color:'#1F9D6B',iconPath:self.IC.check};
+      if(t==='minuta_solicitada') return {bg:'#EEEBFE',color:'#4327E6',iconPath:self.IC.doc};
+      if(t==='minuta_recebida') return {bg:'#E7F6EF',color:'#1F9D6B',iconPath:self.IC.check};
+      return {bg:'#FDECEC',color:'#E5484D',iconPath:self.IC.warn};
+    };
+    base.atividades = ativ.map(function(a){ var ic=iconByTipo(a.tipo); return { label:a.label, sub:a.sub, time:self.fmtAgo(a.at), bg:ic.bg, color:ic.color, iconPath:ic.iconPath }; });
+
+    return base;
+  }
 }
 </script>
 </body>
