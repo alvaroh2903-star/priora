@@ -162,8 +162,9 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
 }
 
 /**
- * GET /api/couriers — reconstrói a visão operacional dos couriers a partir do
- * Outlook (fonte da verdade v1). Sem IA: rápido, só metadados + regex.
+ * Constrói a visão operacional dos couriers a partir do Outlook (fonte da
+ * verdade v1). Sem IA: rápido, só metadados + regex. Reutilizada por GET / e
+ * por GET /stats (assim as KPIs de gestão batem exatamente com a aba Couriers).
  *
  * Cada courier = um tracking (nunca dois cards para o mesmo tracking). Agrupa os
  * processos IMxxxx citados nas mesmas conversas, lista referências (container),
@@ -171,10 +172,9 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
  * confirmado pelo operador (Identificado por padrão). Nada é inventado: o que
  * não estiver no e-mail não aparece.
  */
-courierRouter.get('/', async (req: AuthedRequest, res, next) => {
-  try {
+async function buildCourierView(accessToken: string) {
     let messages = await withTimeout(
-      searchLogisticsMessages(req.accessToken!, {
+      searchLogisticsMessages(accessToken, {
         keywords: config.logisticsKeywords,
         top: 60,
       }),
@@ -184,7 +184,7 @@ courierRouter.get('/', async (req: AuthedRequest, res, next) => {
     let source = 'logistica';
     if (messages.length === 0) {
       messages = await withTimeout(
-        listRecentSummaries(req.accessToken!, { top: 40 }),
+        listRecentSummaries(accessToken, { top: 40 }),
         20000,
         'listInbox',
       );
@@ -201,7 +201,7 @@ courierRouter.get('/', async (req: AuthedRequest, res, next) => {
     await Promise.all(
       withAtt.map(async (m) => {
         const texts = await withTimeout(
-          getItemAttachmentTexts(req.accessToken!, m.id),
+          getItemAttachmentTexts(accessToken, m.id),
           8000,
           'itemAttachment',
         ).catch(() => [] as string[]);
@@ -515,16 +515,131 @@ courierRouter.get('/', async (req: AuthedRequest, res, next) => {
         };
       });
 
-    res.json({
+    return {
       count: couriers.length,
       source,
       couriers,
+      // Lista completa (inclui Concluídos) — usada só pelas KPIs de /stats.
+      couriersAll,
       processosSemCourier: Array.from(processosSemCourier.values()).sort((a, b) =>
         a.data < b.data ? 1 : -1,
       ),
       atividades,
       concluidos,
-    });
+    };
+}
+
+type CourierView = Awaited<ReturnType<typeof buildCourierView>>;
+type CourierRow = CourierView['couriersAll'][number];
+
+/**
+ * GET /api/couriers — visão operacional dos couriers a partir do Outlook.
+ * (couriersAll é interno — não vai para o cliente aqui.)
+ */
+courierRouter.get('/', async (req: AuthedRequest, res, next) => {
+  try {
+    const { couriersAll, ...payload } = await buildCourierView(req.accessToken!);
+    void couriersAll;
+    res.json(payload);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * Calcula as KPIs de gestão a partir da MESMA lista de couriers (couriersAll,
+ * inclui Concluídos). Tudo derivado do que existe — nada inventado. Métricas
+ * sem base suficiente (ex.: tempo médio sem couriers concluídos) voltam null.
+ */
+function computeCourierStats(couriers: CourierRow[], concluidosCount: number) {
+  const estados = getAllEstados();
+  const now = new Date();
+  const monthKey = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  const curKey = monthKey(now);
+  const prevKey = monthKey(new Date(now.getFullYear(), now.getMonth() - 1, 1));
+
+  // Volume nos últimos 6 meses (bucket pela primeira menção do courier).
+  const months: Array<{ key: string; label: string }> = [];
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    months.push({ key: monthKey(d), label: d.toLocaleDateString('pt-BR', { month: 'short' }) });
+  }
+  const volume = new Map<string, number>(months.map((m) => [m.key, 0]));
+
+  const carrierMes = new Map<string, number>();
+  let couriersMes = 0;
+  let couriersMesPrev = 0;
+  let excecoes = 0;
+  const temposDias: number[] = [];
+  const processosLiberados = new Set<string>();
+
+  for (const c of couriers) {
+    const d = new Date(c.primeiraData || c.data || 0);
+    const k = monthKey(d);
+    if (volume.has(k)) volume.set(k, (volume.get(k) || 0) + 1);
+    if (k === curKey) {
+      couriersMes++;
+      carrierMes.set(c.carrier, (carrierMes.get(c.carrier) || 0) + 1);
+    }
+    if (k === prevKey) couriersMesPrev++;
+
+    // Exceção: divergência confirmada OU courier que precisa de revisão humana.
+    if (c.estado === 'Divergência' || c.precisaRevisao) excecoes++;
+
+    if (c.estado === 'Concluído') {
+      // Processos liberados = processos (distintos, por base) de couriers concluídos.
+      for (const p of c.processos) processosLiberados.add(processBase(p));
+      // Tempo médio = (conclusão − primeira menção), quando temos o timestamp.
+      const reg = estados[trackingKey(c.tracking)];
+      if (reg?.updatedAt && c.primeiraData) {
+        const ms = new Date(reg.updatedAt).getTime() - new Date(c.primeiraData).getTime();
+        if (ms > 0) temposDias.push(ms / 86_400_000);
+      }
+    }
+  }
+
+  const tempoMedio = temposDias.length
+    ? Math.round((temposDias.reduce((a, b) => a + b, 0) / temposDias.length) * 10) / 10
+    : null;
+  const pctVsPrev =
+    couriersMesPrev > 0
+      ? Math.round(((couriersMes - couriersMesPrev) / couriersMesPrev) * 100)
+      : null;
+
+  const carriers = Array.from(carrierMes.entries())
+    .map(([nome, qtd]) => ({ nome, qtd }))
+    .sort((a, b) => b.qtd - a.qtd);
+  const totalCarrier = carriers.reduce((s, x) => s + x.qtd, 0) || 1;
+  const porTransportadora = carriers.map((x) => ({
+    ...x,
+    pct: Math.round((x.qtd / totalCarrier) * 100),
+  }));
+
+  return {
+    mes: curKey,
+    couriersMes,
+    couriersMesPrev,
+    couriersPctVsPrev: pctVsPrev,
+    tempoMedioDias: tempoMedio,
+    tempoMedioAmostra: temposDias.length,
+    excecoes,
+    processosLiberados: processosLiberados.size,
+    volume: months.map((m) => ({ mes: m.label, key: m.key, qtd: volume.get(m.key) || 0 })),
+    porTransportadora,
+    totalCouriers: couriers.length,
+    concluidos: concluidosCount,
+  };
+}
+
+/**
+ * GET /api/couriers/stats — KPIs de gestão (aba Gestão → Relatórios) derivadas
+ * da MESMA lista de couriers, para os números baterem com a aba Couriers.
+ */
+courierRouter.get('/stats', async (req: AuthedRequest, res, next) => {
+  try {
+    const view = await buildCourierView(req.accessToken!);
+    res.json(computeCourierStats(view.couriersAll, view.concluidos));
   } catch (err) {
     next(err);
   }

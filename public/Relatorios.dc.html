@@ -13,25 +13,204 @@
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
   body{font-family:'Plus Jakarta Sans',sans-serif;-webkit-font-smoothing:antialiased;background:#F4F5FB}
-  @keyframes pageIn{from{transform:translateY(12px)}to{transform:translateY(0)}}
+  @keyframes pageIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+  @keyframes growBar{from{transform:scaleY(0)}to{transform:scaleY(1)}}
+  .mono{font-family:'JetBrains Mono',monospace}
 </style>
 </helmet>
 <main style="flex:1;min-width:0;display:flex;flex-direction:column">
-    <dc-import name="Topbar" title="Relatórios" subtitle="Visão consolidada da operação — volume, prazos, exceções e custo." icon-path="M14 3v5h5 M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z M8 13v4 M12 11v6 M16 14v3" hint-size="100%,110px"></dc-import>
-    <div style="flex:1;display:flex;align-items:center;justify-content:center;padding:40px;animation:pageIn .35s ease both">
-      <div style="text-align:center;max-width:440px;background:#fff;border:1px solid #E6E8F2;border-radius:16px;padding:44px 34px">
-        <div style="width:58px;height:58px;border-radius:15px;background:#EEEBFE;display:flex;align-items:center;justify-content:center;margin:0 auto 18px">
-          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+    <dc-import name="Topbar" title="Relatórios" subtitle="Visão consolidada da operação de couriers — volume, prazos e exceções." icon-path="M14 3v5h5 M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z M8 13v4 M12 11v6 M16 14v3" hint-size="100%,110px"></dc-import>
+
+    <div style="flex:1;overflow-y:auto;padding:22px 26px 40px;animation:pageIn .35s ease both">
+
+      <!-- ====== Loading ====== -->
+      <sc-if value="{{ loading }}" hint-placeholder-val="{{ true }}">
+        <div style="display:flex;align-items:center;justify-content:center;padding:80px;color:#7A8099;font-size:14px">
+          <span>Consolidando dados dos couriers…</span>
         </div>
-        <div style="font-size:19px;font-weight:800;color:#161A2E;margin-bottom:9px">Em construção</div>
-        <div style="font-size:14px;line-height:1.6;color:#6B7192">Esta tela será conectada aos seus dados reais do Outlook em breve.<br>Por enquanto, use a aba <b style="color:#4327E6">Processos</b> — já funcionando com seus e-mails.</div>
-      </div>
+      </sc-if>
+
+      <!-- ====== Erro / sem dados ====== -->
+      <sc-if value="{{ errored }}" hint-placeholder-val="{{ false }}">
+        <div style="text-align:center;max-width:440px;margin:60px auto;background:#fff;border:1px solid #E6E8F2;border-radius:16px;padding:38px 30px">
+          <div style="font-size:17px;font-weight:800;color:#161A2E;margin-bottom:8px">Não foi possível carregar</div>
+          <div style="font-size:13.5px;line-height:1.6;color:#6B7192">{{ errorMsg }}</div>
+        </div>
+      </sc-if>
+
+      <!-- ====== Conteúdo ====== -->
+      <sc-if value="{{ ready }}" hint-placeholder-val="{{ false }}">
+
+        <!-- Clara — resumo do período (derivado dos números reais) -->
+        <div style="background:#fff;border:1px solid #E6E8F2;border-radius:16px;padding:20px 22px;margin-bottom:18px;display:flex;gap:15px;align-items:flex-start">
+          <span style="width:44px;height:44px;border-radius:13px;background:#EEEBFE;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="2"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4 M9 13h.01 M15 13h.01"/></svg>
+          </span>
+          <div style="flex:1;min-width:0">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">
+              <span style="font-size:14.5px;font-weight:800;color:#161A2E">Clara</span>
+              <span style="font-size:10px;font-weight:700;color:#4327E6;background:#EEEBFE;padding:2px 7px;border-radius:6px">IA</span>
+              <span style="font-size:11.5px;color:#9AA0B4">{{ periodoLabel }}</span>
+            </div>
+            <div style="font-size:13.5px;line-height:1.6;color:#3C4258">{{ claraResumo }}</div>
+          </div>
+        </div>
+
+        <!-- KPIs -->
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:18px">
+          <sc-for value="{{ kpis }}" alias="k">
+            <div style="background:#fff;border:1px solid #E6E8F2;border-radius:15px;padding:17px 18px">
+              <div style="display:flex;align-items:center;gap:7px;margin-bottom:11px">
+                <span style="width:8px;height:8px;border-radius:50%;background:{{ k.dot }}"></span>
+                <span style="font-size:12px;font-weight:600;color:#6B7192">{{ k.label }}</span>
+              </div>
+              <div class="mono" style="font-size:30px;font-weight:700;color:#161A2E;line-height:1">{{ k.value }}</div>
+              <div style="font-size:11.5px;color:{{ k.deltaColor }};margin-top:8px">{{ k.delta }}</div>
+            </div>
+          </sc-for>
+        </div>
+
+        <!-- Volume + Transportadora -->
+        <div style="display:grid;grid-template-columns:1.55fr 1fr;gap:16px;margin-bottom:18px">
+
+          <!-- Volume por mês -->
+          <div style="background:#fff;border:1px solid #E6E8F2;border-radius:16px;padding:20px 22px">
+            <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:4px">
+              <div style="font-size:14.5px;font-weight:800;color:#161A2E">Volume de couriers</div>
+              <div style="font-size:11px;color:#9AA0B4">por mês</div>
+            </div>
+            <div style="font-size:12px;color:#9AA0B4;margin-bottom:20px">Couriers identificados nos últimos 6 meses</div>
+            <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:12px;height:180px">
+              <sc-for value="{{ volume }}" alias="v">
+                <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;gap:8px">
+                  <div style="font-size:12px;font-weight:700;color:#3C4258">{{ v.qtd }}</div>
+                  <div style="width:100%;max-width:46px;height:{{ v.h }}px;background:{{ v.color }};border-radius:8px 8px 4px 4px;transform-origin:bottom;animation:growBar .5s ease both"></div>
+                  <div style="font-size:11px;color:#9AA0B4">{{ v.mes }}</div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+
+          <!-- Por transportadora -->
+          <div style="background:#fff;border:1px solid #E6E8F2;border-radius:16px;padding:20px 22px">
+            <div style="font-size:14.5px;font-weight:800;color:#161A2E">Por transportadora</div>
+            <div style="font-size:12px;color:#9AA0B4;margin-bottom:20px">Participação no mês</div>
+            <sc-if value="{{ temCarrier }}" hint-placeholder-val="{{ true }}">
+              <div style="display:flex;flex-direction:column;gap:17px">
+                <sc-for value="{{ carriers }}" alias="c">
+                  <div>
+                    <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:6px">
+                      <span style="font-size:13px;font-weight:700;color:#161A2E">{{ c.nome }}</span>
+                      <span style="font-size:12px;color:#6B7192"><b class="mono" style="color:#161A2E">{{ c.qtd }}</b> · {{ c.pct }}%</span>
+                    </div>
+                    <div style="height:9px;background:#EFF0F7;border-radius:6px;overflow:hidden">
+                      <div style="height:100%;width:{{ c.pct }}%;background:{{ c.color }};border-radius:6px;transition:width .5s ease"></div>
+                    </div>
+                  </div>
+                </sc-for>
+              </div>
+            </sc-if>
+            <sc-if value="{{ semCarrier }}" hint-placeholder-val="{{ false }}">
+              <div style="font-size:12.5px;color:#9AA0B4;padding:14px 0">Nenhum courier identificado neste mês ainda.</div>
+            </sc-if>
+          </div>
+        </div>
+
+        <!-- Nota de honestidade: o que ainda não vem daqui -->
+        <div style="background:#F7F8FC;border:1px dashed #D8DBEC;border-radius:12px;padding:13px 16px;font-size:11.5px;color:#7A8099;line-height:1.55">
+          <b style="color:#5A6076">Custo de demurrage</b> e <b style="color:#5A6076">exceções por tipo</b> serão ligados quando o módulo <b style="color:#4327E6">Demurrage</b> estiver ativo. Aqui, tudo é calculado a partir dos couriers reais do Outlook — nada é estimado.
+        </div>
+
+      </sc-if>
     </div>
 </main>
 </x-dc>
 <script type="text/x-dc" data-dc-script>
 class Component extends DCLogic {
-  renderVals(){ return {}; }
+  state = { stats:null, status:'loading' };
+
+  componentDidMount(){ this.load(); }
+
+  load(){
+    var self=this;
+    fetch('/api/couriers/stats', { credentials:'same-origin' })
+      .then(function(r){ return r.json().catch(function(){return null;}).then(function(j){ if(!r.ok) throw new Error((j&&j.error)||('HTTP '+r.status)); return j; }); })
+      .then(function(s){ self.setState({ stats:s, status:'done' }); })
+      .catch(function(e){ self.setState({ status:'error:'+String(e&&e.message||e) }); });
+  }
+
+  renderVals(){
+    var s=this.state.stats, st=this.state.status;
+    var loading=(st==='loading');
+    var errored=(st.indexOf('error')===0);
+    var ready=(st==='done' && !!s);
+    if (!ready) {
+      return { loading:loading, errored:errored, ready:false,
+        errorMsg:(errored? st.slice(st.indexOf(':')+1) : '') };
+    }
+
+    var PURPLE='#4327E6', PURPLE_SOFT='#C9C2F7', GREEN='#177D54', AMBER='#E08A1E', MUTED='#9AA0B4';
+
+    // ---- KPIs ----
+    var deltaCouriers = (s.couriersPctVsPrev===null) ? 'sem mês anterior'
+      : ((s.couriersPctVsPrev<=0?'▼ ':'▲ ')+Math.abs(s.couriersPctVsPrev)+'% vs. mês anterior');
+    var tempoVal = (s.tempoMedioDias===null) ? '—' : (String(s.tempoMedioDias).replace('.',',')+'d');
+    var tempoDelta = (s.tempoMedioDias===null)
+      ? 'aguardando couriers concluídos'
+      : (s.tempoMedioAmostra+' courier'+(s.tempoMedioAmostra===1?'':'s')+' concluído'+(s.tempoMedioAmostra===1?'':'s'));
+
+    var kpis=[
+      { label:'Couriers (mês)', value:String(s.couriersMes), dot:PURPLE,
+        delta:deltaCouriers, deltaColor:MUTED },
+      { label:'Tempo médio', value:tempoVal, dot:GREEN,
+        delta:tempoDelta, deltaColor:MUTED },
+      { label:'Exceções', value:String(s.excecoes), dot:AMBER,
+        delta:'divergências + revisões pendentes', deltaColor:MUTED },
+      { label:'Processos liberados', value:String(s.processosLiberados), dot:PURPLE,
+        delta:'em couriers concluídos', deltaColor:MUTED }
+    ];
+
+    // ---- Volume (altura proporcional) ----
+    var vol=s.volume||[];
+    var maxV=1; vol.forEach(function(v){ if(v.qtd>maxV) maxV=v.qtd; });
+    var lastKey=vol.length? vol[vol.length-1].key : '';
+    var volume=vol.map(function(v){
+      var h=Math.round((v.qtd/maxV)*150); if(v.qtd>0 && h<8) h=8; if(v.qtd===0) h=4;
+      return { mes:v.mes, qtd:String(v.qtd), h:h, color:(v.key===lastKey?PURPLE:PURPLE_SOFT) };
+    });
+
+    // ---- Transportadoras ----
+    var CARRIER_COLOR={ 'DHL':'#4327E6', 'FedEx':'#6D28D9', 'Correios':'#8B5CF6', 'Sedex':'#8B5CF6' };
+    var carriers=(s.porTransportadora||[]).map(function(c){
+      return { nome:c.nome, qtd:String(c.qtd), pct:c.pct, color:(CARRIER_COLOR[c.nome]||'#8B5CF6') };
+    });
+
+    // ---- Resumo da Clara (factual) ----
+    var resumo;
+    if (s.couriersMes===0) {
+      resumo='Nenhum courier identificado neste mês ainda. Os números aparecem conforme os e-mails chegam no Outlook.';
+    } else {
+      var p1='Foram identificados '+s.couriersMes+' courier'+(s.couriersMes===1?'':'s')+' este mês';
+      if (s.couriersPctVsPrev!==null) p1+=' ('+(s.couriersPctVsPrev<=0?'queda':'alta')+' de '+Math.abs(s.couriersPctVsPrev)+'% vs. o mês anterior)';
+      var p2 = (s.tempoMedioDias!==null) ? ', com tempo médio de '+String(s.tempoMedioDias).replace('.',',')+' dias até a conclusão' : '';
+      var p3 = (s.excecoes>0) ? '. Há '+s.excecoes+' exceção'+(s.excecoes===1?'':'ões')+' aguardando ação (divergências ou revisão).' : '. Nenhuma exceção pendente no momento.';
+      resumo=p1+p2+p3;
+    }
+
+    var mesLabel='';
+    try { var mk=(s.mes||'').split('-'); if(mk.length===2){ var dd=new Date(Number(mk[0]), Number(mk[1])-1, 1); mesLabel=dd.toLocaleDateString('pt-BR',{month:'long',year:'numeric'}); } } catch(e){}
+
+    return {
+      loading:false, errored:false, ready:true, errorMsg:'',
+      periodoLabel: mesLabel,
+      claraResumo: resumo,
+      kpis: kpis,
+      volume: volume,
+      carriers: carriers,
+      temCarrier: carriers.length>0,
+      semCarrier: carriers.length===0
+    };
+  }
 }
 </script>
 </body>
