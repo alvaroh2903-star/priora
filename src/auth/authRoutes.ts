@@ -5,6 +5,41 @@ import { config, isAzureConfigured } from '../config';
 
 export const authRouter = Router();
 
+/**
+ * CSRF do OAuth SEM depender da sessão. No Render gratuito a instância dorme /
+ * recicla e o arquivo de sessão pendente pode sumir entre /login e /callback,
+ * derrubando o state guardado em sessão ("possível CSRF"). Aqui o state é
+ * ASSINADO (HMAC com o SESSION_SECRET) e carrega um timestamp: no callback
+ * verificamos a assinatura e a validade — provando que fomos nós que geramos,
+ * sem precisar guardar nada. Robusto a reinícios do processo.
+ */
+const STATE_TTL_MS = 15 * 60 * 1000; // 15 min para concluir o login
+
+function makeAuthState(): string {
+  const payload = `${crypto.randomBytes(16).toString('hex')}.${Date.now()}`;
+  const sig = crypto
+    .createHmac('sha256', config.sessionSecret)
+    .update(payload)
+    .digest('hex');
+  return `${payload}.${sig}`;
+}
+
+function isValidAuthState(state: string | undefined): boolean {
+  if (!state) return false;
+  const parts = state.split('.');
+  if (parts.length !== 3) return false;
+  const [nonce, ts, sig] = parts;
+  const expected = crypto
+    .createHmac('sha256', config.sessionSecret)
+    .update(`${nonce}.${ts}`)
+    .digest('hex');
+  const a = Buffer.from(sig);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return false;
+  const age = Date.now() - Number(ts);
+  return age >= 0 && age < STATE_TTL_MS;
+}
+
 /** Inicia o login: redireciona o usuário para a tela "Entrar com a Microsoft". */
 authRouter.get('/login', async (req, res, next) => {
   try {
@@ -16,8 +51,7 @@ authRouter.get('/login', async (req, res, next) => {
             'AZURE_CLIENT_SECRET no arquivo .env e reinicie o servidor.',
         );
     }
-    const state = crypto.randomBytes(16).toString('hex');
-    req.session.authState = state;
+    const state = makeAuthState();
 
     const url = await getMsalClient().getAuthCodeUrl({
       scopes: config.loginScopes,
@@ -63,10 +97,14 @@ authRouter.get('/callback', async (req, res, next) => {
             'não abra /auth/callback diretamente nem recarregue essa página.',
         );
     }
-    if (!state || state !== req.session.authState) {
-      return res.status(400).send('Parâmetro "state" inválido (possível CSRF).');
+    if (!isValidAuthState(state)) {
+      return res
+        .status(400)
+        .send(
+          'Sessão de login expirada ou inválida. Volte à página inicial e clique ' +
+            'em "Entrar com a Microsoft" novamente (não reabra/recarregue esta página).',
+        );
     }
-    delete req.session.authState;
 
     const result = await getMsalClient().acquireTokenByCode({
       code,
