@@ -140,14 +140,38 @@
             </div>
 
             <div class="card" style="padding:20px 22px">
-              <div style="font-size:14.5px;font-weight:800;color:#161A2E">Custo de demurrage</div>
-              <div style="font-size:12px;color:#9AA0B4;margin:4px 0 20px">Módulo Demurrage</div>
-              <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;height:150px;gap:10px">
-                <span style="width:42px;height:42px;border-radius:12px;background:#F1F2F9;display:flex;align-items:center;justify-content:center">
-                  <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="#9AA0B4" stroke-width="2"><path d="M3 3v18h18 M7 15l3-3 3 3 4-5"/></svg>
-                </span>
-                <div style="font-size:12.5px;color:#7A8099;line-height:1.55;max-width:280px">O custo de demurrage é calculado pelo <b style="color:#4327E6">módulo Demurrage</b>. Será exibido aqui quando aquele módulo estiver ativo — sem estimativas.</div>
+              <div style="display:flex;align-items:baseline;justify-content:space-between">
+                <div style="font-size:14.5px;font-weight:800;color:#161A2E">Custo de demurrage</div>
+                <div style="font-size:11px;color:#9AA0B4">exposição atual</div>
               </div>
+              <div style="font-size:12px;color:#9AA0B4;margin:4px 0 20px">Dado real do módulo Demurrage</div>
+              <sc-if value="{{ demOk }}" hint-placeholder-val="{{ true }}">
+                <div style="display:flex;flex-direction:column;gap:16px">
+                  <div>
+                    <div style="font-size:11.5px;color:#6B7192;margin-bottom:4px">Custo ativo <span style="color:#9AA0B4">· {{ demCustoCount }}</span></div>
+                    <div class="mono" style="font-size:30px;font-weight:700;color:#C2333A;line-height:1">{{ demCustoValor }}</div>
+                  </div>
+                  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+                    <div style="background:#F7F8FC;border:1px solid #EEF0F7;border-radius:11px;padding:12px 13px">
+                      <div style="font-size:11px;color:#6B7192;margin-bottom:5px">Impacto total</div>
+                      <div class="mono" style="font-size:17px;font-weight:700;color:#161A2E">{{ demImpacto }}</div>
+                    </div>
+                    <div style="background:#F7F8FC;border:1px solid #EEF0F7;border-radius:11px;padding:12px 13px">
+                      <div style="font-size:11px;color:#6B7192;margin-bottom:5px">Risco iminente</div>
+                      <div class="mono" style="font-size:17px;font-weight:700;color:#E08A1E">{{ demRisco }}<span style="font-size:11px;color:#9AA0B4;font-weight:500">/dia</span></div>
+                    </div>
+                  </div>
+                  <div style="font-size:11px;color:#9AA0B4;line-height:1.5">Histórico mês a mês aparece aqui conforme o módulo Demurrage registrar os custos ao longo do tempo.</div>
+                </div>
+              </sc-if>
+              <sc-if value="{{ demVazio }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;height:150px;gap:10px">
+                  <span style="width:42px;height:42px;border-radius:12px;background:#F1F2F9;display:flex;align-items:center;justify-content:center">
+                    <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="#9AA0B4" stroke-width="2"><path d="M3 3v18h18 M7 15l3-3 3 3 4-5"/></svg>
+                  </span>
+                  <div style="font-size:12.5px;color:#7A8099;line-height:1.55;max-width:280px">{{ demMsg }}</div>
+                </div>
+              </sc-if>
             </div>
           </div>
 
@@ -158,7 +182,7 @@
 </x-dc>
 <script type="text/x-dc" data-dc-script>
 class Component extends DCLogic {
-  state = { stats:null, status:'loading' };
+  state = { stats:null, status:'loading', dem:null, demStatus:'loading' };
   componentDidMount(){ this.load(); }
 
   load(){
@@ -167,6 +191,20 @@ class Component extends DCLogic {
       .then(function(r){ return r.json().catch(function(){return null;}).then(function(j){ if(!r.ok) throw new Error((j&&j.error)||('HTTP '+r.status)); return j; }); })
       .then(function(s){ self.setState({ stats:s, status:'done' }); })
       .catch(function(e){ self.setState({ status:'error:'+String(e&&e.message||e) }); });
+
+    // Custo de demurrage: dado REAL do módulo Demurrage (snapshot atual — não há
+    // histórico mensal ainda). Best-effort: se falhar/estiver off, o card mostra
+    // estado honesto, sem inventar números.
+    fetch('/api/demurrage', { credentials:'same-origin' })
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(d){ self.setState({ dem:d, demStatus:'done' }); })
+      .catch(function(){ self.setState({ dem:null, demStatus:'error' }); });
+  }
+
+  fmtMoeda(valor, moeda){
+    if (valor===null||valor===undefined) return '—';
+    try { return new Intl.NumberFormat('pt-BR',{ style:'currency', currency:(moeda||'BRL'), maximumFractionDigits:0 }).format(valor); }
+    catch(e){ return (moeda||'')+' '+Math.round(valor).toLocaleString('pt-BR'); }
   }
 
   renderVals(){
@@ -218,12 +256,36 @@ class Component extends DCLogic {
 
     var mesLabel=''; try{ var mk=(s.mes||'').split('-'); if(mk.length===2){ var dd=new Date(Number(mk[0]),Number(mk[1])-1,1); mesLabel=dd.toLocaleDateString('pt-BR',{month:'long',year:'numeric'}); } }catch(e){}
 
+    // ---- Custo de demurrage (dado REAL do /api/demurrage; sem histórico mensal) ----
+    var dem=this.state.dem, demStatus=this.state.demStatus;
+    var demOk=false, demVazio=false, demMsg='', demCustoValor='—', demCustoCount='', demImpacto='—', demRisco='—';
+    if (demStatus==='loading') {
+      demVazio=true; demMsg='Carregando custo de demurrage…';
+    } else if (!dem || dem.aiEnabled===false) {
+      demVazio=true; demMsg=(dem&&dem.aiEnabled===false)
+        ? 'Análise de demurrage indisponível (IA off no servidor). Sem estimativas.'
+        : 'Não foi possível carregar o módulo Demurrage agora.';
+    } else {
+      var k=dem.kpis||{}; var ca=k.custoAtivo||{}, it=k.impactoTotal||{}, ri=k.riscoIminente||{};
+      var temAlgum=((ca.count||0)>0)||((ca.valor||0)>0)||((ri.count||0)>0);
+      if (!temAlgum) { demVazio=true; demMsg='Nenhum custo de demurrage ativo no momento. Operação sem sobreestadia.'; }
+      else {
+        demOk=true;
+        demCustoValor=this.fmtMoeda(ca.valor||0, ca.moeda);
+        demCustoCount=(ca.count||0)+' processo'+((ca.count||0)===1?'':'s');
+        demImpacto=this.fmtMoeda(it.valor||0, it.moeda);
+        demRisco=this.fmtMoeda(ri.diariaDia||0, ri.moeda);
+      }
+    }
+
     return {
       loading:false, errored:false, ready:true, errorMsg:'',
       periodoLabel:mesLabel, claraResumo:resumo,
       kpis:kpis, volume:volume,
       carriers:carriers, temCarrier:carriers.length>0, semCarrier:carriers.length===0,
       excecoesTipos:excecoesTipos, temExcecoes:excecoesTipos.length>0, semExcecoes:excecoesTipos.length===0,
+      demOk:demOk, demVazio:demVazio, demMsg:demMsg,
+      demCustoValor:demCustoValor, demCustoCount:demCustoCount, demImpacto:demImpacto, demRisco:demRisco,
       onExportar:function(){ window.print(); }
     };
   }
