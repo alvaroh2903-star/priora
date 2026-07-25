@@ -579,9 +579,13 @@ function computeCourierStats(couriers: CourierRow[], concluidosCount: number) {
   }
   const volume = new Map<string, number>(months.map((m) => [m.key, 0]));
 
-  const carrierMes = new Map<string, number>();
+  // Participação por transportadora: contada sobre TODA a janela de 6 meses (não
+  // só o mês de referência) — assim o gráfico reflete o conjunto real de
+  // couriers, mesmo quando cada mês tem poucos.
+  const carrierJanela = new Map<string, number>();
   let couriersMes = 0;
   let couriersMesPrev = 0;
+  let couriersJanela = 0;
   let excecoes = 0;
   const temposDias: number[] = [];
   const processosLiberados = new Set<string>();
@@ -597,10 +601,11 @@ function computeCourierStats(couriers: CourierRow[], concluidosCount: number) {
     const d = new Date(c.primeiraData || c.data || 0);
     const k = monthKey(d);
     if (volume.has(k)) volume.set(k, (volume.get(k) || 0) + 1);
-    if (k === refKey) {
-      couriersMes++;
-      carrierMes.set(c.carrier, (carrierMes.get(c.carrier) || 0) + 1);
+    if (janelaKeys.has(k)) {
+      couriersJanela++;
+      carrierJanela.set(c.carrier, (carrierJanela.get(c.carrier) || 0) + 1);
     }
+    if (k === refKey) couriersMes++;
     if (k === prevKey) couriersMesPrev++;
 
     // Exceção: divergência confirmada OU courier que precisa de revisão humana.
@@ -642,7 +647,7 @@ function computeCourierStats(couriers: CourierRow[], concluidosCount: number) {
       ? Math.round(((couriersMes - couriersMesPrev) / couriersMesPrev) * 100)
       : null;
 
-  const carriers = Array.from(carrierMes.entries())
+  const carriers = Array.from(carrierJanela.entries())
     .map(([nome, qtd]) => ({ nome, qtd }))
     .sort((a, b) => b.qtd - a.qtd);
   const totalCarrier = carriers.reduce((s, x) => s + x.qtd, 0) || 1;
@@ -660,6 +665,7 @@ function computeCourierStats(couriers: CourierRow[], concluidosCount: number) {
     couriersMes,
     couriersMesPrev,
     couriersPctVsPrev: pctVsPrev,
+    couriersJanela,
     tempoMedioDias: tempoMedio,
     tempoMedioAmostra: temposDias.length,
     excecoes,

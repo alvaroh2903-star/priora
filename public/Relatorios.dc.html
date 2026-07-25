@@ -92,7 +92,7 @@
 
             <div class="card" style="padding:20px 22px">
               <div style="font-size:14.5px;font-weight:800;color:#161A2E">Por transportadora</div>
-              <div style="font-size:12px;color:#9AA0B4;margin:4px 0 22px">Participação no mês</div>
+              <div style="font-size:12px;color:#9AA0B4;margin:4px 0 22px">Participação nos últimos 6 meses</div>
               <sc-if value="{{ temCarrier }}" hint-placeholder-val="{{ true }}">
                 <div style="display:flex;flex-direction:column;gap:18px">
                   <sc-for value="{{ carriers }}" alias="c">
@@ -215,13 +215,17 @@ class Component extends DCLogic {
     var PURPLE='#4327E6', PURPLE_SOFT='#C9C2F7', GREEN='#177D54', AMBER='#E08A1E', RED='#C2333A', MUTED='#9AA0B4';
 
     // ---- KPIs ----
-    var deltaCouriers = (s.couriersPctVsPrev===null) ? 'sem mês anterior'
-      : ((s.couriersPctVsPrev<=0?'▼ ':'▲ ')+Math.abs(s.couriersPctVsPrev)+'% vs. mês anterior');
+    // 1º KPI mostra o TOTAL de couriers (bate com a aba Couriers); o mês de
+    // referência entra como detalhe. Assim a tela reflete o conjunto real mesmo
+    // quando cada mês isolado tem poucos couriers.
+    var totalCour = (s.couriersJanela!=null? s.couriersJanela : s.couriersMes);
+    var deltaCouriers = (s.couriersMes||0)+' no mês atual'
+      + ((s.couriersPctVsPrev!==null) ? ' ('+(s.couriersPctVsPrev<=0?'▼':'▲')+Math.abs(s.couriersPctVsPrev)+'% vs. anterior)' : '');
     var tempoVal = (s.tempoMedioDias===null)?'—':(String(s.tempoMedioDias).replace('.',',')+'d');
     var tempoDelta = (s.tempoMedioDias===null)?'aguardando concluídos'
       :(s.tempoMedioAmostra+' concluído'+(s.tempoMedioAmostra===1?'':'s'));
     var kpis=[
-      { label:'Couriers (mês)', value:String(s.couriersMes), dot:PURPLE, delta:deltaCouriers, deltaColor:(s.couriersPctVsPrev!==null&&s.couriersPctVsPrev<=0?GREEN:MUTED) },
+      { label:'Couriers (6 meses)', value:String(totalCour), dot:PURPLE, delta:deltaCouriers, deltaColor:MUTED },
       { label:'Tempo médio', value:tempoVal, dot:GREEN, delta:tempoDelta, deltaColor:MUTED },
       { label:'Exceções', value:String(s.excecoes), dot:AMBER, delta:'no período (6 meses)', deltaColor:MUTED },
       { label:'Processos liberados', value:String(s.processosLiberados), dot:PURPLE, delta:'em couriers concluídos', deltaColor:MUTED }
@@ -244,11 +248,11 @@ class Component extends DCLogic {
 
     // ---- Resumo factual da Clara ----
     var resumo;
-    if (s.couriersMes===0) {
-      resumo='Nenhum courier identificado neste mês ainda. Os números aparecem conforme os e-mails chegam no Outlook.';
+    if (totalCour===0) {
+      resumo='Nenhum courier identificado ainda. Os números aparecem conforme os e-mails chegam no Outlook.';
     } else {
-      var p1='Foram identificados '+s.couriersMes+' courier'+(s.couriersMes===1?'':'s')+' este mês';
-      if (s.couriersPctVsPrev!==null) p1+=' ('+(s.couriersPctVsPrev<=0?'queda':'alta')+' de '+Math.abs(s.couriersPctVsPrev)+'% vs. o mês anterior)';
+      var p1='Foram identificados '+totalCour+' courier'+(totalCour===1?'':'s')+' nos últimos 6 meses ('+(s.couriersMes||0)+' no mês atual)';
+      if (s.couriersPctVsPrev!==null) p1+=', '+(s.couriersPctVsPrev<=0?'queda':'alta')+' de '+Math.abs(s.couriersPctVsPrev)+'% vs. o mês anterior';
       var p2=(s.tempoMedioDias!==null)?', com tempo médio de '+String(s.tempoMedioDias).replace('.',',')+' dias até a conclusão':'';
       var p3=(s.excecoes>0)?'. Há '+s.excecoes+' exceção'+(s.excecoes===1?'':'ões')+' no período — concentradas em '+((excecoesTipos[0]&&excecoesTipos[0].tipo)||'conferência')+'.':'. Nenhuma exceção pendente no momento.';
       resumo=p1+p2+p3;
