@@ -16,6 +16,8 @@
   @keyframes pageIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
   @keyframes growBar{from{transform:scaleY(0)}to{transform:scaleY(1)}}
   .mono{font-family:'JetBrains Mono',monospace}
+  .card{background:#fff;border:1px solid #E9EAF2;border-radius:16px}
+  @media print{ .no-print{display:none!important} }
 </style>
 </helmet>
 <main style="flex:1;min-width:0;display:flex;flex-direction:column">
@@ -23,104 +25,133 @@
 
     <div style="flex:1;overflow-y:auto;padding:22px 26px 40px;animation:pageIn .35s ease both">
 
-      <!-- ====== Loading ====== -->
       <sc-if value="{{ loading }}" hint-placeholder-val="{{ true }}">
-        <div style="display:flex;align-items:center;justify-content:center;padding:80px;color:#7A8099;font-size:14px">
-          <span>Consolidando dados dos couriers…</span>
-        </div>
+        <div style="display:flex;align-items:center;justify-content:center;padding:80px;color:#7A8099;font-size:14px">Consolidando dados dos couriers…</div>
       </sc-if>
 
-      <!-- ====== Erro / sem dados ====== -->
       <sc-if value="{{ errored }}" hint-placeholder-val="{{ false }}">
-        <div style="text-align:center;max-width:440px;margin:60px auto;background:#fff;border:1px solid #E6E8F2;border-radius:16px;padding:38px 30px">
+        <div class="card" style="text-align:center;max-width:440px;margin:60px auto;padding:38px 30px">
           <div style="font-size:17px;font-weight:800;color:#161A2E;margin-bottom:8px">Não foi possível carregar</div>
           <div style="font-size:13.5px;line-height:1.6;color:#6B7192">{{ errorMsg }}</div>
         </div>
       </sc-if>
 
-      <!-- ====== Conteúdo ====== -->
       <sc-if value="{{ ready }}" hint-placeholder-val="{{ false }}">
+        <div style="max-width:1180px;margin:0 auto">
 
-        <!-- Clara — resumo do período (derivado dos números reais) -->
-        <div style="background:#fff;border:1px solid #E6E8F2;border-radius:16px;padding:20px 22px;margin-bottom:18px;display:flex;gap:15px;align-items:flex-start">
-          <span style="width:44px;height:44px;border-radius:13px;background:#EEEBFE;display:flex;align-items:center;justify-content:center;flex-shrink:0">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="2"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4 M9 13h.01 M15 13h.01"/></svg>
-          </span>
-          <div style="flex:1;min-width:0">
-            <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">
-              <span style="font-size:14.5px;font-weight:800;color:#161A2E">Clara</span>
-              <span style="font-size:10px;font-weight:700;color:#4327E6;background:#EEEBFE;padding:2px 7px;border-radius:6px">IA</span>
-              <span style="font-size:11.5px;color:#9AA0B4">{{ periodoLabel }}</span>
-            </div>
-            <div style="font-size:13.5px;line-height:1.6;color:#3C4258">{{ claraResumo }}</div>
-          </div>
-        </div>
-
-        <!-- KPIs -->
-        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:18px">
-          <sc-for value="{{ kpis }}" alias="k">
-            <div style="background:#fff;border:1px solid #E6E8F2;border-radius:15px;padding:17px 18px">
-              <div style="display:flex;align-items:center;gap:7px;margin-bottom:11px">
-                <span style="width:8px;height:8px;border-radius:50%;background:{{ k.dot }}"></span>
-                <span style="font-size:12px;font-weight:600;color:#6B7192">{{ k.label }}</span>
+          <!-- ===== Clara (resumo do período) + Exportar PDF ===== -->
+          <div class="card" style="padding:20px 22px;margin-bottom:16px;display:flex;gap:15px;align-items:flex-start">
+            <span style="width:46px;height:46px;border-radius:50%;background:#E7F0FE;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#1D4ED8" stroke-width="2"><rect x="4" y="8" width="16" height="12" rx="4"/><path d="M12 8V4.5 M9 13.5h.01 M15 13.5h.01"/></svg>
+            </span>
+            <div style="flex:1;min-width:0">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+                <span style="font-size:15px;font-weight:800;color:#161A2E">Clara</span>
+                <span style="font-size:10px;font-weight:700;color:#4327E6;background:#EEEBFE;padding:2px 7px;border-radius:6px">IA</span>
+                <span style="font-size:11.5px;color:#9AA0B4">{{ periodoLabel }} · parcial</span>
               </div>
-              <div class="mono" style="font-size:30px;font-weight:700;color:#161A2E;line-height:1">{{ k.value }}</div>
-              <div style="font-size:11.5px;color:{{ k.deltaColor }};margin-top:8px">{{ k.delta }}</div>
+              <div style="font-size:13.5px;line-height:1.6;color:#3C4258">{{ claraResumo }}</div>
             </div>
-          </sc-for>
-        </div>
-
-        <!-- Volume + Transportadora -->
-        <div style="display:grid;grid-template-columns:1.55fr 1fr;gap:16px;margin-bottom:18px">
-
-          <!-- Volume por mês -->
-          <div style="background:#fff;border:1px solid #E6E8F2;border-radius:16px;padding:20px 22px">
-            <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:4px">
-              <div style="font-size:14.5px;font-weight:800;color:#161A2E">Volume de couriers</div>
-              <div style="font-size:11px;color:#9AA0B4">por mês</div>
-            </div>
-            <div style="font-size:12px;color:#9AA0B4;margin-bottom:20px">Couriers identificados nos últimos 6 meses</div>
-            <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:12px;height:180px">
-              <sc-for value="{{ volume }}" alias="v">
-                <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;gap:8px">
-                  <div style="font-size:12px;font-weight:700;color:#3C4258">{{ v.qtd }}</div>
-                  <div style="width:100%;max-width:46px;height:{{ v.h }}px;background:{{ v.color }};border-radius:8px 8px 4px 4px;transform-origin:bottom;animation:growBar .5s ease both"></div>
-                  <div style="font-size:11px;color:#9AA0B4">{{ v.mes }}</div>
-                </div>
-              </sc-for>
-            </div>
+            <button class="no-print" onClick="{{ onExportar }}" style="flex-shrink:0;display:flex;align-items:center;gap:7px;background:#fff;color:#3C4258;border:1px solid #E1E3EF;border-radius:10px;padding:9px 14px;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="2"><path d="M12 3v12 M8 11l4 4 4-4 M4 19h16"/></svg>Exportar PDF
+            </button>
           </div>
 
-          <!-- Por transportadora -->
-          <div style="background:#fff;border:1px solid #E6E8F2;border-radius:16px;padding:20px 22px">
-            <div style="font-size:14.5px;font-weight:800;color:#161A2E">Por transportadora</div>
-            <div style="font-size:12px;color:#9AA0B4;margin-bottom:20px">Participação no mês</div>
-            <sc-if value="{{ temCarrier }}" hint-placeholder-val="{{ true }}">
-              <div style="display:flex;flex-direction:column;gap:17px">
-                <sc-for value="{{ carriers }}" alias="c">
-                  <div>
-                    <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:6px">
-                      <span style="font-size:13px;font-weight:700;color:#161A2E">{{ c.nome }}</span>
-                      <span style="font-size:12px;color:#6B7192"><b class="mono" style="color:#161A2E">{{ c.qtd }}</b> · {{ c.pct }}%</span>
-                    </div>
-                    <div style="height:9px;background:#EFF0F7;border-radius:6px;overflow:hidden">
-                      <div style="height:100%;width:{{ c.pct }}%;background:{{ c.color }};border-radius:6px;transition:width .5s ease"></div>
-                    </div>
+          <!-- ===== KPIs ===== -->
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:16px">
+            <sc-for value="{{ kpis }}" alias="k">
+              <div class="card" style="padding:17px 18px">
+                <div style="display:flex;align-items:center;gap:7px;margin-bottom:12px">
+                  <span style="width:8px;height:8px;border-radius:50%;background:{{ k.dot }}"></span>
+                  <span style="font-size:12px;font-weight:600;color:#6B7192">{{ k.label }}</span>
+                </div>
+                <div class="mono" style="font-size:30px;font-weight:700;color:#161A2E;line-height:1">{{ k.value }}</div>
+                <div style="font-size:11.5px;color:{{ k.deltaColor }};margin-top:9px">{{ k.delta }}</div>
+              </div>
+            </sc-for>
+          </div>
+
+          <!-- ===== Volume + Por transportadora ===== -->
+          <div style="display:grid;grid-template-columns:1.55fr 1fr;gap:16px;margin-bottom:16px">
+            <div class="card" style="padding:20px 22px">
+              <div style="display:flex;align-items:baseline;justify-content:space-between">
+                <div style="font-size:14.5px;font-weight:800;color:#161A2E">Volume de couriers</div>
+                <div style="font-size:11px;color:#9AA0B4">por mês</div>
+              </div>
+              <div style="font-size:12px;color:#9AA0B4;margin:4px 0 22px">Couriers identificados nos últimos 6 meses</div>
+              <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:12px;height:180px">
+                <sc-for value="{{ volume }}" alias="v">
+                  <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;gap:8px">
+                    <div style="font-size:12px;font-weight:700;color:#3C4258">{{ v.qtd }}</div>
+                    <div style="width:100%;max-width:48px;height:{{ v.h }}px;background:{{ v.color }};border-radius:8px 8px 4px 4px;transform-origin:bottom;animation:growBar .5s ease both"></div>
+                    <div style="font-size:11px;color:#9AA0B4">{{ v.mes }}</div>
                   </div>
                 </sc-for>
               </div>
-            </sc-if>
-            <sc-if value="{{ semCarrier }}" hint-placeholder-val="{{ false }}">
-              <div style="font-size:12.5px;color:#9AA0B4;padding:14px 0">Nenhum courier identificado neste mês ainda.</div>
-            </sc-if>
+            </div>
+
+            <div class="card" style="padding:20px 22px">
+              <div style="font-size:14.5px;font-weight:800;color:#161A2E">Por transportadora</div>
+              <div style="font-size:12px;color:#9AA0B4;margin:4px 0 22px">Participação no mês</div>
+              <sc-if value="{{ temCarrier }}" hint-placeholder-val="{{ true }}">
+                <div style="display:flex;flex-direction:column;gap:18px">
+                  <sc-for value="{{ carriers }}" alias="c">
+                    <div>
+                      <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:7px">
+                        <span style="font-size:13px;font-weight:700;color:#161A2E">{{ c.nome }}</span>
+                        <span style="font-size:12px;color:#6B7192"><b class="mono" style="color:#161A2E">{{ c.qtd }}</b> · {{ c.pct }}%</span>
+                      </div>
+                      <div style="height:9px;background:#EFF0F7;border-radius:6px;overflow:hidden">
+                        <div style="height:100%;width:{{ c.pct }}%;background:{{ c.color }};border-radius:6px"></div>
+                      </div>
+                    </div>
+                  </sc-for>
+                </div>
+              </sc-if>
+              <sc-if value="{{ semCarrier }}" hint-placeholder-val="{{ false }}">
+                <div style="font-size:12.5px;color:#9AA0B4;padding:14px 0">Nenhum courier identificado neste mês ainda.</div>
+              </sc-if>
+            </div>
           </div>
-        </div>
 
-        <!-- Nota de honestidade: o que ainda não vem daqui -->
-        <div style="background:#F7F8FC;border:1px dashed #D8DBEC;border-radius:12px;padding:13px 16px;font-size:11.5px;color:#7A8099;line-height:1.55">
-          <b style="color:#5A6076">Custo de demurrage</b> e <b style="color:#5A6076">exceções por tipo</b> serão ligados quando o módulo <b style="color:#4327E6">Demurrage</b> estiver ativo. Aqui, tudo é calculado a partir dos couriers reais do Outlook — nada é estimado.
-        </div>
+          <!-- ===== Exceções por tipo + Custo de demurrage ===== -->
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+            <div class="card" style="padding:20px 22px">
+              <div style="font-size:14.5px;font-weight:800;color:#161A2E">Exceções por tipo</div>
+              <div style="font-size:12px;color:#9AA0B4;margin:4px 0 20px">Últimos 6 meses</div>
+              <sc-if value="{{ temExcecoes }}" hint-placeholder-val="{{ true }}">
+                <div style="display:flex;flex-direction:column;gap:15px">
+                  <sc-for value="{{ excecoesTipos }}" alias="e">
+                    <div style="display:flex;align-items:center;gap:11px">
+                      <span style="width:9px;height:9px;border-radius:50%;background:{{ e.color }};flex-shrink:0"></span>
+                      <span style="font-size:12.5px;color:#3C4258;width:170px;flex-shrink:0">{{ e.tipo }}</span>
+                      <div style="flex:1;height:8px;background:#EFF0F7;border-radius:5px;overflow:hidden"><div style="height:100%;width:{{ e.w }}%;background:{{ e.color }};border-radius:5px"></div></div>
+                      <span class="mono" style="font-size:13px;font-weight:700;color:#161A2E;width:20px;text-align:right">{{ e.qtd }}</span>
+                    </div>
+                  </sc-for>
+                </div>
+              </sc-if>
+              <sc-if value="{{ semExcecoes }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex;align-items:center;gap:9px;padding:18px 0;color:#177D54;font-size:13px;font-weight:600">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#177D54" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>
+                  Nenhuma exceção no período. Operação sem pendências.
+                </div>
+              </sc-if>
+            </div>
 
+            <div class="card" style="padding:20px 22px">
+              <div style="font-size:14.5px;font-weight:800;color:#161A2E">Custo de demurrage</div>
+              <div style="font-size:12px;color:#9AA0B4;margin:4px 0 20px">Módulo Demurrage</div>
+              <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;height:150px;gap:10px">
+                <span style="width:42px;height:42px;border-radius:12px;background:#F1F2F9;display:flex;align-items:center;justify-content:center">
+                  <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="#9AA0B4" stroke-width="2"><path d="M3 3v18h18 M7 15l3-3 3 3 4-5"/></svg>
+                </span>
+                <div style="font-size:12.5px;color:#7A8099;line-height:1.55;max-width:280px">O custo de demurrage é calculado pelo <b style="color:#4327E6">módulo Demurrage</b>. Será exibido aqui quando aquele módulo estiver ativo — sem estimativas.</div>
+              </div>
+            </div>
+          </div>
+
+        </div>
       </sc-if>
     </div>
 </main>
@@ -128,7 +159,6 @@
 <script type="text/x-dc" data-dc-script>
 class Component extends DCLogic {
   state = { stats:null, status:'loading' };
-
   componentDidMount(){ this.load(); }
 
   load(){
@@ -141,74 +171,60 @@ class Component extends DCLogic {
 
   renderVals(){
     var s=this.state.stats, st=this.state.status;
-    var loading=(st==='loading');
-    var errored=(st.indexOf('error')===0);
-    var ready=(st==='done' && !!s);
-    if (!ready) {
-      return { loading:loading, errored:errored, ready:false,
-        errorMsg:(errored? st.slice(st.indexOf(':')+1) : '') };
-    }
+    var loading=(st==='loading'), errored=(st.indexOf('error')===0), ready=(st==='done'&&!!s);
+    if (!ready) return { loading:loading, errored:errored, ready:false, errorMsg:(errored?st.slice(st.indexOf(':')+1):'') };
 
-    var PURPLE='#4327E6', PURPLE_SOFT='#C9C2F7', GREEN='#177D54', AMBER='#E08A1E', MUTED='#9AA0B4';
+    var PURPLE='#4327E6', PURPLE_SOFT='#C9C2F7', GREEN='#177D54', AMBER='#E08A1E', RED='#C2333A', MUTED='#9AA0B4';
 
     // ---- KPIs ----
     var deltaCouriers = (s.couriersPctVsPrev===null) ? 'sem mês anterior'
       : ((s.couriersPctVsPrev<=0?'▼ ':'▲ ')+Math.abs(s.couriersPctVsPrev)+'% vs. mês anterior');
-    var tempoVal = (s.tempoMedioDias===null) ? '—' : (String(s.tempoMedioDias).replace('.',',')+'d');
-    var tempoDelta = (s.tempoMedioDias===null)
-      ? 'aguardando couriers concluídos'
-      : (s.tempoMedioAmostra+' courier'+(s.tempoMedioAmostra===1?'':'s')+' concluído'+(s.tempoMedioAmostra===1?'':'s'));
-
+    var tempoVal = (s.tempoMedioDias===null)?'—':(String(s.tempoMedioDias).replace('.',',')+'d');
+    var tempoDelta = (s.tempoMedioDias===null)?'aguardando concluídos'
+      :(s.tempoMedioAmostra+' concluído'+(s.tempoMedioAmostra===1?'':'s'));
     var kpis=[
-      { label:'Couriers (mês)', value:String(s.couriersMes), dot:PURPLE,
-        delta:deltaCouriers, deltaColor:MUTED },
-      { label:'Tempo médio', value:tempoVal, dot:GREEN,
-        delta:tempoDelta, deltaColor:MUTED },
-      { label:'Exceções', value:String(s.excecoes), dot:AMBER,
-        delta:'divergências + revisões pendentes', deltaColor:MUTED },
-      { label:'Processos liberados', value:String(s.processosLiberados), dot:PURPLE,
-        delta:'em couriers concluídos', deltaColor:MUTED }
+      { label:'Couriers (mês)', value:String(s.couriersMes), dot:PURPLE, delta:deltaCouriers, deltaColor:(s.couriersPctVsPrev!==null&&s.couriersPctVsPrev<=0?GREEN:MUTED) },
+      { label:'Tempo médio', value:tempoVal, dot:GREEN, delta:tempoDelta, deltaColor:MUTED },
+      { label:'Exceções', value:String(s.excecoes), dot:AMBER, delta:'no período (6 meses)', deltaColor:MUTED },
+      { label:'Processos liberados', value:String(s.processosLiberados), dot:PURPLE, delta:'em couriers concluídos', deltaColor:MUTED }
     ];
 
-    // ---- Volume (altura proporcional) ----
-    var vol=s.volume||[];
-    var maxV=1; vol.forEach(function(v){ if(v.qtd>maxV) maxV=v.qtd; });
-    var lastKey=vol.length? vol[vol.length-1].key : '';
-    var volume=vol.map(function(v){
-      var h=Math.round((v.qtd/maxV)*150); if(v.qtd>0 && h<8) h=8; if(v.qtd===0) h=4;
-      return { mes:v.mes, qtd:String(v.qtd), h:h, color:(v.key===lastKey?PURPLE:PURPLE_SOFT) };
-    });
+    // ---- Volume ----
+    var vol=s.volume||[], maxV=1; vol.forEach(function(v){ if(v.qtd>maxV)maxV=v.qtd; });
+    var lastKey=vol.length?vol[vol.length-1].key:'';
+    var volume=vol.map(function(v){ var h=Math.round((v.qtd/maxV)*150); if(v.qtd>0&&h<8)h=8; if(v.qtd===0)h=4;
+      return { mes:v.mes, qtd:String(v.qtd), h:h, color:(v.key===lastKey?PURPLE:PURPLE_SOFT) }; });
 
     // ---- Transportadoras ----
-    var CARRIER_COLOR={ 'DHL':'#4327E6', 'FedEx':'#6D28D9', 'Correios':'#8B5CF6', 'Sedex':'#8B5CF6' };
-    var carriers=(s.porTransportadora||[]).map(function(c){
-      return { nome:c.nome, qtd:String(c.qtd), pct:c.pct, color:(CARRIER_COLOR[c.nome]||'#8B5CF6') };
-    });
+    var CC={ 'DHL':'#4327E6','FedEx':'#6D28D9','Correios':'#8B5CF6','Sedex':'#8B5CF6' };
+    var carriers=(s.porTransportadora||[]).map(function(c){ return { nome:c.nome, qtd:String(c.qtd), pct:c.pct, color:(CC[c.nome]||'#8B5CF6') }; });
 
-    // ---- Resumo da Clara (factual) ----
+    // ---- Exceções por tipo (courier-derivadas) ----
+    var EC={ 'OMBL ausente':AMBER, 'OHBL ausente':'#D97706', 'Revisão pendente':MUTED, 'Divergência na conferência':RED };
+    var et=s.excecoesPorTipo||[], maxE=1; et.forEach(function(e){ if(e.qtd>maxE)maxE=e.qtd; });
+    var excecoesTipos=et.map(function(e){ return { tipo:e.tipo, qtd:String(e.qtd), w:Math.round((e.qtd/maxE)*100), color:(EC[e.tipo]||MUTED) }; });
+
+    // ---- Resumo factual da Clara ----
     var resumo;
     if (s.couriersMes===0) {
       resumo='Nenhum courier identificado neste mês ainda. Os números aparecem conforme os e-mails chegam no Outlook.';
     } else {
       var p1='Foram identificados '+s.couriersMes+' courier'+(s.couriersMes===1?'':'s')+' este mês';
       if (s.couriersPctVsPrev!==null) p1+=' ('+(s.couriersPctVsPrev<=0?'queda':'alta')+' de '+Math.abs(s.couriersPctVsPrev)+'% vs. o mês anterior)';
-      var p2 = (s.tempoMedioDias!==null) ? ', com tempo médio de '+String(s.tempoMedioDias).replace('.',',')+' dias até a conclusão' : '';
-      var p3 = (s.excecoes>0) ? '. Há '+s.excecoes+' exceção'+(s.excecoes===1?'':'ões')+' aguardando ação (divergências ou revisão).' : '. Nenhuma exceção pendente no momento.';
+      var p2=(s.tempoMedioDias!==null)?', com tempo médio de '+String(s.tempoMedioDias).replace('.',',')+' dias até a conclusão':'';
+      var p3=(s.excecoes>0)?'. Há '+s.excecoes+' exceção'+(s.excecoes===1?'':'ões')+' no período — concentradas em '+((excecoesTipos[0]&&excecoesTipos[0].tipo)||'conferência')+'.':'. Nenhuma exceção pendente no momento.';
       resumo=p1+p2+p3;
     }
 
-    var mesLabel='';
-    try { var mk=(s.mes||'').split('-'); if(mk.length===2){ var dd=new Date(Number(mk[0]), Number(mk[1])-1, 1); mesLabel=dd.toLocaleDateString('pt-BR',{month:'long',year:'numeric'}); } } catch(e){}
+    var mesLabel=''; try{ var mk=(s.mes||'').split('-'); if(mk.length===2){ var dd=new Date(Number(mk[0]),Number(mk[1])-1,1); mesLabel=dd.toLocaleDateString('pt-BR',{month:'long',year:'numeric'}); } }catch(e){}
 
     return {
       loading:false, errored:false, ready:true, errorMsg:'',
-      periodoLabel: mesLabel,
-      claraResumo: resumo,
-      kpis: kpis,
-      volume: volume,
-      carriers: carriers,
-      temCarrier: carriers.length>0,
-      semCarrier: carriers.length===0
+      periodoLabel:mesLabel, claraResumo:resumo,
+      kpis:kpis, volume:volume,
+      carriers:carriers, temCarrier:carriers.length>0, semCarrier:carriers.length===0,
+      excecoesTipos:excecoesTipos, temExcecoes:excecoesTipos.length>0, semExcecoes:excecoesTipos.length===0,
+      onExportar:function(){ window.print(); }
     };
   }
 }

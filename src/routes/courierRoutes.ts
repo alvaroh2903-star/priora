@@ -573,6 +573,13 @@ function computeCourierStats(couriers: CourierRow[], concluidosCount: number) {
   let excecoes = 0;
   const temposDias: number[] = [];
   const processosLiberados = new Set<string>();
+  // Exceções por TIPO (derivadas da conferência real dos couriers). Só tipos que
+  // os dados suportam: documento ausente (OMBL/OHBL) e revisão pendente.
+  const tipoExcecao = new Map<string, number>();
+  const bump = (t: string) => tipoExcecao.set(t, (tipoExcecao.get(t) || 0) + 1);
+
+  // Janela de 6 meses (para os totais "no período").
+  const janelaKeys = new Set(months.map((m) => m.key));
 
   for (const c of couriers) {
     const d = new Date(c.primeiraData || c.data || 0);
@@ -585,7 +592,23 @@ function computeCourierStats(couriers: CourierRow[], concluidosCount: number) {
     if (k === prevKey) couriersMesPrev++;
 
     // Exceção: divergência confirmada OU courier que precisa de revisão humana.
-    if (c.estado === 'Divergência' || c.precisaRevisao) excecoes++;
+    const conf = (c as { conferencia?: Record<string, Record<string, string>> })
+      .conferencia || {};
+    const docsFaltando = { mbl: false, hbl: false };
+    for (const proc of Object.values(conf)) {
+      if (proc?.mbl === 'nao_recebido') docsFaltando.mbl = true;
+      if (proc?.hbl === 'nao_recebido') docsFaltando.hbl = true;
+    }
+    const ehExcecao = c.estado === 'Divergência' || c.precisaRevisao;
+    if (ehExcecao && janelaKeys.has(k)) {
+      excecoes++;
+      // Classifica por tipo (courier-derivável). Um courier pode ter mais de um.
+      if (docsFaltando.mbl) bump('OMBL ausente');
+      if (docsFaltando.hbl) bump('OHBL ausente');
+      if (c.precisaRevisao) bump('Revisão pendente');
+      if (c.estado === 'Divergência' && !docsFaltando.mbl && !docsFaltando.hbl)
+        bump('Divergência na conferência');
+    }
 
     if (c.estado === 'Concluído') {
       // Processos liberados = processos (distintos, por base) de couriers concluídos.
@@ -616,6 +639,10 @@ function computeCourierStats(couriers: CourierRow[], concluidosCount: number) {
     pct: Math.round((x.qtd / totalCarrier) * 100),
   }));
 
+  const excecoesPorTipo = Array.from(tipoExcecao.entries())
+    .map(([tipo, qtd]) => ({ tipo, qtd }))
+    .sort((a, b) => b.qtd - a.qtd);
+
   return {
     mes: curKey,
     couriersMes,
@@ -624,6 +651,7 @@ function computeCourierStats(couriers: CourierRow[], concluidosCount: number) {
     tempoMedioDias: tempoMedio,
     tempoMedioAmostra: temposDias.length,
     excecoes,
+    excecoesPorTipo,
     processosLiberados: processosLiberados.size,
     volume: months.map((m) => ({ mes: m.label, key: m.key, qtd: volume.get(m.key) || 0 })),
     porTransportadora,
