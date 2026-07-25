@@ -59,7 +59,7 @@
 
           <!-- ===== KPIs ===== -->
           <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:16px">
-            <sc-for value="{{ kpis }}" alias="k">
+            <sc-for list="{{ kpis }}" as="k" hint-placeholder-count="4">
               <div class="card" style="padding:17px 18px">
                 <div style="display:flex;align-items:center;gap:7px;margin-bottom:12px">
                   <span style="width:8px;height:8px;border-radius:50%;background:{{ k.dot }}"></span>
@@ -80,7 +80,7 @@
               </div>
               <div style="font-size:12px;color:#9AA0B4;margin:4px 0 22px">Couriers identificados nos últimos 6 meses</div>
               <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:12px;height:180px">
-                <sc-for value="{{ volume }}" alias="v">
+                <sc-for list="{{ volume }}" as="v" hint-placeholder-count="6">
                   <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;gap:8px">
                     <div style="font-size:12px;font-weight:700;color:#3C4258">{{ v.qtd }}</div>
                     <div style="width:100%;max-width:48px;height:{{ v.h }}px;background:{{ v.color }};border-radius:8px 8px 4px 4px;transform-origin:bottom;animation:growBar .5s ease both"></div>
@@ -95,7 +95,7 @@
               <div style="font-size:12px;color:#9AA0B4;margin:4px 0 22px">Participação nos últimos 6 meses</div>
               <sc-if value="{{ temCarrier }}" hint-placeholder-val="{{ true }}">
                 <div style="display:flex;flex-direction:column;gap:18px">
-                  <sc-for value="{{ carriers }}" alias="c">
+                  <sc-for list="{{ carriers }}" as="c" hint-placeholder-count="3">
                     <div>
                       <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:7px">
                         <span style="font-size:13px;font-weight:700;color:#161A2E">{{ c.nome }}</span>
@@ -121,7 +121,7 @@
               <div style="font-size:12px;color:#9AA0B4;margin:4px 0 20px">Últimos 6 meses</div>
               <sc-if value="{{ temExcecoes }}" hint-placeholder-val="{{ true }}">
                 <div style="display:flex;flex-direction:column;gap:15px">
-                  <sc-for value="{{ excecoesTipos }}" alias="e">
+                  <sc-for list="{{ excecoesTipos }}" as="e" hint-placeholder-count="4">
                     <div style="display:flex;align-items:center;gap:11px">
                       <span style="width:9px;height:9px;border-radius:50%;background:{{ e.color }};flex-shrink:0"></span>
                       <span style="font-size:12.5px;color:#3C4258;width:170px;flex-shrink:0">{{ e.tipo }}</span>
