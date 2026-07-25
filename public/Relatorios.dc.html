@@ -182,19 +182,20 @@
 </x-dc>
 <script type="text/x-dc" data-dc-script>
 class Component extends DCLogic {
-  state = { stats:null, status:'loading', dem:null, demStatus:'loading' };
+  state = { resp:null, status:'loading', dem:null, demStatus:'loading' };
   componentDidMount(){ this.load(); }
 
   load(){
     var self=this;
-    fetch('/api/couriers/stats', { credentials:'same-origin' })
+    // MESMA fonte da aba Couriers (/api/couriers). Assim os couriers que
+    // aparecem lá aparecem AQUI — sem depender de nenhum endpoint separado.
+    fetch('/api/couriers', { credentials:'same-origin' })
       .then(function(r){ return r.json().catch(function(){return null;}).then(function(j){ if(!r.ok) throw new Error((j&&j.error)||('HTTP '+r.status)); return j; }); })
-      .then(function(s){ self.setState({ stats:s, status:'done' }); })
+      .then(function(d){ self.setState({ resp:d, status:'done' }); })
       .catch(function(e){ self.setState({ status:'error:'+String(e&&e.message||e) }); });
 
-    // Custo de demurrage: dado REAL do módulo Demurrage (snapshot atual — não há
-    // histórico mensal ainda). Best-effort: se falhar/estiver off, o card mostra
-    // estado honesto, sem inventar números.
+    // Custo de demurrage: dado REAL do módulo Demurrage (snapshot atual).
+    // Best-effort: se falhar/estiver off, o card mostra estado honesto.
     fetch('/api/demurrage', { credentials:'same-origin' })
       .then(function(r){ return r.ok ? r.json() : null; })
       .then(function(d){ self.setState({ dem:d, demStatus:'done' }); })
@@ -207,28 +208,67 @@ class Component extends DCLogic {
     catch(e){ return (moeda||'')+' '+Math.round(valor).toLocaleString('pt-BR'); }
   }
 
+  mkKey(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); }
+  procBase(p){ return String(p).replace(/-\d{2}$/,''); }
+
+  // Calcula as métricas NO FRONT a partir da lista de couriers (a mesma da aba).
+  computeStats(couriers, semCourierCount){
+    var self=this, now=new Date(), curKey=this.mkKey(now);
+    var keys=couriers.map(function(c){ return self.mkKey(new Date(c.primeiraData||c.data||0)); })
+      .filter(function(k){ return k<=curKey; }).sort();
+    var refKey=keys.length?keys[keys.length-1]:curKey;
+    var refY=Number(refKey.slice(0,4)), refM=Number(refKey.slice(5,7));
+    var prevKey=this.mkKey(new Date(refY,refM-2,1));
+    var months=[]; for(var i=5;i>=0;i--){ var d=new Date(refY,refM-1-i,1); months.push({ key:this.mkKey(d), label:d.toLocaleDateString('pt-BR',{month:'short'}) }); }
+    var janela={}, volume={}; months.forEach(function(m){ janela[m.key]=true; volume[m.key]=0; });
+    var carrier={}, couriersMes=0, couriersMesPrev=0, couriersJanela=0, excecoes=0, tipo={}, procs={};
+    couriers.forEach(function(c){
+      var k=self.mkKey(new Date(c.primeiraData||c.data||0));
+      if(volume[k]!=null) volume[k]++;
+      if(janela[k]){ couriersJanela++; carrier[c.carrier]=(carrier[c.carrier]||0)+1; }
+      if(k===refKey) couriersMes++;
+      if(k===prevKey) couriersMesPrev++;
+      (c.processos||[]).forEach(function(p){ procs[self.procBase(p)]=true; });
+      var conf=c.conferencia||{}, mbl=false, hbl=false;
+      Object.keys(conf).forEach(function(pk){ var pc=conf[pk]||{}; if(pc.mbl==='nao_recebido')mbl=true; if(pc.hbl==='nao_recebido')hbl=true; });
+      if((c.estado==='Divergência'||c.precisaRevisao) && janela[k]){ excecoes++;
+        if(mbl)tipo['OMBL ausente']=(tipo['OMBL ausente']||0)+1;
+        if(hbl)tipo['OHBL ausente']=(tipo['OHBL ausente']||0)+1;
+        if(c.precisaRevisao)tipo['Revisão pendente']=(tipo['Revisão pendente']||0)+1;
+        if(c.estado==='Divergência'&&!mbl&&!hbl)tipo['Divergência na conferência']=(tipo['Divergência na conferência']||0)+1;
+      }
+    });
+    var pct=couriersMesPrev>0?Math.round((couriersMes-couriersMesPrev)/couriersMesPrev*100):null;
+    var carriers=Object.keys(carrier).map(function(n){ return {nome:n,qtd:carrier[n]}; }).sort(function(a,b){return b.qtd-a.qtd;});
+    var totalC=carriers.reduce(function(s,x){return s+x.qtd;},0)||1;
+    var excTipos=Object.keys(tipo).map(function(t){ return {tipo:t,qtd:tipo[t]}; }).sort(function(a,b){return b.qtd-a.qtd;});
+    return {
+      mes:refKey, couriersMes:couriersMes, couriersPctVsPrev:pct, couriersJanela:couriersJanela,
+      totalCouriers:couriers.length, processosAgrupados:Object.keys(procs).length, processosSemCourier:semCourierCount,
+      excecoes:excecoes,
+      volume:months.map(function(m){ return {mes:m.label,key:m.key,qtd:volume[m.key]||0}; }),
+      porTransportadora:carriers.map(function(x){ return {nome:x.nome,qtd:x.qtd,pct:Math.round(x.qtd/totalC*100)}; }),
+      excecoesPorTipo:excTipos
+    };
+  }
+
   renderVals(){
-    var s=this.state.stats, st=this.state.status;
-    var loading=(st==='loading'), errored=(st.indexOf('error')===0), ready=(st==='done'&&!!s);
+    var resp=this.state.resp, st=this.state.status;
+    var loading=(st==='loading'), errored=(st.indexOf('error')===0), ready=(st==='done'&&!!resp);
     if (!ready) return { loading:loading, errored:errored, ready:false, errorMsg:(errored?st.slice(st.indexOf(':')+1):'') };
 
+    var s=this.computeStats(resp.couriers||[], (resp.processosSemCourier||[]).length);
     var PURPLE='#4327E6', PURPLE_SOFT='#C9C2F7', GREEN='#177D54', AMBER='#E08A1E', RED='#C2333A', MUTED='#9AA0B4';
 
-    // ---- KPIs ----
-    // 1º KPI mostra o TOTAL de couriers (bate com a aba Couriers); o mês de
-    // referência entra como detalhe. Assim a tela reflete o conjunto real mesmo
-    // quando cada mês isolado tem poucos couriers.
-    var totalCour = (s.couriersJanela!=null? s.couriersJanela : s.couriersMes);
-    var deltaCouriers = (s.couriersMes||0)+' no mês atual'
+    // ---- KPIs (refletem a aba Couriers) ----
+    var totalCour=s.couriersJanela;
+    var deltaCouriers=(s.couriersMes||0)+' no mês atual'
       + ((s.couriersPctVsPrev!==null) ? ' ('+(s.couriersPctVsPrev<=0?'▼':'▲')+Math.abs(s.couriersPctVsPrev)+'% vs. anterior)' : '');
-    var tempoVal = (s.tempoMedioDias===null)?'—':(String(s.tempoMedioDias).replace('.',',')+'d');
-    var tempoDelta = (s.tempoMedioDias===null)?'aguardando concluídos'
-      :(s.tempoMedioAmostra+' concluído'+(s.tempoMedioAmostra===1?'':'s'));
     var kpis=[
       { label:'Couriers (6 meses)', value:String(totalCour), dot:PURPLE, delta:deltaCouriers, deltaColor:MUTED },
-      { label:'Tempo médio', value:tempoVal, dot:GREEN, delta:tempoDelta, deltaColor:MUTED },
-      { label:'Exceções', value:String(s.excecoes), dot:AMBER, delta:'no período (6 meses)', deltaColor:MUTED },
-      { label:'Processos liberados', value:String(s.processosLiberados), dot:PURPLE, delta:'em couriers concluídos', deltaColor:MUTED }
+      { label:'Processos agrupados', value:String(s.processosAgrupados), dot:GREEN, delta:'vinculados a um envelope', deltaColor:MUTED },
+      { label:'Processos sem courier', value:String(s.processosSemCourier), dot:AMBER, delta:'aguardam tracking', deltaColor:MUTED },
+      { label:'Exceções', value:String(s.excecoes), dot:RED, delta:'divergência / revisão', deltaColor:MUTED }
     ];
 
     // ---- Volume ----
@@ -238,7 +278,7 @@ class Component extends DCLogic {
       return { mes:v.mes, qtd:String(v.qtd), h:h, color:(v.key===lastKey?PURPLE:PURPLE_SOFT) }; });
 
     // ---- Transportadoras ----
-    var CC={ 'DHL':'#4327E6','FedEx':'#6D28D9','Correios':'#8B5CF6','Sedex':'#8B5CF6' };
+    var CC={ 'DHL':'#4327E6','FedEx':'#6D28D9','Correios':'#8B5CF6','Sedex':'#8B5CF6','Courier':'#A6ABC4' };
     var carriers=(s.porTransportadora||[]).map(function(c){ return { nome:c.nome, qtd:String(c.qtd), pct:c.pct, color:(CC[c.nome]||'#8B5CF6') }; });
 
     // ---- Exceções por tipo (courier-derivadas) ----
@@ -251,10 +291,9 @@ class Component extends DCLogic {
     if (totalCour===0) {
       resumo='Nenhum courier identificado ainda. Os números aparecem conforme os e-mails chegam no Outlook.';
     } else {
-      var p1='Foram identificados '+totalCour+' courier'+(totalCour===1?'':'s')+' nos últimos 6 meses ('+(s.couriersMes||0)+' no mês atual)';
-      if (s.couriersPctVsPrev!==null) p1+=', '+(s.couriersPctVsPrev<=0?'queda':'alta')+' de '+Math.abs(s.couriersPctVsPrev)+'% vs. o mês anterior';
-      var p2=(s.tempoMedioDias!==null)?', com tempo médio de '+String(s.tempoMedioDias).replace('.',',')+' dias até a conclusão':'';
-      var p3=(s.excecoes>0)?'. Há '+s.excecoes+' exceção'+(s.excecoes===1?'':'ões')+' no período — concentradas em '+((excecoesTipos[0]&&excecoesTipos[0].tipo)||'conferência')+'.':'. Nenhuma exceção pendente no momento.';
+      var p1='Reconstruí '+totalCour+' courier'+(totalCour===1?'':'s')+' nos últimos 6 meses — '+s.processosAgrupados+' processo'+(s.processosAgrupados===1?'':'s')+' agrupado'+(s.processosAgrupados===1?'':'s');
+      var p2=(s.processosSemCourier>0)?', e '+s.processosSemCourier+' ainda sem courier':'';
+      var p3=(s.excecoes>0)?'. Há '+s.excecoes+' exceção'+(s.excecoes===1?'':'ões')+' no período — concentradas em '+((excecoesTipos[0]&&excecoesTipos[0].tipo)||'conferência')+'.':'. Nenhuma pendência crítica no momento.';
       resumo=p1+p2+p3;
     }
 
