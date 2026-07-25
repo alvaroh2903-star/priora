@@ -557,12 +557,24 @@ function computeCourierStats(couriers: CourierRow[], concluidosCount: number) {
   const monthKey = (d: Date) =>
     `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
   const curKey = monthKey(now);
-  const prevKey = monthKey(new Date(now.getFullYear(), now.getMonth() - 1, 1));
 
-  // Volume nos últimos 6 meses (bucket pela primeira menção do courier).
+  // Mês de REFERÊNCIA = o mês mais recente que TEM couriers (≤ mês atual). Assim
+  // o dashboard popula em torno da última atividade real — como o design mostra
+  // "junho" — em vez de ficar vazio quando o mês-calendário atual está parado.
+  let refKey = curKey;
+  const mesesComCourier = couriers
+    .map((c) => monthKey(new Date(c.primeiraData || c.data || 0)))
+    .filter((k) => k <= curKey)
+    .sort();
+  if (mesesComCourier.length) refKey = mesesComCourier[mesesComCourier.length - 1];
+  const refY = Number(refKey.slice(0, 4));
+  const refM = Number(refKey.slice(5, 7)); // 1-12
+  const prevKey = monthKey(new Date(refY, refM - 2, 1));
+
+  // Volume: 6 meses TERMINANDO no mês de referência.
   const months: Array<{ key: string; label: string }> = [];
   for (let i = 5; i >= 0; i--) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const d = new Date(refY, refM - 1 - i, 1);
     months.push({ key: monthKey(d), label: d.toLocaleDateString('pt-BR', { month: 'short' }) });
   }
   const volume = new Map<string, number>(months.map((m) => [m.key, 0]));
@@ -585,7 +597,7 @@ function computeCourierStats(couriers: CourierRow[], concluidosCount: number) {
     const d = new Date(c.primeiraData || c.data || 0);
     const k = monthKey(d);
     if (volume.has(k)) volume.set(k, (volume.get(k) || 0) + 1);
-    if (k === curKey) {
+    if (k === refKey) {
       couriersMes++;
       carrierMes.set(c.carrier, (carrierMes.get(c.carrier) || 0) + 1);
     }
@@ -644,7 +656,7 @@ function computeCourierStats(couriers: CourierRow[], concluidosCount: number) {
     .sort((a, b) => b.qtd - a.qtd);
 
   return {
-    mes: curKey,
+    mes: refKey,
     couriersMes,
     couriersMesPrev,
     couriersPctVsPrev: pctVsPrev,
