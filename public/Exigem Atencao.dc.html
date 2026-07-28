@@ -235,40 +235,57 @@ class Component extends DCLogic {
     couriers.forEach(function(c){
       var last=new Date(c.data||c.primeiraData||0).getTime();
       var stale=Math.max(0, Math.floor((now-last)/DAY));
+      // Atracação/ETA do navio (do e-mail; ver /api/couriers -> eta). Dias até atracar.
+      var eta=c.eta||{}, arrivalDays=null;
+      if(eta.date){ var ad=new Date(eta.date+'T00:00:00').getTime(); if(!isNaN(ad)) arrivalDays=Math.round((ad-now)/DAY); }
       var conf=c.conferencia||{}, faltando=[];
       Object.keys(conf).forEach(function(pk){ var pc=conf[pk]||{};
         if(pc.mbl==='nao_recebido') faltando.push({proc:pk,doc:'OMBL'});
         if(pc.hbl==='nao_recebido') faltando.push({proc:pk,doc:'OHBL'}); });
+      var esperaDocs=(c.estado==='Identificado'); // envelope ainda não recebido/conferido
+      var iminente=(arrivalDays!=null && arrivalDays<=5 && esperaDocs); // navio chega logo, docs a bordo
       var divergencia=(c.estado==='Divergência')||faltando.length>0;
       var revisao=!!c.precisaRevisao;
       var parado=(c.estado==='Identificado' && stale>=7);
-      var sev=divergencia?2:((revisao||parado)?1:0);
+      var sev=(divergencia||iminente)?2:((revisao||parado)?1:0);
+      // Chip: prioriza a atracação (é o relógio real do risco) quando conhecida.
+      var chipInfo = (arrivalDays!=null)
+        ? { t:(arrivalDays<=0?'Atracado':'Atraca '+arrivalDays+'d') }
+        : { t:(stale+' dias') };
       if(sev>0){
-        var motivo = divergencia ? 'Documento não recebido na conferência — liberação bloqueada.'
+        var motivo = iminente ? ('Navio atraca em '+(arrivalDays<=0?'0':arrivalDays)+'d e os documentos ainda não foram conferidos — liberação em risco.')
+          : divergencia ? 'Documento não recebido na conferência — liberação bloqueada.'
           : revisao ? 'Sem processo vinculado resolvido — precisa de revisão manual.'
           : ('Sem atualização há '+stale+' dias. '+(c.processos.length||0)+' processo(s) dependem deste envelope.');
-        criticos.push({ sev:sev, carrier:c.carrier, tracking:c.tracking, dias:stale, motivo:motivo, cid:c.conversationId });
+        criticos.push({ sev:sev, carrier:c.carrier, tracking:c.tracking, dias:stale, arrivalDays:arrivalDays, chipT:chipInfo.t, motivo:motivo, cid:c.conversationId });
       }
       faltando.forEach(function(f){ docs.push({ sev:2, proc:f.proc, doc:f.doc,
         motivo:'Esperado no courier '+c.carrier+' — não localizado na conferência.', cid:c.conversationId }); });
       if(sev>0){ (c.processos||[]).forEach(function(p){
-        var reason = divergencia?'Documento pendente no envelope — liberação ameaçada.':(parado?'Envelope parado há '+stale+'d, sem atualização.':'Courier precisa de revisão.');
-        if(!procMap[p]||sev>procMap[p].sev) procMap[p]={ sev:sev, proc:p, motivo:reason }; }); }
+        var reason = iminente?('Navio atraca em '+arrivalDays+'d — documento a bordo ainda não conferido.')
+          : divergencia?'Documento pendente no envelope — liberação ameaçada.'
+          : parado?'Envelope parado há '+stale+'d, sem atualização.':'Courier precisa de revisão.';
+        var pchip = (arrivalDays!=null && arrivalDays<=5) ? ('Atraca '+(arrivalDays<=0?0:arrivalDays)+'d') : null;
+        if(!procMap[p]||sev>procMap[p].sev) procMap[p]={ sev:sev, proc:p, motivo:reason, pchip:pchip }; }); }
     });
-    criticos.sort(function(a,b){ return b.sev-a.sev || b.dias-a.dias; });
+    // ordena: severidade; depois quem atraca antes; senão mais parado
+    var byUrg=function(a,b){ return b.sev-a.sev
+      || ((a.arrivalDays==null?9999:a.arrivalDays)-(b.arrivalDays==null?9999:b.arrivalDays))
+      || (b.dias-a.dias); };
+    criticos.sort(byUrg);
     docs.sort(function(a,b){ return b.sev-a.sev; });
     var procArr=Object.keys(procMap).map(function(k){return procMap[k];}).sort(function(a,b){return b.sev-a.sev;});
 
     var chip=function(sev){ return sev>=2?{c:RED,bg:'#FDECEC',t:'Crítico'}:{c:AMBER,bg:'#FEF3E2',t:'Atenção'}; };
 
     var criticosOut=criticos.slice(0,6).map(function(c){ var k=chip(c.sev);
-      return { titulo:(c.carrier+' '+c.tracking), chip:(c.dias+' dias'), chipColor:k.c, chipBg:k.bg, sevColor:k.c, motivo:c.motivo,
+      return { titulo:(c.carrier+' '+c.tracking), chip:c.chipT, chipColor:k.c, chipBg:k.bg, sevColor:k.c, motivo:c.motivo,
         onClick:function(){ self.focar('couriers', c.tracking); } }; });
     var docsOut=docs.slice(0,6).map(function(d){
       return { titulo:(d.proc+' · '+d.doc), chip:'Ausente', chipColor:RED, chipBg:'#FDECEC', sevColor:RED, motivo:d.motivo,
         onClick:function(){ self.focar('couriers', d.cid); } }; });
     var procOut=procArr.slice(0,6).map(function(p){ var k=chip(p.sev);
-      return { proc:p.proc, chip:k.t, chipColor:k.c, chipBg:k.bg, sevColor:k.c, motivo:p.motivo,
+      return { proc:p.proc, chip:(p.pchip||k.t), chipColor:k.c, chipBg:k.bg, sevColor:k.c, motivo:p.motivo,
         onClick:function(){ self.focar('processos', p.proc); } }; });
 
     // ---- Demurrage vencendo (best-effort do /api/demurrage) ----

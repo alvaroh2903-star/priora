@@ -114,6 +114,58 @@ function docResolutionFromText(text: string): {
   };
 }
 
+/**
+ * ATRACAÇÃO / ETA do NAVIO. Isto NÃO vem da API da FedEx/DHL (courier rastreia o
+ * documento, não a carga) — vem do E-MAIL do agente/armador (aviso de chegada,
+ * ETA, previsão de atracação). Aqui extraímos o rótulo determinístico do texto e
+ * tentamos normalizar uma data. A Clara (IA) complementa com maior precisão na
+ * análise. No futuro, uma API de armador/aggregator (Maersk/MSC/project44…)
+ * traria isso em tempo real — hoje a fonte é o Outlook.
+ */
+// Rótulo de ETA/atracação, seguido (em até ~25 chars — pode haver o porto no
+// meio, ex.: "ETA Itajaí 15/08") de uma DATA numérica (DD/MM[/AAAA] ou ISO).
+const RE_ETA = /\b(?:ETA|E\.?T\.?A\.?|ETB|EXPECTED\s+(?:TIME\s+OF\s+)?ARRIVAL|ARRIVAL(?:\s+DATE)?|ATRACA[CÇ][AÃ]O|PREVIS[AÃ]O\s+DE\s+(?:CHEGADA|ATRACA[CÇ][AÃ]O)|CHEGADA\s+(?:PREVISTA|DO\s+NAVIO))\b[^\n\r]{0,25}?(\d{1,4}[/.\-]\d{1,2}(?:[/.\-]\d{2,4})?)/i;
+
+/** Tenta normalizar a data capturada para ISO (AAAA-MM-DD). Conservador. */
+function parseEtaDate(raw: string): string | null {
+  const s = (raw || '').trim();
+  let m: RegExpMatchArray | null;
+  // AAAA-MM-DD
+  if ((m = s.match(/\b(\d{4})-(\d{1,2})-(\d{1,2})\b/))) {
+    return isoOf(+m[1], +m[2], +m[3]);
+  }
+  // DD/MM/AAAA ou DD-MM-AAAA ou DD.MM.AAAA
+  if ((m = s.match(/\b(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{2,4})\b/))) {
+    let y = +m[3];
+    if (y < 100) y += 2000;
+    return isoOf(y, +m[2], +m[1]);
+  }
+  // DD/MM (sem ano) → assume ano atual; se já passou há >30 dias, ano seguinte
+  if ((m = s.match(/\b(\d{1,2})[/.\-](\d{1,2})\b/))) {
+    const now = new Date();
+    let y = now.getFullYear();
+    const cand = isoOf(y, +m[2], +m[1]);
+    if (cand) {
+      const d = new Date(cand + 'T00:00:00');
+      if (d.getTime() < now.getTime() - 30 * 86_400_000) return isoOf(y + 1, +m[2], +m[1]);
+      return cand;
+    }
+  }
+  return null;
+}
+function isoOf(y: number, mo: number, d: number): string | null {
+  if (mo < 1 || mo > 12 || d < 1 || d > 31 || y < 2000 || y > 2100) return null;
+  return `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+}
+
+/** ETA/atracação do courier a partir do texto dos e-mails (rótulo + data). */
+function extractEta(text: string): { text: string | null; date: string | null } {
+  const m = (text || '').match(RE_ETA);
+  if (!m || !m[1]) return { text: null, date: null };
+  const raw = m[1].trim().replace(/[.,;]+$/, '');
+  return { text: raw, date: parseEtaDate(raw) };
+}
+
 interface CourierItem {
   carrier: string;
   tracking: string;
@@ -436,6 +488,8 @@ async function buildCourierView(accessToken: string) {
       ].join('\n');
       const docExpect = docExpectFromText(courierText);
       const docResolution = docResolutionFromText(courierText);
+      // Atracação/ETA do navio (fonte: e-mail; NÃO vem da API do courier).
+      const eta = extractEta(courierText);
 
       // Multi-conversa: liga ao courier TODA thread que cita um de seus
       // processos (o envelope se espalha por várias conversas). A conversa
@@ -456,6 +510,7 @@ async function buildCourierView(accessToken: string) {
         referencias: c.referencias,
         docExpect,
         docResolution,
+        eta,
         // Resolução por referência: transparência de "como" o processo foi achado.
         resolucao: { resolvidos, candidatos },
         assunto: c.assunto,

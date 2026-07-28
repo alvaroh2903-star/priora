@@ -69,6 +69,9 @@ const ExtractionSchema = z.object({
   documents: z.array(z.string()),
   hblResolution: z.string().nullable(),
   carrier: z.string().nullable(),
+  // Atracação/chegada do NAVIO no destino (evento marítimo — não é o courier).
+  etaArrival: z.string().nullable(),
+  vessel: z.string().nullable(),
   dates: z.array(
     z.object({
       text: z.string(),
@@ -98,6 +101,8 @@ Extraia:
 - externalReferences[]: QUALQUER identificador que ajude a localizar o processo — HBL, MBL, container, booking, referência do cliente/agente, códigos como "SHYY26041185", "SHAM01105600", etc. NÃO assuma o tipo com certeza: preencha "type" com o melhor rótulo inferido (ex.: "HBL", "MBL", "container", "booking", "client_reference", "unknown") e "value" com o identificador. Amanhã podem surgir novos padrões — quando não souber o tipo, use "unknown".
 - documents[]: documentos ESPECÍFICOS citados. Conjunto conhecido: OMBL, OHBL, Invoice, Packing, Insurance, Debit Note, Credit Note, Fumigation. Use "Documents" (genérico) SOMENTE quando o e-mail menciona envio de documentos sem dizer quais — nunca liste "Documents" junto com documentos específicos (se sabe quais são, liste só os específicos).
 - hblResolution: resolução do HBL, se houver. Detecte frases como "Telex Release", "Original HBL sent to consignee", "Original HBL sent to Rocket", "Wave BL", "Destination Release". Devolva a resolução detectada ou null.
+- etaArrival: data PREVISTA de CHEGADA/ATRACAÇÃO do NAVIO no porto de destino (evento marítimo — NÃO é a entrega do courier). Procure "ETA", "ETB", "expected arrival", "arrival notice", "aviso de chegada", "atracação", "previsão de chegada". Normalize para AAAA-MM-DD quando possível (use a data do e-mail como referência); null se não houver.
+- vessel: nome do navio e/ou viagem citado (ex.: "MSC LORETO / FT521A"); null se não houver.
 - dates[]: datas mencionadas NO TEXTO (inclui relativas como "sent today", "posted on Apr.27", "couriered yesterday"). "text" = trecho original; "normalized" = AAAA-MM-DD quando for possível resolver (use a data de recebimento do e-mail, fornecida abaixo, como referência para "today"/"yesterday"); senão null.
 - evidences[]: para CADA conclusão relevante (documento esperado, resolução do HBL, carrier, etc.), guarde o trecho do e-mail que a justifica. Ex.: conclusão "OMBL esperado" → snippet "...we sent Original MBL via FEDEX...". Copie o trecho literal do corpo.
 - confidence: número de 0 a 1 indicando sua confiança geral na extração.
@@ -168,6 +173,10 @@ export interface ParsedThread {
   documents: string[];
   hblResolution: string | null;
   carrier: string | null;
+  /** Chegada/atracação prevista do navio (AAAA-MM-DD) — do e-mail, não do courier. */
+  etaArrival: string | null;
+  /** Navio/viagem citado, quando houver. */
+  vessel: string | null;
   dates: DateMention[];
   evidences: Evidence[];
   confidence: number;
@@ -256,6 +265,8 @@ export async function parseThread(
     documents: dedupe(ai.documents, (d) => d.toLowerCase()),
     hblResolution: ai.hblResolution,
     carrier: ai.carrier,
+    etaArrival: ai.etaArrival || null,
+    vessel: ai.vessel || null,
     dates: ai.dates,
     evidences: ai.evidences,
     confidence: clamp01(ai.confidence),
