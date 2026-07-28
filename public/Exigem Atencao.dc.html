@@ -180,21 +180,42 @@
 <script type="text/x-dc" data-dc-script>
 class Component extends DCLogic {
   state = { resp:null, status:'loading', dem:null, demStatus:'loading' };
-  componentDidMount(){ this.load(); }
+  componentDidMount(){ this._alive=true; this.load(); }
+  componentWillUnmount(){ this._alive=false; }
+
+  // Fetch com TIMEOUT: nunca deixa um módulo lento/fora travar a tela.
+  // Resolve com o JSON quando OK; com null quando falhou/timeout/não-OK.
+  fetchJson(url, ms){
+    return Promise.race([
+      fetch(url, { credentials:'same-origin' })
+        .then(function(r){ return r.ok ? r.json().catch(function(){return null;}) : null; })
+        .catch(function(){ return null; }),
+      new Promise(function(res){ setTimeout(function(){ res(null); }, ms||15000); })
+    ]);
+  }
 
   load(){
     var self=this;
-    // MESMA fonte da aba Couriers (/api/couriers) — o risco de courier é
-    // calculado no front a partir dos couriers reais.
-    fetch('/api/couriers', { credentials:'same-origin' })
-      .then(function(r){ return r.json().catch(function(){return null;}).then(function(j){ if(!r.ok) throw new Error((j&&j.error)||('HTTP '+r.status)); return j; }); })
-      .then(function(d){ self.setState({ resp:d, status:'done' }); })
-      .catch(function(e){ self.setState({ status:'error:'+String(e&&e.message||e) }); });
-    // Demurrage vencendo: dado real do módulo Demurrage (best-effort).
-    fetch('/api/demurrage', { credentials:'same-origin' })
-      .then(function(r){ return r.ok ? r.json() : null; })
-      .then(function(d){ self.setState({ dem:d, demStatus:'done' }); })
-      .catch(function(){ self.setState({ dem:null, demStatus:'error' }); });
+    // Couriers (fonte garantida — mesma da aba Couriers). O risco é calculado no front.
+    this.fetchJson('/api/couriers', 25000).then(function(d){
+      if(!self._alive) return;
+      if(d) self.setState({ resp:d, status:'done' });
+      else self.setState({ status:'error:Não foi possível carregar os couriers (tempo esgotado).' });
+    });
+    // Demurrage: OPCIONAL. Se o módulo estiver fora/lento, a tela funciona sem
+    // ele; e re-tentamos algumas vezes para INCORPORAR automaticamente quando
+    // o módulo voltar a responder — sem precisar recarregar a página.
+    this.loadDemurrage(0);
+  }
+
+  loadDemurrage(attempt){
+    var self=this;
+    this.fetchJson('/api/demurrage', 15000).then(function(d){
+      if(!self._alive) return;
+      if(d){ self.setState({ dem:d, demStatus:'done' }); return; } // chegou (mesmo aiEnabled:false)
+      self.setState({ dem:null, demStatus:'done' });               // indisponível agora
+      if(attempt < 3) setTimeout(function(){ if(self._alive) self.loadDemurrage(attempt+1); }, 20000);
+    });
   }
 
   fmtMoeda(v, m){ if(v==null) return ''; try{ return new Intl.NumberFormat('pt-BR',{style:'currency',currency:(m||'BRL'),maximumFractionDigits:0}).format(v);}catch(e){ return (m||'')+' '+Math.round(v).toLocaleString('pt-BR'); } }

@@ -183,23 +183,40 @@
 <script type="text/x-dc" data-dc-script>
 class Component extends DCLogic {
   state = { resp:null, status:'loading', dem:null, demStatus:'loading' };
-  componentDidMount(){ this.load(); }
+  componentDidMount(){ this._alive=true; this.load(); }
+  componentWillUnmount(){ this._alive=false; }
+
+  // Fetch com TIMEOUT: um módulo lento/fora nunca trava a tela.
+  fetchJson(url, ms){
+    return Promise.race([
+      fetch(url, { credentials:'same-origin' })
+        .then(function(r){ return r.ok ? r.json().catch(function(){return null;}) : null; })
+        .catch(function(){ return null; }),
+      new Promise(function(res){ setTimeout(function(){ res(null); }, ms||15000); })
+    ]);
+  }
 
   load(){
     var self=this;
-    // MESMA fonte da aba Couriers (/api/couriers). Assim os couriers que
-    // aparecem lá aparecem AQUI — sem depender de nenhum endpoint separado.
-    fetch('/api/couriers', { credentials:'same-origin' })
-      .then(function(r){ return r.json().catch(function(){return null;}).then(function(j){ if(!r.ok) throw new Error((j&&j.error)||('HTTP '+r.status)); return j; }); })
-      .then(function(d){ self.setState({ resp:d, status:'done' }); })
-      .catch(function(e){ self.setState({ status:'error:'+String(e&&e.message||e) }); });
+    // MESMA fonte da aba Couriers (/api/couriers): os couriers de lá aparecem AQUI.
+    this.fetchJson('/api/couriers', 25000).then(function(d){
+      if(!self._alive) return;
+      if(d) self.setState({ resp:d, status:'done' });
+      else self.setState({ status:'error:Não foi possível carregar os couriers (tempo esgotado).' });
+    });
+    // Custo de demurrage: OPCIONAL. Se o módulo estiver fora/lento a tela
+    // funciona sem ele; re-tentamos para INCORPORAR automaticamente quando voltar.
+    this.loadDemurrage(0);
+  }
 
-    // Custo de demurrage: dado REAL do módulo Demurrage (snapshot atual).
-    // Best-effort: se falhar/estiver off, o card mostra estado honesto.
-    fetch('/api/demurrage', { credentials:'same-origin' })
-      .then(function(r){ return r.ok ? r.json() : null; })
-      .then(function(d){ self.setState({ dem:d, demStatus:'done' }); })
-      .catch(function(){ self.setState({ dem:null, demStatus:'error' }); });
+  loadDemurrage(attempt){
+    var self=this;
+    this.fetchJson('/api/demurrage', 15000).then(function(d){
+      if(!self._alive) return;
+      if(d){ self.setState({ dem:d, demStatus:'done' }); return; }
+      self.setState({ dem:null, demStatus:'done' });
+      if(attempt < 3) setTimeout(function(){ if(self._alive) self.loadDemurrage(attempt+1); }, 20000);
+    });
   }
 
   fmtMoeda(valor, moeda){
