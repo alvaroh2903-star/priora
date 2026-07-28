@@ -13,25 +13,288 @@
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
   body{font-family:'Plus Jakarta Sans',sans-serif;-webkit-font-smoothing:antialiased;background:#F4F5FB}
-  @keyframes pageIn{from{transform:translateY(12px)}to{transform:translateY(0)}}
+  @keyframes pageIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+  .card{background:#fff;border:1px solid #E9EAF2;border-radius:16px}
+  .risk-item{display:flex;align-items:flex-start;gap:11px;padding:13px 4px;border-top:1px solid #F1F2F8;cursor:pointer}
+  .risk-item:first-of-type{border-top:none}
+  .risk-item:hover{background:#FAFAFE}
 </style>
 </helmet>
 <main style="flex:1;min-width:0;display:flex;flex-direction:column">
-    <dc-import name="Topbar" title="Exigem Atenção" subtitle="Tudo que está em risco real — agregado de todos os módulos, num só lugar." icon-path="M12 9v4 M12 17h.01 M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" hint-size="100%,110px"></dc-import>
-    <div style="flex:1;display:flex;align-items:center;justify-content:center;padding:40px;animation:pageIn .35s ease both">
-      <div style="text-align:center;max-width:440px;background:#fff;border:1px solid #E6E8F2;border-radius:16px;padding:44px 34px">
-        <div style="width:58px;height:58px;border-radius:15px;background:#EEEBFE;display:flex;align-items:center;justify-content:center;margin:0 auto 18px">
-          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+    <dc-import name="Topbar" title="Exigem Atenção" subtitle="Tudo que está em risco real — agregado num só lugar." icon-path="M12 9v4 M12 17h.01 M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" hint-size="100%,110px"></dc-import>
+
+    <div style="flex:1;overflow-y:auto;padding:22px 26px 40px;animation:pageIn .35s ease both">
+
+      <sc-if value="{{ loading }}" hint-placeholder-val="{{ true }}">
+        <div style="display:flex;align-items:center;justify-content:center;padding:80px;color:#7A8099;font-size:14px">Avaliando riscos operacionais…</div>
+      </sc-if>
+
+      <sc-if value="{{ errored }}" hint-placeholder-val="{{ false }}">
+        <div class="card" style="text-align:center;max-width:440px;margin:60px auto;padding:38px 30px">
+          <div style="font-size:17px;font-weight:800;color:#161A2E;margin-bottom:8px">Não foi possível carregar</div>
+          <div style="font-size:13.5px;line-height:1.6;color:#6B7192">{{ errorMsg }}</div>
         </div>
-        <div style="font-size:19px;font-weight:800;color:#161A2E;margin-bottom:9px">Em construção</div>
-        <div style="font-size:14px;line-height:1.6;color:#6B7192">Esta tela será conectada aos seus dados reais do Outlook em breve.<br>Por enquanto, use a aba <b style="color:#4327E6">Processos</b> — já funcionando com seus e-mails.</div>
-      </div>
+      </sc-if>
+
+      <sc-if value="{{ ready }}" hint-placeholder-val="{{ false }}">
+        <div style="max-width:1200px;margin:0 auto">
+
+          <!-- ===== Clara — alerta agregado ===== -->
+          <div class="card" style="padding:20px 22px;margin-bottom:18px;display:flex;gap:15px;align-items:flex-start;background:{{ claraBg }}">
+            <span style="width:46px;height:46px;border-radius:50%;background:#E7F0FE;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#1D4ED8" stroke-width="2"><rect x="4" y="8" width="16" height="12" rx="4"/><path d="M12 8V4.5 M9 13.5h.01 M15 13.5h.01"/></svg>
+            </span>
+            <div style="flex:1;min-width:0">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+                <span style="font-size:15px;font-weight:800;color:#161A2E">Clara</span>
+                <span style="font-size:10px;font-weight:700;color:#fff;background:{{ claraTagBg }};padding:2px 8px;border-radius:6px">{{ claraTag }}</span>
+              </div>
+              <div style="font-size:13.5px;line-height:1.6;color:#3C4258">{{ claraResumo }}</div>
+            </div>
+            <div style="flex-shrink:0;text-align:right">
+              <div style="font-size:11px;color:#9AA0B4;margin-bottom:5px">Nível de risco operacional</div>
+              <div style="display:flex;align-items:center;gap:7px;justify-content:flex-end">
+                <span style="width:9px;height:9px;border-radius:50%;background:{{ nivelColor }}"></span>
+                <span style="font-size:16px;font-weight:800;color:{{ nivelColor }}">{{ nivel }}</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- ===== Cards de risco ===== -->
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px">
+
+            <!-- Couriers críticos -->
+            <div class="card" style="padding:18px 20px">
+              <div style="display:flex;align-items:center;gap:11px;margin-bottom:14px">
+                <span style="width:34px;height:34px;border-radius:10px;background:#FDECEC;display:flex;align-items:center;justify-content:center"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#C2333A" stroke-width="2"><rect x="1" y="6" width="15" height="12" rx="2"/><path d="M16 9h4l3 3v6h-7 M5.5 18a2 2 0 1 0 0 .01 M18.5 18a2 2 0 1 0 0 .01"/></svg></span>
+                <div style="flex:1;min-width:0"><div style="font-size:14px;font-weight:800;color:#161A2E">Couriers críticos</div><div style="font-size:11px;color:#9AA0B4">Risco para a liberação documental</div></div>
+                <span style="font-size:12px;font-weight:800;color:#C2333A;background:#FDECEC;min-width:24px;height:24px;border-radius:12px;display:flex;align-items:center;justify-content:center;padding:0 7px">{{ criticosCount }}</span>
+              </div>
+              <sc-if value="{{ temCriticos }}" hint-placeholder-val="{{ true }}">
+                <div>
+                  <sc-for list="{{ criticos }}" as="c" hint-placeholder-count="2">
+                    <div class="risk-item" onClick="{{ c.onClick }}">
+                      <span style="width:8px;height:8px;border-radius:50%;background:{{ c.sevColor }};margin-top:5px;flex-shrink:0"></span>
+                      <div style="flex:1;min-width:0">
+                        <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
+                          <span class="mono" style="font-size:12.5px;font-weight:700;color:#161A2E">{{ c.titulo }}</span>
+                          <span style="font-size:10px;font-weight:700;color:{{ c.chipColor }};background:{{ c.chipBg }};padding:2px 7px;border-radius:6px">{{ c.chip }}</span>
+                        </div>
+                        <div style="font-size:11.5px;color:#6B7192;line-height:1.45">{{ c.motivo }}</div>
+                      </div>
+                      <span style="color:#C7CBDA;font-size:16px;flex-shrink:0">›</span>
+                    </div>
+                  </sc-for>
+                </div>
+              </sc-if>
+              <sc-if value="{{ semCriticos }}" hint-placeholder-val="{{ false }}"><div style="font-size:12.5px;color:#177D54;padding:10px 2px">Nenhum courier crítico.</div></sc-if>
+            </div>
+
+            <!-- Demurrage vencendo -->
+            <div class="card" style="padding:18px 20px">
+              <div style="display:flex;align-items:center;gap:11px;margin-bottom:14px">
+                <span style="width:34px;height:34px;border-radius:10px;background:#FEF3E2;display:flex;align-items:center;justify-content:center"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#E08A1E" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span>
+                <div style="flex:1;min-width:0"><div style="font-size:14px;font-weight:800;color:#161A2E">Demurrage vencendo</div><div style="font-size:11px;color:#9AA0B4">Custo evitável por estadia</div></div>
+                <span style="font-size:12px;font-weight:800;color:#E08A1E;background:#FEF3E2;min-width:24px;height:24px;border-radius:12px;display:flex;align-items:center;justify-content:center;padding:0 7px">{{ demCount }}</span>
+              </div>
+              <sc-if value="{{ temDem }}" hint-placeholder-val="{{ true }}">
+                <div>
+                  <sc-for list="{{ demItems }}" as="d" hint-placeholder-count="2">
+                    <div class="risk-item" onClick="{{ d.onClick }}">
+                      <span style="width:8px;height:8px;border-radius:50%;background:{{ d.sevColor }};margin-top:5px;flex-shrink:0"></span>
+                      <div style="flex:1;min-width:0">
+                        <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
+                          <span class="mono" style="font-size:12.5px;font-weight:700;color:#161A2E">{{ d.titulo }}</span>
+                          <span style="font-size:10px;font-weight:700;color:{{ d.chipColor }};background:{{ d.chipBg }};padding:2px 7px;border-radius:6px">{{ d.chip }}</span>
+                        </div>
+                        <div style="font-size:11.5px;color:#6B7192;line-height:1.45">{{ d.motivo }}</div>
+                      </div>
+                      <span style="color:#C7CBDA;font-size:16px;flex-shrink:0">›</span>
+                    </div>
+                  </sc-for>
+                </div>
+              </sc-if>
+              <sc-if value="{{ semDem }}" hint-placeholder-val="{{ false }}"><div style="font-size:12.5px;color:#7A8099;padding:10px 2px">{{ demMsg }}</div></sc-if>
+            </div>
+
+            <!-- Processos em risco -->
+            <div class="card" style="padding:18px 20px">
+              <div style="display:flex;align-items:center;gap:11px;margin-bottom:14px">
+                <span style="width:34px;height:34px;border-radius:10px;background:#EEEBFE;display:flex;align-items:center;justify-content:center"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="2"><path d="M12 2 4 6v6c0 5 3.5 8 8 10 4.5-2 8-5 8-10V6Z"/></svg></span>
+                <div style="flex:1;min-width:0"><div style="font-size:14px;font-weight:800;color:#161A2E">Processos em risco</div><div style="font-size:11px;color:#9AA0B4">Liberação ameaçada por documento</div></div>
+                <span style="font-size:12px;font-weight:800;color:#4327E6;background:#EEEBFE;min-width:24px;height:24px;border-radius:12px;display:flex;align-items:center;justify-content:center;padding:0 7px">{{ procCount }}</span>
+              </div>
+              <sc-if value="{{ temProc }}" hint-placeholder-val="{{ true }}">
+                <div>
+                  <sc-for list="{{ procRisco }}" as="p" hint-placeholder-count="3">
+                    <div class="risk-item" onClick="{{ p.onClick }}">
+                      <span style="width:8px;height:8px;border-radius:50%;background:{{ p.sevColor }};margin-top:5px;flex-shrink:0"></span>
+                      <div style="flex:1;min-width:0">
+                        <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
+                          <span class="mono" style="font-size:12.5px;font-weight:700;color:#4327E6">{{ p.proc }}</span>
+                          <span style="font-size:10px;font-weight:700;color:{{ p.chipColor }};background:{{ p.chipBg }};padding:2px 7px;border-radius:6px">{{ p.chip }}</span>
+                        </div>
+                        <div style="font-size:11.5px;color:#6B7192;line-height:1.45">{{ p.motivo }}</div>
+                      </div>
+                      <span style="color:#C7CBDA;font-size:16px;flex-shrink:0">›</span>
+                    </div>
+                  </sc-for>
+                </div>
+              </sc-if>
+              <sc-if value="{{ semProc }}" hint-placeholder-val="{{ false }}"><div style="font-size:12.5px;color:#177D54;padding:10px 2px">Nenhum processo em risco.</div></sc-if>
+            </div>
+
+            <!-- Documentos ausentes -->
+            <div class="card" style="padding:18px 20px">
+              <div style="display:flex;align-items:center;gap:11px;margin-bottom:14px">
+                <span style="width:34px;height:34px;border-radius:10px;background:#FEF3E2;display:flex;align-items:center;justify-content:center"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#E08A1E" stroke-width="2"><path d="M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/></svg></span>
+                <div style="flex:1;min-width:0"><div style="font-size:14px;font-weight:800;color:#161A2E">Documentos ausentes</div><div style="font-size:11px;color:#9AA0B4">Esperados e não recebidos</div></div>
+                <span style="font-size:12px;font-weight:800;color:#E08A1E;background:#FEF3E2;min-width:24px;height:24px;border-radius:12px;display:flex;align-items:center;justify-content:center;padding:0 7px">{{ docsCount }}</span>
+              </div>
+              <sc-if value="{{ temDocs }}" hint-placeholder-val="{{ true }}">
+                <div>
+                  <sc-for list="{{ docs }}" as="d" hint-placeholder-count="2">
+                    <div class="risk-item" onClick="{{ d.onClick }}">
+                      <span style="width:8px;height:8px;border-radius:50%;background:{{ d.sevColor }};margin-top:5px;flex-shrink:0"></span>
+                      <div style="flex:1;min-width:0">
+                        <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
+                          <span class="mono" style="font-size:12.5px;font-weight:700;color:#161A2E">{{ d.titulo }}</span>
+                          <span style="font-size:10px;font-weight:700;color:{{ d.chipColor }};background:{{ d.chipBg }};padding:2px 7px;border-radius:6px">{{ d.chip }}</span>
+                        </div>
+                        <div style="font-size:11.5px;color:#6B7192;line-height:1.45">{{ d.motivo }}</div>
+                      </div>
+                      <span style="color:#C7CBDA;font-size:16px;flex-shrink:0">›</span>
+                    </div>
+                  </sc-for>
+                </div>
+              </sc-if>
+              <sc-if value="{{ semDocs }}" hint-placeholder-val="{{ false }}"><div style="font-size:12.5px;color:#177D54;padding:10px 2px">Nenhum documento pendente de conferência.</div></sc-if>
+            </div>
+
+          </div>
+        </div>
+      </sc-if>
     </div>
 </main>
 </x-dc>
 <script type="text/x-dc" data-dc-script>
 class Component extends DCLogic {
-  renderVals(){ return {}; }
+  state = { resp:null, status:'loading', dem:null, demStatus:'loading' };
+  componentDidMount(){ this.load(); }
+
+  load(){
+    var self=this;
+    // MESMA fonte da aba Couriers (/api/couriers) — o risco de courier é
+    // calculado no front a partir dos couriers reais.
+    fetch('/api/couriers', { credentials:'same-origin' })
+      .then(function(r){ return r.json().catch(function(){return null;}).then(function(j){ if(!r.ok) throw new Error((j&&j.error)||('HTTP '+r.status)); return j; }); })
+      .then(function(d){ self.setState({ resp:d, status:'done' }); })
+      .catch(function(e){ self.setState({ status:'error:'+String(e&&e.message||e) }); });
+    // Demurrage vencendo: dado real do módulo Demurrage (best-effort).
+    fetch('/api/demurrage', { credentials:'same-origin' })
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(d){ self.setState({ dem:d, demStatus:'done' }); })
+      .catch(function(){ self.setState({ dem:null, demStatus:'error' }); });
+  }
+
+  fmtMoeda(v, m){ if(v==null) return ''; try{ return new Intl.NumberFormat('pt-BR',{style:'currency',currency:(m||'BRL'),maximumFractionDigits:0}).format(v);}catch(e){ return (m||'')+' '+Math.round(v).toLocaleString('pt-BR'); } }
+  focar(mod, id){ if(window.PrioraBus) window.PrioraBus.focus(mod, id); }
+
+  renderVals(){
+    var resp=this.state.resp, st=this.state.status, self=this;
+    var loading=(st==='loading'), errored=(st.indexOf('error')===0), ready=(st==='done'&&!!resp);
+    if(!ready) return { loading:loading, errored:errored, ready:false, errorMsg:(errored?st.slice(st.indexOf(':')+1):'') };
+
+    var RED='#E5484D', AMBER='#E08A1E', GREEN='#177D54', MUTED='#9AA0B4';
+    var now=Date.now(), DAY=86400000;
+    var couriers=resp.couriers||[];
+
+    // ---- Análise de risco por courier ----
+    var criticos=[], docs=[], procMap={};
+    couriers.forEach(function(c){
+      var last=new Date(c.data||c.primeiraData||0).getTime();
+      var stale=Math.max(0, Math.floor((now-last)/DAY));
+      var conf=c.conferencia||{}, faltando=[];
+      Object.keys(conf).forEach(function(pk){ var pc=conf[pk]||{};
+        if(pc.mbl==='nao_recebido') faltando.push({proc:pk,doc:'OMBL'});
+        if(pc.hbl==='nao_recebido') faltando.push({proc:pk,doc:'OHBL'}); });
+      var divergencia=(c.estado==='Divergência')||faltando.length>0;
+      var revisao=!!c.precisaRevisao;
+      var parado=(c.estado==='Identificado' && stale>=7);
+      var sev=divergencia?2:((revisao||parado)?1:0);
+      if(sev>0){
+        var motivo = divergencia ? 'Documento não recebido na conferência — liberação bloqueada.'
+          : revisao ? 'Sem processo vinculado resolvido — precisa de revisão manual.'
+          : ('Sem atualização há '+stale+' dias. '+(c.processos.length||0)+' processo(s) dependem deste envelope.');
+        criticos.push({ sev:sev, carrier:c.carrier, tracking:c.tracking, dias:stale, motivo:motivo, cid:c.conversationId });
+      }
+      faltando.forEach(function(f){ docs.push({ sev:2, proc:f.proc, doc:f.doc,
+        motivo:'Esperado no courier '+c.carrier+' — não localizado na conferência.', cid:c.conversationId }); });
+      if(sev>0){ (c.processos||[]).forEach(function(p){
+        var reason = divergencia?'Documento pendente no envelope — liberação ameaçada.':(parado?'Envelope parado há '+stale+'d, sem atualização.':'Courier precisa de revisão.');
+        if(!procMap[p]||sev>procMap[p].sev) procMap[p]={ sev:sev, proc:p, motivo:reason }; }); }
+    });
+    criticos.sort(function(a,b){ return b.sev-a.sev || b.dias-a.dias; });
+    docs.sort(function(a,b){ return b.sev-a.sev; });
+    var procArr=Object.keys(procMap).map(function(k){return procMap[k];}).sort(function(a,b){return b.sev-a.sev;});
+
+    var chip=function(sev){ return sev>=2?{c:RED,bg:'#FDECEC',t:'Crítico'}:{c:AMBER,bg:'#FEF3E2',t:'Atenção'}; };
+
+    var criticosOut=criticos.slice(0,6).map(function(c){ var k=chip(c.sev);
+      return { titulo:(c.carrier+' '+c.tracking), chip:(c.dias+' dias'), chipColor:k.c, chipBg:k.bg, sevColor:k.c, motivo:c.motivo,
+        onClick:function(){ self.focar('couriers', c.tracking); } }; });
+    var docsOut=docs.slice(0,6).map(function(d){
+      return { titulo:(d.proc+' · '+d.doc), chip:'Ausente', chipColor:RED, chipBg:'#FDECEC', sevColor:RED, motivo:d.motivo,
+        onClick:function(){ self.focar('couriers', d.cid); } }; });
+    var procOut=procArr.slice(0,6).map(function(p){ var k=chip(p.sev);
+      return { proc:p.proc, chip:k.t, chipColor:k.c, chipBg:k.bg, sevColor:k.c, motivo:p.motivo,
+        onClick:function(){ self.focar('processos', p.proc); } }; });
+
+    // ---- Demurrage vencendo (best-effort do /api/demurrage) ----
+    var dem=this.state.dem, demStatus=this.state.demStatus, demItems=[], demMsg='';
+    if(demStatus==='loading'){ demMsg='Carregando exposição de demurrage…'; }
+    else if(!dem || dem.aiEnabled===false){ demMsg=(dem&&dem.aiEnabled===false)?'Análise de demurrage off no servidor.':'Módulo Demurrage indisponível agora.'; }
+    else {
+      var sec=dem.sections||{}; var lista=(sec.custo||[]).concat(sec.risco||[]);
+      demItems=lista.slice(0,4).map(function(x){
+        var emCusto=(x.bucket==='custo');
+        var titulo=x.processo||x.cliente||'Demurrage';
+        var chipT=emCusto?'Em demurrage':((x.diasRestantes!=null)?(x.diasRestantes+' dias'):'Risco');
+        var mv=[]; if(emCusto && x.valorAcumulado!=null) mv.push('Acumulando '+self.fmtMoeda(x.diariaDia,x.moeda)+'/dia');
+        else if(x.diasRestantes!=null) mv.push('Free time expira em '+x.diasRestantes+' dias');
+        if(!emCusto && x.diariaDia!=null) mv.push(self.fmtMoeda(x.diariaDia,x.moeda)+'/dia após o prazo');
+        return { titulo:titulo, chip:chipT, chipColor:emCusto?RED:AMBER, chipBg:emCusto?'#FDECEC':'#FEF3E2', sevColor:emCusto?RED:AMBER,
+          motivo:(mv.join(' · ')||'Exposição a demurrage.'),
+          onClick:function(){ self.focar('demurrage', x.processo||''); } };
+      });
+      if(demItems.length===0) demMsg='Nenhum container em risco de demurrage.';
+    }
+
+    // ---- Clara — resumo agregado ----
+    var total=criticosOut.length+docsOut.length+procOut.length+demItems.length;
+    var frentes=[criticosOut.length,docsOut.length,procOut.length,demItems.length].filter(function(n){return n>0;}).length;
+    var temAlta=(criticos.some(function(c){return c.sev>=2;})||docs.length>0||demItems.some(function(d){return d.chip==='Em demurrage';}));
+    var nivel, nivelColor, claraBg, claraTag, claraTagBg;
+    if(total===0){ nivel='Baixo'; nivelColor=GREEN; claraBg='#fff'; claraTag='OK'; claraTagBg=GREEN; }
+    else if(temAlta){ nivel='Elevado'; nivelColor=RED; claraBg='#FEF4F4'; claraTag='ALERTA'; claraTagBg=RED; }
+    else { nivel='Moderado'; nivelColor=AMBER; claraBg='#FFFBF4'; claraTag='ATENÇÃO'; claraTagBg=AMBER; }
+
+    // concentração: qual frente tem mais itens
+    var frentesNome=[['couriers críticos',criticosOut.length],['documentos ausentes',docsOut.length],['processos em risco',procOut.length],['demurrage vencendo',demItems.length]];
+    frentesNome.sort(function(a,b){return b[1]-a[1];});
+    var resumo;
+    if(total===0){ resumo='Nenhuma pendência crítica no momento. Todos os couriers têm processo vinculado e nenhum documento está em falta.'; }
+    else { resumo=total+' '+(total===1?'item exige':'itens exigem')+' atenção agora, em '+frentes+' '+(frentes===1?'frente':'frentes')+'. A maior concentração de risco está em '+frentesNome[0][0]+'.'; }
+
+    return {
+      loading:false, errored:false, ready:true, errorMsg:'',
+      claraResumo:resumo, nivel:nivel, nivelColor:nivelColor, claraBg:claraBg, claraTag:claraTag, claraTagBg:claraTagBg,
+      criticos:criticosOut, criticosCount:String(criticosOut.length), temCriticos:criticosOut.length>0, semCriticos:criticosOut.length===0,
+      docs:docsOut, docsCount:String(docsOut.length), temDocs:docsOut.length>0, semDocs:docsOut.length===0,
+      procRisco:procOut, procCount:String(procOut.length), temProc:procOut.length>0, semProc:procOut.length===0,
+      demItems:demItems, demCount:String(demItems.length), temDem:demItems.length>0, semDem:demItems.length===0, demMsg:demMsg
+    };
+  }
 }
 </script>
 </body>
