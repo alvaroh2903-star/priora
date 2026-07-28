@@ -72,6 +72,8 @@ html[data-theme="dark"] .pr-x:hover{background:#1C2238!important}
       <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M4 11.5 12 4l8 7.5"/><path d="M6 10v9h12v-9"/></svg>Início</a>
     <a href="Fila de Decisoes.dc.html" style="display:flex;align-items:center;gap:13px;padding:11px 13px;border-radius:11px;text-decoration:none;font-size:14px;background:{{ it.fila.bg }};color:{{ it.fila.color }};font-weight:{{ it.fila.weight }};box-shadow:{{ it.fila.shadow }}" style-hover="background:{{ it.fila.hover }}">
       <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><rect x="4" y="4" width="6" height="16" rx="1.5"/><rect x="14" y="4" width="6" height="9" rx="1.5"/></svg>Fila de Decisões</a>
+    <a href="Auditoria.dc.html" style="display:flex;align-items:center;gap:13px;padding:11px 13px;border-radius:11px;text-decoration:none;font-size:14px;background:{{ it.auditoria.bg }};color:{{ it.auditoria.color }};font-weight:{{ it.auditoria.weight }};box-shadow:{{ it.auditoria.shadow }}" style-hover="background:{{ it.auditoria.hover }}">
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M3 9h18 M8 14l2.5 2.5L16 11"/></svg>Auditoria</a>
     <a href="Processos.dc.html" style="display:flex;align-items:center;gap:13px;padding:11px 13px;border-radius:11px;text-decoration:none;font-size:14px;background:{{ it.processos.bg }};color:{{ it.processos.color }};font-weight:{{ it.processos.weight }};box-shadow:{{ it.processos.shadow }}" style-hover="background:{{ it.processos.hover }}">
       <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M12 3 4 7v10l8 4 8-4V7Z"/><path d="m4 7 8 4 8-4M12 11v10"/></svg>Processos</a>
     <a href="Liberacao.dc.html" style="display:flex;align-items:center;gap:13px;padding:11px 13px;border-radius:11px;text-decoration:none;font-size:14px;background:{{ it.liberacao.bg }};color:{{ it.liberacao.color }};font-weight:{{ it.liberacao.weight }};box-shadow:{{ it.liberacao.shadow }}" style-hover="background:{{ it.liberacao.hover }}">
@@ -329,7 +331,7 @@ class Component extends DCLogic {
     const a=this.props.active||'couriers';
     const mk=(k)=> a===k?this.ACT:this.INA;
     const childActive=['exigem','equipe','relatorios'].includes(a);
-    const it={ inicio:mk('inicio'), fila:mk('fila'), processos:mk('processos'), liberacao:mk('liberacao'), couriers:mk('couriers'), demurrage:mk('demurrage'), config:this.state.settings?this.ACT:this.INA, gestao:(childActive||this.state.gestaoOpen)?this.ACT:this.INA };
+    const it={ inicio:mk('inicio'), fila:mk('fila'), auditoria:mk('auditoria'), processos:mk('processos'), liberacao:mk('liberacao'), couriers:mk('couriers'), demurrage:mk('demurrage'), config:this.state.settings?this.ACT:this.INA, gestao:(childActive||this.state.gestaoOpen)?this.ACT:this.INA };
     const sub=(k)=>({ color: a===k?'#fff':'#9197B5', weight: a===k?'700':'500' });
     const p=this.state.prof, av=this.AVATARS[p.avatar]||this.AVATARS[0], st=this.STATUS[p.status]||this.STATUS.online;
     const avatars=this.AVATARS.map((g,i)=>({ grad:g, on:i===p.avatar, pick:()=>this.saveProf({avatar:i}) }));

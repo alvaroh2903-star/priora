@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+<script src="./priora-bus.js"></script>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Plus Jakarta Sans',sans-serif;-webkit-font-smoothing:antialiased;background:#F4F5FB}
+  @keyframes pageIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .mono{font-family:'JetBrains Mono',monospace}
+  .card{background:#fff;border:1px solid #E9EAF2;border-radius:16px}
+  .aud-cta{transition:filter .14s,transform .14s}.aud-cta:hover{filter:brightness(1.07)}
+  .proc-row{cursor:pointer;transition:background .14s}.proc-row:hover{background:#FAFAFE}
+</style>
+</helmet>
+<main style="flex:1;min-width:0;display:flex;flex-direction:column">
+    <dc-import name="Topbar" title="Central de Auditoria" subtitle="Processos identificados a partir da caixa do Courier" icon-path="M3 4h18v16H3z M3 9h18 M8 14l2.5 2.5L16 12" hint-size="100%,110px"></dc-import>
+
+    <div style="flex:1;overflow-y:auto;padding:18px 26px 40px;animation:pageIn .35s ease both">
+      <div style="max-width:1080px;margin:0 auto">
+
+        <!-- Barra de ação: Importar do Outlook -->
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:18px">
+          <div style="font-size:12.5px;color:#7A8099">{{ resumoLinha }}</div>
+          <button class="aud-cta" onClick="{{ onImportar }}" style="display:flex;align-items:center;gap:8px;background:#4327E6;color:#fff;border:none;border-radius:12px;padding:11px 18px;font-family:inherit;font-size:13.5px;font-weight:700;cursor:pointer;box-shadow:0 8px 20px -8px rgba(67,39,230,.6)">
+            <sc-if value="{{ loading }}" hint-placeholder-val="{{ false }}"><span style="width:15px;height:15px;border:2px solid rgba(255,255,255,.5);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;display:inline-block"></span></sc-if>
+            <sc-if value="{{ notLoading }}" hint-placeholder-val="{{ true }}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M12 3v12 M8 11l4 4 4-4 M4 19h16"/></svg></sc-if>
+            {{ importLabel }}
+          </button>
+        </div>
+
+        <!-- IDLE: nenhum processo carregado (estado da imagem) -->
+        <sc-if value="{{ idle }}" hint-placeholder-val="{{ true }}">
+          <div class="card" style="display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:70px 30px;margin-top:30px">
+            <span style="width:66px;height:66px;border-radius:18px;background:#F1F2F9;display:flex;align-items:center;justify-content:center;margin-bottom:18px">
+              <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#9AA0B4" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="m3 8 9 6 9-6"/></svg>
+            </span>
+            <div style="font-size:19px;font-weight:800;color:#161A2E;margin-bottom:8px">Nenhum processo carregado</div>
+            <div style="font-size:13.5px;line-height:1.6;color:#6B7192;max-width:400px">Clique em <b style="color:#4327E6">Importar do Outlook</b>. A Priora identifica os documentos e agrupa automaticamente por processo.</div>
+          </div>
+        </sc-if>
+
+        <!-- LOADING: etapas reais (Blueprint 6.6) -->
+        <sc-if value="{{ loading }}" hint-placeholder-val="{{ false }}">
+          <div class="card" style="display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:64px 30px;margin-top:30px">
+            <span style="width:40px;height:40px;border:3px solid #E7E4FB;border-top-color:#4327E6;border-radius:50%;animation:spin .8s linear infinite;margin-bottom:18px"></span>
+            <div style="font-size:15px;font-weight:800;color:#161A2E;margin-bottom:6px">Importando do Outlook…</div>
+            <div style="font-size:12.5px;color:#7A8099">Lendo a caixa do Courier, classificando documentos e agrupando por processo.</div>
+          </div>
+        </sc-if>
+
+        <!-- ERRO -->
+        <sc-if value="{{ errored }}" hint-placeholder-val="{{ false }}">
+          <div class="card" style="text-align:center;max-width:440px;margin:40px auto;padding:34px 28px">
+            <div style="font-size:16px;font-weight:800;color:#161A2E;margin-bottom:8px">Não foi possível importar</div>
+            <div style="font-size:13px;line-height:1.6;color:#6B7192">{{ errorMsg }}</div>
+          </div>
+        </sc-if>
+
+        <!-- VAZIO após importar -->
+        <sc-if value="{{ vazio }}" hint-placeholder-val="{{ false }}">
+          <div class="card" style="text-align:center;padding:56px 30px;margin-top:20px">
+            <div style="font-size:16px;font-weight:800;color:#161A2E;margin-bottom:6px">Nenhum processo com documentos encontrado</div>
+            <div style="font-size:13px;color:#6B7192">Não encontrei anexos vinculados a um processo (IMxxxx) na caixa do Courier.</div>
+          </div>
+        </sc-if>
+
+        <!-- LISTA DE PROCESSOS -->
+        <sc-if value="{{ temProcessos }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex;flex-direction:column;gap:12px">
+            <sc-for list="{{ processos }}" as="p" hint-placeholder-count="3">
+              <div class="card" style="overflow:hidden">
+                <div class="proc-row" onClick="{{ p.onToggle }}" style="display:flex;align-items:center;gap:16px;padding:16px 20px">
+                  <span style="width:38px;height:38px;border-radius:11px;background:#EEEBFE;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="2"><path d="M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/></svg></span>
+                  <div style="min-width:0;width:150px;flex-shrink:0">
+                    <div class="mono" style="font-size:14px;font-weight:700;color:#161A2E">{{ p.processo }}</div>
+                    <div style="font-size:11.5px;color:#9AA0B4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ p.clienteLabel }}</div>
+                  </div>
+                  <div style="flex:1;min-width:0;display:flex;align-items:center;gap:7px;flex-wrap:wrap">
+                    <span style="font-size:12px;color:#6B7192"><b style="color:#161A2E">{{ p.qtdDocs }}</b> doc(s)</span>
+                    <sc-for list="{{ p.auditoriaChips }}" as="a" hint-placeholder-count="2">
+                      <span style="font-size:10.5px;font-weight:700;color:#177D54;background:#E7F6EF;padding:3px 9px;border-radius:7px">{{ a.label }}</span>
+                    </sc-for>
+                    <sc-if value="{{ p.semAuditoria }}" hint-placeholder-val="{{ false }}"><span style="font-size:10.5px;font-weight:600;color:#9AA0B4;background:#F1F2F9;padding:3px 9px;border-radius:7px">Sem auditoria disponível</span></sc-if>
+                  </div>
+                  <span style="font-size:11px;font-weight:700;color:{{ p.statusColor }};background:{{ p.statusBg }};padding:4px 11px;border-radius:8px;flex-shrink:0">{{ p.status }}</span>
+                  <span style="color:#C7CBDA;font-size:15px;flex-shrink:0;transition:transform .2s;transform:{{ p.caret }}">▾</span>
+                </div>
+
+                <!-- Detalhe: documentos do processo (Blueprint 2.6) -->
+                <sc-if value="{{ p.aberto }}" hint-placeholder-val="{{ false }}">
+                  <div style="border-top:1px solid #F1F2F8;padding:16px 20px;background:#FBFBFE">
+                    <div style="font-size:10.5px;font-weight:700;color:#9AA0B4;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px">Documentos encontrados</div>
+                    <div style="display:flex;flex-direction:column;gap:8px">
+                      <sc-for list="{{ p.docs }}" as="d" hint-placeholder-count="3">
+                        <div style="display:flex;align-items:center;gap:11px">
+                          <span style="width:30px;height:30px;border-radius:8px;background:#fff;border:1px solid #ECEDF4;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#7A8099" stroke-width="2"><path d="M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/></svg></span>
+                          <div style="flex:1;min-width:0"><div style="font-size:12.5px;color:#3C4258;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ d.nome }}</div></div>
+                          <span style="font-size:10.5px;font-weight:700;color:{{ d.tipoColor }};background:{{ d.tipoBg }};padding:3px 9px;border-radius:7px;flex-shrink:0">{{ d.tipoLabel }}</span>
+                        </div>
+                      </sc-for>
+                    </div>
+
+                    <sc-if value="{{ p.temFaltando }}" hint-placeholder-val="{{ false }}">
+                      <div style="margin-top:13px;padding-top:12px;border-top:1px dashed #E6E7F0">
+                        <div style="font-size:11.5px;color:#B4740A;background:#FEF6E9;border:1px solid #F5E4C4;border-radius:9px;padding:9px 12px">Documentos esperados ausentes: <b>{{ p.faltandoLabel }}</b> — a auditoria será parcial.</div>
+                      </div>
+                    </sc-if>
+
+                    <!-- Iniciar auditoria (motor OCR — próxima etapa) -->
+                    <div style="margin-top:14px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+                      <div style="font-size:11px;color:#9AA0B4;max-width:520px;line-height:1.5">A conferência campo a campo (OCR + comparação MBL×HBL / CE Master×CE House) é a próxima etapa do módulo.</div>
+                      <button onClick="{{ p.onIniciar }}" style="display:flex;align-items:center;gap:7px;background:#EEEBFE;color:#4327E6;border:none;border-radius:10px;padding:9px 15px;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer">Iniciar auditoria</button>
+                    </div>
+                  </div>
+                </sc-if>
+              </div>
+            </sc-for>
+          </div>
+        </sc-if>
+
+      </div>
+    </div>
+</main>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = { status:'idle', resp:null, expanded:null, toast:'' };
+
+  importar(){
+    var self=this;
+    this.setState({ status:'loading' });
+    fetch('/api/auditoria/processos', { credentials:'same-origin' })
+      .then(function(r){ return r.json().catch(function(){return null;}).then(function(j){ if(!r.ok) throw new Error((j&&j.error)||('HTTP '+r.status)); return j; }); })
+      .then(function(d){ self.setState({ resp:d, status:'done' }); })
+      .catch(function(e){ self.setState({ status:'error:'+String(e&&e.message||e) }); });
+  }
+
+  renderVals(){
+    var self=this, st=this.state.status, resp=this.state.resp;
+    var loading=(st==='loading'), errored=(st.indexOf('error')===0), done=(st==='done'&&!!resp), idle=(st==='idle');
+    var lista=(done && resp.processos)?resp.processos:[];
+
+    var TIPO_COLOR={ 'Master BL':{c:'#4327E6',bg:'#EEEBFE'}, 'House BL':{c:'#6D28D9',bg:'#F1EBFD'},
+      'CE Master':{c:'#1D4ED8',bg:'#E7F0FE'}, 'CE House':{c:'#0E7490',bg:'#E3F5F8'},
+      'Item':{c:'#177D54',bg:'#E7F6EF'}, 'Invoice':{c:'#B4740A',bg:'#FEF6E9'},
+      'Packing List':{c:'#B4740A',bg:'#FEF6E9'}, 'Não classificado':{c:'#9AA0B4',bg:'#F1F2F9'} };
+    var STATUS_COLOR={ 'Completa':{c:'#177D54',bg:'#E7F6EF'}, 'Parcial':{c:'#B4740A',bg:'#FEF6E9'}, 'Aguardando':{c:'#7A8099',bg:'#F1F2F9'} };
+
+    var processos=lista.map(function(p){
+      var sc=STATUS_COLOR[p.status]||STATUS_COLOR['Aguardando'];
+      var aberto=(self.state.expanded===p.processo);
+      return {
+        processo:p.processo,
+        clienteLabel:(p.cliente||'Cliente a confirmar'),
+        qtdDocs:String(p.qtdDocs),
+        auditoriaChips:(p.auditorias||[]).map(function(a){ return { label:a }; }),
+        semAuditoria:((p.auditorias||[]).length===0),
+        status:p.status, statusColor:sc.c, statusBg:sc.bg,
+        aberto:aberto, caret:(aberto?'rotate(180deg)':'rotate(0deg)'),
+        docs:(p.docs||[]).map(function(d){ var tc=TIPO_COLOR[d.tipoLabel]||TIPO_COLOR['Não classificado'];
+          return { nome:d.nome, tipoLabel:d.tipoLabel, tipoColor:tc.c, tipoBg:tc.bg }; }),
+        temFaltando:((p.faltando||[]).length>0),
+        faltandoLabel:(p.faltando||[]).join(', '),
+        onToggle:function(){ self.setState({ expanded:(self.state.expanded===p.processo?null:p.processo) }); },
+        onIniciar:function(ev){ if(ev&&ev.stopPropagation)ev.stopPropagation(); if(window.PrioraBus) window.PrioraBus.focus('couriers', p.processo); }
+      };
+    });
+
+    var resumoLinha='';
+    if(done){ resumoLinha = (resp.count||0)+' processo(s) · '+(resp.totalDocumentos||0)+' documento(s) · '+(resp.prontos||0)+' pronto(s) para auditoria'; }
+
+    return {
+      loading:loading, notLoading:!loading,
+      idle:idle, errored:errored, errorMsg:(errored?st.slice(st.indexOf(':')+1):''),
+      vazio:(done && lista.length===0),
+      temProcessos:(done && lista.length>0),
+      processos:processos,
+      resumoLinha:resumoLinha,
+      importLabel:(loading?'Importando…':'Importar do Outlook'),
+      onImportar:function(){ if(!loading) self.importar(); }
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -32,6 +32,7 @@
 
   <div data-view="{{ vw.inicio }}" data-screen-label="Início"><sc-if value="{{ m.inicio }}" hint-placeholder-val="{{ false }}"><dc-import name="Inicio" hint-size="100%,640px"></dc-import></sc-if></div>
   <div data-view="{{ vw.fila }}" data-screen-label="Fila de Decisões"><sc-if value="{{ m.fila }}" hint-placeholder-val="{{ false }}"><dc-import name="Fila de Decisoes" hint-size="100%,640px"></dc-import></sc-if></div>
+  <div data-view="{{ vw.auditoria }}" data-screen-label="Auditoria"><sc-if value="{{ m.auditoria }}" hint-placeholder-val="{{ false }}"><dc-import name="Auditoria" hint-size="100%,640px"></dc-import></sc-if></div>
   <div data-view="{{ vw.processos }}" data-screen-label="Processos"><sc-if value="{{ m.processos }}" hint-placeholder-val="{{ false }}"><dc-import name="Processos" hint-size="100%,640px"></dc-import></sc-if></div>
   <div data-view="{{ vw.liberacao }}" data-screen-label="Liberação"><sc-if value="{{ m.liberacao }}" hint-placeholder-val="{{ false }}"><dc-import name="Liberacao" hint-size="100%,640px"></dc-import></sc-if></div>
   <div data-view="{{ vw.couriers }}" data-screen-label="Couriers"><sc-if value="{{ m.couriers }}" hint-placeholder-val="{{ false }}"><dc-import name="Courier Module" hint-size="100%,640px"></dc-import></sc-if></div>
@@ -47,10 +48,11 @@
 </x-dc>
 <script type="text/x-dc" data-dc-script>
 class Component extends DCLogic {
-  KEYS = ['inicio','fila','processos','liberacao','couriers','demurrage','exigem','equipe','relatorios'];
+  KEYS = ['inicio','fila','auditoria','processos','liberacao','couriers','demurrage','exigem','equipe','relatorios'];
   HREF2KEY = {
     'Inicio.dc.html':'inicio',
     'Fila de Decisoes.dc.html':'fila',
+    'Auditoria.dc.html':'auditoria',
     'Processos.dc.html':'processos',
     'Liberacao.dc.html':'liberacao',
     'Courier Module.dc.html':'couriers',
