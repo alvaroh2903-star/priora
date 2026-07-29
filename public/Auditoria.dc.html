@@ -12,294 +12,494 @@
 <script src="./priora-bus.js"></script>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:'Plus Jakarta Sans',sans-serif;-webkit-font-smoothing:antialiased;background:#F4F5FB}
-  @keyframes pageIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+  @keyframes pageIn{from{transform:translateY(12px)}to{transform:translateY(0)}}
+  @keyframes audExpand{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}
+  @keyframes claraBob{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
   @keyframes spin{to{transform:rotate(360deg)}}
-  .mono{font-family:'JetBrains Mono',monospace}
-  .card{background:#fff;border:1px solid #E9EAF2;border-radius:16px}
-  .aud-cta{transition:filter .14s,transform .14s}.aud-cta:hover{filter:brightness(1.07)}
-  .proc-row{cursor:pointer;transition:background .14s}.proc-row:hover{background:#FAFAFE}
+  .aud-drop{transition:border-color .16s,background .16s}
+  .aud-drop:hover{border-color:#B7ACF2;background:#FBFAFF}
+  .aud-ev:hover{background:#FAFAFE}
+  .aud-cta:hover{filter:brightness(1.06)}
+  .aud-ghost:hover{background:#F3F1FE;border-color:#CFC6FB;color:#3D34C9}
+  .aud-seg:hover{color:#3C4258}
+  .aud-vpdf:hover{background:#EEEBFE}
 </style>
 </helmet>
-<main style="flex:1;min-width:0;display:flex;flex-direction:column">
-    <dc-import name="Topbar" title="Central de Auditoria" subtitle="Processos identificados a partir da caixa do Courier" icon-path="M3 4h18v16H3z M3 9h18 M8 14l2.5 2.5L16 12" hint-size="100%,110px"></dc-import>
+<main style="flex:1;min-width:0;display:flex;flex-direction:column;background:#F4F5FB;font-family:'Plus Jakarta Sans',sans-serif;color:#161A2E">
+  <dc-import name="Topbar" title="Auditoria Documental" subtitle="A Priora identifica automaticamente os documentos nos e-mails do courier." icon-path="M9 11l3 3L22 4 M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" hint-size="100%,86px"></dc-import>
 
-    <div style="flex:1;overflow-y:auto;padding:18px 26px 40px;animation:pageIn .35s ease both">
-      <div style="max-width:1080px;margin:0 auto">
+  <!-- ================= DISCOVERY (process finder) ================= -->
+  <sc-if value="{{ isDiscover }}" hint-placeholder-val="{{ true }}">
+  <div style="padding:20px 30px 40px;animation:pageIn .35s ease both">
+    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:20px">
+      <button onClick="{{ onImport }}" class="aud-cta" style="display:flex;align-items:center;gap:10px;height:48px;padding:0 22px;border:none;border-radius:13px;background:#4327E6;color:#fff;font-family:inherit;font-size:14px;font-weight:800;cursor:pointer;box-shadow:0 12px 24px -13px rgba(67,39,230,.7)">
+        <sc-if value="{{ discLoading }}" hint-placeholder-val="{{ false }}"><span style="width:17px;height:17px;border:2px solid rgba(255,255,255,.5);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;display:inline-block"></span></sc-if>
+        <sc-if value="{{ discNotLoading }}" hint-placeholder-val="{{ true }}"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M4 5h16v14H4z M4 6l8 6 8-6"/></svg></sc-if>
+        {{ importLabel }}</button>
+      <sc-if value="{{ discDone }}" hint-placeholder-val="{{ false }}"><div style="display:flex;align-items:center;gap:9px"><span style="width:8px;height:8px;border-radius:50%;background:#1F9D6B"></span><span style="font-size:12.5px;color:#7A8099">{{ importStatus }}</span><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#1F9D6B" stroke-width="2.4"><path d="m5 12 5 5 9-10"/></svg></div></sc-if>
+    </div>
 
-        <!-- ============================ LISTA ============================ -->
-        <sc-if value="{{ showLista }}" hint-placeholder-val="{{ true }}">
-        <div>
-          <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:18px">
-            <div style="font-size:12.5px;color:#7A8099">{{ resumoLinha }}</div>
-            <button class="aud-cta" onClick="{{ onImportar }}" style="display:flex;align-items:center;gap:8px;background:#4327E6;color:#fff;border:none;border-radius:12px;padding:11px 18px;font-family:inherit;font-size:13.5px;font-weight:700;cursor:pointer;box-shadow:0 8px 20px -8px rgba(67,39,230,.6)">
-              <sc-if value="{{ loading }}" hint-placeholder-val="{{ false }}"><span style="width:15px;height:15px;border:2px solid rgba(255,255,255,.5);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;display:inline-block"></span></sc-if>
-              <sc-if value="{{ notLoading }}" hint-placeholder-val="{{ true }}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M12 3v12 M8 11l4 4 4-4 M4 19h16"/></svg></sc-if>
-              {{ importLabel }}
-            </button>
-          </div>
+    <!-- loading -->
+    <sc-if value="{{ discLoading }}" hint-placeholder-val="{{ false }}">
+      <div style="background:#fff;border:1px solid #EAEBF4;border-radius:18px;padding:64px 30px;text-align:center"><span style="width:40px;height:40px;border:3px solid #E7E4FB;border-top-color:#4327E6;border-radius:50%;animation:spin .8s linear infinite;display:inline-block;margin-bottom:16px"></span><div style="font-size:15px;font-weight:800">Importando do Outlook…</div><div style="font-size:12.5px;color:#7A8099;margin-top:5px">Lendo a caixa do Courier, classificando documentos e agrupando por processo.</div></div>
+    </sc-if>
+    <sc-if value="{{ discError }}" hint-placeholder-val="{{ false }}">
+      <div style="background:#fff;border:1px solid #EAEBF4;border-radius:18px;padding:44px 30px;text-align:center;max-width:480px;margin:0 auto"><div style="font-size:16px;font-weight:800;margin-bottom:8px">Não foi possível importar</div><div style="font-size:13px;color:#6B7192;line-height:1.6">{{ discErrorMsg }}</div></div>
+    </sc-if>
+    <sc-if value="{{ discEmpty }}" hint-placeholder-val="{{ false }}">
+      <div style="background:#fff;border:1px solid #EAEBF4;border-radius:18px;padding:56px 30px;text-align:center"><div style="font-size:16px;font-weight:800;margin-bottom:6px">Nenhum processo com documentos encontrado</div><div style="font-size:13px;color:#6B7192">Não encontrei anexos vinculados a um processo (IMxxxx) na caixa do Courier.</div></div>
+    </sc-if>
 
-          <sc-if value="{{ idle }}" hint-placeholder-val="{{ true }}">
-            <div class="card" style="display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:70px 30px;margin-top:30px">
-              <span style="width:66px;height:66px;border-radius:18px;background:#F1F2F9;display:flex;align-items:center;justify-content:center;margin-bottom:18px"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#9AA0B4" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="m3 8 9 6 9-6"/></svg></span>
-              <div style="font-size:19px;font-weight:800;color:#161A2E;margin-bottom:8px">Nenhum processo carregado</div>
-              <div style="font-size:13.5px;line-height:1.6;color:#6B7192;max-width:400px">Clique em <b style="color:#4327E6">Importar do Outlook</b>. A Priora identifica os documentos e agrupa automaticamente por processo.</div>
-            </div>
-          </sc-if>
+    <sc-if value="{{ discHas }}" hint-placeholder-val="{{ false }}">
+    <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr) 300px;gap:18px;align-items:start">
 
-          <sc-if value="{{ loading }}" hint-placeholder-val="{{ false }}">
-            <div class="card" style="display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:64px 30px;margin-top:30px">
-              <span style="width:40px;height:40px;border:3px solid #E7E4FB;border-top-color:#4327E6;border-radius:50%;animation:spin .8s linear infinite;margin-bottom:18px"></span>
-              <div style="font-size:15px;font-weight:800;color:#161A2E;margin-bottom:6px">Importando do Outlook…</div>
-              <div style="font-size:12.5px;color:#7A8099">Lendo a caixa do Courier, classificando documentos e agrupando por processo.</div>
-            </div>
-          </sc-if>
-
-          <sc-if value="{{ errored }}" hint-placeholder-val="{{ false }}">
-            <div class="card" style="text-align:center;max-width:440px;margin:40px auto;padding:34px 28px"><div style="font-size:16px;font-weight:800;color:#161A2E;margin-bottom:8px">Não foi possível importar</div><div style="font-size:13px;line-height:1.6;color:#6B7192">{{ errorMsg }}</div></div>
-          </sc-if>
-
-          <sc-if value="{{ vazio }}" hint-placeholder-val="{{ false }}">
-            <div class="card" style="text-align:center;padding:56px 30px;margin-top:20px"><div style="font-size:16px;font-weight:800;color:#161A2E;margin-bottom:6px">Nenhum processo com documentos encontrado</div><div style="font-size:13px;color:#6B7192">Não encontrei anexos vinculados a um processo (IMxxxx) na caixa do Courier.</div></div>
-          </sc-if>
-
-          <sc-if value="{{ temProcessos }}" hint-placeholder-val="{{ false }}">
-            <div style="display:flex;flex-direction:column;gap:12px">
-              <sc-for list="{{ processos }}" as="p" hint-placeholder-count="3">
-                <div class="card" style="overflow:hidden">
-                  <div class="proc-row" onClick="{{ p.onToggle }}" style="display:flex;align-items:center;gap:16px;padding:16px 20px">
-                    <span style="width:38px;height:38px;border-radius:11px;background:#EEEBFE;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="2"><path d="M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/></svg></span>
-                    <div style="min-width:0;width:150px;flex-shrink:0"><div class="mono" style="font-size:14px;font-weight:700;color:#161A2E">{{ p.processo }}</div><div style="font-size:11.5px;color:#9AA0B4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ p.clienteLabel }}</div></div>
-                    <div style="flex:1;min-width:0;display:flex;align-items:center;gap:7px;flex-wrap:wrap">
-                      <span style="font-size:12px;color:#6B7192"><b style="color:#161A2E">{{ p.qtdDocs }}</b> doc(s)</span>
-                      <sc-for list="{{ p.auditoriaChips }}" as="a" hint-placeholder-count="2"><span style="font-size:10.5px;font-weight:700;color:#177D54;background:#E7F6EF;padding:3px 9px;border-radius:7px">{{ a.label }}</span></sc-for>
-                      <sc-if value="{{ p.semAuditoria }}" hint-placeholder-val="{{ false }}"><span style="font-size:10.5px;font-weight:600;color:#9AA0B4;background:#F1F2F9;padding:3px 9px;border-radius:7px">Sem auditoria disponível</span></sc-if>
-                    </div>
-                    <span style="font-size:11px;font-weight:700;color:{{ p.statusColor }};background:{{ p.statusBg }};padding:4px 11px;border-radius:8px;flex-shrink:0">{{ p.status }}</span>
-                    <span style="color:#C7CBDA;font-size:15px;flex-shrink:0;transition:transform .2s;transform:{{ p.caret }}">▾</span>
-                  </div>
-                  <sc-if value="{{ p.aberto }}" hint-placeholder-val="{{ false }}">
-                    <div style="border-top:1px solid #F1F2F8;padding:16px 20px;background:#FBFBFE">
-                      <div style="font-size:10.5px;font-weight:700;color:#9AA0B4;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px">Documentos encontrados</div>
-                      <div style="display:flex;flex-direction:column;gap:8px">
-                        <sc-for list="{{ p.docs }}" as="d" hint-placeholder-count="3">
-                          <div style="display:flex;align-items:center;gap:11px">
-                            <span style="width:30px;height:30px;border-radius:8px;background:#fff;border:1px solid #ECEDF4;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#7A8099" stroke-width="2"><path d="M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/></svg></span>
-                            <div style="flex:1;min-width:0"><div style="font-size:12.5px;color:#3C4258;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ d.nome }}</div></div>
-                            <span style="font-size:10.5px;font-weight:700;color:{{ d.tipoColor }};background:{{ d.tipoBg }};padding:3px 9px;border-radius:7px;flex-shrink:0">{{ d.tipoLabel }}</span>
-                          </div>
-                        </sc-for>
-                      </div>
-                      <sc-if value="{{ p.temFaltando }}" hint-placeholder-val="{{ false }}"><div style="margin-top:13px;padding-top:12px;border-top:1px dashed #E6E7F0"><div style="font-size:11.5px;color:#B4740A;background:#FEF6E9;border:1px solid #F5E4C4;border-radius:9px;padding:9px 12px">Documentos esperados ausentes: <b>{{ p.faltandoLabel }}</b> — a auditoria será parcial.</div></div></sc-if>
-                      <div style="margin-top:14px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
-                        <div style="font-size:11px;color:#9AA0B4;max-width:520px;line-height:1.5">A Priora vai ler os documentos (OCR), comparar campo a campo e organizar as evidências.</div>
-                        <button class="aud-cta" onClick="{{ p.onIniciar }}" style="display:flex;align-items:center;gap:7px;background:#4327E6;color:#fff;border:none;border-radius:10px;padding:9px 16px;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer">Iniciar auditoria</button>
-                      </div>
-                    </div>
-                  </sc-if>
-                </div>
-              </sc-for>
-            </div>
-          </sc-if>
+      <!-- processes found -->
+      <div style="background:#fff;border:1px solid #EAEBF4;border-radius:18px;overflow:hidden;box-shadow:0 1px 2px rgba(20,24,50,.04)">
+        <div style="display:flex;align-items:center;gap:9px;padding:17px 20px 14px"><span style="font-size:15px;font-weight:800;color:#161A2E">Processos Encontrados</span><span style="font-size:11.5px;font-weight:800;color:#4327E6;background:#EEEBFE;padding:3px 9px;border-radius:20px">{{ procCount }}</span></div>
+        <div style="padding:0 20px 14px;display:flex;gap:10px">
+          <div style="flex:1;display:flex;align-items:center;gap:8px;background:#F5F6FA;border:1px solid #EEF0F6;border-radius:11px;padding:0 12px;height:40px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#9AA0B4" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3-3"/></svg><input value="{{ busca }}" onInput="{{ onBusca }}" placeholder="Buscar processo..." style="flex:1;border:none;background:transparent;outline:none;font-family:inherit;font-size:12.5px;color:#161A2E"></div>
         </div>
-        </sc-if>
-
-        <!-- ========================== WORKSPACE ========================== -->
-        <sc-if value="{{ showWorkspace }}" hint-placeholder-val="{{ false }}">
-        <div>
-          <div onClick="{{ onVoltar }}" style="display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:#6B7192;cursor:pointer;margin-bottom:14px">‹ Voltar aos processos</div>
-
-          <!-- Cabeçalho (5.4) -->
-          <div class="card" style="padding:18px 22px;margin-bottom:14px;display:flex;align-items:center;gap:16px;flex-wrap:wrap">
-            <span style="width:44px;height:44px;border-radius:12px;background:#EEEBFE;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="2"><path d="M3 4h18v16H3z M3 9h18 M8 14l2.5 2.5L16 12"/></svg></span>
-            <div style="min-width:0;flex:1">
-              <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><span class="mono" style="font-size:18px;font-weight:800;color:#161A2E">{{ ws.processo }}</span><span style="font-size:11px;font-weight:700;color:{{ ws.statusColor }};background:{{ ws.statusBg }};padding:4px 11px;border-radius:8px">{{ ws.status }}</span></div>
-              <div style="font-size:12px;color:#7A8099;margin-top:3px">{{ ws.subhead }}</div>
+        <div style="max-height:520px;overflow:auto;padding:0 14px 14px;display:flex;flex-direction:column;gap:10px">
+          <sc-for list="{{ processes }}" as="p" hint-placeholder-count="4">
+            <div class="aud-ev" onClick="{{ p.onSelect }}" style="border:1.5px solid {{ p.border }};border-radius:14px;padding:15px 16px;cursor:pointer;background:{{ p.bg }}">
+              <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+                <div style="min-width:0"><div style="font-family:'JetBrains Mono',monospace;font-size:16px;font-weight:700;color:#161A2E">{{ p.code }}</div><div style="font-size:12.5px;color:#7A8099;margin-top:3px">{{ p.client }}</div><div style="font-size:11px;color:#9AA0B4;margin-top:4px">Atualizado {{ p.updated }}</div></div>
+                <span style="font-size:11px;font-weight:700;color:{{ p.badgeColor }};background:{{ p.badgeBg }};padding:4px 10px;border-radius:8px;white-space:nowrap">{{ p.docs }} docs</span>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:5px;margin-top:11px">
+                <sc-for list="{{ p.tags }}" as="t" hint-placeholder-count="2">
+                  <div style="display:flex;align-items:center;gap:7px;font-size:11.5px;color:{{ t.color }};font-weight:600"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="{{ t.color }}" stroke-width="2.4"><path d="{{ t.icon }}"/></svg>{{ t.label }}</div>
+                </sc-for>
+              </div>
             </div>
+          </sc-for>
+        </div>
+      </div>
+
+      <!-- documents of selected process -->
+      <div style="background:#fff;border:1px solid #EAEBF4;border-radius:18px;overflow:hidden;box-shadow:0 1px 2px rgba(20,24,50,.04)">
+        <div style="display:flex;align-items:center;gap:10px;padding:17px 22px 15px;border-bottom:1px solid #F1F2F8"><span style="font-size:15px;font-weight:800;color:#161A2E">Documentos do Processo</span><span style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:#4327E6;background:#EEEBFE;padding:3px 9px;border-radius:7px">{{ sel.code }}</span><span style="font-size:12.5px;color:#7A8099;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ sel.client }}</span></div>
+        <div style="padding:12px 22px;display:flex;flex-direction:column">
+          <sc-for list="{{ sel.documents }}" as="d" hint-placeholder-count="6">
+            <div style="display:flex;align-items:center;gap:13px;padding:11px 0;border-bottom:1px solid #F4F5FA">
+              <span style="width:34px;height:40px;border-radius:6px;background:{{ d.iconBg }};display:flex;align-items:center;justify-content:center;flex-shrink:0"><span style="font-size:8px;font-weight:800;color:{{ d.iconColor }}">PDF</span></span>
+              <div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:700;color:#161A2E;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ d.name }}</div><div style="font-size:11px;color:#9AA0B4;margin-top:1px">{{ d.type }}</div></div>
+              <span style="font-size:11px;font-weight:700;color:{{ d.badgeColor }};background:{{ d.badgeBg }};padding:4px 10px;border-radius:7px;white-space:nowrap">{{ d.badge }}</span>
+            </div>
+          </sc-for>
+          <div style="font-size:11px;font-weight:700;color:#9AA0B4;text-transform:uppercase;letter-spacing:.05em;margin:18px 0 11px">Auditorias disponíveis para este processo</div>
+          <sc-if value="{{ sel.temAudits }}" hint-placeholder-val="{{ true }}">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+            <sc-for list="{{ sel.audits }}" as="a" hint-placeholder-count="2">
+              <div style="border:1px solid #EAEBF4;border-radius:13px;padding:15px 16px">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:8px"><span style="width:32px;height:32px;border-radius:9px;background:#EEEBFE;display:flex;align-items:center;justify-content:center"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="1.9"><path d="{{ a.icon }}"/></svg></span><span style="font-size:10px;font-weight:700;color:{{ a.stColor }};background:{{ a.stBg }};padding:3px 8px;border-radius:6px">{{ a.st }}</span></div>
+                <div style="font-size:13.5px;font-weight:800;color:#161A2E;margin-top:11px">{{ a.name }}</div>
+                <div style="font-size:11.5px;color:#7A8099;margin-top:3px;line-height:1.4">{{ a.desc }}</div>
+              </div>
+            </sc-for>
           </div>
+          </sc-if>
+          <sc-if value="{{ sel.semAudits }}" hint-placeholder-val="{{ false }}"><div style="font-size:12px;color:#9AA0B4;padding:2px 0 4px">Nenhuma auditoria disponível — faltam documentos ({{ sel.faltando }}).</div></sc-if>
+          <button onClick="{{ onStartAudit }}" class="aud-cta" style="display:flex;flex-direction:column;align-items:center;gap:3px;width:100%;margin-top:16px;border:none;border-radius:13px;background:#4327E6;color:#fff;padding:14px;font-family:inherit;cursor:pointer;box-shadow:0 12px 24px -13px rgba(67,39,230,.7)"><span style="display:flex;align-items:center;gap:8px;font-size:14px;font-weight:800"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2"><path d="M5 3l14 9-14 9V3Z"/></svg>Iniciar Auditoria</span><span style="font-size:11px;opacity:.85;font-weight:600">A Priora irá executar as auditorias e apresentar os resultados.</span></button>
+        </div>
+      </div>
 
-          <!-- Loading com etapas reais (6.6) -->
-          <sc-if value="{{ ws.loading }}" hint-placeholder-val="{{ false }}">
-            <div class="card" style="display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:60px 30px">
-              <span style="width:40px;height:40px;border:3px solid #E7E4FB;border-top-color:#4327E6;border-radius:50%;animation:spin .8s linear infinite;margin-bottom:16px"></span>
-              <div style="font-size:15px;font-weight:800;color:#161A2E;margin-bottom:6px">Construindo a auditoria…</div>
-              <div style="font-size:12.5px;color:#7A8099">Lendo os documentos (OCR), organizando o processo e executando os Playbooks.</div>
+      <!-- how it works -->
+      <div style="background:#fff;border:1px solid #EAEBF4;border-radius:18px;padding:20px;box-shadow:0 1px 2px rgba(20,24,50,.04)">
+        <div style="display:flex;align-items:center;gap:9px;margin-bottom:16px"><span style="width:30px;height:30px;border-radius:9px;background:#F3F1FE;display:flex;align-items:center;justify-content:center"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4M12 8h.01"/></svg></span><span style="font-size:14px;font-weight:800;color:#161A2E">Como funciona?</span></div>
+        <div style="display:flex;flex-direction:column;gap:16px">
+          <div style="display:flex;gap:12px"><span style="width:24px;height:24px;border-radius:7px;background:#EEEBFE;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:12px;font-weight:800;color:#4327E6">1</span><div><div style="font-size:13px;font-weight:700;color:#161A2E">Clique simples</div><div style="font-size:11.5px;color:#7A8099;line-height:1.5;margin-top:2px">Selecione o processo para visualizar os documentos encontrados.</div></div></div>
+          <div style="display:flex;gap:12px"><span style="width:24px;height:24px;border-radius:7px;background:#EEEBFE;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:12px;font-weight:800;color:#4327E6">2</span><div><div style="font-size:13px;font-weight:700;color:#161A2E">Iniciar Auditoria</div><div style="font-size:11.5px;color:#7A8099;line-height:1.5;margin-top:2px">A Priora abre a mesa de auditoria e executa as conferências automaticamente.</div></div></div>
+        </div>
+      </div>
+    </div>
+    </sc-if>
+  </div>
+  </sc-if>
+
+  <!-- ================= MESA DE AUDITORIA ================= -->
+  <sc-if value="{{ isMesa }}" hint-placeholder-val="{{ false }}">
+  <div style="padding:20px 30px 40px;animation:pageIn .35s ease both">
+
+    <button onClick="{{ onBack }}" class="aud-ghost" style="display:inline-flex;align-items:center;gap:8px;background:#fff;border:1px solid #E6E8F2;border-radius:11px;padding:9px 15px;font-family:inherit;font-size:13px;font-weight:700;color:#5A6076;cursor:pointer;margin-bottom:16px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 18l-6-6 6-6"/></svg>Voltar para Processos</button>
+
+    <!-- mesa loading / error -->
+    <sc-if value="{{ mesaLoading }}" hint-placeholder-val="{{ false }}">
+      <div style="background:#fff;border:1px solid #EAEBF4;border-radius:18px;padding:70px 30px;text-align:center"><span style="width:44px;height:44px;border:3px solid #E7E4FB;border-top-color:#4327E6;border-radius:50%;animation:spin .8s linear infinite;display:inline-block;margin-bottom:16px"></span><div style="font-size:16px;font-weight:800">Construindo a auditoria…</div><div style="font-size:12.5px;color:#7A8099;margin-top:6px">Lendo os documentos (OCR), organizando o processo e executando os Playbooks.</div></div>
+    </sc-if>
+    <sc-if value="{{ mesaError }}" hint-placeholder-val="{{ false }}">
+      <div style="background:#fff;border:1px solid #EAEBF4;border-radius:18px;padding:44px 30px;text-align:center;max-width:520px;margin:0 auto"><div style="font-size:16px;font-weight:800;margin-bottom:8px">Não foi possível concluir a auditoria</div><div style="font-size:13px;color:#6B7192;line-height:1.6">{{ mesaErrorMsg }}</div></div>
+    </sc-if>
+
+    <sc-if value="{{ mesaReady }}" hint-placeholder-val="{{ false }}">
+    <div>
+    <!-- ===== PLAYBOOK BAR ===== -->
+    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;background:#fff;border:1px solid #EAEBF4;border-radius:16px;padding:16px 20px;box-shadow:0 1px 2px rgba(20,24,50,.04)">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="width:36px;height:36px;border-radius:10px;background:#EEEBFE;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="1.9"><path d="M4 5h16M4 5v14a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V5M9 10h6M9 14h4"/></svg></span>
+        <div><div style="font-size:10px;font-weight:700;color:#9AA0B4;text-transform:uppercase;letter-spacing:.05em">Playbook</div><div style="font-size:14px;font-weight:800;color:#161A2E;margin-top:1px">{{ playbookLabel }}</div></div>
+      </div>
+      <div style="display:flex;gap:6px;background:#F1F2F8;border-radius:12px;padding:5px;flex-wrap:wrap">
+        <sc-for list="{{ playbooks }}" as="pb" hint-placeholder-count="2">
+          <button onClick="{{ pb.onSelect }}" class="aud-seg" style="display:flex;align-items:center;gap:7px;height:38px;padding:0 15px;border:none;border-radius:9px;background:{{ pb.bg }};color:{{ pb.color }};font-family:inherit;font-size:13px;font-weight:{{ pb.weight }};cursor:pointer;box-shadow:{{ pb.shadow }}">{{ pb.label }}</button>
+        </sc-for>
+      </div>
+      <button onClick="{{ onExecute }}" class="aud-cta" style="display:flex;align-items:center;gap:9px;margin-left:auto;height:44px;padding:0 22px;border:none;border-radius:12px;background:#4327E6;color:#fff;font-family:inherit;font-size:13.5px;font-weight:800;cursor:pointer;box-shadow:0 12px 24px -13px rgba(67,39,230,.7)"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M23 4v6h-6M1 20v-6h6M3.5 9a9 9 0 0 1 15-3.4L23 10M1 14l4.5 4.4A9 9 0 0 0 20.5 15"/></svg>Reprocessar</button>
+    </div>
+
+    <!-- ===== WORKSPACE ===== -->
+    <div style="display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:18px;align-items:start;margin-top:18px">
+
+      <!-- DOCUMENTS (comparação lado a lado dos campos extraídos) -->
+      <div style="display:flex;flex-direction:column;gap:16px;min-width:0">
+        <div style="display:flex;align-items:center;gap:14px;background:#fff;border:1px solid #EAEBF4;border-radius:13px;padding:10px 14px;box-shadow:0 1px 2px rgba(20,24,50,.04)">
+          <span style="font-size:12px;color:#7A8099;font-weight:600">Comparação documental — campos extraídos</span>
+          <span style="font-size:11px;color:#9AA0B4;margin-left:auto">Clique numa evidência → destaca nos dois lados</span>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+          <sc-for list="{{ viewers }}" as="v" hint-placeholder-count="2">
+            <div style="background:#fff;border:1px solid #EAEBF4;border-radius:16px;overflow:hidden;box-shadow:0 1px 2px rgba(20,24,50,.04)">
+              <div style="display:flex;align-items:center;gap:9px;padding:12px 16px;border-bottom:1px solid #F1F2F8;background:#FAFAFE">
+                <span style="width:26px;height:26px;border-radius:7px;background:{{ v.tagBg }};display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="{{ v.tagColor }}" stroke-width="2"><path d="M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/></svg></span>
+                <div style="min-width:0"><div style="font-size:13px;font-weight:800;color:#161A2E">{{ v.label }}</div><div style="font-size:11px;color:#9AA0B4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ v.fileName }}</div></div>
+              </div>
+              <div ref="{{ v.scrollRef }}" style="height:520px;overflow:auto;background:#EEF0F5;padding:20px">
+                <div style="background:#fff;box-shadow:0 6px 20px -8px rgba(20,24,50,.25);border-radius:4px;padding:34px 30px;font-family:'JetBrains Mono',monospace;color:#3C4258">
+                  <div style="font-size:13px;font-weight:700;color:#161A2E;letter-spacing:.04em;border-bottom:2px solid #161A2E;padding-bottom:8px;margin-bottom:16px">{{ v.docTitle }}</div>
+                  <sc-for list="{{ v.lines }}" as="ln" hint-placeholder-count="8">
+                    <div id="{{ ln.anchor }}" style="display:flex;justify-content:space-between;gap:14px;padding:8px 10px;margin:2px -6px;border-radius:6px;font-size:11.5px;line-height:1.5;background:{{ ln.hlBg }};box-shadow:{{ ln.hlRing }};transition:background .3s,box-shadow .3s">
+                      <span style="color:#9AA0B4">{{ ln.field }}</span>
+                      <span style="color:{{ ln.valColor }};font-weight:700;text-align:right">{{ ln.value }}</span>
+                    </div>
+                  </sc-for>
+                  <div style="text-align:center;font-size:10px;color:#C7CBDA;border-top:1px dashed #E2E4EE;padding-top:12px;margin-top:14px">— campos lidos do documento —</div>
+                </div>
+              </div>
             </div>
-          </sc-if>
+          </sc-for>
+        </div>
+      </div>
 
-          <sc-if value="{{ ws.errored }}" hint-placeholder-val="{{ false }}">
-            <div class="card" style="text-align:center;padding:34px 28px"><div style="font-size:15px;font-weight:800;color:#161A2E;margin-bottom:8px">Não foi possível concluir a auditoria</div><div style="font-size:13px;color:#6B7192">{{ ws.errorMsg }}</div></div>
-          </sc-if>
+      <!-- EVIDENCE NAVIGATOR -->
+      <div style="display:flex;flex-direction:column;gap:16px;position:sticky;top:20px">
+        <!-- summary -->
+        <div style="background:#fff;border:1px solid #EAEBF4;border-radius:18px;padding:20px 22px;box-shadow:0 1px 2px rgba(20,24,50,.04)">
+          <div style="font-size:11px;font-weight:700;color:#9AA0B4;text-transform:uppercase;letter-spacing:.05em">Resumo da auditoria</div>
+          <div style="display:flex;align-items:baseline;gap:8px;margin-top:10px"><span style="font-size:32px;font-weight:800;color:#161A2E">{{ sum.total }}</span><span style="font-size:13px;color:#7A8099">verificações</span></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:9px;margin-top:16px">
+            <div style="background:#E7F6EF;border-radius:12px;padding:12px 10px;text-align:center"><div style="font-size:20px;font-weight:800;color:#177D54">{{ sum.ok }}</div><div style="font-size:10.5px;color:#177D54;font-weight:600;margin-top:2px">Consistentes</div></div>
+            <div style="background:#FDECEC;border-radius:12px;padding:12px 10px;text-align:center"><div style="font-size:20px;font-weight:800;color:#C2333A">{{ sum.crit }}</div><div style="font-size:10.5px;color:#C2333A;font-weight:600;margin-top:2px">Divergências</div></div>
+            <div style="background:#FDF3E0;border-radius:12px;padding:12px 10px;text-align:center"><div style="font-size:20px;font-weight:800;color:#B9760A">{{ sum.manual }}</div><div style="font-size:10.5px;color:#B9760A;font-weight:600;margin-top:2px">Validação</div></div>
+          </div>
+          <sc-if value="{{ sum.temNaoAval }}" hint-placeholder-val="{{ false }}"><div style="font-size:11px;color:#9AA0B4;margin-top:10px">{{ sum.naoAvalLabel }}</div></sc-if>
+        </div>
 
-          <sc-if value="{{ ws.pronto }}" hint-placeholder-val="{{ false }}">
+        <!-- pendências -->
+        <sc-if value="{{ hasPend }}" hint-placeholder-val="{{ false }}">
+          <div style="background:#fff;border:1px solid #F4DEDE;border-radius:16px;overflow:hidden;box-shadow:0 1px 2px rgba(20,24,50,.04)">
+            <div style="display:flex;align-items:center;gap:10px;padding:15px 18px 12px;border-bottom:1px solid #F4F5FA">
+              <span style="font-size:16px">🚨</span>
+              <div style="flex:1;min-width:0"><div style="font-size:14px;font-weight:800;color:#161A2E">Pendências</div><div style="font-size:11.5px;color:#9AA0B4;margin-top:1px">O que você precisa resolver agora</div></div>
+              <span style="font-size:12px;font-weight:800;color:#C2333A;background:#FDECEC;padding:4px 11px;border-radius:20px">{{ pendCount }}</span>
+            </div>
             <div>
-              <!-- Resumo consolidado (5.11) -->
-              <div class="card" style="padding:16px 20px;margin-bottom:14px;display:flex;gap:22px;flex-wrap:wrap">
-                <div><div class="mono" style="font-size:22px;font-weight:800;color:#161A2E">{{ ws.total }}</div><div style="font-size:11px;color:#9AA0B4">validações</div></div>
-                <div><div class="mono" style="font-size:22px;font-weight:800;color:#177D54">{{ ws.consistentes }}</div><div style="font-size:11px;color:#9AA0B4">consistentes</div></div>
-                <div><div class="mono" style="font-size:22px;font-weight:800;color:#C2333A">{{ ws.divergencias }}</div><div style="font-size:11px;color:#9AA0B4">divergências</div></div>
-                <div><div class="mono" style="font-size:22px;font-weight:800;color:#E08A1E">{{ ws.humanas }}</div><div style="font-size:11px;color:#9AA0B4">validação humana</div></div>
-                <div><div class="mono" style="font-size:22px;font-weight:800;color:#9AA0B4">{{ ws.naoAval }}</div><div style="font-size:11px;color:#9AA0B4">não avaliados</div></div>
-              </div>
-
-              <sc-if value="{{ ws.temIlegiveis }}" hint-placeholder-val="{{ false }}"><div style="font-size:11.5px;color:#B4740A;background:#FEF6E9;border:1px solid #F5E4C4;border-radius:10px;padding:10px 14px;margin-bottom:14px">Documento(s) ilegível(is): <b>{{ ws.ilegiveisLabel }}</b>. As validações dependentes ficaram como "Não avaliado".</div></sc-if>
-
-              <!-- Painel de evidências agrupado por container (5.7/5.8) -->
-              <sc-for list="{{ ws.grupos }}" as="g" hint-placeholder-count="2">
-                <div class="card" style="margin-bottom:14px;overflow:hidden">
-                  <div style="padding:12px 18px;border-bottom:1px solid #F1F2F8;display:flex;align-items:center;gap:8px;background:#FBFBFE"><span style="font-size:12.5px;font-weight:800;color:#161A2E">{{ g.titulo }}</span><span style="font-size:11px;color:#9AA0B4">{{ g.sub }}</span></div>
-                  <div>
-                    <sc-for list="{{ g.evidencias }}" as="e" hint-placeholder-count="3">
-                      <div style="padding:13px 18px;border-top:1px solid #F5F6FB;display:flex;gap:13px;align-items:flex-start">
-                        <span style="width:9px;height:9px;border-radius:50%;background:{{ e.cor }};margin-top:5px;flex-shrink:0"></span>
-                        <div style="flex:1;min-width:0">
-                          <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:4px">
-                            <span style="font-size:13px;font-weight:700;color:#161A2E">{{ e.campo }}</span>
-                            <span style="font-size:10px;font-weight:700;color:{{ e.cor }};background:{{ e.bg }};padding:2px 8px;border-radius:6px">{{ e.resultado }}</span>
-                            <span style="font-size:10px;color:#9AA0B4">{{ e.criticidade }}</span>
-                          </div>
-                          <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:4px">
-                            <sc-for list="{{ e.valores }}" as="v" hint-placeholder-count="2"><span style="font-size:11.5px;color:#3C4258;background:#F4F5FB;border:1px solid #ECEDF4;border-radius:7px;padding:3px 9px"><b style="color:#7A8099;font-weight:600">{{ v.doc }}:</b> {{ v.valor }}</span></sc-for>
-                          </div>
-                          <div style="font-size:11.5px;color:#6B7192;line-height:1.45">{{ e.motivo }}</div>
-                        </div>
-                      </div>
-                    </sc-for>
-                  </div>
+              <sc-for list="{{ pendencias }}" as="p" hint-placeholder-count="4">
+                <div class="aud-ev" onClick="{{ p.onGo }}" style="display:flex;align-items:center;gap:11px;padding:13px 18px;border-bottom:1px solid #F4F5FA;cursor:pointer">
+                  <span style="width:9px;height:9px;border-radius:50%;background:{{ p.dot }};flex-shrink:0"></span>
+                  <div style="flex:1;min-width:0"><div style="font-size:13.5px;font-weight:700;color:#161A2E">{{ p.field }}</div><div style="font-size:11.5px;color:#9AA0B4;margin-top:1px">{{ p.where }}</div></div>
+                  <span style="font-size:10.5px;font-weight:700;color:{{ p.statusColor }};background:{{ p.statusBg }};padding:4px 9px;border-radius:7px;white-space:nowrap">{{ p.statusLabel }}</span>
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#C7CBDA" stroke-width="2.4" style="flex-shrink:0"><path d="m9 6 6 6-6 6"/></svg>
                 </div>
               </sc-for>
-
-              <!-- Clara (5.10) -->
-              <div class="card" style="padding:16px 20px;background:#FBFAFF;border-color:#E7E3FB">
-                <div style="display:flex;align-items:center;gap:9px;margin-bottom:8px"><span style="width:30px;height:30px;border-radius:9px;background:#E7F0FE;display:flex;align-items:center;justify-content:center"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#1D4ED8" stroke-width="2"><rect x="4" y="8" width="16" height="12" rx="4"/><path d="M12 8V4.5 M9 13.5h.01 M15 13.5h.01"/></svg></span><span style="font-size:14px;font-weight:800;color:#161A2E">Clara</span><span style="font-size:10px;font-weight:700;color:#4327E6;background:#EEEBFE;padding:2px 7px;border-radius:6px">{{ ws.claraFonte }}</span></div>
-                <div style="display:flex;flex-direction:column;gap:5px;margin-bottom:11px">
-                  <sc-for list="{{ ws.claraLinhas }}" as="l" hint-placeholder-count="2"><div style="font-size:13px;color:#3C4258;line-height:1.5">{{ l.txt }}</div></sc-for>
-                </div>
-                <div style="font-size:12.5px;color:#161A2E;background:#fff;border:1px solid #ECEDF4;border-radius:9px;padding:9px 12px;margin-bottom:12px"><b style="color:#4327E6">Próximo passo:</b> {{ ws.proximoPasso }}</div>
-                <div style="display:flex;gap:9px;flex-wrap:wrap">
-                  <button onClick="{{ ws.onGerarEmail }}" style="display:flex;align-items:center;gap:7px;background:#4327E6;color:#fff;border:none;border-radius:9px;padding:8px 14px;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer">Gerar e-mail para o agente</button>
-                  <button onClick="{{ ws.onJaSolicitei }}" style="background:#fff;color:#3C4258;border:1px solid #E1E3EF;border-radius:9px;padding:8px 14px;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer">{{ ws.jaSolicitadoLabel }}</button>
-                </div>
-              </div>
             </div>
-          </sc-if>
-        </div>
+          </div>
+        </sc-if>
+        <sc-if value="{{ noPend }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex;align-items:center;gap:12px;background:#fff;border:1px solid #C7E8D6;border-radius:16px;padding:16px 18px;box-shadow:0 1px 2px rgba(20,24,50,.04)">
+            <span style="width:36px;height:36px;border-radius:10px;background:#E7F6EF;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#1F9D6B" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg></span>
+            <div><div style="font-size:14px;font-weight:800;color:#177D54">Nenhuma pendência</div><div style="font-size:12px;color:#7A8099;margin-top:1px">Todas as verificações estão consistentes.</div></div>
+          </div>
         </sc-if>
 
+        <!-- evidence navigator: grouped by operational object -->
+        <div style="display:flex;flex-direction:column;gap:12px">
+          <sc-for list="{{ groups }}" as="g" hint-placeholder-count="3">
+            <div style="background:#fff;border:1px solid {{ g.cardBorder }};border-radius:16px;overflow:hidden;box-shadow:0 1px 2px rgba(20,24,50,.04)">
+              <div class="aud-ev" onClick="{{ g.onToggle }}" style="display:flex;align-items:center;gap:12px;padding:15px 18px;cursor:pointer">
+                <span style="width:34px;height:34px;border-radius:10px;background:{{ g.iconBg }};display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="{{ g.iconColor }}" stroke-width="1.9"><path d="{{ g.icon }}"/></svg></span>
+                <div style="flex:1;min-width:0">
+                  <div style="display:flex;align-items:center;gap:8px"><span style="font-size:14px;font-weight:800;color:#161A2E;font-family:{{ g.titleFont }}">{{ g.title }}</span><span style="width:8px;height:8px;border-radius:50%;background:{{ g.dot }};flex-shrink:0"></span></div>
+                  <div style="display:flex;align-items:center;gap:10px;margin-top:3px">
+                    <sc-if value="{{ g.hasCrit }}" hint-placeholder-val="{{ false }}"><span style="font-size:11.5px;font-weight:700;color:#C2333A">🔴 {{ g.critN }} {{ g.critWord }}</span></sc-if>
+                    <sc-if value="{{ g.hasManual }}" hint-placeholder-val="{{ false }}"><span style="font-size:11.5px;font-weight:700;color:#B9760A">🟡 {{ g.manualN }} validação</span></sc-if>
+                    <sc-if value="{{ g.hasOk }}" hint-placeholder-val="{{ false }}"><span style="font-size:11.5px;font-weight:600;color:#177D54">🟢 {{ g.okN }} {{ g.okWord }}</span></sc-if>
+                  </div>
+                </div>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#B8BDD0" stroke-width="2.4" style="flex-shrink:0;transition:transform .24s;transform:{{ g.chevRot }}"><path d="m6 9 6 6 6-6"/></svg>
+              </div>
+              <sc-if value="{{ g.open }}" hint-placeholder-val="{{ false }}">
+                <div style="padding:0 12px 10px;animation:audExpand .22s ease both">
+                  <sc-for list="{{ g.items }}" as="e" hint-placeholder-count="4">
+                    <div class="aud-ev" style="border:1px solid #F1F2F8;border-radius:11px;margin-top:8px;overflow:hidden;cursor:pointer">
+                      <div onClick="{{ e.onToggle }}" style="display:flex;align-items:center;gap:10px;padding:11px 13px">
+                        <span style="width:8px;height:8px;border-radius:50%;background:{{ e.dot }};flex-shrink:0"></span>
+                        <div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:700;color:#161A2E">{{ e.field }}</div><div style="font-size:11px;color:{{ e.statusColor }};font-weight:600;margin-top:1px">{{ e.statusLabel }}</div></div>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#C7CBDA" stroke-width="2.4" style="flex-shrink:0;transition:transform .24s;transform:{{ e.chevRot }}"><path d="m6 9 6 6 6-6"/></svg>
+                      </div>
+                      <sc-if value="{{ e.open }}" hint-placeholder-val="{{ false }}">
+                        <div style="padding:0 13px 13px;animation:audExpand .2s ease both">
+                          <div style="display:flex;gap:9px">
+                            <div style="flex:1;background:#FAFAFE;border:1px solid #F0F1F7;border-radius:10px;padding:9px 11px"><div style="font-size:9.5px;color:#9AA0B4;text-transform:uppercase;letter-spacing:.04em">{{ e.masterLabel }}</div><div style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:#161A2E;margin-top:3px">{{ e.master }}</div></div>
+                            <div style="flex:1;background:#FAFAFE;border:1px solid #F0F1F7;border-radius:10px;padding:9px 11px"><div style="font-size:9.5px;color:#9AA0B4;text-transform:uppercase;letter-spacing:.04em">{{ e.houseLabel }}</div><div style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:{{ e.houseColor }};margin-top:3px">{{ e.house }}</div></div>
+                          </div>
+                          <div style="display:flex;gap:8px;margin-top:10px;padding:10px 12px;background:{{ e.impactBg }};border-radius:10px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="{{ e.impactColor }}" stroke-width="2" style="flex-shrink:0;margin-top:1px"><path d="{{ e.impactIcon }}"/></svg><div style="font-size:11.5px;color:{{ e.impactColor }};line-height:1.5;font-weight:600">{{ e.impact }}</div></div>
+                          <button onClick="{{ e.onViewPdf }}" class="aud-vpdf" style="display:flex;align-items:center;justify-content:center;gap:7px;width:100%;margin-top:10px;background:#F3F1FE;color:#3D34C9;border:1px solid #E0DAF9;border-radius:10px;padding:9px;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>Destacar nos documentos</button>
+                        </div>
+                      </sc-if>
+                    </div>
+                  </sc-for>
+                </div>
+              </sc-if>
+            </div>
+          </sc-for>
+        </div>
       </div>
     </div>
 
-    <!-- Modal do e-mail sugerido (7.7 — Clara sugere, nunca envia) -->
-    <sc-if value="{{ emailModal }}" hint-placeholder-val="{{ false }}">
-      <div onClick="{{ onFecharEmail }}" style="position:fixed;inset:0;background:rgba(22,26,46,.45);z-index:90;display:flex;align-items:center;justify-content:center;padding:24px">
-        <div onClick="{{ stop }}" class="card" style="width:min(640px,100%);max-height:86vh;display:flex;flex-direction:column">
-          <div style="padding:16px 20px;border-bottom:1px solid #EFF0F7;display:flex;align-items:center;justify-content:space-between"><div style="font-size:14.5px;font-weight:800;color:#161A2E">E-mail sugerido ao agente</div><span onClick="{{ onFecharEmail }}" style="cursor:pointer;color:#9AA0B4;font-size:18px">✕</span></div>
-          <div style="padding:16px 20px;overflow-y:auto"><div style="font-size:12.5px;color:#3C4258;white-space:pre-wrap;line-height:1.6;background:#F7F8FC;border:1px solid #E6E8F2;border-radius:10px;padding:14px">{{ emailTexto }}</div><div style="font-size:11px;color:#9AA0B4;margin-top:10px">A Priora apenas sugere. Revise e envie pelo Outlook — nada é enviado automaticamente.</div></div>
-          <div style="padding:14px 20px;border-top:1px solid #EFF0F7;display:flex;justify-content:flex-end;gap:9px"><button onClick="{{ onFecharEmail }}" style="background:#fff;color:#3C4258;border:1px solid #E1E3EF;border-radius:9px;padding:9px 15px;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer">Fechar</button><button onClick="{{ onCopiarEmail }}" style="background:#4327E6;color:#fff;border:none;border-radius:9px;padding:9px 15px;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer">Copiar texto</button></div>
+    <!-- ===== CLARA — verdict banner ===== -->
+    <div style="display:flex;gap:18px;align-items:flex-start;background:linear-gradient(108deg,#FFFFFF 58%,#F3F1FE);border:1px solid #E4E1FA;border-radius:20px;padding:22px 26px;margin-top:18px;box-shadow:0 1px 2px rgba(20,24,50,.04)">
+      <div style="position:relative;width:64px;height:64px;border-radius:17px;background:radial-gradient(circle at 50% 35%,#EDE9FF,#F6F4FF);display:flex;align-items:flex-end;justify-content:center;overflow:hidden;flex-shrink:0"><img src="assets/clara.png" alt="Clara" style="position:absolute;width:58px;height:auto;bottom:-2px;animation:claraBob 5s ease-in-out infinite"></div>
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;align-items:center;gap:8px"><span style="font-size:15px;font-weight:800;color:#161A2E">Clara</span><span style="font-size:9px;font-weight:700;color:#fff;background:#4327E6;padding:2px 7px;border-radius:20px">IA</span><span style="font-size:11.5px;color:#9AA0B4;margin-left:2px">Parecer final</span></div>
+        <div style="margin-top:9px;display:flex;flex-direction:column;gap:5px;max-width:780px">
+          <sc-for list="{{ verdict }}" as="l" hint-placeholder-count="3"><p style="font-size:14px;color:#3C4258;line-height:1.55">{{ l.txt }}</p></sc-for>
+        </div>
+        <div style="font-size:12.5px;color:#161A2E;background:#fff;border:1px solid #ECEDF4;border-radius:10px;padding:9px 13px;margin-top:11px;max-width:780px"><b style="color:#4327E6">Próximo passo:</b> {{ proximoPasso }}</div>
+        <div style="display:flex;gap:11px;margin-top:16px;flex-wrap:wrap">
+          <button onClick="{{ genEmail }}" class="aud-cta" style="display:flex;align-items:center;gap:8px;background:#4327E6;color:#fff;border:none;border-radius:12px;padding:12px 20px;font-family:inherit;font-size:13.5px;font-weight:700;cursor:pointer;box-shadow:0 12px 24px -13px rgba(67,39,230,.7)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M4 5h16v14H4z M4 6l8 6 8-6"/></svg>Gerar e-mail para o agente</button>
+          <button onClick="{{ alreadyAsked }}" class="aud-ghost" style="display:flex;align-items:center;gap:8px;background:#fff;color:#3C4258;border:1px solid #E2E4EE;border-radius:12px;padding:12px 20px;font-family:inherit;font-size:13.5px;font-weight:700;cursor:pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#1F9D6B" stroke-width="2.2"><path d="M20 6 9 17l-5-5"/></svg>{{ jaSolicitadoLabel }}</button>
         </div>
       </div>
+    </div>
+    </div>
     </sc-if>
+  </div>
+  </sc-if>
+
+  <!-- e-mail modal (Clara sugere, nunca envia) -->
+  <sc-if value="{{ emailModal }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ onFecharEmail }}" style="position:fixed;inset:0;background:rgba(22,26,46,.45);z-index:90;display:flex;align-items:center;justify-content:center;padding:24px">
+      <div onClick="{{ stop }}" style="background:#fff;border:1px solid #EAEBF4;border-radius:18px;width:min(640px,100%);max-height:86vh;display:flex;flex-direction:column">
+        <div style="padding:16px 20px;border-bottom:1px solid #EFF0F7;display:flex;align-items:center;justify-content:space-between"><div style="font-size:14.5px;font-weight:800;color:#161A2E">E-mail sugerido ao agente</div><span onClick="{{ onFecharEmail }}" style="cursor:pointer;color:#9AA0B4;font-size:18px">✕</span></div>
+        <div style="padding:16px 20px;overflow-y:auto"><div style="font-size:12.5px;color:#3C4258;white-space:pre-wrap;line-height:1.6;background:#F7F8FC;border:1px solid #E6E8F2;border-radius:10px;padding:14px">{{ emailTexto }}</div><div style="font-size:11px;color:#9AA0B4;margin-top:10px">A Priora apenas sugere. Revise e envie pelo Outlook — nada é enviado automaticamente.</div></div>
+        <div style="padding:14px 20px;border-top:1px solid #EFF0F7;display:flex;justify-content:flex-end;gap:9px"><button onClick="{{ onFecharEmail }}" style="background:#fff;color:#3C4258;border:1px solid #E1E3EF;border-radius:9px;padding:9px 15px;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer">Fechar</button><button onClick="{{ onCopiarEmail }}" style="background:#4327E6;color:#fff;border:none;border-radius:9px;padding:9px 15px;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer">Copiar texto</button></div>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- toast -->
+  <sc-if value="{{ toastOn }}" hint-placeholder-val="{{ false }}">
+    <div style="position:fixed;right:24px;bottom:24px;z-index:80;display:flex;align-items:center;gap:11px;background:#0D1227;color:#fff;border-radius:13px;padding:14px 18px;box-shadow:0 18px 44px -16px rgba(13,18,39,.6);animation:audExpand .25s ease both;max-width:380px">
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#4ED99A" stroke-width="2.4" style="flex-shrink:0"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg>
+      <span style="font-size:13.5px;font-weight:600">{{ toastMsg }}</span>
+    </div>
+  </sc-if>
 </main>
 </x-dc>
 <script type="text/x-dc" data-dc-script>
 class Component extends DCLogic {
-  state = { status:'idle', resp:null, expanded:null,
-    view:'lista', auditProc:null, auditStatus:'', auditData:null,
-    jaSolicitado:false, emailModal:false };
+  STATUS = {
+    ok:{ dot:'#1F9D6B', color:'#177D54', label:'Consistente', impBg:'#E7F6EF', impIcon:'m5 12 5 5 9-10' },
+    crit:{ dot:'#E5484D', color:'#C2333A', label:'Divergência', impBg:'#FDECEC', impIcon:'M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z' },
+    manual:{ dot:'#E8990C', color:'#B9760A', label:'Validação humana', impBg:'#FDF3E0', impIcon:'M12 8v5M12 16h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0' },
+    na:{ dot:'#9AA0B4', color:'#7A8099', label:'Não avaliado', impBg:'#F1F2F8', impIcon:'M12 8v5M12 16h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0' },
+    info:{ dot:'#2563EB', color:'#1D4ED8', label:'Informativo', impBg:'#E7F0FE', impIcon:'M12 16v-4M12 8h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0' },
+  };
+  masterScrollRef = React.createRef();
+  houseScrollRef = React.createRef();
 
-  importar(){
-    var self=this; this.setState({ status:'loading' });
+  constructor(props){
+    super(props);
+    this.state = { screen:'discover', procStatus:'loading', processos:[], selected:null, busca:'',
+      auditStatus:'idle', auditData:null, playbook:null, openGroup:null, openEv:null, focus:null,
+      jaSolicitado:false, emailModal:false, toast:'' };
+  }
+  componentDidMount(){ this.load(); }
+
+  load(){
+    var self=this; this.setState({ procStatus:'loading' });
     fetch('/api/auditoria/processos', { credentials:'same-origin' })
       .then(function(r){ return r.json().catch(function(){return null;}).then(function(j){ if(!r.ok) throw new Error((j&&j.error)||('HTTP '+r.status)); return j; }); })
-      .then(function(d){ self.setState({ resp:d, status:'done' }); })
-      .catch(function(e){ self.setState({ status:'error:'+String(e&&e.message||e) }); });
+      .then(function(d){ var ps=(d&&d.processos)||[]; self.setState({ processos:ps, procStatus:'done', selected:(self.state.selected||(ps[0]&&ps[0].processo)||null) }); })
+      .catch(function(e){ self.setState({ procStatus:'error:'+String(e&&e.message||e) }); });
   }
 
-  iniciarAuditoria(proc){
+  statusKey(resultado){
+    if(resultado==='Consistente')return 'ok'; if(resultado==='Divergência')return 'crit';
+    if(resultado==='Validação Humana')return 'manual'; if(resultado==='Informativo')return 'info'; return 'na';
+  }
+  toast(msg){ clearTimeout(this._t); this.setState({toast:msg}); var self=this; this._t=setTimeout(function(){self.setState({toast:''});},2800); }
+  relTime(iso){ try{ var d=new Date(iso).getTime(); if(isNaN(d))return '—'; var s=Math.max(0,(Date.now()-d)/1000);
+    if(s<90)return 'há instantes'; if(s<5400)return 'há '+Math.round(s/60)+' min'; if(s<172800)return 'há '+Math.round(s/3600)+' h'; return 'há '+Math.round(s/86400)+' d'; }catch(e){ return '—'; } }
+
+  iniciar(code){
     var self=this;
-    this.setState({ view:'workspace', auditProc:proc, auditStatus:'loading', auditData:null, jaSolicitado:false });
-    fetch('/api/auditoria/'+encodeURIComponent(proc)+'/auditoria', { credentials:'same-origin' })
+    this.setState({ screen:'mesa', selected:code, auditStatus:'loading', auditData:null, playbook:null, openGroup:null, openEv:null, jaSolicitado:false });
+    fetch('/api/auditoria/'+encodeURIComponent(code)+'/auditoria', { credentials:'same-origin' })
       .then(function(r){ return r.json().catch(function(){return null;}).then(function(j){ if(!r.ok) throw new Error((j&&j.error)||('HTTP '+r.status)); return j; }); })
-      .then(function(d){ self.setState({ auditData:d, auditStatus:'done' }); })
+      .then(function(d){ var pb=(d.resultado&&d.resultado.playbooksExecutados&&d.resultado.playbooksExecutados[0])||null; self.setState({ auditData:d, auditStatus:'done', playbook:pb }); })
+      .catch(function(e){ self.setState({ auditStatus:'error:'+String(e&&e.message||e) }); });
+  }
+  reprocessar(){
+    var code=this.state.selected, self=this; if(!code)return;
+    this.setState({ auditStatus:'loading', auditData:null });
+    fetch('/api/auditoria/'+encodeURIComponent(code)+'/auditoria?refresh=1', { credentials:'same-origin' })
+      .then(function(r){ return r.json().catch(function(){return null;}).then(function(j){ if(!r.ok) throw new Error((j&&j.error)||('HTTP '+r.status)); return j; }); })
+      .then(function(d){ var pb=(d.resultado&&d.resultado.playbooksExecutados&&d.resultado.playbooksExecutados[0])||self.state.playbook; self.setState({ auditData:d, auditStatus:'done', playbook:pb }); self.toast('Auditoria reprocessada.'); })
       .catch(function(e){ self.setState({ auditStatus:'error:'+String(e&&e.message||e) }); });
   }
 
-  emailSugerido(d){
-    var proc=(d&&d.processo)||'', divs=[];
-    var evs=(d&&d.resultado&&d.resultado.evidencias)||[];
-    evs.forEach(function(e){ if(e.resultado==='Divergência'){ divs.push('- '+e.campo+(e.container?(' (container '+e.container+')'):'')+': '+e.motivo); } });
-    var corpo='Prezados,\n\nApós a conferência documental do processo '+proc+', identificamos os seguintes pontos que precisam de correção/confirmação:\n\n';
-    corpo += (divs.length?divs.join('\n'):'- (nenhuma divergência objetiva; conferência de valores comerciais pendente)');
+  anchorId(field){ return 'anchor-'+String(field).replace(/[^a-zA-Z0-9]/g,'_'); }
+  viewPdf(field, gkey, key){
+    var self=this; this.setState({ openGroup:gkey, openEv:key, focus:field });
+    var id='#'+this.anchorId(field);
+    var scroll=function(ref){ var c=ref.current; if(!c)return; var el=c.querySelector(id); if(el){ var y=el.offsetTop - c.clientHeight/2 + el.clientHeight/2; c.scrollTo({top:Math.max(0,y),behavior:'smooth'}); } };
+    setTimeout(function(){ scroll(self.masterScrollRef); scroll(self.houseScrollRef); },60);
+    clearTimeout(this._f); this._f=setTimeout(function(){ self.setState({focus:null}); },3000);
+  }
+
+  emailSugerido(){
+    var d=this.state.auditData; if(!d||!d.resultado)return '';
+    var divs=[]; (d.resultado.evidencias||[]).forEach(function(e){ if(e.resultado==='Divergência'){ divs.push('- '+e.campo+(e.container?(' (container '+e.container+')'):'')+': '+e.motivo); } });
+    var corpo='Prezados,\n\nApós a conferência documental do processo '+(d.processo||'')+', identificamos os seguintes pontos:\n\n';
+    corpo += (divs.length?divs.join('\n'):'- (sem divergências objetivas; conferência de valores comerciais pendente)');
     corpo += '\n\nPor gentileza, confirmem/corrijam antes da emissão do CE Mercante.\n\nDesde já agradecemos.';
     return corpo;
   }
 
   renderVals(){
-    var self=this, st=this.state.status, resp=this.state.resp;
-    var loading=(st==='loading'), errored=(st.indexOf('error')===0), done=(st==='done'&&!!resp), idle=(st==='idle');
-    var lista=(done && resp.processos)?resp.processos:[];
-    var view=this.state.view;
+    var self=this, st=this.state;
+    var procStatus=st.procStatus;
+    var discLoading=(procStatus==='loading'), discError=(procStatus.indexOf('error')===0), discDone=(procStatus==='done');
+    var processosRaw=st.processos||[];
 
-    var TIPO_COLOR={ 'Master BL':{c:'#4327E6',bg:'#EEEBFE'}, 'House BL':{c:'#6D28D9',bg:'#F1EBFD'}, 'CE Master':{c:'#1D4ED8',bg:'#E7F0FE'}, 'CE House':{c:'#0E7490',bg:'#E3F5F8'}, 'Item':{c:'#177D54',bg:'#E7F6EF'}, 'Invoice':{c:'#B4740A',bg:'#FEF6E9'}, 'Packing List':{c:'#B4740A',bg:'#FEF6E9'}, 'Não classificado':{c:'#9AA0B4',bg:'#F1F2F9'} };
-    var STATUS_COLOR={ 'Completa':{c:'#177D54',bg:'#E7F6EF'}, 'Parcial':{c:'#B4740A',bg:'#FEF6E9'}, 'Aguardando':{c:'#7A8099',bg:'#F1F2F9'} };
-    var EST_COLOR={ 'Divergência':{c:'#C2333A',bg:'#FDECEC'}, 'Validação Humana':{c:'#E08A1E',bg:'#FEF3E2'}, 'Não Avaliado':{c:'#7A8099',bg:'#F1F2F9'}, 'Consistente':{c:'#177D54',bg:'#E7F6EF'}, 'Informativo':{c:'#1D4ED8',bg:'#E7F0FE'} };
+    // ----- Discover: lista de processos -----
+    var busca=(st.busca||'').trim().toLowerCase();
+    var filtrados=processosRaw.filter(function(p){ if(!busca)return true; return (p.processo+' '+(p.cliente||'')).toLowerCase().indexOf(busca)>=0; });
+    var processes=filtrados.map(function(p){ var on=(p.processo===st.selected);
+      var temAud=(p.auditorias||[]).length>0;
+      var tags = temAud
+        ? (p.auditorias||[]).map(function(a){ return {label:a+' disponível',color:'#177D54',icon:'m5 12 5 5 9-10'}; })
+        : [{label:'Documentação incompleta',color:'#B9760A',icon:'M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z'}];
+      return { code:p.processo, client:(p.cliente||'Cliente a confirmar'), updated:self.relTime(p.data), docs:String(p.qtdDocs||0),
+        onSelect:function(){ self.setState({selected:p.processo}); },
+        border:on?'#4327E6':'#EEF0F6', bg:on?'#FAF9FF':'#fff', badgeColor:on?'#4327E6':'#5A6076', badgeBg:on?'#EEEBFE':'#F1F2F8', tags:tags }; });
 
-    var processos=lista.map(function(p){
-      var sc=STATUS_COLOR[p.status]||STATUS_COLOR['Aguardando'];
-      var aberto=(self.state.expanded===p.processo);
-      return { processo:p.processo, clienteLabel:(p.cliente||'Cliente a confirmar'), qtdDocs:String(p.qtdDocs),
-        auditoriaChips:(p.auditorias||[]).map(function(a){return{label:a};}), semAuditoria:((p.auditorias||[]).length===0),
-        status:p.status, statusColor:sc.c, statusBg:sc.bg, aberto:aberto, caret:(aberto?'rotate(180deg)':'rotate(0deg)'),
-        docs:(p.docs||[]).map(function(d){ var tc=TIPO_COLOR[d.tipoLabel]||TIPO_COLOR['Não classificado']; return { nome:d.nome, tipoLabel:d.tipoLabel, tipoColor:tc.c, tipoBg:tc.bg }; }),
-        temFaltando:((p.faltando||[]).length>0), faltandoLabel:(p.faltando||[]).join(', '),
-        onToggle:function(){ self.setState({ expanded:(self.state.expanded===p.processo?null:p.processo) }); },
-        onIniciar:function(ev){ if(ev&&ev.stopPropagation)ev.stopPropagation(); self.iniciarAuditoria(p.processo); } };
-    });
+    var sel=processosRaw.find(function(p){return p.processo===st.selected;})||processosRaw[0]||null;
+    var DOC_BADGE={ 'MBL':{c:'#4327E6',b:'#EEEBFE'},'HBL':{c:'#6D28D9',b:'#F1EBFD'},'CE_MASTER':{c:'#1D4ED8',b:'#E7F0FE'},'CE_HOUSE':{c:'#0E7490',b:'#E3F5F8'},'ITEM':{c:'#177D54',b:'#E7F6EF'} };
+    var AUD_DESC={ 'Pré-Alerta':{icon:'M4 5h16M4 5v14a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V5M9 10h6M9 14h4',desc:'Comparação entre MBL e HBL'}, 'CE Mercante':{icon:'M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z',desc:'Comparação CE Master e CE House'} };
+    var selVM={ code:(sel&&sel.processo)||'—', client:(sel&&sel.cliente)||'Cliente a confirmar',
+      documents:((sel&&sel.docs)||[]).map(function(d){ var bd=DOC_BADGE[d.tipo]||{c:'#177D54',b:'#E7F6EF'}; var classificado=(d.tipo!=='OUTRO'&&d.tipo!=='INVOICE'&&d.tipo!=='PACKING');
+        return { name:d.nome, type:d.tipoLabel, iconBg:'#FDECEC', iconColor:'#C2333A', badge:(classificado?'Identificado':'Classificar'), badgeColor:(classificado?'#177D54':'#B9760A'), badgeBg:(classificado?'#E7F6EF':'#FDF3E0') }; }),
+      audits:((sel&&sel.auditorias)||[]).map(function(a){ var ad=AUD_DESC[a]||{icon:'M9 11l3 3L22 4',desc:''}; return { name:a, desc:ad.desc, icon:ad.icon, st:'Disponível', stColor:'#177D54', stBg:'#E7F6EF' }; }),
+      temAudits:((sel&&sel.auditorias)||[]).length>0, semAudits:((sel&&sel.auditorias)||[]).length===0, faltando:((sel&&sel.faltando)||[]).join(', ') };
 
-    var resumoLinha= done ? ((resp.count||0)+' processo(s) · '+(resp.totalDocumentos||0)+' documento(s) · '+(resp.prontos||0)+' pronto(s) para auditoria') : '';
+    // ----- Mesa: auditoria -----
+    var ast=st.auditStatus, ad=st.auditData;
+    var mesaLoading=(ast==='loading'), mesaError=(ast.indexOf('error')===0), mesaReady=(ast==='done'&&!!ad);
+    var res=(mesaReady&&ad.resultado)?ad.resultado:null;
+    var playbooksExec=(res&&res.playbooksExecutados)||[];
+    var pbSel=st.playbook||playbooksExec[0]||null;
+    var playbooks=playbooksExec.map(function(pb){ var on=(pb===pbSel);
+      return { label:pb, onSelect:function(){ self.setState({playbook:pb, openGroup:null, openEv:null}); },
+        bg:on?'#fff':'transparent', color:on?'#161A2E':'#6B7188', weight:on?'700':'600', shadow:on?'0 1px 4px rgba(16,20,40,.16)':'none' }; });
 
-    // ---------- Workspace ----------
-    var ws={ loading:false, errored:false, pronto:false, errorMsg:'', processo:(this.state.auditProc||''), status:'', statusColor:'#7A8099', statusBg:'#F1F2F9', subhead:'', total:'0', consistentes:'0', divergencias:'0', humanas:'0', naoAval:'0', temIlegiveis:false, ilegiveisLabel:'', grupos:[], claraLinhas:[], proximoPasso:'', claraFonte:'', jaSolicitadoLabel:'Já solicitei esta ação', onVoltar:function(){ self.setState({ view:'lista', auditData:null, auditStatus:'' }); }, onGerarEmail:function(){}, onJaSolicitei:function(){} };
-    var ast=this.state.auditStatus, ad=this.state.auditData;
-    ws.loading=(ast==='loading'); ws.errored=(ast.indexOf('error')===0); ws.errorMsg=(ws.errored?ast.slice(ast.indexOf(':')+1):'');
-    ws.pronto=(ast==='done' && !!ad);
-    ws.onVoltar=function(){ self.setState({ view:'lista', auditData:null, auditStatus:'' }); };
-    ws.onGerarEmail=function(){ self.setState({ emailModal:true }); };
-    ws.onJaSolicitei=function(){ self.setState({ jaSolicitado:true }); };
-    ws.jaSolicitadoLabel=(this.state.jaSolicitado?'✓ Follow-up registrado':'Já solicitei esta ação');
-    if(ws.pronto){
-      var STC={ 'Concluída sem pendências':{c:'#177D54',bg:'#E7F6EF'}, 'Concluída com divergências':{c:'#C2333A',bg:'#FDECEC'}, 'Aguardando validação humana':{c:'#E08A1E',bg:'#FEF3E2'}, 'Auditoria parcial':{c:'#7A8099',bg:'#F1F2F9'} };
-      if(ad.semDocumentos){
-        ws.status='Sem documentos auditáveis'; var s0=STC['Auditoria parcial']; ws.statusColor=s0.c; ws.statusBg=s0.bg;
-        ws.subhead=(ad.cliente||'Cliente a confirmar')+' · nenhum MBL/HBL/CE para conferência';
-        ws.claraLinhas=[{txt:'Não há documentos com Playbook disponível neste processo ainda.'}]; ws.proximoPasso='Anexar MBL/HBL ou CE Master/House para executar a conferência.'; ws.claraFonte='IA';
-      } else {
-        var r=ad.resultado||{}, rz=r.resumo||{}; var sc2=STC[r.status]||STC['Auditoria parcial'];
-        ws.status=r.status||'—'; ws.statusColor=sc2.c; ws.statusBg=sc2.bg;
-        ws.subhead=(ad.cliente||'Cliente a confirmar')+' · '+((r.playbooksExecutados||[]).join(' + ')||'sem playbook')+' · '+(ad.qtdDocs||0)+' documento(s)';
-        ws.total=String(rz.total||0); ws.consistentes=String(rz.consistentes||0); ws.divergencias=String(rz.divergencias||0); ws.humanas=String(rz.validacoesHumanas||0); ws.naoAval=String(rz.naoAvaliados||0);
-        ws.temIlegiveis=((ad.ilegiveis||[]).length>0); ws.ilegiveisLabel=(ad.ilegiveis||[]).join(', ');
-        // agrupa evidências por container (5.8)
-        var byC={}; var ordem=[];
-        (r.evidencias||[]).forEach(function(e){ var k=e.container||'__geral'; if(!byC[k]){ byC[k]=[]; ordem.push(k); } byC[k].push(e); });
-        ws.grupos=ordem.map(function(k){ return { titulo:(k==='__geral'?'Conhecimento':('Container '+k)), sub:(byC[k].length+' verificação(ões)'),
-          evidencias:byC[k].map(function(e){ var ec=EST_COLOR[e.resultado]||EST_COLOR['Não Avaliado']; return { campo:e.campo, resultado:e.resultado, criticidade:e.criticidade, cor:ec.c, bg:ec.bg, motivo:e.motivo, valores:(e.valores||[]).map(function(v){return{doc:v.doc,valor:v.valor};}) }; }) }; });
-        var cl=ad.clara||{}; ws.claraLinhas=(cl.linhas||[]).map(function(t){return{txt:t};}); ws.proximoPasso=(cl.proximoPasso||'—'); ws.claraFonte=(cl.fonte==='ia'?'IA':'Resumo');
-      }
-    }
+    var evAll=(res&&res.evidencias)||[];
+    var ev=evAll.filter(function(e){ return !pbSel || e.playbook===pbSel; });
+    // rótulos dos dois lados (a partir dos documentos comparados)
+    var docPair=(ev[0]&&ev[0].documentos)||['MBL','HBL'];
+    var labA=docPair[0]||'Master', labB=docPair[1]||'House';
 
-    var emailTexto = (this.state.emailModal && ad) ? this.emailSugerido(ad) : '';
+    // resumo
+    var cOk=ev.filter(function(e){return e.resultado==='Consistente';}).length;
+    var cCrit=ev.filter(function(e){return e.resultado==='Divergência';}).length;
+    var cMan=ev.filter(function(e){return e.resultado==='Validação Humana';}).length;
+    var cNa=ev.filter(function(e){return e.resultado==='Não Avaliado';}).length;
+    var sum={ total:String(ev.length), ok:String(cOk), crit:String(cCrit), manual:String(cMan), temNaoAval:(cNa>0), naoAvalLabel:cNa+' verificação(ões) não avaliada(s) por documento ausente/ilegível.' };
+
+    // grupos por container (null => Conhecimento)
+    var byC={}, ordem=[];
+    ev.forEach(function(e){ var k=e.container||'__con'; if(!byC[k]){byC[k]=[];ordem.push(k);} byC[k].push(e); });
+    var mkItem=function(e, gkey){
+      var key=gkey+'::'+e.campo; var S=self.STATUS[self.statusKey(e.resultado)]; var open=(st.openEv===key);
+      var va=(e.valores&&e.valores[0])?e.valores[0].valor:'—', vb=(e.valores&&e.valores[1])?e.valores[1].valor:'—';
+      return { field:e.campo, dot:S.dot, statusColor:S.color, statusLabel:S.label, open:open, chevRot:open?'rotate(180deg)':'rotate(0deg)',
+        masterLabel:labA, houseLabel:labB, master:va, house:vb, houseColor:(e.resultado==='Divergência'?S.color:'#161A2E'),
+        impact:e.motivo, impactBg:S.impBg, impactColor:S.color, impactIcon:S.impIcon,
+        onToggle:function(){ self.setState(function(s){return {openEv:(s.openEv===key?null:key)};}); },
+        onViewPdf:function(){ self.viewPdf(e.campo, gkey, key); } };
+    };
+    var groups=ordem.map(function(k){ var items=byC[k];
+      var crit=items.filter(function(i){return i.resultado==='Divergência';}).length;
+      var man=items.filter(function(i){return i.resultado==='Validação Humana';}).length;
+      var ok=items.filter(function(i){return i.resultado==='Consistente';}).length;
+      var S=self.STATUS[ crit?'crit':(man?'manual':'ok') ];
+      var isCon=(k==='__con'); var gkey=isCon?'con':('ct::'+k); var open=(st.openGroup===gkey);
+      return { title:isCon?'Conhecimento':('Container '+k), icon:isCon?'M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z':'M12 3 4 7v10l8 4 8-4V7Z M4 7l8 4 8-4M12 11v10',
+        iconBg:isCon?'#EEEBFE':'#E7F0FE', iconColor:isCon?'#4327E6':'#2563EB', titleFont:isCon?"'Plus Jakarta Sans',sans-serif":"'JetBrains Mono',monospace",
+        dot:S.dot, cardBorder:crit?'#F4DEDE':(man?'#F3E7CE':'#EAEBF4'),
+        hasCrit:crit>0, critN:crit, critWord:(crit===1?'divergência':'divergências'), hasManual:man>0, manualN:man, hasOk:ok>0, okN:ok, okWord:(ok===1?'consistente':'consistentes'),
+        open:open, chevRot:open?'rotate(180deg)':'rotate(0deg)',
+        onToggle:function(){ self.setState(function(s){return {openGroup:(s.openGroup===gkey?null:gkey)};}); },
+        items:items.map(function(e){ return mkItem(e, gkey); }) }; });
+
+    // pendências (divergência + validação humana)
+    var pend=ev.filter(function(e){return e.resultado==='Divergência'||e.resultado==='Validação Humana';});
+    var pendencias=pend.map(function(e){ var S=self.STATUS[self.statusKey(e.resultado)];
+      return { field:e.campo, where:(e.container?('Container '+e.container):'Conhecimento'), dot:S.dot, statusColor:S.color, statusBg:S.impBg,
+        statusLabel:(e.resultado==='Divergência'?'Divergência':'Validação'),
+        onGo:function(){ var gkey=e.container?('ct::'+e.container):'con'; self.viewPdf(e.campo, gkey, gkey+'::'+e.campo); } }; });
+
+    // viewers (campos extraídos lado a lado)
+    var mkViewer=function(side){
+      var lines=ev.map(function(e){ var raw=(e.valores&&e.valores[side])?e.valores[side].valor:'—'; var isFocus=(st.focus===e.campo);
+        var diverges=(side===1 && e.resultado==='Divergência'); var S=self.STATUS[self.statusKey(e.resultado)];
+        return { anchor:self.anchorId(e.campo), field:e.campo, value:raw, valColor:diverges?S.color:'#3C4258',
+          hlBg:isFocus?'#FEF7E4':'transparent', hlRing:isFocus?'0 0 0 2px #F5B31E':'none' }; });
+      return { label:(side===0?labA:labB), fileName:((res&&res)&&''), tagBg:side===0?'#EEEBFE':'#E7F0FE', tagColor:side===0?'#4327E6':'#2563EB',
+        docTitle:(side===0?labA:labB).toUpperCase(), lines:lines, scrollRef:side===0?self.masterScrollRef:self.houseScrollRef }; };
+    var viewers = mesaReady ? [mkViewer(0), mkViewer(1)] : [];
+    // nomes de arquivo dos documentos auditados (para o cabeçalho dos viewers)
+    if(mesaReady && ad.docsAuditados){ if(viewers[0])viewers[0].fileName=ad.docsAuditados[0]||''; if(viewers[1])viewers[1].fileName=ad.docsAuditados[1]||''; }
+
+    var clara=(mesaReady&&ad.clara)?ad.clara:null;
+    var verdict=(clara&&clara.linhas||[]).map(function(t){return {txt:t};});
+    if(mesaReady && ad.semDocumentos){ verdict=[{txt:'Não há documentos com Playbook disponível neste processo ainda (MBL/HBL ou CE Master/House).'}]; }
 
     return {
-      showLista:(view==='lista'), showWorkspace:(view==='workspace'),
-      loading:loading, notLoading:!loading, idle:idle, errored:errored, errorMsg:(errored?st.slice(st.indexOf(':')+1):''),
-      vazio:(done && lista.length===0), temProcessos:(done && lista.length>0), processos:processos, resumoLinha:resumoLinha,
-      importLabel:(loading?'Importando…':'Importar do Outlook'), onImportar:function(){ if(!loading) self.importar(); },
-      ws:ws,
-      emailModal:this.state.emailModal, emailTexto:emailTexto,
-      onFecharEmail:function(){ self.setState({ emailModal:false }); },
-      onCopiarEmail:function(){ try{ navigator.clipboard.writeText(emailTexto); }catch(e){} self.setState({ emailModal:false }); },
-      stop:function(ev){ if(ev&&ev.stopPropagation)ev.stopPropagation(); }
+      isDiscover:(st.screen==='discover'), isMesa:(st.screen==='mesa'),
+      // discover states
+      discLoading:discLoading, discNotLoading:!discLoading, discError:discError, discErrorMsg:(discError?procStatus.slice(procStatus.indexOf(':')+1):''),
+      discDone:discDone, discEmpty:(discDone&&processosRaw.length===0), discHas:(discDone&&processosRaw.length>0),
+      importLabel:(discLoading?'Importando…':'Importar do Outlook'),
+      importStatus:'Última importação: '+(processosRaw.length?'agora':'—'),
+      onImport:function(){ if(!discLoading) self.load(); },
+      busca:st.busca, onBusca:function(e){ self.setState({busca:(e&&e.target&&e.target.value)||''}); },
+      procCount:String(processosRaw.length), processes:processes, sel:selVM,
+      onStartAudit:function(){ if(selVM.code&&selVM.code!=='—') self.iniciar(selVM.code); },
+      // mesa
+      onBack:function(){ self.setState({screen:'discover', auditData:null, auditStatus:'idle'}); },
+      mesaLoading:mesaLoading, mesaError:mesaError, mesaErrorMsg:(mesaError?ast.slice(ast.indexOf(':')+1):''), mesaReady:mesaReady,
+      playbookLabel:(pbSel||'—'), playbooks:playbooks, onExecute:function(){ self.reprocessar(); },
+      viewers:viewers, sum:sum, groups:groups, pendencias:pendencias, hasPend:pendencias.length>0, noPend:(mesaReady&&pendencias.length===0), pendCount:String(pendencias.length),
+      verdict:verdict, proximoPasso:((clara&&clara.proximoPasso)||'—'),
+      genEmail:function(){ self.setState({emailModal:true}); }, alreadyAsked:function(){ self.setState({jaSolicitado:true}); self.toast('Registrado: solicitação ao agente.'); },
+      jaSolicitadoLabel:(st.jaSolicitado?'✓ Solicitado ao agente':'Já solicitei ao agente'),
+      emailModal:st.emailModal, emailTexto:(st.emailModal?this.emailSugerido():''),
+      onFecharEmail:function(){ self.setState({emailModal:false}); },
+      onCopiarEmail:function(){ try{ navigator.clipboard.writeText(self.emailSugerido()); }catch(e){} self.setState({emailModal:false}); self.toast('Texto copiado.'); },
+      stop:function(e){ if(e&&e.stopPropagation)e.stopPropagation(); },
+      toastOn:!!st.toast, toastMsg:st.toast,
     };
   }
 }
