@@ -27,166 +27,279 @@
     <div style="flex:1;overflow-y:auto;padding:18px 26px 40px;animation:pageIn .35s ease both">
       <div style="max-width:1080px;margin:0 auto">
 
-        <!-- Barra de ação: Importar do Outlook -->
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:18px">
-          <div style="font-size:12.5px;color:#7A8099">{{ resumoLinha }}</div>
-          <button class="aud-cta" onClick="{{ onImportar }}" style="display:flex;align-items:center;gap:8px;background:#4327E6;color:#fff;border:none;border-radius:12px;padding:11px 18px;font-family:inherit;font-size:13.5px;font-weight:700;cursor:pointer;box-shadow:0 8px 20px -8px rgba(67,39,230,.6)">
-            <sc-if value="{{ loading }}" hint-placeholder-val="{{ false }}"><span style="width:15px;height:15px;border:2px solid rgba(255,255,255,.5);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;display:inline-block"></span></sc-if>
-            <sc-if value="{{ notLoading }}" hint-placeholder-val="{{ true }}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M12 3v12 M8 11l4 4 4-4 M4 19h16"/></svg></sc-if>
-            {{ importLabel }}
-          </button>
-        </div>
-
-        <!-- IDLE: nenhum processo carregado (estado da imagem) -->
-        <sc-if value="{{ idle }}" hint-placeholder-val="{{ true }}">
-          <div class="card" style="display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:70px 30px;margin-top:30px">
-            <span style="width:66px;height:66px;border-radius:18px;background:#F1F2F9;display:flex;align-items:center;justify-content:center;margin-bottom:18px">
-              <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#9AA0B4" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="m3 8 9 6 9-6"/></svg>
-            </span>
-            <div style="font-size:19px;font-weight:800;color:#161A2E;margin-bottom:8px">Nenhum processo carregado</div>
-            <div style="font-size:13.5px;line-height:1.6;color:#6B7192;max-width:400px">Clique em <b style="color:#4327E6">Importar do Outlook</b>. A Priora identifica os documentos e agrupa automaticamente por processo.</div>
+        <!-- ============================ LISTA ============================ -->
+        <sc-if value="{{ showLista }}" hint-placeholder-val="{{ true }}">
+        <div>
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:18px">
+            <div style="font-size:12.5px;color:#7A8099">{{ resumoLinha }}</div>
+            <button class="aud-cta" onClick="{{ onImportar }}" style="display:flex;align-items:center;gap:8px;background:#4327E6;color:#fff;border:none;border-radius:12px;padding:11px 18px;font-family:inherit;font-size:13.5px;font-weight:700;cursor:pointer;box-shadow:0 8px 20px -8px rgba(67,39,230,.6)">
+              <sc-if value="{{ loading }}" hint-placeholder-val="{{ false }}"><span style="width:15px;height:15px;border:2px solid rgba(255,255,255,.5);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;display:inline-block"></span></sc-if>
+              <sc-if value="{{ notLoading }}" hint-placeholder-val="{{ true }}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M12 3v12 M8 11l4 4 4-4 M4 19h16"/></svg></sc-if>
+              {{ importLabel }}
+            </button>
           </div>
-        </sc-if>
 
-        <!-- LOADING: etapas reais (Blueprint 6.6) -->
-        <sc-if value="{{ loading }}" hint-placeholder-val="{{ false }}">
-          <div class="card" style="display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:64px 30px;margin-top:30px">
-            <span style="width:40px;height:40px;border:3px solid #E7E4FB;border-top-color:#4327E6;border-radius:50%;animation:spin .8s linear infinite;margin-bottom:18px"></span>
-            <div style="font-size:15px;font-weight:800;color:#161A2E;margin-bottom:6px">Importando do Outlook…</div>
-            <div style="font-size:12.5px;color:#7A8099">Lendo a caixa do Courier, classificando documentos e agrupando por processo.</div>
-          </div>
-        </sc-if>
+          <sc-if value="{{ idle }}" hint-placeholder-val="{{ true }}">
+            <div class="card" style="display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:70px 30px;margin-top:30px">
+              <span style="width:66px;height:66px;border-radius:18px;background:#F1F2F9;display:flex;align-items:center;justify-content:center;margin-bottom:18px"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#9AA0B4" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="m3 8 9 6 9-6"/></svg></span>
+              <div style="font-size:19px;font-weight:800;color:#161A2E;margin-bottom:8px">Nenhum processo carregado</div>
+              <div style="font-size:13.5px;line-height:1.6;color:#6B7192;max-width:400px">Clique em <b style="color:#4327E6">Importar do Outlook</b>. A Priora identifica os documentos e agrupa automaticamente por processo.</div>
+            </div>
+          </sc-if>
 
-        <!-- ERRO -->
-        <sc-if value="{{ errored }}" hint-placeholder-val="{{ false }}">
-          <div class="card" style="text-align:center;max-width:440px;margin:40px auto;padding:34px 28px">
-            <div style="font-size:16px;font-weight:800;color:#161A2E;margin-bottom:8px">Não foi possível importar</div>
-            <div style="font-size:13px;line-height:1.6;color:#6B7192">{{ errorMsg }}</div>
-          </div>
-        </sc-if>
+          <sc-if value="{{ loading }}" hint-placeholder-val="{{ false }}">
+            <div class="card" style="display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:64px 30px;margin-top:30px">
+              <span style="width:40px;height:40px;border:3px solid #E7E4FB;border-top-color:#4327E6;border-radius:50%;animation:spin .8s linear infinite;margin-bottom:18px"></span>
+              <div style="font-size:15px;font-weight:800;color:#161A2E;margin-bottom:6px">Importando do Outlook…</div>
+              <div style="font-size:12.5px;color:#7A8099">Lendo a caixa do Courier, classificando documentos e agrupando por processo.</div>
+            </div>
+          </sc-if>
 
-        <!-- VAZIO após importar -->
-        <sc-if value="{{ vazio }}" hint-placeholder-val="{{ false }}">
-          <div class="card" style="text-align:center;padding:56px 30px;margin-top:20px">
-            <div style="font-size:16px;font-weight:800;color:#161A2E;margin-bottom:6px">Nenhum processo com documentos encontrado</div>
-            <div style="font-size:13px;color:#6B7192">Não encontrei anexos vinculados a um processo (IMxxxx) na caixa do Courier.</div>
-          </div>
-        </sc-if>
+          <sc-if value="{{ errored }}" hint-placeholder-val="{{ false }}">
+            <div class="card" style="text-align:center;max-width:440px;margin:40px auto;padding:34px 28px"><div style="font-size:16px;font-weight:800;color:#161A2E;margin-bottom:8px">Não foi possível importar</div><div style="font-size:13px;line-height:1.6;color:#6B7192">{{ errorMsg }}</div></div>
+          </sc-if>
 
-        <!-- LISTA DE PROCESSOS -->
-        <sc-if value="{{ temProcessos }}" hint-placeholder-val="{{ false }}">
-          <div style="display:flex;flex-direction:column;gap:12px">
-            <sc-for list="{{ processos }}" as="p" hint-placeholder-count="3">
-              <div class="card" style="overflow:hidden">
-                <div class="proc-row" onClick="{{ p.onToggle }}" style="display:flex;align-items:center;gap:16px;padding:16px 20px">
-                  <span style="width:38px;height:38px;border-radius:11px;background:#EEEBFE;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="2"><path d="M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/></svg></span>
-                  <div style="min-width:0;width:150px;flex-shrink:0">
-                    <div class="mono" style="font-size:14px;font-weight:700;color:#161A2E">{{ p.processo }}</div>
-                    <div style="font-size:11.5px;color:#9AA0B4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ p.clienteLabel }}</div>
-                  </div>
-                  <div style="flex:1;min-width:0;display:flex;align-items:center;gap:7px;flex-wrap:wrap">
-                    <span style="font-size:12px;color:#6B7192"><b style="color:#161A2E">{{ p.qtdDocs }}</b> doc(s)</span>
-                    <sc-for list="{{ p.auditoriaChips }}" as="a" hint-placeholder-count="2">
-                      <span style="font-size:10.5px;font-weight:700;color:#177D54;background:#E7F6EF;padding:3px 9px;border-radius:7px">{{ a.label }}</span>
-                    </sc-for>
-                    <sc-if value="{{ p.semAuditoria }}" hint-placeholder-val="{{ false }}"><span style="font-size:10.5px;font-weight:600;color:#9AA0B4;background:#F1F2F9;padding:3px 9px;border-radius:7px">Sem auditoria disponível</span></sc-if>
-                  </div>
-                  <span style="font-size:11px;font-weight:700;color:{{ p.statusColor }};background:{{ p.statusBg }};padding:4px 11px;border-radius:8px;flex-shrink:0">{{ p.status }}</span>
-                  <span style="color:#C7CBDA;font-size:15px;flex-shrink:0;transition:transform .2s;transform:{{ p.caret }}">▾</span>
-                </div>
+          <sc-if value="{{ vazio }}" hint-placeholder-val="{{ false }}">
+            <div class="card" style="text-align:center;padding:56px 30px;margin-top:20px"><div style="font-size:16px;font-weight:800;color:#161A2E;margin-bottom:6px">Nenhum processo com documentos encontrado</div><div style="font-size:13px;color:#6B7192">Não encontrei anexos vinculados a um processo (IMxxxx) na caixa do Courier.</div></div>
+          </sc-if>
 
-                <!-- Detalhe: documentos do processo (Blueprint 2.6) -->
-                <sc-if value="{{ p.aberto }}" hint-placeholder-val="{{ false }}">
-                  <div style="border-top:1px solid #F1F2F8;padding:16px 20px;background:#FBFBFE">
-                    <div style="font-size:10.5px;font-weight:700;color:#9AA0B4;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px">Documentos encontrados</div>
-                    <div style="display:flex;flex-direction:column;gap:8px">
-                      <sc-for list="{{ p.docs }}" as="d" hint-placeholder-count="3">
-                        <div style="display:flex;align-items:center;gap:11px">
-                          <span style="width:30px;height:30px;border-radius:8px;background:#fff;border:1px solid #ECEDF4;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#7A8099" stroke-width="2"><path d="M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/></svg></span>
-                          <div style="flex:1;min-width:0"><div style="font-size:12.5px;color:#3C4258;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ d.nome }}</div></div>
-                          <span style="font-size:10.5px;font-weight:700;color:{{ d.tipoColor }};background:{{ d.tipoBg }};padding:3px 9px;border-radius:7px;flex-shrink:0">{{ d.tipoLabel }}</span>
-                        </div>
-                      </sc-for>
+          <sc-if value="{{ temProcessos }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;flex-direction:column;gap:12px">
+              <sc-for list="{{ processos }}" as="p" hint-placeholder-count="3">
+                <div class="card" style="overflow:hidden">
+                  <div class="proc-row" onClick="{{ p.onToggle }}" style="display:flex;align-items:center;gap:16px;padding:16px 20px">
+                    <span style="width:38px;height:38px;border-radius:11px;background:#EEEBFE;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="2"><path d="M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/></svg></span>
+                    <div style="min-width:0;width:150px;flex-shrink:0"><div class="mono" style="font-size:14px;font-weight:700;color:#161A2E">{{ p.processo }}</div><div style="font-size:11.5px;color:#9AA0B4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ p.clienteLabel }}</div></div>
+                    <div style="flex:1;min-width:0;display:flex;align-items:center;gap:7px;flex-wrap:wrap">
+                      <span style="font-size:12px;color:#6B7192"><b style="color:#161A2E">{{ p.qtdDocs }}</b> doc(s)</span>
+                      <sc-for list="{{ p.auditoriaChips }}" as="a" hint-placeholder-count="2"><span style="font-size:10.5px;font-weight:700;color:#177D54;background:#E7F6EF;padding:3px 9px;border-radius:7px">{{ a.label }}</span></sc-for>
+                      <sc-if value="{{ p.semAuditoria }}" hint-placeholder-val="{{ false }}"><span style="font-size:10.5px;font-weight:600;color:#9AA0B4;background:#F1F2F9;padding:3px 9px;border-radius:7px">Sem auditoria disponível</span></sc-if>
                     </div>
-
-                    <sc-if value="{{ p.temFaltando }}" hint-placeholder-val="{{ false }}">
-                      <div style="margin-top:13px;padding-top:12px;border-top:1px dashed #E6E7F0">
-                        <div style="font-size:11.5px;color:#B4740A;background:#FEF6E9;border:1px solid #F5E4C4;border-radius:9px;padding:9px 12px">Documentos esperados ausentes: <b>{{ p.faltandoLabel }}</b> — a auditoria será parcial.</div>
+                    <span style="font-size:11px;font-weight:700;color:{{ p.statusColor }};background:{{ p.statusBg }};padding:4px 11px;border-radius:8px;flex-shrink:0">{{ p.status }}</span>
+                    <span style="color:#C7CBDA;font-size:15px;flex-shrink:0;transition:transform .2s;transform:{{ p.caret }}">▾</span>
+                  </div>
+                  <sc-if value="{{ p.aberto }}" hint-placeholder-val="{{ false }}">
+                    <div style="border-top:1px solid #F1F2F8;padding:16px 20px;background:#FBFBFE">
+                      <div style="font-size:10.5px;font-weight:700;color:#9AA0B4;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px">Documentos encontrados</div>
+                      <div style="display:flex;flex-direction:column;gap:8px">
+                        <sc-for list="{{ p.docs }}" as="d" hint-placeholder-count="3">
+                          <div style="display:flex;align-items:center;gap:11px">
+                            <span style="width:30px;height:30px;border-radius:8px;background:#fff;border:1px solid #ECEDF4;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#7A8099" stroke-width="2"><path d="M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/></svg></span>
+                            <div style="flex:1;min-width:0"><div style="font-size:12.5px;color:#3C4258;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ d.nome }}</div></div>
+                            <span style="font-size:10.5px;font-weight:700;color:{{ d.tipoColor }};background:{{ d.tipoBg }};padding:3px 9px;border-radius:7px;flex-shrink:0">{{ d.tipoLabel }}</span>
+                          </div>
+                        </sc-for>
                       </div>
-                    </sc-if>
-
-                    <!-- Iniciar auditoria (motor OCR — próxima etapa) -->
-                    <div style="margin-top:14px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
-                      <div style="font-size:11px;color:#9AA0B4;max-width:520px;line-height:1.5">A conferência campo a campo (OCR + comparação MBL×HBL / CE Master×CE House) é a próxima etapa do módulo.</div>
-                      <button onClick="{{ p.onIniciar }}" style="display:flex;align-items:center;gap:7px;background:#EEEBFE;color:#4327E6;border:none;border-radius:10px;padding:9px 15px;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer">Iniciar auditoria</button>
+                      <sc-if value="{{ p.temFaltando }}" hint-placeholder-val="{{ false }}"><div style="margin-top:13px;padding-top:12px;border-top:1px dashed #E6E7F0"><div style="font-size:11.5px;color:#B4740A;background:#FEF6E9;border:1px solid #F5E4C4;border-radius:9px;padding:9px 12px">Documentos esperados ausentes: <b>{{ p.faltandoLabel }}</b> — a auditoria será parcial.</div></div></sc-if>
+                      <div style="margin-top:14px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+                        <div style="font-size:11px;color:#9AA0B4;max-width:520px;line-height:1.5">A Priora vai ler os documentos (OCR), comparar campo a campo e organizar as evidências.</div>
+                        <button class="aud-cta" onClick="{{ p.onIniciar }}" style="display:flex;align-items:center;gap:7px;background:#4327E6;color:#fff;border:none;border-radius:10px;padding:9px 16px;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer">Iniciar auditoria</button>
+                      </div>
                     </div>
-                  </div>
-                </sc-if>
-              </div>
-            </sc-for>
+                  </sc-if>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
+        </div>
+        </sc-if>
+
+        <!-- ========================== WORKSPACE ========================== -->
+        <sc-if value="{{ showWorkspace }}" hint-placeholder-val="{{ false }}">
+        <div>
+          <div onClick="{{ onVoltar }}" style="display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:#6B7192;cursor:pointer;margin-bottom:14px">‹ Voltar aos processos</div>
+
+          <!-- Cabeçalho (5.4) -->
+          <div class="card" style="padding:18px 22px;margin-bottom:14px;display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+            <span style="width:44px;height:44px;border-radius:12px;background:#EEEBFE;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="2"><path d="M3 4h18v16H3z M3 9h18 M8 14l2.5 2.5L16 12"/></svg></span>
+            <div style="min-width:0;flex:1">
+              <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><span class="mono" style="font-size:18px;font-weight:800;color:#161A2E">{{ ws.processo }}</span><span style="font-size:11px;font-weight:700;color:{{ ws.statusColor }};background:{{ ws.statusBg }};padding:4px 11px;border-radius:8px">{{ ws.status }}</span></div>
+              <div style="font-size:12px;color:#7A8099;margin-top:3px">{{ ws.subhead }}</div>
+            </div>
           </div>
+
+          <!-- Loading com etapas reais (6.6) -->
+          <sc-if value="{{ ws.loading }}" hint-placeholder-val="{{ false }}">
+            <div class="card" style="display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:60px 30px">
+              <span style="width:40px;height:40px;border:3px solid #E7E4FB;border-top-color:#4327E6;border-radius:50%;animation:spin .8s linear infinite;margin-bottom:16px"></span>
+              <div style="font-size:15px;font-weight:800;color:#161A2E;margin-bottom:6px">Construindo a auditoria…</div>
+              <div style="font-size:12.5px;color:#7A8099">Lendo os documentos (OCR), organizando o processo e executando os Playbooks.</div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ ws.errored }}" hint-placeholder-val="{{ false }}">
+            <div class="card" style="text-align:center;padding:34px 28px"><div style="font-size:15px;font-weight:800;color:#161A2E;margin-bottom:8px">Não foi possível concluir a auditoria</div><div style="font-size:13px;color:#6B7192">{{ ws.errorMsg }}</div></div>
+          </sc-if>
+
+          <sc-if value="{{ ws.pronto }}" hint-placeholder-val="{{ false }}">
+            <div>
+              <!-- Resumo consolidado (5.11) -->
+              <div class="card" style="padding:16px 20px;margin-bottom:14px;display:flex;gap:22px;flex-wrap:wrap">
+                <div><div class="mono" style="font-size:22px;font-weight:800;color:#161A2E">{{ ws.total }}</div><div style="font-size:11px;color:#9AA0B4">validações</div></div>
+                <div><div class="mono" style="font-size:22px;font-weight:800;color:#177D54">{{ ws.consistentes }}</div><div style="font-size:11px;color:#9AA0B4">consistentes</div></div>
+                <div><div class="mono" style="font-size:22px;font-weight:800;color:#C2333A">{{ ws.divergencias }}</div><div style="font-size:11px;color:#9AA0B4">divergências</div></div>
+                <div><div class="mono" style="font-size:22px;font-weight:800;color:#E08A1E">{{ ws.humanas }}</div><div style="font-size:11px;color:#9AA0B4">validação humana</div></div>
+                <div><div class="mono" style="font-size:22px;font-weight:800;color:#9AA0B4">{{ ws.naoAval }}</div><div style="font-size:11px;color:#9AA0B4">não avaliados</div></div>
+              </div>
+
+              <sc-if value="{{ ws.temIlegiveis }}" hint-placeholder-val="{{ false }}"><div style="font-size:11.5px;color:#B4740A;background:#FEF6E9;border:1px solid #F5E4C4;border-radius:10px;padding:10px 14px;margin-bottom:14px">Documento(s) ilegível(is): <b>{{ ws.ilegiveisLabel }}</b>. As validações dependentes ficaram como "Não avaliado".</div></sc-if>
+
+              <!-- Painel de evidências agrupado por container (5.7/5.8) -->
+              <sc-for list="{{ ws.grupos }}" as="g" hint-placeholder-count="2">
+                <div class="card" style="margin-bottom:14px;overflow:hidden">
+                  <div style="padding:12px 18px;border-bottom:1px solid #F1F2F8;display:flex;align-items:center;gap:8px;background:#FBFBFE"><span style="font-size:12.5px;font-weight:800;color:#161A2E">{{ g.titulo }}</span><span style="font-size:11px;color:#9AA0B4">{{ g.sub }}</span></div>
+                  <div>
+                    <sc-for list="{{ g.evidencias }}" as="e" hint-placeholder-count="3">
+                      <div style="padding:13px 18px;border-top:1px solid #F5F6FB;display:flex;gap:13px;align-items:flex-start">
+                        <span style="width:9px;height:9px;border-radius:50%;background:{{ e.cor }};margin-top:5px;flex-shrink:0"></span>
+                        <div style="flex:1;min-width:0">
+                          <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:4px">
+                            <span style="font-size:13px;font-weight:700;color:#161A2E">{{ e.campo }}</span>
+                            <span style="font-size:10px;font-weight:700;color:{{ e.cor }};background:{{ e.bg }};padding:2px 8px;border-radius:6px">{{ e.resultado }}</span>
+                            <span style="font-size:10px;color:#9AA0B4">{{ e.criticidade }}</span>
+                          </div>
+                          <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:4px">
+                            <sc-for list="{{ e.valores }}" as="v" hint-placeholder-count="2"><span style="font-size:11.5px;color:#3C4258;background:#F4F5FB;border:1px solid #ECEDF4;border-radius:7px;padding:3px 9px"><b style="color:#7A8099;font-weight:600">{{ v.doc }}:</b> {{ v.valor }}</span></sc-for>
+                          </div>
+                          <div style="font-size:11.5px;color:#6B7192;line-height:1.45">{{ e.motivo }}</div>
+                        </div>
+                      </div>
+                    </sc-for>
+                  </div>
+                </div>
+              </sc-for>
+
+              <!-- Clara (5.10) -->
+              <div class="card" style="padding:16px 20px;background:#FBFAFF;border-color:#E7E3FB">
+                <div style="display:flex;align-items:center;gap:9px;margin-bottom:8px"><span style="width:30px;height:30px;border-radius:9px;background:#E7F0FE;display:flex;align-items:center;justify-content:center"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#1D4ED8" stroke-width="2"><rect x="4" y="8" width="16" height="12" rx="4"/><path d="M12 8V4.5 M9 13.5h.01 M15 13.5h.01"/></svg></span><span style="font-size:14px;font-weight:800;color:#161A2E">Clara</span><span style="font-size:10px;font-weight:700;color:#4327E6;background:#EEEBFE;padding:2px 7px;border-radius:6px">{{ ws.claraFonte }}</span></div>
+                <div style="display:flex;flex-direction:column;gap:5px;margin-bottom:11px">
+                  <sc-for list="{{ ws.claraLinhas }}" as="l" hint-placeholder-count="2"><div style="font-size:13px;color:#3C4258;line-height:1.5">{{ l.txt }}</div></sc-for>
+                </div>
+                <div style="font-size:12.5px;color:#161A2E;background:#fff;border:1px solid #ECEDF4;border-radius:9px;padding:9px 12px;margin-bottom:12px"><b style="color:#4327E6">Próximo passo:</b> {{ ws.proximoPasso }}</div>
+                <div style="display:flex;gap:9px;flex-wrap:wrap">
+                  <button onClick="{{ ws.onGerarEmail }}" style="display:flex;align-items:center;gap:7px;background:#4327E6;color:#fff;border:none;border-radius:9px;padding:8px 14px;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer">Gerar e-mail para o agente</button>
+                  <button onClick="{{ ws.onJaSolicitei }}" style="background:#fff;color:#3C4258;border:1px solid #E1E3EF;border-radius:9px;padding:8px 14px;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer">{{ ws.jaSolicitadoLabel }}</button>
+                </div>
+              </div>
+            </div>
+          </sc-if>
+        </div>
         </sc-if>
 
       </div>
     </div>
+
+    <!-- Modal do e-mail sugerido (7.7 — Clara sugere, nunca envia) -->
+    <sc-if value="{{ emailModal }}" hint-placeholder-val="{{ false }}">
+      <div onClick="{{ onFecharEmail }}" style="position:fixed;inset:0;background:rgba(22,26,46,.45);z-index:90;display:flex;align-items:center;justify-content:center;padding:24px">
+        <div onClick="{{ stop }}" class="card" style="width:min(640px,100%);max-height:86vh;display:flex;flex-direction:column">
+          <div style="padding:16px 20px;border-bottom:1px solid #EFF0F7;display:flex;align-items:center;justify-content:space-between"><div style="font-size:14.5px;font-weight:800;color:#161A2E">E-mail sugerido ao agente</div><span onClick="{{ onFecharEmail }}" style="cursor:pointer;color:#9AA0B4;font-size:18px">✕</span></div>
+          <div style="padding:16px 20px;overflow-y:auto"><div style="font-size:12.5px;color:#3C4258;white-space:pre-wrap;line-height:1.6;background:#F7F8FC;border:1px solid #E6E8F2;border-radius:10px;padding:14px">{{ emailTexto }}</div><div style="font-size:11px;color:#9AA0B4;margin-top:10px">A Priora apenas sugere. Revise e envie pelo Outlook — nada é enviado automaticamente.</div></div>
+          <div style="padding:14px 20px;border-top:1px solid #EFF0F7;display:flex;justify-content:flex-end;gap:9px"><button onClick="{{ onFecharEmail }}" style="background:#fff;color:#3C4258;border:1px solid #E1E3EF;border-radius:9px;padding:9px 15px;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer">Fechar</button><button onClick="{{ onCopiarEmail }}" style="background:#4327E6;color:#fff;border:none;border-radius:9px;padding:9px 15px;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer">Copiar texto</button></div>
+        </div>
+      </div>
+    </sc-if>
 </main>
 </x-dc>
 <script type="text/x-dc" data-dc-script>
 class Component extends DCLogic {
-  state = { status:'idle', resp:null, expanded:null, toast:'' };
+  state = { status:'idle', resp:null, expanded:null,
+    view:'lista', auditProc:null, auditStatus:'', auditData:null,
+    jaSolicitado:false, emailModal:false };
 
   importar(){
-    var self=this;
-    this.setState({ status:'loading' });
+    var self=this; this.setState({ status:'loading' });
     fetch('/api/auditoria/processos', { credentials:'same-origin' })
       .then(function(r){ return r.json().catch(function(){return null;}).then(function(j){ if(!r.ok) throw new Error((j&&j.error)||('HTTP '+r.status)); return j; }); })
       .then(function(d){ self.setState({ resp:d, status:'done' }); })
       .catch(function(e){ self.setState({ status:'error:'+String(e&&e.message||e) }); });
   }
 
+  iniciarAuditoria(proc){
+    var self=this;
+    this.setState({ view:'workspace', auditProc:proc, auditStatus:'loading', auditData:null, jaSolicitado:false });
+    fetch('/api/auditoria/'+encodeURIComponent(proc)+'/auditoria', { credentials:'same-origin' })
+      .then(function(r){ return r.json().catch(function(){return null;}).then(function(j){ if(!r.ok) throw new Error((j&&j.error)||('HTTP '+r.status)); return j; }); })
+      .then(function(d){ self.setState({ auditData:d, auditStatus:'done' }); })
+      .catch(function(e){ self.setState({ auditStatus:'error:'+String(e&&e.message||e) }); });
+  }
+
+  emailSugerido(d){
+    var proc=(d&&d.processo)||'', divs=[];
+    var evs=(d&&d.resultado&&d.resultado.evidencias)||[];
+    evs.forEach(function(e){ if(e.resultado==='Divergência'){ divs.push('- '+e.campo+(e.container?(' (container '+e.container+')'):'')+': '+e.motivo); } });
+    var corpo='Prezados,\n\nApós a conferência documental do processo '+proc+', identificamos os seguintes pontos que precisam de correção/confirmação:\n\n';
+    corpo += (divs.length?divs.join('\n'):'- (nenhuma divergência objetiva; conferência de valores comerciais pendente)');
+    corpo += '\n\nPor gentileza, confirmem/corrijam antes da emissão do CE Mercante.\n\nDesde já agradecemos.';
+    return corpo;
+  }
+
   renderVals(){
     var self=this, st=this.state.status, resp=this.state.resp;
     var loading=(st==='loading'), errored=(st.indexOf('error')===0), done=(st==='done'&&!!resp), idle=(st==='idle');
     var lista=(done && resp.processos)?resp.processos:[];
+    var view=this.state.view;
 
-    var TIPO_COLOR={ 'Master BL':{c:'#4327E6',bg:'#EEEBFE'}, 'House BL':{c:'#6D28D9',bg:'#F1EBFD'},
-      'CE Master':{c:'#1D4ED8',bg:'#E7F0FE'}, 'CE House':{c:'#0E7490',bg:'#E3F5F8'},
-      'Item':{c:'#177D54',bg:'#E7F6EF'}, 'Invoice':{c:'#B4740A',bg:'#FEF6E9'},
-      'Packing List':{c:'#B4740A',bg:'#FEF6E9'}, 'Não classificado':{c:'#9AA0B4',bg:'#F1F2F9'} };
+    var TIPO_COLOR={ 'Master BL':{c:'#4327E6',bg:'#EEEBFE'}, 'House BL':{c:'#6D28D9',bg:'#F1EBFD'}, 'CE Master':{c:'#1D4ED8',bg:'#E7F0FE'}, 'CE House':{c:'#0E7490',bg:'#E3F5F8'}, 'Item':{c:'#177D54',bg:'#E7F6EF'}, 'Invoice':{c:'#B4740A',bg:'#FEF6E9'}, 'Packing List':{c:'#B4740A',bg:'#FEF6E9'}, 'Não classificado':{c:'#9AA0B4',bg:'#F1F2F9'} };
     var STATUS_COLOR={ 'Completa':{c:'#177D54',bg:'#E7F6EF'}, 'Parcial':{c:'#B4740A',bg:'#FEF6E9'}, 'Aguardando':{c:'#7A8099',bg:'#F1F2F9'} };
+    var EST_COLOR={ 'Divergência':{c:'#C2333A',bg:'#FDECEC'}, 'Validação Humana':{c:'#E08A1E',bg:'#FEF3E2'}, 'Não Avaliado':{c:'#7A8099',bg:'#F1F2F9'}, 'Consistente':{c:'#177D54',bg:'#E7F6EF'}, 'Informativo':{c:'#1D4ED8',bg:'#E7F0FE'} };
 
     var processos=lista.map(function(p){
       var sc=STATUS_COLOR[p.status]||STATUS_COLOR['Aguardando'];
       var aberto=(self.state.expanded===p.processo);
-      return {
-        processo:p.processo,
-        clienteLabel:(p.cliente||'Cliente a confirmar'),
-        qtdDocs:String(p.qtdDocs),
-        auditoriaChips:(p.auditorias||[]).map(function(a){ return { label:a }; }),
-        semAuditoria:((p.auditorias||[]).length===0),
-        status:p.status, statusColor:sc.c, statusBg:sc.bg,
-        aberto:aberto, caret:(aberto?'rotate(180deg)':'rotate(0deg)'),
-        docs:(p.docs||[]).map(function(d){ var tc=TIPO_COLOR[d.tipoLabel]||TIPO_COLOR['Não classificado'];
-          return { nome:d.nome, tipoLabel:d.tipoLabel, tipoColor:tc.c, tipoBg:tc.bg }; }),
-        temFaltando:((p.faltando||[]).length>0),
-        faltandoLabel:(p.faltando||[]).join(', '),
+      return { processo:p.processo, clienteLabel:(p.cliente||'Cliente a confirmar'), qtdDocs:String(p.qtdDocs),
+        auditoriaChips:(p.auditorias||[]).map(function(a){return{label:a};}), semAuditoria:((p.auditorias||[]).length===0),
+        status:p.status, statusColor:sc.c, statusBg:sc.bg, aberto:aberto, caret:(aberto?'rotate(180deg)':'rotate(0deg)'),
+        docs:(p.docs||[]).map(function(d){ var tc=TIPO_COLOR[d.tipoLabel]||TIPO_COLOR['Não classificado']; return { nome:d.nome, tipoLabel:d.tipoLabel, tipoColor:tc.c, tipoBg:tc.bg }; }),
+        temFaltando:((p.faltando||[]).length>0), faltandoLabel:(p.faltando||[]).join(', '),
         onToggle:function(){ self.setState({ expanded:(self.state.expanded===p.processo?null:p.processo) }); },
-        onIniciar:function(ev){ if(ev&&ev.stopPropagation)ev.stopPropagation(); if(window.PrioraBus) window.PrioraBus.focus('couriers', p.processo); }
-      };
+        onIniciar:function(ev){ if(ev&&ev.stopPropagation)ev.stopPropagation(); self.iniciarAuditoria(p.processo); } };
     });
 
-    var resumoLinha='';
-    if(done){ resumoLinha = (resp.count||0)+' processo(s) · '+(resp.totalDocumentos||0)+' documento(s) · '+(resp.prontos||0)+' pronto(s) para auditoria'; }
+    var resumoLinha= done ? ((resp.count||0)+' processo(s) · '+(resp.totalDocumentos||0)+' documento(s) · '+(resp.prontos||0)+' pronto(s) para auditoria') : '';
+
+    // ---------- Workspace ----------
+    var ws={ loading:false, errored:false, pronto:false, errorMsg:'', processo:(this.state.auditProc||''), status:'', statusColor:'#7A8099', statusBg:'#F1F2F9', subhead:'', total:'0', consistentes:'0', divergencias:'0', humanas:'0', naoAval:'0', temIlegiveis:false, ilegiveisLabel:'', grupos:[], claraLinhas:[], proximoPasso:'', claraFonte:'', jaSolicitadoLabel:'Já solicitei esta ação', onVoltar:function(){ self.setState({ view:'lista', auditData:null, auditStatus:'' }); }, onGerarEmail:function(){}, onJaSolicitei:function(){} };
+    var ast=this.state.auditStatus, ad=this.state.auditData;
+    ws.loading=(ast==='loading'); ws.errored=(ast.indexOf('error')===0); ws.errorMsg=(ws.errored?ast.slice(ast.indexOf(':')+1):'');
+    ws.pronto=(ast==='done' && !!ad);
+    ws.onVoltar=function(){ self.setState({ view:'lista', auditData:null, auditStatus:'' }); };
+    ws.onGerarEmail=function(){ self.setState({ emailModal:true }); };
+    ws.onJaSolicitei=function(){ self.setState({ jaSolicitado:true }); };
+    ws.jaSolicitadoLabel=(this.state.jaSolicitado?'✓ Follow-up registrado':'Já solicitei esta ação');
+    if(ws.pronto){
+      var STC={ 'Concluída sem pendências':{c:'#177D54',bg:'#E7F6EF'}, 'Concluída com divergências':{c:'#C2333A',bg:'#FDECEC'}, 'Aguardando validação humana':{c:'#E08A1E',bg:'#FEF3E2'}, 'Auditoria parcial':{c:'#7A8099',bg:'#F1F2F9'} };
+      if(ad.semDocumentos){
+        ws.status='Sem documentos auditáveis'; var s0=STC['Auditoria parcial']; ws.statusColor=s0.c; ws.statusBg=s0.bg;
+        ws.subhead=(ad.cliente||'Cliente a confirmar')+' · nenhum MBL/HBL/CE para conferência';
+        ws.claraLinhas=[{txt:'Não há documentos com Playbook disponível neste processo ainda.'}]; ws.proximoPasso='Anexar MBL/HBL ou CE Master/House para executar a conferência.'; ws.claraFonte='IA';
+      } else {
+        var r=ad.resultado||{}, rz=r.resumo||{}; var sc2=STC[r.status]||STC['Auditoria parcial'];
+        ws.status=r.status||'—'; ws.statusColor=sc2.c; ws.statusBg=sc2.bg;
+        ws.subhead=(ad.cliente||'Cliente a confirmar')+' · '+((r.playbooksExecutados||[]).join(' + ')||'sem playbook')+' · '+(ad.qtdDocs||0)+' documento(s)';
+        ws.total=String(rz.total||0); ws.consistentes=String(rz.consistentes||0); ws.divergencias=String(rz.divergencias||0); ws.humanas=String(rz.validacoesHumanas||0); ws.naoAval=String(rz.naoAvaliados||0);
+        ws.temIlegiveis=((ad.ilegiveis||[]).length>0); ws.ilegiveisLabel=(ad.ilegiveis||[]).join(', ');
+        // agrupa evidências por container (5.8)
+        var byC={}; var ordem=[];
+        (r.evidencias||[]).forEach(function(e){ var k=e.container||'__geral'; if(!byC[k]){ byC[k]=[]; ordem.push(k); } byC[k].push(e); });
+        ws.grupos=ordem.map(function(k){ return { titulo:(k==='__geral'?'Conhecimento':('Container '+k)), sub:(byC[k].length+' verificação(ões)'),
+          evidencias:byC[k].map(function(e){ var ec=EST_COLOR[e.resultado]||EST_COLOR['Não Avaliado']; return { campo:e.campo, resultado:e.resultado, criticidade:e.criticidade, cor:ec.c, bg:ec.bg, motivo:e.motivo, valores:(e.valores||[]).map(function(v){return{doc:v.doc,valor:v.valor};}) }; }) }; });
+        var cl=ad.clara||{}; ws.claraLinhas=(cl.linhas||[]).map(function(t){return{txt:t};}); ws.proximoPasso=(cl.proximoPasso||'—'); ws.claraFonte=(cl.fonte==='ia'?'IA':'Resumo');
+      }
+    }
+
+    var emailTexto = (this.state.emailModal && ad) ? this.emailSugerido(ad) : '';
 
     return {
-      loading:loading, notLoading:!loading,
-      idle:idle, errored:errored, errorMsg:(errored?st.slice(st.indexOf(':')+1):''),
-      vazio:(done && lista.length===0),
-      temProcessos:(done && lista.length>0),
-      processos:processos,
-      resumoLinha:resumoLinha,
-      importLabel:(loading?'Importando…':'Importar do Outlook'),
-      onImportar:function(){ if(!loading) self.importar(); }
+      showLista:(view==='lista'), showWorkspace:(view==='workspace'),
+      loading:loading, notLoading:!loading, idle:idle, errored:errored, errorMsg:(errored?st.slice(st.indexOf(':')+1):''),
+      vazio:(done && lista.length===0), temProcessos:(done && lista.length>0), processos:processos, resumoLinha:resumoLinha,
+      importLabel:(loading?'Importando…':'Importar do Outlook'), onImportar:function(){ if(!loading) self.importar(); },
+      ws:ws,
+      emailModal:this.state.emailModal, emailTexto:emailTexto,
+      onFecharEmail:function(){ self.setState({ emailModal:false }); },
+      onCopiarEmail:function(){ try{ navigator.clipboard.writeText(emailTexto); }catch(e){} self.setState({ emailModal:false }); },
+      stop:function(ev){ if(ev&&ev.stopPropagation)ev.stopPropagation(); }
     };
   }
 }

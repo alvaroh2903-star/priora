@@ -61,11 +61,39 @@ export async function generateStructured<T extends z.ZodType>(
   systemInstruction: string,
   userText: string,
 ): Promise<z.infer<T>> {
+  return generateStructuredFromContents(schema, systemInstruction, userText);
+}
+
+/**
+ * OCR + extração por VISÃO: envia o documento (PDF/imagem) inline para o Gemini
+ * e exige a saída no formato do esquema. É a camada de OCR/Parser substituível
+ * do módulo de Auditoria (Blueprint 3.3/3.4/3.11) — pode ser trocada por um OCR
+ * dedicado sem afetar o Core/Playbooks.
+ */
+export async function generateStructuredFromDocument<T extends z.ZodType>(
+  schema: T,
+  systemInstruction: string,
+  doc: { data: string; mimeType: string },
+  userText: string,
+): Promise<z.infer<T>> {
+  const contents = [
+    { inlineData: { data: doc.data, mimeType: doc.mimeType } },
+    { text: userText },
+  ];
+  return generateStructuredFromContents(schema, systemInstruction, contents as unknown as string);
+}
+
+/** Núcleo compartilhado: aceita texto puro OU partes multimodais em `contents`. */
+async function generateStructuredFromContents<T extends z.ZodType>(
+  schema: T,
+  systemInstruction: string,
+  contents: string,
+): Promise<z.infer<T>> {
   const ai = getGeminiClient();
 
   const params = {
     model: config.ai.model,
-    contents: userText,
+    contents,
     config: {
       systemInstruction,
       responseMimeType: 'application/json',

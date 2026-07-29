@@ -267,6 +267,35 @@ export async function getFullMessage(
     .get();
 }
 
+export interface AttachmentContent {
+  name: string;
+  contentType: string;
+  /** Conteúdo do arquivo em base64 (para enviar ao OCR/Gemini visão). */
+  contentBytes: string;
+}
+
+/**
+ * Baixa o CONTEÚDO de um anexo (base64). Usado pelo módulo de Auditoria para
+ * mandar o PDF/imagem ao OCR. Só fileAttachment tem contentBytes; itemAttachment
+ * ou referência devolvem vazio (defensivo).
+ */
+export async function getAttachmentContent(
+  accessToken: string,
+  messageId: string,
+  attachmentId: string,
+): Promise<AttachmentContent | null> {
+  const client = getGraphClient(accessToken);
+  const att: any = await client
+    .api(`/me/messages/${messageId}/attachments/${attachmentId}`)
+    .get();
+  if (!att || !att.contentBytes) return null;
+  return {
+    name: att.name || 'documento',
+    contentType: att.contentType || 'application/octet-stream',
+    contentBytes: att.contentBytes as string,
+  };
+}
+
 /** Busca todas as mensagens completas de uma conversa (thread), em ordem cronológica. */
 export async function getConversationFull(
   accessToken: string,
