@@ -57,16 +57,20 @@ const TIPO_LABEL: Record<DocTipo, string> = {
  * MBL/HBL porque "CE Master" contém "master". Sem OCR — só o nome.
  */
 function classifyDoc(name: string): DocTipo {
+  // Delimita por LETRA (não por \b): nomes de arquivo usam "_", "-" e dígitos
+  // colados ("OMBL_IM2866.pdf", "CE_HOUSE_2866.pdf", "MBL2866.pdf"). Com \b esses
+  // casos falhavam; os lookarounds (?<![a-z]) / (?![a-z]) resolvem.
   const n = (name || '').toLowerCase();
-  if (/\bce\b|mercante/.test(n)) {
-    if (/master|\bmbl\b|master\s*b\/?l/.test(n)) return 'CE_MASTER';
-    if (/house|\bhbl\b|house\s*b\/?l/.test(n)) return 'CE_HOUSE';
+  const has = (re: RegExp) => re.test(n);
+  if (has(/(?<![a-z])ce(?![a-z])|mercante/)) {
+    if (has(/(?<![a-z])(master|o?mbl)(?![a-z])/)) return 'CE_MASTER';
+    if (has(/(?<![a-z])(house|o?hbl)(?![a-z])/)) return 'CE_HOUSE';
   }
-  if (/\bo?mbl\b|master\s*b\/?l|master\s*bill|\bm\.?b\.?l\.?\b/.test(n)) return 'MBL';
-  if (/\bo?hbl\b|house\s*b\/?l|house\s*bill|\bh\.?b\.?l\.?\b/.test(n)) return 'HBL';
-  if (/\bitem\b|\bcntr\b|container/.test(n)) return 'ITEM';
-  if (/invoice|fatura|commercial\s*inv/.test(n)) return 'INVOICE';
-  if (/packing|romaneio/.test(n)) return 'PACKING';
+  if (has(/(?<![a-z])(o?mbl)(?![a-z])|master\s*b\/?l|master\s*bill/)) return 'MBL';
+  if (has(/(?<![a-z])(o?hbl)(?![a-z])|house\s*b\/?l|house\s*bill/)) return 'HBL';
+  if (has(/(?<![a-z])(item|cntr)(?![a-z])|container/)) return 'ITEM';
+  if (has(/invoice|fatura|commercial\s*inv/)) return 'INVOICE';
+  if (has(/packing|romaneio/)) return 'PACKING';
   return 'OUTRO';
 }
 
