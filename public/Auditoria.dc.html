@@ -15,7 +15,6 @@
   @keyframes pageIn{from{transform:translateY(12px)}to{transform:translateY(0)}}
   @keyframes audExpand{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}
   @keyframes claraBob{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
-  @keyframes spin{to{transform:rotate(360deg)}}
   .aud-drop{transition:border-color .16s,background .16s}
   .aud-drop:hover{border-color:#B7ACF2;background:#FBFAFF}
   .aud-ev:hover{background:#FAFAFE}
@@ -32,32 +31,18 @@
   <sc-if value="{{ isDiscover }}" hint-placeholder-val="{{ true }}">
   <div style="padding:20px 30px 40px;animation:pageIn .35s ease both">
     <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:20px">
-      <button onClick="{{ onImport }}" class="aud-cta" style="display:flex;align-items:center;gap:10px;height:48px;padding:0 22px;border:none;border-radius:13px;background:#4327E6;color:#fff;font-family:inherit;font-size:14px;font-weight:800;cursor:pointer;box-shadow:0 12px 24px -13px rgba(67,39,230,.7)">
-        <sc-if value="{{ discLoading }}" hint-placeholder-val="{{ false }}"><span style="width:17px;height:17px;border:2px solid rgba(255,255,255,.5);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;display:inline-block"></span></sc-if>
-        <sc-if value="{{ discNotLoading }}" hint-placeholder-val="{{ true }}"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M4 5h16v14H4z M4 6l8 6 8-6"/></svg></sc-if>
-        {{ importLabel }}</button>
-      <sc-if value="{{ discDone }}" hint-placeholder-val="{{ false }}"><div style="display:flex;align-items:center;gap:9px"><span style="width:8px;height:8px;border-radius:50%;background:#1F9D6B"></span><span style="font-size:12.5px;color:#7A8099">{{ importStatus }}</span><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#1F9D6B" stroke-width="2.4"><path d="m5 12 5 5 9-10"/></svg></div></sc-if>
+      <button onClick="{{ onImport }}" class="aud-cta" style="display:flex;align-items:center;gap:10px;height:48px;padding:0 22px;border:none;border-radius:13px;background:#4327E6;color:#fff;font-family:inherit;font-size:14px;font-weight:800;cursor:pointer;box-shadow:0 12px 24px -13px rgba(67,39,230,.7)"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M4 5h16v14H4z M4 6l8 6 8-6"/></svg>Importar do Outlook</button>
+      <div style="display:flex;align-items:center;gap:9px"><span style="width:8px;height:8px;border-radius:50%;background:#1F9D6B"></span><span style="font-size:12.5px;color:#7A8099">Última importação: há 2 min</span><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#1F9D6B" stroke-width="2.4"><path d="m5 12 5 5 9-10"/></svg></div>
     </div>
 
-    <!-- loading -->
-    <sc-if value="{{ discLoading }}" hint-placeholder-val="{{ false }}">
-      <div style="background:#fff;border:1px solid #EAEBF4;border-radius:18px;padding:64px 30px;text-align:center"><span style="width:40px;height:40px;border:3px solid #E7E4FB;border-top-color:#4327E6;border-radius:50%;animation:spin .8s linear infinite;display:inline-block;margin-bottom:16px"></span><div style="font-size:15px;font-weight:800">Importando do Outlook…</div><div style="font-size:12.5px;color:#7A8099;margin-top:5px">Lendo a caixa do Courier, classificando documentos e agrupando por processo.</div></div>
-    </sc-if>
-    <sc-if value="{{ discError }}" hint-placeholder-val="{{ false }}">
-      <div style="background:#fff;border:1px solid #EAEBF4;border-radius:18px;padding:44px 30px;text-align:center;max-width:480px;margin:0 auto"><div style="font-size:16px;font-weight:800;margin-bottom:8px">Não foi possível importar</div><div style="font-size:13px;color:#6B7192;line-height:1.6">{{ discErrorMsg }}</div></div>
-    </sc-if>
-    <sc-if value="{{ discEmpty }}" hint-placeholder-val="{{ false }}">
-      <div style="background:#fff;border:1px solid #EAEBF4;border-radius:18px;padding:56px 30px;text-align:center"><div style="font-size:16px;font-weight:800;margin-bottom:6px">Nenhum processo com documentos encontrado</div><div style="font-size:13px;color:#6B7192">Não encontrei anexos vinculados a um processo (IMxxxx) na caixa do Courier.</div></div>
-    </sc-if>
-
-    <sc-if value="{{ discHas }}" hint-placeholder-val="{{ false }}">
     <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr) 300px;gap:18px;align-items:start">
 
       <!-- processes found -->
       <div style="background:#fff;border:1px solid #EAEBF4;border-radius:18px;overflow:hidden;box-shadow:0 1px 2px rgba(20,24,50,.04)">
         <div style="display:flex;align-items:center;gap:9px;padding:17px 20px 14px"><span style="font-size:15px;font-weight:800;color:#161A2E">Processos Encontrados</span><span style="font-size:11.5px;font-weight:800;color:#4327E6;background:#EEEBFE;padding:3px 9px;border-radius:20px">{{ procCount }}</span></div>
         <div style="padding:0 20px 14px;display:flex;gap:10px">
-          <div style="flex:1;display:flex;align-items:center;gap:8px;background:#F5F6FA;border:1px solid #EEF0F6;border-radius:11px;padding:0 12px;height:40px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#9AA0B4" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3-3"/></svg><input value="{{ busca }}" onInput="{{ onBusca }}" placeholder="Buscar processo..." style="flex:1;border:none;background:transparent;outline:none;font-family:inherit;font-size:12.5px;color:#161A2E"></div>
+          <div style="flex:1;display:flex;align-items:center;gap:8px;background:#F5F6FA;border:1px solid #EEF0F6;border-radius:11px;padding:0 12px;height:40px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#9AA0B4" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3-3"/></svg><span style="font-size:12.5px;color:#9AA0B4">Buscar processo...</span></div>
+          <button class="aud-vpdf" style="display:flex;align-items:center;gap:7px;height:40px;padding:0 13px;border:1px solid #E6E8F2;border-radius:11px;background:#fff;font-family:inherit;font-size:12.5px;font-weight:700;color:#5A6076;cursor:pointer"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#7A8099" stroke-width="2"><path d="M3 5h18M6 12h12M10 19h4"/></svg>Filtros</button>
         </div>
         <div style="max-height:520px;overflow:auto;padding:0 14px 14px;display:flex;flex-direction:column;gap:10px">
           <sc-for list="{{ processes }}" as="p" hint-placeholder-count="4">
@@ -82,24 +67,22 @@
         <div style="padding:12px 22px;display:flex;flex-direction:column">
           <sc-for list="{{ sel.documents }}" as="d" hint-placeholder-count="6">
             <div style="display:flex;align-items:center;gap:13px;padding:11px 0;border-bottom:1px solid #F4F5FA">
-              <span style="width:34px;height:40px;border-radius:6px;background:{{ d.iconBg }};display:flex;align-items:center;justify-content:center;flex-shrink:0"><span style="font-size:8px;font-weight:800;color:{{ d.iconColor }}">PDF</span></span>
+              <span style="width:34px;height:40px;border-radius:6px;background:#FDECEC;display:flex;align-items:center;justify-content:center;flex-shrink:0"><span style="font-size:8px;font-weight:800;color:#C2333A">PDF</span></span>
               <div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:700;color:#161A2E;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ d.name }}</div><div style="font-size:11px;color:#9AA0B4;margin-top:1px">{{ d.type }}</div></div>
-              <span style="font-size:11px;font-weight:700;color:{{ d.badgeColor }};background:{{ d.badgeBg }};padding:4px 10px;border-radius:7px;white-space:nowrap">{{ d.badge }}</span>
+              <span style="font-size:11px;font-weight:700;color:#177D54;background:#E7F6EF;padding:4px 10px;border-radius:7px;white-space:nowrap">Identificado</span>
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#9AA0B4" stroke-width="1.9" style="flex-shrink:0"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
             </div>
           </sc-for>
           <div style="font-size:11px;font-weight:700;color:#9AA0B4;text-transform:uppercase;letter-spacing:.05em;margin:18px 0 11px">Auditorias disponíveis para este processo</div>
-          <sc-if value="{{ sel.temAudits }}" hint-placeholder-val="{{ true }}">
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
             <sc-for list="{{ sel.audits }}" as="a" hint-placeholder-count="2">
               <div style="border:1px solid #EAEBF4;border-radius:13px;padding:15px 16px">
-                <div style="display:flex;align-items:center;justify-content:space-between;gap:8px"><span style="width:32px;height:32px;border-radius:9px;background:#EEEBFE;display:flex;align-items:center;justify-content:center"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="1.9"><path d="{{ a.icon }}"/></svg></span><span style="font-size:10px;font-weight:700;color:{{ a.stColor }};background:{{ a.stBg }};padding:3px 8px;border-radius:6px">{{ a.st }}</span></div>
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:8px"><span style="width:32px;height:32px;border-radius:9px;background:#EEEBFE;display:flex;align-items:center;justify-content:center"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="1.9"><path d="{{ a.icon }}"/></svg></span><span style="font-size:10px;font-weight:700;color:#177D54;background:#E7F6EF;padding:3px 8px;border-radius:6px">Disponível</span></div>
                 <div style="font-size:13.5px;font-weight:800;color:#161A2E;margin-top:11px">{{ a.name }}</div>
                 <div style="font-size:11.5px;color:#7A8099;margin-top:3px;line-height:1.4">{{ a.desc }}</div>
               </div>
             </sc-for>
           </div>
-          </sc-if>
-          <sc-if value="{{ sel.semAudits }}" hint-placeholder-val="{{ false }}"><div style="font-size:12px;color:#9AA0B4;padding:2px 0 4px">Nenhuma auditoria disponível — faltam documentos ({{ sel.faltando }}).</div></sc-if>
           <button onClick="{{ onStartAudit }}" class="aud-cta" style="display:flex;flex-direction:column;align-items:center;gap:3px;width:100%;margin-top:16px;border:none;border-radius:13px;background:#4327E6;color:#fff;padding:14px;font-family:inherit;cursor:pointer;box-shadow:0 12px 24px -13px rgba(67,39,230,.7)"><span style="display:flex;align-items:center;gap:8px;font-size:14px;font-weight:800"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2"><path d="M5 3l14 9-14 9V3Z"/></svg>Iniciar Auditoria</span><span style="font-size:11px;opacity:.85;font-weight:600">A Priora irá executar as auditorias e apresentar os resultados.</span></button>
         </div>
       </div>
@@ -113,7 +96,6 @@
         </div>
       </div>
     </div>
-    </sc-if>
   </div>
   </sc-if>
 
@@ -123,16 +105,7 @@
 
     <button onClick="{{ onBack }}" class="aud-ghost" style="display:inline-flex;align-items:center;gap:8px;background:#fff;border:1px solid #E6E8F2;border-radius:11px;padding:9px 15px;font-family:inherit;font-size:13px;font-weight:700;color:#5A6076;cursor:pointer;margin-bottom:16px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 18l-6-6 6-6"/></svg>Voltar para Processos</button>
 
-    <!-- mesa loading / error -->
-    <sc-if value="{{ mesaLoading }}" hint-placeholder-val="{{ false }}">
-      <div style="background:#fff;border:1px solid #EAEBF4;border-radius:18px;padding:70px 30px;text-align:center"><span style="width:44px;height:44px;border:3px solid #E7E4FB;border-top-color:#4327E6;border-radius:50%;animation:spin .8s linear infinite;display:inline-block;margin-bottom:16px"></span><div style="font-size:16px;font-weight:800">Construindo a auditoria…</div><div style="font-size:12.5px;color:#7A8099;margin-top:6px">Lendo os documentos (OCR), organizando o processo e executando os Playbooks.</div></div>
-    </sc-if>
-    <sc-if value="{{ mesaError }}" hint-placeholder-val="{{ false }}">
-      <div style="background:#fff;border:1px solid #EAEBF4;border-radius:18px;padding:44px 30px;text-align:center;max-width:520px;margin:0 auto"><div style="font-size:16px;font-weight:800;margin-bottom:8px">Não foi possível concluir a auditoria</div><div style="font-size:13px;color:#6B7192;line-height:1.6">{{ mesaErrorMsg }}</div></div>
-    </sc-if>
 
-    <sc-if value="{{ mesaReady }}" hint-placeholder-val="{{ false }}">
-    <div>
     <!-- ===== PLAYBOOK BAR ===== -->
     <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;background:#fff;border:1px solid #EAEBF4;border-radius:16px;padding:16px 20px;box-shadow:0 1px 2px rgba(20,24,50,.04)">
       <div style="display:flex;align-items:center;gap:10px">
@@ -140,161 +113,189 @@
         <div><div style="font-size:10px;font-weight:700;color:#9AA0B4;text-transform:uppercase;letter-spacing:.05em">Playbook</div><div style="font-size:14px;font-weight:800;color:#161A2E;margin-top:1px">{{ playbookLabel }}</div></div>
       </div>
       <div style="display:flex;gap:6px;background:#F1F2F8;border-radius:12px;padding:5px;flex-wrap:wrap">
-        <sc-for list="{{ playbooks }}" as="pb" hint-placeholder-count="2">
+        <sc-for list="{{ playbooks }}" as="pb" hint-placeholder-count="4">
           <button onClick="{{ pb.onSelect }}" class="aud-seg" style="display:flex;align-items:center;gap:7px;height:38px;padding:0 15px;border:none;border-radius:9px;background:{{ pb.bg }};color:{{ pb.color }};font-family:inherit;font-size:13px;font-weight:{{ pb.weight }};cursor:pointer;box-shadow:{{ pb.shadow }}">{{ pb.label }}</button>
         </sc-for>
       </div>
-      <button onClick="{{ onExecute }}" class="aud-cta" style="display:flex;align-items:center;gap:9px;margin-left:auto;height:44px;padding:0 22px;border:none;border-radius:12px;background:#4327E6;color:#fff;font-family:inherit;font-size:13.5px;font-weight:800;cursor:pointer;box-shadow:0 12px 24px -13px rgba(67,39,230,.7)"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M23 4v6h-6M1 20v-6h6M3.5 9a9 9 0 0 1 15-3.4L23 10M1 14l4.5 4.4A9 9 0 0 0 20.5 15"/></svg>Reprocessar</button>
+      <button onClick="{{ onExecute }}" class="aud-cta" style="display:flex;align-items:center;gap:9px;margin-left:auto;height:44px;padding:0 22px;border:none;border-radius:12px;background:{{ execBg }};color:{{ execColor }};font-family:inherit;font-size:13.5px;font-weight:800;cursor:{{ execCursor }};box-shadow:{{ execShadow }}"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 3l14 9-14 9V3Z"/></svg>Executar Auditoria</button>
     </div>
 
-    <!-- ===== WORKSPACE ===== -->
+    <!-- ===== WORKSPACE: documents (left) + evidence navigator (right) ===== -->
     <div style="display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:18px;align-items:start;margin-top:18px">
 
-      <!-- DOCUMENTS (comparação lado a lado dos campos extraídos) -->
+      <!-- DOCUMENTS -->
       <div style="display:flex;flex-direction:column;gap:16px;min-width:0">
-        <div style="display:flex;align-items:center;gap:14px;background:#fff;border:1px solid #EAEBF4;border-radius:13px;padding:10px 14px;box-shadow:0 1px 2px rgba(20,24,50,.04)">
-          <span style="font-size:12px;color:#7A8099;font-weight:600">Comparação documental — campos extraídos</span>
-          <span style="font-size:11px;color:#9AA0B4;margin-left:auto">Clique numa evidência → destaca nos dois lados</span>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
-          <sc-for list="{{ viewers }}" as="v" hint-placeholder-count="2">
-            <div style="background:#fff;border:1px solid #EAEBF4;border-radius:16px;overflow:hidden;box-shadow:0 1px 2px rgba(20,24,50,.04)">
-              <div style="display:flex;align-items:center;gap:9px;padding:12px 16px;border-bottom:1px solid #F1F2F8;background:#FAFAFE">
-                <span style="width:26px;height:26px;border-radius:7px;background:{{ v.tagBg }};display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="{{ v.tagColor }}" stroke-width="2"><path d="M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/></svg></span>
-                <div style="min-width:0"><div style="font-size:13px;font-weight:800;color:#161A2E">{{ v.label }}</div><div style="font-size:11px;color:#9AA0B4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ v.fileName }}</div></div>
-              </div>
-              <div ref="{{ v.scrollRef }}" style="height:520px;overflow:auto;background:#EEF0F5;padding:20px">
-                <div style="background:#fff;box-shadow:0 6px 20px -8px rgba(20,24,50,.25);border-radius:4px;padding:34px 30px;font-family:'JetBrains Mono',monospace;color:#3C4258">
-                  <div style="font-size:13px;font-weight:700;color:#161A2E;letter-spacing:.04em;border-bottom:2px solid #161A2E;padding-bottom:8px;margin-bottom:16px">{{ v.docTitle }}</div>
-                  <sc-for list="{{ v.lines }}" as="ln" hint-placeholder-count="8">
-                    <div id="{{ ln.anchor }}" style="display:flex;justify-content:space-between;gap:14px;padding:8px 10px;margin:2px -6px;border-radius:6px;font-size:11.5px;line-height:1.5;background:{{ ln.hlBg }};box-shadow:{{ ln.hlRing }};transition:background .3s,box-shadow .3s">
-                      <span style="color:#9AA0B4">{{ ln.field }}</span>
-                      <span style="color:{{ ln.valColor }};font-weight:700;text-align:right">{{ ln.value }}</span>
+        <sc-if value="{{ needAttach }}" hint-placeholder-val="{{ true }}">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+            <sc-for list="{{ slots }}" as="s" hint-placeholder-count="2">
+              <label class="aud-drop" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;min-height:300px;padding:28px 22px;border:2px dashed {{ s.border }};border-radius:18px;background:{{ s.bg }};cursor:pointer;text-align:center">
+                <input type="file" accept=".pdf,.jpg,.jpeg,.png" onChange="{{ s.onFile }}" style="display:none">
+                <span style="width:56px;height:56px;border-radius:16px;background:{{ s.iconBg }};display:flex;align-items:center;justify-content:center"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="{{ s.iconColor }}" stroke-width="1.8"><path d="{{ s.iconPath }}"/></svg></span>
+                <div><div style="font-size:15px;font-weight:800;color:#161A2E">{{ s.title }}</div><div style="font-size:12px;color:#9AA0B4;margin-top:3px">{{ s.hint }}</div></div>
+                <sc-if value="{{ s.filled }}" hint-placeholder-val="{{ false }}">
+                  <span style="display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:700;color:#177D54;background:#E7F6EF;padding:6px 13px;border-radius:9px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#1F9D6B" stroke-width="2.4"><path d="m5 12 5 5 9-10"/></svg>{{ s.fileName }}</span>
+                </sc-if>
+                <sc-if value="{{ s.empty }}" hint-placeholder-val="{{ true }}">
+                  <span style="font-size:12px;font-weight:700;color:#4327E6">Arraste o arquivo ou clique</span>
+                </sc-if>
+              </label>
+            </sc-for>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ bothAttached }}" hint-placeholder-val="{{ false }}">
+          <!-- viewer toolbar (synced) -->
+          <div style="display:flex;align-items:center;gap:14px;background:#fff;border:1px solid #EAEBF4;border-radius:13px;padding:10px 14px;box-shadow:0 1px 2px rgba(20,24,50,.04)">
+            <span style="font-size:12px;color:#7A8099;font-weight:600">Visualização sincronizada</span>
+            <div style="display:flex;align-items:center;gap:6px;margin-left:auto">
+              <button onClick="{{ pagePrev }}" class="aud-vpdf" style="width:32px;height:32px;border-radius:8px;border:1px solid #E6E8F2;background:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#5A6076" stroke-width="2.2"><path d="M15 18l-6-6 6-6"/></svg></button>
+              <span style="font-size:12.5px;font-weight:700;color:#3C4258;min-width:74px;text-align:center">Página {{ page }}/{{ pageCount }}</span>
+              <button onClick="{{ pageNext }}" class="aud-vpdf" style="width:32px;height:32px;border-radius:8px;border:1px solid #E6E8F2;background:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#5A6076" stroke-width="2.2"><path d="m9 6 6 6-6 6"/></svg></button>
+              <div style="width:1px;height:22px;background:#E6E8F2;margin:0 4px"></div>
+              <button onClick="{{ zoomOut }}" class="aud-vpdf" style="width:32px;height:32px;border-radius:8px;border:1px solid #E6E8F2;background:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#5A6076" stroke-width="2.2"><path d="M5 12h14"/></svg></button>
+              <span style="font-size:12.5px;font-weight:700;color:#3C4258;min-width:46px;text-align:center">{{ zoomLabel }}</span>
+              <button onClick="{{ zoomIn }}" class="aud-vpdf" style="width:32px;height:32px;border-radius:8px;border:1px solid #E6E8F2;background:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#5A6076" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg></button>
+            </div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+            <sc-for list="{{ viewers }}" as="v" hint-placeholder-count="2">
+              <div style="background:#fff;border:1px solid #EAEBF4;border-radius:16px;overflow:hidden;box-shadow:0 1px 2px rgba(20,24,50,.04)">
+                <div style="display:flex;align-items:center;gap:9px;padding:12px 16px;border-bottom:1px solid #F1F2F8;background:#FAFAFE">
+                  <span style="width:26px;height:26px;border-radius:7px;background:{{ v.tagBg }};display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="{{ v.tagColor }}" stroke-width="2"><path d="M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/></svg></span>
+                  <div style="min-width:0"><div style="font-size:13px;font-weight:800;color:#161A2E">{{ v.label }}</div><div style="font-size:11px;color:#9AA0B4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ v.fileName }}</div></div>
+                </div>
+                <div ref="{{ v.scrollRef }}" style="height:520px;overflow:auto;background:#EEF0F5;padding:20px">
+                  <div style="width:{{ pageW }};margin:0 auto;transform-origin:top center">
+                    <div style="background:#fff;box-shadow:0 6px 20px -8px rgba(20,24,50,.25);border-radius:4px;padding:34px 30px;font-family:'JetBrains Mono',monospace;color:#3C4258">
+                      <div style="font-size:13px;font-weight:700;color:#161A2E;letter-spacing:.04em;border-bottom:2px solid #161A2E;padding-bottom:8px;margin-bottom:16px">{{ v.docTitle }}</div>
+                      <sc-for list="{{ v.lines }}" as="ln" hint-placeholder-count="8">
+                        <div id="{{ ln.anchor }}" style="display:flex;justify-content:space-between;gap:14px;padding:8px 10px;margin:2px -6px;border-radius:6px;font-size:11.5px;line-height:1.5;background:{{ ln.hlBg }};box-shadow:{{ ln.hlRing }};transition:background .3s,box-shadow .3s">
+                          <span style="color:#9AA0B4">{{ ln.field }}</span>
+                          <span style="color:{{ ln.valColor }};font-weight:700;text-align:right">{{ ln.value }}</span>
+                        </div>
+                      </sc-for>
+                      <div style="height:280px"></div>
+                      <div style="text-align:center;font-size:10px;color:#C7CBDA;border-top:1px dashed #E2E4EE;padding-top:12px">— página {{ page }} —</div>
                     </div>
-                  </sc-for>
-                  <div style="text-align:center;font-size:10px;color:#C7CBDA;border-top:1px dashed #E2E4EE;padding-top:12px;margin-top:14px">— campos lidos do documento —</div>
+                  </div>
                 </div>
               </div>
-            </div>
-          </sc-for>
-        </div>
+            </sc-for>
+          </div>
+        </sc-if>
       </div>
 
       <!-- EVIDENCE NAVIGATOR -->
       <div style="display:flex;flex-direction:column;gap:16px;position:sticky;top:20px">
-        <!-- summary -->
-        <div style="background:#fff;border:1px solid #EAEBF4;border-radius:18px;padding:20px 22px;box-shadow:0 1px 2px rgba(20,24,50,.04)">
-          <div style="font-size:11px;font-weight:700;color:#9AA0B4;text-transform:uppercase;letter-spacing:.05em">Resumo da auditoria</div>
-          <div style="display:flex;align-items:baseline;gap:8px;margin-top:10px"><span style="font-size:32px;font-weight:800;color:#161A2E">{{ sum.total }}</span><span style="font-size:13px;color:#7A8099">verificações</span></div>
-          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:9px;margin-top:16px">
-            <div style="background:#E7F6EF;border-radius:12px;padding:12px 10px;text-align:center"><div style="font-size:20px;font-weight:800;color:#177D54">{{ sum.ok }}</div><div style="font-size:10.5px;color:#177D54;font-weight:600;margin-top:2px">Consistentes</div></div>
-            <div style="background:#FDECEC;border-radius:12px;padding:12px 10px;text-align:center"><div style="font-size:20px;font-weight:800;color:#C2333A">{{ sum.crit }}</div><div style="font-size:10.5px;color:#C2333A;font-weight:600;margin-top:2px">Divergências</div></div>
-            <div style="background:#FDF3E0;border-radius:12px;padding:12px 10px;text-align:center"><div style="font-size:20px;font-weight:800;color:#B9760A">{{ sum.manual }}</div><div style="font-size:10.5px;color:#B9760A;font-weight:600;margin-top:2px">Validação</div></div>
-          </div>
-          <sc-if value="{{ sum.temNaoAval }}" hint-placeholder-val="{{ false }}"><div style="font-size:11px;color:#9AA0B4;margin-top:10px">{{ sum.naoAvalLabel }}</div></sc-if>
-        </div>
-
-        <!-- pendências -->
-        <sc-if value="{{ hasPend }}" hint-placeholder-val="{{ false }}">
-          <div style="background:#fff;border:1px solid #F4DEDE;border-radius:16px;overflow:hidden;box-shadow:0 1px 2px rgba(20,24,50,.04)">
-            <div style="display:flex;align-items:center;gap:10px;padding:15px 18px 12px;border-bottom:1px solid #F4F5FA">
-              <span style="font-size:16px">🚨</span>
-              <div style="flex:1;min-width:0"><div style="font-size:14px;font-weight:800;color:#161A2E">Pendências</div><div style="font-size:11.5px;color:#9AA0B4;margin-top:1px">O que você precisa resolver agora</div></div>
-              <span style="font-size:12px;font-weight:800;color:#C2333A;background:#FDECEC;padding:4px 11px;border-radius:20px">{{ pendCount }}</span>
-            </div>
-            <div>
-              <sc-for list="{{ pendencias }}" as="p" hint-placeholder-count="4">
-                <div class="aud-ev" onClick="{{ p.onGo }}" style="display:flex;align-items:center;gap:11px;padding:13px 18px;border-bottom:1px solid #F4F5FA;cursor:pointer">
-                  <span style="width:9px;height:9px;border-radius:50%;background:{{ p.dot }};flex-shrink:0"></span>
-                  <div style="flex:1;min-width:0"><div style="font-size:13.5px;font-weight:700;color:#161A2E">{{ p.field }}</div><div style="font-size:11.5px;color:#9AA0B4;margin-top:1px">{{ p.where }}</div></div>
-                  <span style="font-size:10.5px;font-weight:700;color:{{ p.statusColor }};background:{{ p.statusBg }};padding:4px 9px;border-radius:7px;white-space:nowrap">{{ p.statusLabel }}</span>
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#C7CBDA" stroke-width="2.4" style="flex-shrink:0"><path d="m9 6 6 6-6 6"/></svg>
-                </div>
-              </sc-for>
-            </div>
-          </div>
-        </sc-if>
-        <sc-if value="{{ noPend }}" hint-placeholder-val="{{ false }}">
-          <div style="display:flex;align-items:center;gap:12px;background:#fff;border:1px solid #C7E8D6;border-radius:16px;padding:16px 18px;box-shadow:0 1px 2px rgba(20,24,50,.04)">
-            <span style="width:36px;height:36px;border-radius:10px;background:#E7F6EF;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#1F9D6B" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg></span>
-            <div><div style="font-size:14px;font-weight:800;color:#177D54">Nenhuma pendência</div><div style="font-size:12px;color:#7A8099;margin-top:1px">Todas as verificações estão consistentes.</div></div>
+        <sc-if value="{{ notRun }}" hint-placeholder-val="{{ true }}">
+          <div style="background:#fff;border:1px solid #EAEBF4;border-radius:18px;padding:26px 22px;text-align:center;box-shadow:0 1px 2px rgba(20,24,50,.04)">
+            <div style="width:56px;height:56px;border-radius:16px;background:#F3F1FE;display:flex;align-items:center;justify-content:center;margin:0 auto 15px"><svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="1.7"><path d="M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></div>
+            <h3 style="font-size:15.5px;font-weight:800;color:#161A2E">Nenhuma auditoria executada</h3>
+            <p style="font-size:13px;color:#7A8099;line-height:1.55;margin-top:8px">{{ emptyHint }}</p>
           </div>
         </sc-if>
 
-        <!-- evidence navigator: grouped by operational object -->
-        <div style="display:flex;flex-direction:column;gap:12px">
-          <sc-for list="{{ groups }}" as="g" hint-placeholder-count="3">
-            <div style="background:#fff;border:1px solid {{ g.cardBorder }};border-radius:16px;overflow:hidden;box-shadow:0 1px 2px rgba(20,24,50,.04)">
-              <div class="aud-ev" onClick="{{ g.onToggle }}" style="display:flex;align-items:center;gap:12px;padding:15px 18px;cursor:pointer">
-                <span style="width:34px;height:34px;border-radius:10px;background:{{ g.iconBg }};display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="{{ g.iconColor }}" stroke-width="1.9"><path d="{{ g.icon }}"/></svg></span>
-                <div style="flex:1;min-width:0">
-                  <div style="display:flex;align-items:center;gap:8px"><span style="font-size:14px;font-weight:800;color:#161A2E;font-family:{{ g.titleFont }}">{{ g.title }}</span><span style="width:8px;height:8px;border-radius:50%;background:{{ g.dot }};flex-shrink:0"></span></div>
-                  <div style="display:flex;align-items:center;gap:10px;margin-top:3px">
-                    <sc-if value="{{ g.hasCrit }}" hint-placeholder-val="{{ false }}"><span style="font-size:11.5px;font-weight:700;color:#C2333A">🔴 {{ g.critN }} {{ g.critWord }}</span></sc-if>
-                    <sc-if value="{{ g.hasManual }}" hint-placeholder-val="{{ false }}"><span style="font-size:11.5px;font-weight:700;color:#B9760A">🟡 {{ g.manualN }} validação</span></sc-if>
-                    <sc-if value="{{ g.hasOk }}" hint-placeholder-val="{{ false }}"><span style="font-size:11.5px;font-weight:600;color:#177D54">🟢 {{ g.okN }} {{ g.okWord }}</span></sc-if>
-                  </div>
-                </div>
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#B8BDD0" stroke-width="2.4" style="flex-shrink:0;transition:transform .24s;transform:{{ g.chevRot }}"><path d="m6 9 6 6 6-6"/></svg>
+        <sc-if value="{{ hasRun }}" hint-placeholder-val="{{ false }}">
+          <!-- summary -->
+          <div style="background:#fff;border:1px solid #EAEBF4;border-radius:18px;padding:20px 22px;box-shadow:0 1px 2px rgba(20,24,50,.04)">
+            <div style="font-size:11px;font-weight:700;color:#9AA0B4;text-transform:uppercase;letter-spacing:.05em">Resumo da auditoria</div>
+            <div style="display:flex;align-items:baseline;gap:8px;margin-top:10px"><span style="font-size:32px;font-weight:800;color:#161A2E">{{ sum.total }}</span><span style="font-size:13px;color:#7A8099">verificações</span></div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:9px;margin-top:16px">
+              <div style="background:#E7F6EF;border-radius:12px;padding:12px 10px;text-align:center"><div style="font-size:20px;font-weight:800;color:#177D54">{{ sum.ok }}</div><div style="font-size:10.5px;color:#177D54;font-weight:600;margin-top:2px">Consistentes</div></div>
+              <div style="background:#FDECEC;border-radius:12px;padding:12px 10px;text-align:center"><div style="font-size:20px;font-weight:800;color:#C2333A">{{ sum.crit }}</div><div style="font-size:10.5px;color:#C2333A;font-weight:600;margin-top:2px">Críticas</div></div>
+              <div style="background:#FDF3E0;border-radius:12px;padding:12px 10px;text-align:center"><div style="font-size:20px;font-weight:800;color:#B9760A">{{ sum.manual }}</div><div style="font-size:10.5px;color:#B9760A;font-weight:600;margin-top:2px">Validação</div></div>
+            </div>
+          </div>
+
+          <!-- pendências (only what needs action) -->
+          <sc-if value="{{ hasPend }}" hint-placeholder-val="{{ false }}">
+            <div style="background:#fff;border:1px solid #F4DEDE;border-radius:16px;overflow:hidden;box-shadow:0 1px 2px rgba(20,24,50,.04)">
+              <div style="display:flex;align-items:center;gap:10px;padding:15px 18px 12px;border-bottom:1px solid #F4F5FA">
+                <span style="font-size:16px">🚨</span>
+                <div style="flex:1;min-width:0"><div style="font-size:14px;font-weight:800;color:#161A2E">Pendências</div><div style="font-size:11.5px;color:#9AA0B4;margin-top:1px">O que você precisa resolver agora</div></div>
+                <span style="font-size:12px;font-weight:800;color:#C2333A;background:#FDECEC;padding:4px 11px;border-radius:20px">{{ pendCount }}</span>
               </div>
-              <sc-if value="{{ g.open }}" hint-placeholder-val="{{ false }}">
-                <div style="padding:0 12px 10px;animation:audExpand .22s ease both">
-                  <sc-for list="{{ g.items }}" as="e" hint-placeholder-count="4">
-                    <div class="aud-ev" style="border:1px solid #F1F2F8;border-radius:11px;margin-top:8px;overflow:hidden;cursor:pointer">
-                      <div onClick="{{ e.onToggle }}" style="display:flex;align-items:center;gap:10px;padding:11px 13px">
-                        <span style="width:8px;height:8px;border-radius:50%;background:{{ e.dot }};flex-shrink:0"></span>
-                        <div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:700;color:#161A2E">{{ e.field }}</div><div style="font-size:11px;color:{{ e.statusColor }};font-weight:600;margin-top:1px">{{ e.statusLabel }}</div></div>
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#C7CBDA" stroke-width="2.4" style="flex-shrink:0;transition:transform .24s;transform:{{ e.chevRot }}"><path d="m6 9 6 6 6-6"/></svg>
-                      </div>
-                      <sc-if value="{{ e.open }}" hint-placeholder-val="{{ false }}">
-                        <div style="padding:0 13px 13px;animation:audExpand .2s ease both">
-                          <div style="display:flex;gap:9px">
-                            <div style="flex:1;background:#FAFAFE;border:1px solid #F0F1F7;border-radius:10px;padding:9px 11px"><div style="font-size:9.5px;color:#9AA0B4;text-transform:uppercase;letter-spacing:.04em">{{ e.masterLabel }}</div><div style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:#161A2E;margin-top:3px">{{ e.master }}</div></div>
-                            <div style="flex:1;background:#FAFAFE;border:1px solid #F0F1F7;border-radius:10px;padding:9px 11px"><div style="font-size:9.5px;color:#9AA0B4;text-transform:uppercase;letter-spacing:.04em">{{ e.houseLabel }}</div><div style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:{{ e.houseColor }};margin-top:3px">{{ e.house }}</div></div>
-                          </div>
-                          <div style="display:flex;gap:8px;margin-top:10px;padding:10px 12px;background:{{ e.impactBg }};border-radius:10px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="{{ e.impactColor }}" stroke-width="2" style="flex-shrink:0;margin-top:1px"><path d="{{ e.impactIcon }}"/></svg><div style="font-size:11.5px;color:{{ e.impactColor }};line-height:1.5;font-weight:600">{{ e.impact }}</div></div>
-                          <button onClick="{{ e.onViewPdf }}" class="aud-vpdf" style="display:flex;align-items:center;justify-content:center;gap:7px;width:100%;margin-top:10px;background:#F3F1FE;color:#3D34C9;border:1px solid #E0DAF9;border-radius:10px;padding:9px;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>Destacar nos documentos</button>
-                        </div>
-                      </sc-if>
-                    </div>
-                  </sc-for>
-                </div>
-              </sc-if>
+              <div>
+                <sc-for list="{{ pendencias }}" as="p" hint-placeholder-count="4">
+                  <div class="aud-ev" onClick="{{ p.onGo }}" style="display:flex;align-items:center;gap:11px;padding:13px 18px;border-bottom:1px solid #F4F5FA;cursor:pointer">
+                    <span style="width:9px;height:9px;border-radius:50%;background:{{ p.dot }};flex-shrink:0"></span>
+                    <div style="flex:1;min-width:0"><div style="font-size:13.5px;font-weight:700;color:#161A2E">{{ p.field }}</div><div style="font-size:11.5px;color:#9AA0B4;margin-top:1px">{{ p.where }}</div></div>
+                    <span style="font-size:10.5px;font-weight:700;color:{{ p.statusColor }};background:{{ p.statusBg }};padding:4px 9px;border-radius:7px;white-space:nowrap">{{ p.statusLabel }}</span>
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#C7CBDA" stroke-width="2.4" style="flex-shrink:0"><path d="m9 6 6 6-6 6"/></svg>
+                  </div>
+                </sc-for>
+              </div>
             </div>
-          </sc-for>
-        </div>
+          </sc-if>
+          <sc-if value="{{ noPend }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;align-items:center;gap:12px;background:#fff;border:1px solid #C7E8D6;border-radius:16px;padding:16px 18px;box-shadow:0 1px 2px rgba(20,24,50,.04)">
+              <span style="width:36px;height:36px;border-radius:10px;background:#E7F6EF;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#1F9D6B" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg></span>
+              <div><div style="font-size:14px;font-weight:800;color:#177D54">Nenhuma pendência</div><div style="font-size:12px;color:#7A8099;margin-top:1px">Todas as verificações estão consistentes.</div></div>
+            </div>
+          </sc-if>
+
+          <!-- evidence navigator: grouped by operational object -->
+          <div style="display:flex;flex-direction:column;gap:12px">
+            <sc-for list="{{ groups }}" as="g" hint-placeholder-count="3">
+              <div style="background:#fff;border:1px solid {{ g.cardBorder }};border-radius:16px;overflow:hidden;box-shadow:0 1px 2px rgba(20,24,50,.04)">
+                <div class="aud-ev" onClick="{{ g.onToggle }}" style="display:flex;align-items:center;gap:12px;padding:15px 18px;cursor:pointer">
+                  <span style="width:34px;height:34px;border-radius:10px;background:{{ g.iconBg }};display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="{{ g.iconColor }}" stroke-width="1.9"><path d="{{ g.icon }}"/></svg></span>
+                  <div style="flex:1;min-width:0">
+                    <div style="display:flex;align-items:center;gap:8px"><span style="font-size:14px;font-weight:800;color:#161A2E;font-family:{{ g.titleFont }}">{{ g.title }}</span><span style="width:8px;height:8px;border-radius:50%;background:{{ g.dot }};flex-shrink:0"></span></div>
+                    <div style="display:flex;align-items:center;gap:10px;margin-top:3px">
+                      <sc-if value="{{ g.hasCrit }}" hint-placeholder-val="{{ false }}"><span style="font-size:11.5px;font-weight:700;color:#C2333A">🔴 {{ g.critN }} {{ g.critWord }}</span></sc-if>
+                      <sc-if value="{{ g.hasManual }}" hint-placeholder-val="{{ false }}"><span style="font-size:11.5px;font-weight:700;color:#B9760A">🟡 {{ g.manualN }} validação</span></sc-if>
+                      <sc-if value="{{ g.hasOk }}" hint-placeholder-val="{{ false }}"><span style="font-size:11.5px;font-weight:600;color:#177D54">🟢 {{ g.okN }} {{ g.okWord }}</span></sc-if>
+                    </div>
+                  </div>
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#B8BDD0" stroke-width="2.4" style="flex-shrink:0;transition:transform .24s;transform:{{ g.chevRot }}"><path d="m6 9 6 6 6-6"/></svg>
+                </div>
+                <sc-if value="{{ g.open }}" hint-placeholder-val="{{ false }}">
+                  <div style="padding:0 12px 10px;animation:audExpand .22s ease both">
+                    <sc-for list="{{ g.items }}" as="e" hint-placeholder-count="4">
+                      <div class="aud-ev" style="border:1px solid #F1F2F8;border-radius:11px;margin-top:8px;overflow:hidden;cursor:pointer">
+                        <div onClick="{{ e.onToggle }}" style="display:flex;align-items:center;gap:10px;padding:11px 13px">
+                          <span style="width:8px;height:8px;border-radius:50%;background:{{ e.dot }};flex-shrink:0"></span>
+                          <div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:700;color:#161A2E">{{ e.field }}</div><div style="font-size:11px;color:{{ e.statusColor }};font-weight:600;margin-top:1px">{{ e.statusLabel }}</div></div>
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#C7CBDA" stroke-width="2.4" style="flex-shrink:0;transition:transform .24s;transform:{{ e.chevRot }}"><path d="m6 9 6 6 6-6"/></svg>
+                        </div>
+                        <sc-if value="{{ e.open }}" hint-placeholder-val="{{ false }}">
+                          <div style="padding:0 13px 13px;animation:audExpand .2s ease both">
+                            <div style="display:flex;gap:9px">
+                              <div style="flex:1;background:#FAFAFE;border:1px solid #F0F1F7;border-radius:10px;padding:9px 11px"><div style="font-size:9.5px;color:#9AA0B4;text-transform:uppercase;letter-spacing:.04em">Master (MBL)</div><div style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:#161A2E;margin-top:3px">{{ e.master }}</div></div>
+                              <div style="flex:1;background:#FAFAFE;border:1px solid #F0F1F7;border-radius:10px;padding:9px 11px"><div style="font-size:9.5px;color:#9AA0B4;text-transform:uppercase;letter-spacing:.04em">House (HBL)</div><div style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:{{ e.houseColor }};margin-top:3px">{{ e.house }}</div></div>
+                            </div>
+                            <div style="display:flex;gap:8px;margin-top:10px;padding:10px 12px;background:{{ e.impactBg }};border-radius:10px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="{{ e.impactColor }}" stroke-width="2" style="flex-shrink:0;margin-top:1px"><path d="{{ e.impactIcon }}"/></svg><div style="font-size:11.5px;color:{{ e.impactColor }};line-height:1.5;font-weight:600">{{ e.impact }}</div></div>
+                            <button onClick="{{ e.onViewPdf }}" class="aud-vpdf" style="display:flex;align-items:center;justify-content:center;gap:7px;width:100%;margin-top:10px;background:#F3F1FE;color:#3D34C9;border:1px solid #E0DAF9;border-radius:10px;padding:9px;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>Ver no PDF</button>
+                          </div>
+                        </sc-if>
+                      </div>
+                    </sc-for>
+                  </div>
+                </sc-if>
+              </div>
+            </sc-for>
+          </div>
+        </sc-if>
       </div>
     </div>
 
-    <!-- ===== CLARA — verdict banner ===== -->
-    <div style="display:flex;gap:18px;align-items:flex-start;background:linear-gradient(108deg,#FFFFFF 58%,#F3F1FE);border:1px solid #E4E1FA;border-radius:20px;padding:22px 26px;margin-top:18px;box-shadow:0 1px 2px rgba(20,24,50,.04)">
-      <div style="position:relative;width:64px;height:64px;border-radius:17px;background:radial-gradient(circle at 50% 35%,#EDE9FF,#F6F4FF);display:flex;align-items:flex-end;justify-content:center;overflow:hidden;flex-shrink:0"><img src="assets/clara.png" alt="Clara" style="position:absolute;width:58px;height:auto;bottom:-2px;animation:claraBob 5s ease-in-out infinite"></div>
-      <div style="flex:1;min-width:0">
-        <div style="display:flex;align-items:center;gap:8px"><span style="font-size:15px;font-weight:800;color:#161A2E">Clara</span><span style="font-size:9px;font-weight:700;color:#fff;background:#4327E6;padding:2px 7px;border-radius:20px">IA</span><span style="font-size:11.5px;color:#9AA0B4;margin-left:2px">Parecer final</span></div>
-        <div style="margin-top:9px;display:flex;flex-direction:column;gap:5px;max-width:780px">
-          <sc-for list="{{ verdict }}" as="l" hint-placeholder-count="3"><p style="font-size:14px;color:#3C4258;line-height:1.55">{{ l.txt }}</p></sc-for>
-        </div>
-        <div style="font-size:12.5px;color:#161A2E;background:#fff;border:1px solid #ECEDF4;border-radius:10px;padding:9px 13px;margin-top:11px;max-width:780px"><b style="color:#4327E6">Próximo passo:</b> {{ proximoPasso }}</div>
-        <div style="display:flex;gap:11px;margin-top:16px;flex-wrap:wrap">
-          <button onClick="{{ genEmail }}" class="aud-cta" style="display:flex;align-items:center;gap:8px;background:#4327E6;color:#fff;border:none;border-radius:12px;padding:12px 20px;font-family:inherit;font-size:13.5px;font-weight:700;cursor:pointer;box-shadow:0 12px 24px -13px rgba(67,39,230,.7)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M4 5h16v14H4z M4 6l8 6 8-6"/></svg>Gerar e-mail para o agente</button>
-          <button onClick="{{ alreadyAsked }}" class="aud-ghost" style="display:flex;align-items:center;gap:8px;background:#fff;color:#3C4258;border:1px solid #E2E4EE;border-radius:12px;padding:12px 20px;font-family:inherit;font-size:13.5px;font-weight:700;cursor:pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#1F9D6B" stroke-width="2.2"><path d="M20 6 9 17l-5-5"/></svg>{{ jaSolicitadoLabel }}</button>
+    <!-- ===== CLARA — verdict banner (full width, after audit) ===== -->
+    <sc-if value="{{ hasRun }}" hint-placeholder-val="{{ false }}">
+      <div style="display:flex;gap:18px;align-items:flex-start;background:linear-gradient(108deg,#FFFFFF 58%,#F3F1FE);border:1px solid #E4E1FA;border-radius:20px;padding:22px 26px;margin-top:18px;box-shadow:0 1px 2px rgba(20,24,50,.04)">
+        <div style="position:relative;width:64px;height:64px;border-radius:17px;background:radial-gradient(circle at 50% 35%,#EDE9FF,#F6F4FF);display:flex;align-items:flex-end;justify-content:center;overflow:hidden;flex-shrink:0"><img src="assets/clara.png" alt="Clara" style="position:absolute;width:58px;height:auto;bottom:-2px;animation:claraBob 5s ease-in-out infinite"></div>
+        <div style="flex:1;min-width:0">
+          <div style="display:flex;align-items:center;gap:8px"><span style="font-size:15px;font-weight:800;color:#161A2E">Clara</span><span style="font-size:9px;font-weight:700;color:#fff;background:#4327E6;padding:2px 7px;border-radius:20px">IA</span><span style="font-size:11.5px;color:#9AA0B4;margin-left:2px">Parecer final</span></div>
+          <p style="font-size:14px;color:#3C4258;line-height:1.6;margin-top:9px;max-width:760px">{{ verdict }}</p>
+          <div style="display:flex;gap:11px;margin-top:16px;flex-wrap:wrap">
+            <button onClick="{{ genEmail }}" class="aud-cta" style="display:flex;align-items:center;gap:8px;background:#4327E6;color:#fff;border:none;border-radius:12px;padding:12px 20px;font-family:inherit;font-size:13.5px;font-weight:700;cursor:pointer;box-shadow:0 12px 24px -13px rgba(67,39,230,.7)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M4 5h16v14H4z M4 6l8 6 8-6"/></svg>Gerar e-mail para o agente</button>
+            <button onClick="{{ alreadyAsked }}" class="aud-ghost" style="display:flex;align-items:center;gap:8px;background:#fff;color:#3C4258;border:1px solid #E2E4EE;border-radius:12px;padding:12px 20px;font-family:inherit;font-size:13.5px;font-weight:700;cursor:pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#1F9D6B" stroke-width="2.2"><path d="M20 6 9 17l-5-5"/></svg>Já solicitei ao agente</button>
+          </div>
         </div>
       </div>
-    </div>
-    </div>
     </sc-if>
   </div>
-  </sc-if>
-
-  <!-- e-mail modal (Clara sugere, nunca envia) -->
-  <sc-if value="{{ emailModal }}" hint-placeholder-val="{{ false }}">
-    <div onClick="{{ onFecharEmail }}" style="position:fixed;inset:0;background:rgba(22,26,46,.45);z-index:90;display:flex;align-items:center;justify-content:center;padding:24px">
-      <div onClick="{{ stop }}" style="background:#fff;border:1px solid #EAEBF4;border-radius:18px;width:min(640px,100%);max-height:86vh;display:flex;flex-direction:column">
-        <div style="padding:16px 20px;border-bottom:1px solid #EFF0F7;display:flex;align-items:center;justify-content:space-between"><div style="font-size:14.5px;font-weight:800;color:#161A2E">E-mail sugerido ao agente</div><span onClick="{{ onFecharEmail }}" style="cursor:pointer;color:#9AA0B4;font-size:18px">✕</span></div>
-        <div style="padding:16px 20px;overflow-y:auto"><div style="font-size:12.5px;color:#3C4258;white-space:pre-wrap;line-height:1.6;background:#F7F8FC;border:1px solid #E6E8F2;border-radius:10px;padding:14px">{{ emailTexto }}</div><div style="font-size:11px;color:#9AA0B4;margin-top:10px">A Priora apenas sugere. Revise e envie pelo Outlook — nada é enviado automaticamente.</div></div>
-        <div style="padding:14px 20px;border-top:1px solid #EFF0F7;display:flex;justify-content:flex-end;gap:9px"><button onClick="{{ onFecharEmail }}" style="background:#fff;color:#3C4258;border:1px solid #E1E3EF;border-radius:9px;padding:9px 15px;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer">Fechar</button><button onClick="{{ onCopiarEmail }}" style="background:#4327E6;color:#fff;border:none;border-radius:9px;padding:9px 15px;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer">Copiar texto</button></div>
-      </div>
-    </div>
   </sc-if>
 
   <!-- toast -->
@@ -306,12 +307,18 @@
   </sc-if>
 </main>
 </x-dc>
-<script type="text/x-dc" data-dc-script>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1180,&quot;height&quot;:900}}">
 class Component extends DCLogic {
+  PLAYBOOKS = [
+    { key:'prealerta', label:'Pré-Alerta', pb:'Pré-Alerta' },
+    { key:'cemaster', label:'CE Master', pb:'CE Mercante' },
+    { key:'cehouse', label:'CE House', pb:'CE Mercante' },
+    { key:'dncn', label:'DN/CN', pb:null },
+  ];
   STATUS = {
     ok:{ dot:'#1F9D6B', color:'#177D54', label:'Consistente', impBg:'#E7F6EF', impIcon:'m5 12 5 5 9-10' },
-    crit:{ dot:'#E5484D', color:'#C2333A', label:'Divergência', impBg:'#FDECEC', impIcon:'M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z' },
-    manual:{ dot:'#E8990C', color:'#B9760A', label:'Validação humana', impBg:'#FDF3E0', impIcon:'M12 8v5M12 16h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0' },
+    crit:{ dot:'#E5484D', color:'#C2333A', label:'Crítica', impBg:'#FDECEC', impIcon:'M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z' },
+    manual:{ dot:'#E8990C', color:'#B9760A', label:'Validação manual', impBg:'#FDF3E0', impIcon:'M12 8v5M12 16h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0' },
     na:{ dot:'#9AA0B4', color:'#7A8099', label:'Não avaliado', impBg:'#F1F2F8', impIcon:'M12 8v5M12 16h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0' },
     info:{ dot:'#2563EB', color:'#1D4ED8', label:'Informativo', impBg:'#E7F0FE', impIcon:'M12 16v-4M12 8h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0' },
   };
@@ -320,185 +327,172 @@ class Component extends DCLogic {
 
   constructor(props){
     super(props);
-    this.state = { screen:'discover', procStatus:'loading', processos:[], selected:null, busca:'',
-      auditStatus:'idle', auditData:null, playbook:null, openGroup:null, openEv:null, focus:null,
-      jaSolicitado:false, emailModal:false, toast:'' };
+    this.state = { screen:'discover', procStatus:'loading', processos:[], selected:null,
+      running:false, auditData:null, playbook:'prealerta', ran:false, openGroup:null, openEv:null,
+      page:1, zoom:100, focus:null, toast:'', mbl:null, hbl:null };
   }
-  componentDidMount(){ this.load(); }
+  componentDidMount(){ this.loadProcessos(); }
 
-  load(){
+  loadProcessos(cb){
     var self=this; this.setState({ procStatus:'loading' });
-    fetch('/api/auditoria/processos', { credentials:'same-origin' })
+    fetch('/api/auditoria/processos',{credentials:'same-origin'})
       .then(function(r){ return r.json().catch(function(){return null;}).then(function(j){ if(!r.ok) throw new Error((j&&j.error)||('HTTP '+r.status)); return j; }); })
-      .then(function(d){ var ps=(d&&d.processos)||[]; self.setState({ processos:ps, procStatus:'done', selected:(self.state.selected||(ps[0]&&ps[0].processo)||null) }); })
-      .catch(function(e){ self.setState({ procStatus:'error:'+String(e&&e.message||e) }); });
+      .then(function(d){ var ps=(d&&d.processos)||[]; self.setState({ processos:ps, procStatus:'done', selected:(self.state.selected||(ps[0]&&ps[0].processo)||null) }); if(cb)cb(ps); })
+      .catch(function(e){ self.setState({ procStatus:'error' }); self.toast('Não foi possível importar: '+String(e&&e.message||e)); });
   }
 
-  statusKey(resultado){
-    if(resultado==='Consistente')return 'ok'; if(resultado==='Divergência')return 'crit';
-    if(resultado==='Validação Humana')return 'manual'; if(resultado==='Informativo')return 'info'; return 'na';
-  }
-  toast(msg){ clearTimeout(this._t); this.setState({toast:msg}); var self=this; this._t=setTimeout(function(){self.setState({toast:''});},2800); }
-  relTime(iso){ try{ var d=new Date(iso).getTime(); if(isNaN(d))return '—'; var s=Math.max(0,(Date.now()-d)/1000);
-    if(s<90)return 'há instantes'; if(s<5400)return 'há '+Math.round(s/60)+' min'; if(s<172800)return 'há '+Math.round(s/3600)+' h'; return 'há '+Math.round(s/86400)+' d'; }catch(e){ return '—'; } }
+  toast(msg,persist){ clearTimeout(this._t); this.setState({toast:msg}); if(!persist){ var self=this; this._t=setTimeout(function(){self.setState({toast:''});},2800); } }
+  relTime(iso){ try{ var d=new Date(iso).getTime(); if(isNaN(d))return '—'; var s=Math.max(0,(Date.now()-d)/1000); if(s<90)return 'há instantes'; if(s<5400)return 'há '+Math.round(s/60)+' min'; if(s<172800)return 'há '+Math.round(s/3600)+' h'; return 'há '+Math.round(s/86400)+' d'; }catch(e){ return '—'; } }
+  statusKey(r){ if(r==='Consistente')return 'ok'; if(r==='Divergência')return 'crit'; if(r==='Validação Humana')return 'manual'; if(r==='Informativo')return 'info'; return 'na'; }
+  anchorId(field){ return 'anchor-'+String(field).replace(/[^a-zA-Z0-9]/g,'_'); }
 
-  iniciar(code){
-    var self=this;
-    this.setState({ screen:'mesa', selected:code, auditStatus:'loading', auditData:null, playbook:null, openGroup:null, openEv:null, jaSolicitado:false });
-    fetch('/api/auditoria/'+encodeURIComponent(code)+'/auditoria', { credentials:'same-origin' })
+  onImport(){ if(this.state.procStatus==='loading')return; var self=this; this.toast('Importando do Outlook…',true); this.loadProcessos(function(ps){ self.toast('Importação concluída — '+ps.length+' processos encontrados.'); }); }
+
+  firstPlaybookKey(d){ var pbs=(d&&d.resultado&&d.resultado.playbooksExecutados)||[]; if(pbs.indexOf('Pré-Alerta')>=0)return 'prealerta'; if(pbs.indexOf('CE Mercante')>=0)return 'cemaster'; return 'prealerta'; }
+  docFiles(d){ var da=(d&&d.docsAuditados)||[]; return [da[0]||'MBL.pdf', da[1]||'HBL.pdf']; }
+
+  startAudit(){
+    var self=this, code=this.state.selected; if(!code)return;
+    this.setState({ running:true }); this.toast('Construindo a auditoria… lendo os documentos.',true);
+    fetch('/api/auditoria/'+encodeURIComponent(code)+'/auditoria',{credentials:'same-origin'})
       .then(function(r){ return r.json().catch(function(){return null;}).then(function(j){ if(!r.ok) throw new Error((j&&j.error)||('HTTP '+r.status)); return j; }); })
-      .then(function(d){ var pb=(d.resultado&&d.resultado.playbooksExecutados&&d.resultado.playbooksExecutados[0])||null; self.setState({ auditData:d, auditStatus:'done', playbook:pb }); })
-      .catch(function(e){ self.setState({ auditStatus:'error:'+String(e&&e.message||e) }); });
+      .then(function(d){ var files=self.docFiles(d);
+        self.setState({ auditData:d, running:false, screen:'mesa', ran:true, playbook:self.firstPlaybookKey(d), openGroup:null, openEv:null, mbl:files[0], hbl:files[1], page:1 });
+        var n=(d.resultado&&d.resultado.resumo&&d.resultado.resumo.total)||0; self.toast('Mesa de auditoria pronta — '+n+' verificações.'); })
+      .catch(function(e){ self.setState({ running:false }); self.toast('Falha na auditoria: '+String(e&&e.message||e)); });
   }
   reprocessar(){
-    var code=this.state.selected, self=this; if(!code)return;
-    this.setState({ auditStatus:'loading', auditData:null });
-    fetch('/api/auditoria/'+encodeURIComponent(code)+'/auditoria?refresh=1', { credentials:'same-origin' })
+    var self=this, code=this.state.selected; if(!code||this.state.running)return;
+    this.setState({ running:true }); this.toast('Reprocessando…',true);
+    fetch('/api/auditoria/'+encodeURIComponent(code)+'/auditoria?refresh=1',{credentials:'same-origin'})
       .then(function(r){ return r.json().catch(function(){return null;}).then(function(j){ if(!r.ok) throw new Error((j&&j.error)||('HTTP '+r.status)); return j; }); })
-      .then(function(d){ var pb=(d.resultado&&d.resultado.playbooksExecutados&&d.resultado.playbooksExecutados[0])||self.state.playbook; self.setState({ auditData:d, auditStatus:'done', playbook:pb }); self.toast('Auditoria reprocessada.'); })
-      .catch(function(e){ self.setState({ auditStatus:'error:'+String(e&&e.message||e) }); });
+      .then(function(d){ self.setState({ auditData:d, running:false, ran:true }); var n=(d.resultado&&d.resultado.resumo&&d.resultado.resumo.total)||0; self.toast('Auditoria reprocessada — '+n+' verificações.'); })
+      .catch(function(e){ self.setState({ running:false }); self.toast('Falha: '+String(e&&e.message||e)); });
   }
 
-  anchorId(field){ return 'anchor-'+String(field).replace(/[^a-zA-Z0-9]/g,'_'); }
-  viewPdf(field, gkey, key){
-    var self=this; this.setState({ openGroup:gkey, openEv:key, focus:field });
-    var id='#'+this.anchorId(field);
+  filteredEvs(){
+    var d=this.state.auditData; if(!d||!d.resultado)return [];
+    var tab=this.PLAYBOOKS.find(function(p){return p.key===this.state.playbook;}.bind(this))||{}; var pb=tab.pb;
+    return (d.resultado.evidencias||[]).filter(function(e){ return pb ? e.playbook===pb : false; });
+  }
+  rowsFrom(evs){
+    var self=this;
+    return evs.map(function(e){ var va=(e.valores&&e.valores[0])?e.valores[0].valor:'—', vb=(e.valores&&e.valores[1])?e.valores[1].valor:'—';
+      return { field:e.campo, status:self.statusKey(e.resultado), master:va, house:vb, impact:e.motivo, container:e.container||null,
+        gkey:(e.container?('ct::'+e.container):'conhecimento'), key:(e.container?('ct::'+e.container):'conhecimento')+'::'+e.campo }; });
+  }
+
+  toggleGroup(g){ this.setState(function(s){return {openGroup:s.openGroup===g?null:g};}); }
+  toggleEv(k){ this.setState(function(s){return {openEv:s.openEv===k?null:k};}); }
+  viewPdf(row){
+    var self=this; this.setState({ openGroup:row.gkey, openEv:row.key, focus:row.field });
+    var id='#'+this.anchorId(row.field);
     var scroll=function(ref){ var c=ref.current; if(!c)return; var el=c.querySelector(id); if(el){ var y=el.offsetTop - c.clientHeight/2 + el.clientHeight/2; c.scrollTo({top:Math.max(0,y),behavior:'smooth'}); } };
     setTimeout(function(){ scroll(self.masterScrollRef); scroll(self.houseScrollRef); },60);
-    clearTimeout(this._f); this._f=setTimeout(function(){ self.setState({focus:null}); },3000);
+    clearTimeout(this._focus); this._focus=setTimeout(function(){ self.setState({focus:null}); },3000);
   }
+  pagePrev(){ this.setState(function(s){return {page:Math.max(1,s.page-1)};}); }
+  pageNext(){ this.setState(function(s){return {page:Math.min(3,s.page+1)};}); }
+  zoomIn(){ this.setState(function(s){return {zoom:Math.min(150,s.zoom+10)};}); }
+  zoomOut(){ this.setState(function(s){return {zoom:Math.max(70,s.zoom-10)};}); }
 
+  buildVerdict(){
+    var d=this.state.auditData; var cl=(d&&d.clara)||null;
+    if(cl && cl.linhas && cl.linhas.length){ return cl.linhas.join(' ') + (cl.proximoPasso?(' Próximo passo: '+cl.proximoPasso):''); }
+    return 'Auditoria executada.';
+  }
   emailSugerido(){
     var d=this.state.auditData; if(!d||!d.resultado)return '';
     var divs=[]; (d.resultado.evidencias||[]).forEach(function(e){ if(e.resultado==='Divergência'){ divs.push('- '+e.campo+(e.container?(' (container '+e.container+')'):'')+': '+e.motivo); } });
-    var corpo='Prezados,\n\nApós a conferência documental do processo '+(d.processo||'')+', identificamos os seguintes pontos:\n\n';
-    corpo += (divs.length?divs.join('\n'):'- (sem divergências objetivas; conferência de valores comerciais pendente)');
-    corpo += '\n\nPor gentileza, confirmem/corrijam antes da emissão do CE Mercante.\n\nDesde já agradecemos.';
-    return corpo;
+    return 'Prezados,\n\nApós a conferência do processo '+(d.processo||'')+', identificamos:\n\n'+(divs.length?divs.join('\n'):'- (sem divergências objetivas)')+'\n\nPor gentileza confirmem/corrijam antes da emissão do CE Mercante.\n\nDesde já agradecemos.';
+  }
+
+  docLabels(){
+    var evs=this.filteredEvs(); var docs=(evs[0]&&evs[0].documentos)||['MBL','HBL'];
+    var a=docs[0]||'MBL', b=docs[1]||'HBL'; var isCe=(String(a).indexOf('CE')>=0);
+    return { a:a, b:b, titleA:isCe?'CE MERCANTE MASTER':'MASTER BILL OF LADING', titleB:isCe?'CE MERCANTE HOUSE':'HOUSE BILL OF LADING' };
+  }
+  buildViewer(side, rows){
+    var self=this, st=this.state, pair=this.docLabels();
+    var lines=rows.map(function(e){ var isFocus=(st.focus===e.field); var raw=(side==='master'?e.master:e.house); var diverges=(side==='house'&&e.status==='crit');
+      return { anchor:self.anchorId(e.field), field:e.field, value:raw, valColor:diverges?((self.STATUS[e.status]||{}).color||'#3C4258'):'#3C4258', hlBg:isFocus?'#FEF7E4':'transparent', hlRing:isFocus?'0 0 0 2px #F5B31E':'none' }; });
+    return { label:(side==='master'?('Master · '+pair.a):('House · '+pair.b)), fileName:(side==='master'?st.mbl:st.hbl),
+      tagBg:(side==='master'?'#EEEBFE':'#E7F0FE'), tagColor:(side==='master'?'#4327E6':'#2563EB'),
+      docTitle:(side==='master'?pair.titleA:pair.titleB), lines:lines, scrollRef:(side==='master'?this.masterScrollRef:this.houseScrollRef) };
+  }
+  buildItem(e){
+    var self=this, S=this.STATUS[e.status]||this.STATUS.na, open=(this.state.openEv===e.key);
+    return { field:e.field, dot:S.dot, statusColor:S.color, statusLabel:S.label, open:open, chevRot:open?'rotate(180deg)':'rotate(0deg)',
+      master:e.master, house:e.house, houseColor:(e.status==='crit'?S.color:'#161A2E'),
+      impact:e.impact, impactBg:S.impBg, impactColor:S.color, impactIcon:S.impIcon,
+      onToggle:function(){ self.toggleEv(e.key); }, onViewPdf:function(){ self.viewPdf(e); } };
+  }
+  buildGroup(gkey, title, icon, iconBg, iconColor, items, mono){
+    var self=this;
+    var crit=items.filter(function(i){return i.status==='crit';}).length, manual=items.filter(function(i){return i.status==='manual';}).length, ok=items.filter(function(i){return i.status==='ok';}).length;
+    var S=this.STATUS[ crit?'crit':(manual?'manual':'ok') ], open=(this.state.openGroup===gkey);
+    return { title:title, icon:icon, iconBg:iconBg, iconColor:iconColor, titleFont:(mono?"'JetBrains Mono',monospace":"'Plus Jakarta Sans',sans-serif"),
+      dot:S.dot, cardBorder:(crit?'#F4DEDE':(manual?'#F3E7CE':'#EAEBF4')),
+      hasCrit:crit>0, critN:crit, critWord:(crit===1?'divergência':'divergências'), hasManual:manual>0, manualN:manual, hasOk:ok>0, okN:ok, okWord:(ok===1?'consistente':'consistentes'),
+      open:open, chevRot:open?'rotate(180deg)':'rotate(0deg)',
+      onToggle:function(){ self.toggleGroup(gkey); }, items:items.map(function(e){ return self.buildItem(e); }) };
   }
 
   renderVals(){
     var self=this, st=this.state;
-    var procStatus=st.procStatus;
-    var discLoading=(procStatus==='loading'), discError=(procStatus.indexOf('error')===0), discDone=(procStatus==='done');
     var processosRaw=st.processos||[];
-
-    // ----- Discover: lista de processos -----
-    var busca=(st.busca||'').trim().toLowerCase();
-    var filtrados=processosRaw.filter(function(p){ if(!busca)return true; return (p.processo+' '+(p.cliente||'')).toLowerCase().indexOf(busca)>=0; });
-    var processes=filtrados.map(function(p){ var on=(p.processo===st.selected);
+    var processes=processosRaw.map(function(p){ var on=(p.processo===st.selected);
       var temAud=(p.auditorias||[]).length>0;
-      var tags = temAud
-        ? (p.auditorias||[]).map(function(a){ return {label:a+' disponível',color:'#177D54',icon:'m5 12 5 5 9-10'}; })
+      var tags = temAud ? (p.auditorias||[]).map(function(a){ return {label:a+' disponível',color:'#177D54',icon:'m5 12 5 5 9-10'}; })
         : [{label:'Documentação incompleta',color:'#B9760A',icon:'M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z'}];
       return { code:p.processo, client:(p.cliente||'Cliente a confirmar'), updated:self.relTime(p.data), docs:String(p.qtdDocs||0),
         onSelect:function(){ self.setState({selected:p.processo}); },
         border:on?'#4327E6':'#EEF0F6', bg:on?'#FAF9FF':'#fff', badgeColor:on?'#4327E6':'#5A6076', badgeBg:on?'#EEEBFE':'#F1F2F8', tags:tags }; });
-
     var sel=processosRaw.find(function(p){return p.processo===st.selected;})||processosRaw[0]||null;
-    var DOC_BADGE={ 'MBL':{c:'#4327E6',b:'#EEEBFE'},'HBL':{c:'#6D28D9',b:'#F1EBFD'},'CE_MASTER':{c:'#1D4ED8',b:'#E7F0FE'},'CE_HOUSE':{c:'#0E7490',b:'#E3F5F8'},'ITEM':{c:'#177D54',b:'#E7F6EF'} };
     var AUD_DESC={ 'Pré-Alerta':{icon:'M4 5h16M4 5v14a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V5M9 10h6M9 14h4',desc:'Comparação entre MBL e HBL'}, 'CE Mercante':{icon:'M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z',desc:'Comparação CE Master e CE House'} };
-    var selVM={ code:(sel&&sel.processo)||'—', client:(sel&&sel.cliente)||'Cliente a confirmar',
-      documents:((sel&&sel.docs)||[]).map(function(d){ var bd=DOC_BADGE[d.tipo]||{c:'#177D54',b:'#E7F6EF'}; var classificado=(d.tipo!=='OUTRO'&&d.tipo!=='INVOICE'&&d.tipo!=='PACKING');
-        return { name:d.nome, type:d.tipoLabel, iconBg:'#FDECEC', iconColor:'#C2333A', badge:(classificado?'Identificado':'Classificar'), badgeColor:(classificado?'#177D54':'#B9760A'), badgeBg:(classificado?'#E7F6EF':'#FDF3E0') }; }),
-      audits:((sel&&sel.auditorias)||[]).map(function(a){ var ad=AUD_DESC[a]||{icon:'M9 11l3 3L22 4',desc:''}; return { name:a, desc:ad.desc, icon:ad.icon, st:'Disponível', stColor:'#177D54', stBg:'#E7F6EF' }; }),
-      temAudits:((sel&&sel.auditorias)||[]).length>0, semAudits:((sel&&sel.auditorias)||[]).length===0, faltando:((sel&&sel.faltando)||[]).join(', ') };
+    var selVM={ code:(sel&&sel.processo)||'—', client:(sel&&sel.cliente)||'',
+      documents:((sel&&sel.docs)||[]).map(function(d){ return {name:d.nome, type:d.tipoLabel}; }),
+      audits:((sel&&sel.auditorias)||[]).map(function(a){ var ad=AUD_DESC[a]||{icon:'M9 11l3 3L22 4',desc:''}; return {icon:ad.icon, name:a, desc:ad.desc}; }) };
 
-    // ----- Mesa: auditoria -----
-    var ast=st.auditStatus, ad=st.auditData;
-    var mesaLoading=(ast==='loading'), mesaError=(ast.indexOf('error')===0), mesaReady=(ast==='done'&&!!ad);
-    var res=(mesaReady&&ad.resultado)?ad.resultado:null;
-    var playbooksExec=(res&&res.playbooksExecutados)||[];
-    var pbSel=st.playbook||playbooksExec[0]||null;
-    var playbooks=playbooksExec.map(function(pb){ var on=(pb===pbSel);
-      return { label:pb, onSelect:function(){ self.setState({playbook:pb, openGroup:null, openEv:null}); },
-        bg:on?'#fff':'transparent', color:on?'#161A2E':'#6B7188', weight:on?'700':'600', shadow:on?'0 1px 4px rgba(16,20,40,.16)':'none' }; });
+    var evs=this.filteredEvs();
+    var rows=this.rowsFrom(evs);
+    var conhecimento=rows.filter(function(r){return !r.container;});
+    var ctIds=[], byCt={}; rows.forEach(function(r){ if(r.container){ if(!byCt[r.container]){byCt[r.container]=[];ctIds.push(r.container);} byCt[r.container].push(r); } });
+    var groups=[]; if(conhecimento.length) groups.push(this.buildGroup('conhecimento','Conhecimento','M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z','#EEEBFE','#4327E6',conhecimento,false));
+    ctIds.forEach(function(id){ groups.push(self.buildGroup('ct::'+id, id, 'M12 3 4 7v10l8 4 8-4V7Z M4 7l8 4 8-4M12 11v10','#E7F0FE','#2563EB', byCt[id], true)); });
 
-    var evAll=(res&&res.evidencias)||[];
-    var ev=evAll.filter(function(e){ return !pbSel || e.playbook===pbSel; });
-    // rótulos dos dois lados (a partir dos documentos comparados)
-    var docPair=(ev[0]&&ev[0].documentos)||['MBL','HBL'];
-    var labA=docPair[0]||'Master', labB=docPair[1]||'House';
+    var cOk=rows.filter(function(r){return r.status==='ok';}).length;
+    var cCrit=rows.filter(function(r){return r.status==='crit';}).length;
+    var cMan=rows.filter(function(r){return r.status==='manual';}).length;
+    var pend=rows.filter(function(r){return r.status==='crit'||r.status==='manual';});
+    var pendencias=pend.map(function(r){ var S=self.STATUS[r.status]; return { field:r.field, where:(r.container?('Container '+r.container):'Conhecimento'), dot:S.dot, statusColor:S.color, statusBg:S.impBg, statusLabel:(r.status==='crit'?'Crítica':'Validação'), onGo:function(){ self.viewPdf(r); } }; });
 
-    // resumo
-    var cOk=ev.filter(function(e){return e.resultado==='Consistente';}).length;
-    var cCrit=ev.filter(function(e){return e.resultado==='Divergência';}).length;
-    var cMan=ev.filter(function(e){return e.resultado==='Validação Humana';}).length;
-    var cNa=ev.filter(function(e){return e.resultado==='Não Avaliado';}).length;
-    var sum={ total:String(ev.length), ok:String(cOk), crit:String(cCrit), manual:String(cMan), temNaoAval:(cNa>0), naoAvalLabel:cNa+' verificação(ões) não avaliada(s) por documento ausente/ilegível.' };
+    var pbLabel=(this.PLAYBOOKS.find(function(p){return p.key===st.playbook;})||{}).label||'';
+    var playbooks=this.PLAYBOOKS.map(function(p){ var on=(st.playbook===p.key); return { label:p.label, onSelect:function(){ self.setState({playbook:p.key, openGroup:null, openEv:null}); }, bg:on?'#fff':'transparent', color:on?'#161A2E':'#6B7188', weight:on?'700':'600', shadow:on?'0 1px 4px rgba(16,20,40,.16)':'none' }; });
 
-    // grupos por container (null => Conhecimento)
-    var byC={}, ordem=[];
-    ev.forEach(function(e){ var k=e.container||'__con'; if(!byC[k]){byC[k]=[];ordem.push(k);} byC[k].push(e); });
-    var mkItem=function(e, gkey){
-      var key=gkey+'::'+e.campo; var S=self.STATUS[self.statusKey(e.resultado)]; var open=(st.openEv===key);
-      var va=(e.valores&&e.valores[0])?e.valores[0].valor:'—', vb=(e.valores&&e.valores[1])?e.valores[1].valor:'—';
-      return { field:e.campo, dot:S.dot, statusColor:S.color, statusLabel:S.label, open:open, chevRot:open?'rotate(180deg)':'rotate(0deg)',
-        masterLabel:labA, houseLabel:labB, master:va, house:vb, houseColor:(e.resultado==='Divergência'?S.color:'#161A2E'),
-        impact:e.motivo, impactBg:S.impBg, impactColor:S.color, impactIcon:S.impIcon,
-        onToggle:function(){ self.setState(function(s){return {openEv:(s.openEv===key?null:key)};}); },
-        onViewPdf:function(){ self.viewPdf(e.campo, gkey, key); } };
-    };
-    var groups=ordem.map(function(k){ var items=byC[k];
-      var crit=items.filter(function(i){return i.resultado==='Divergência';}).length;
-      var man=items.filter(function(i){return i.resultado==='Validação Humana';}).length;
-      var ok=items.filter(function(i){return i.resultado==='Consistente';}).length;
-      var S=self.STATUS[ crit?'crit':(man?'manual':'ok') ];
-      var isCon=(k==='__con'); var gkey=isCon?'con':('ct::'+k); var open=(st.openGroup===gkey);
-      return { title:isCon?'Conhecimento':('Container '+k), icon:isCon?'M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z':'M12 3 4 7v10l8 4 8-4V7Z M4 7l8 4 8-4M12 11v10',
-        iconBg:isCon?'#EEEBFE':'#E7F0FE', iconColor:isCon?'#4327E6':'#2563EB', titleFont:isCon?"'Plus Jakarta Sans',sans-serif":"'JetBrains Mono',monospace",
-        dot:S.dot, cardBorder:crit?'#F4DEDE':(man?'#F3E7CE':'#EAEBF4'),
-        hasCrit:crit>0, critN:crit, critWord:(crit===1?'divergência':'divergências'), hasManual:man>0, manualN:man, hasOk:ok>0, okN:ok, okWord:(ok===1?'consistente':'consistentes'),
-        open:open, chevRot:open?'rotate(180deg)':'rotate(0deg)',
-        onToggle:function(){ self.setState(function(s){return {openGroup:(s.openGroup===gkey?null:gkey)};}); },
-        items:items.map(function(e){ return mkItem(e, gkey); }) }; });
-
-    // pendências (divergência + validação humana)
-    var pend=ev.filter(function(e){return e.resultado==='Divergência'||e.resultado==='Validação Humana';});
-    var pendencias=pend.map(function(e){ var S=self.STATUS[self.statusKey(e.resultado)];
-      return { field:e.campo, where:(e.container?('Container '+e.container):'Conhecimento'), dot:S.dot, statusColor:S.color, statusBg:S.impBg,
-        statusLabel:(e.resultado==='Divergência'?'Divergência':'Validação'),
-        onGo:function(){ var gkey=e.container?('ct::'+e.container):'con'; self.viewPdf(e.campo, gkey, gkey+'::'+e.campo); } }; });
-
-    // viewers (campos extraídos lado a lado)
-    var mkViewer=function(side){
-      var lines=ev.map(function(e){ var raw=(e.valores&&e.valores[side])?e.valores[side].valor:'—'; var isFocus=(st.focus===e.campo);
-        var diverges=(side===1 && e.resultado==='Divergência'); var S=self.STATUS[self.statusKey(e.resultado)];
-        return { anchor:self.anchorId(e.campo), field:e.campo, value:raw, valColor:diverges?S.color:'#3C4258',
-          hlBg:isFocus?'#FEF7E4':'transparent', hlRing:isFocus?'0 0 0 2px #F5B31E':'none' }; });
-      return { label:(side===0?labA:labB), fileName:((res&&res)&&''), tagBg:side===0?'#EEEBFE':'#E7F0FE', tagColor:side===0?'#4327E6':'#2563EB',
-        docTitle:(side===0?labA:labB).toUpperCase(), lines:lines, scrollRef:side===0?self.masterScrollRef:self.houseScrollRef }; };
-    var viewers = mesaReady ? [mkViewer(0), mkViewer(1)] : [];
-    // nomes de arquivo dos documentos auditados (para o cabeçalho dos viewers)
-    if(mesaReady && ad.docsAuditados){ if(viewers[0])viewers[0].fileName=ad.docsAuditados[0]||''; if(viewers[1])viewers[1].fileName=ad.docsAuditados[1]||''; }
-
-    var clara=(mesaReady&&ad.clara)?ad.clara:null;
-    var verdict=(clara&&clara.linhas||[]).map(function(t){return {txt:t};});
-    if(mesaReady && ad.semDocumentos){ verdict=[{txt:'Não há documentos com Playbook disponível neste processo ainda (MBL/HBL ou CE Master/House).'}]; }
+    var both=!!(st.mbl&&st.hbl);
+    var viewers=(both&&st.ran)?[this.buildViewer('master',rows),this.buildViewer('house',rows)]:[];
+    var mkSlot=function(slot,title,hint,ip){ return { title:title, hint:hint, iconPath:ip, filled:!!st[slot], empty:!st[slot], fileName:st[slot]||'', border:st[slot]?'#BFE6D2':'#D8D3F3', bg:st[slot]?'#F3FBF6':'#FAFAFE', iconBg:st[slot]?'#E7F6EF':'#EEEBFE', iconColor:st[slot]?'#1F9D6B':'#4327E6', onFile:function(){} }; };
+    var slots=[ mkSlot('mbl','MBL — Master','Bill of Lading do armador','M4 5h16v14H4z M4 9h16'), mkSlot('hbl','HBL — House','Bill of Lading do agente','M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z') ];
 
     return {
       isDiscover:(st.screen==='discover'), isMesa:(st.screen==='mesa'),
-      // discover states
-      discLoading:discLoading, discNotLoading:!discLoading, discError:discError, discErrorMsg:(discError?procStatus.slice(procStatus.indexOf(':')+1):''),
-      discDone:discDone, discEmpty:(discDone&&processosRaw.length===0), discHas:(discDone&&processosRaw.length>0),
-      importLabel:(discLoading?'Importando…':'Importar do Outlook'),
-      importStatus:'Última importação: '+(processosRaw.length?'agora':'—'),
-      onImport:function(){ if(!discLoading) self.load(); },
-      busca:st.busca, onBusca:function(e){ self.setState({busca:(e&&e.target&&e.target.value)||''}); },
       procCount:String(processosRaw.length), processes:processes, sel:selVM,
-      onStartAudit:function(){ if(selVM.code&&selVM.code!=='—') self.iniciar(selVM.code); },
-      // mesa
-      onBack:function(){ self.setState({screen:'discover', auditData:null, auditStatus:'idle'}); },
-      mesaLoading:mesaLoading, mesaError:mesaError, mesaErrorMsg:(mesaError?ast.slice(ast.indexOf(':')+1):''), mesaReady:mesaReady,
-      playbookLabel:(pbSel||'—'), playbooks:playbooks, onExecute:function(){ self.reprocessar(); },
-      viewers:viewers, sum:sum, groups:groups, pendencias:pendencias, hasPend:pendencias.length>0, noPend:(mesaReady&&pendencias.length===0), pendCount:String(pendencias.length),
-      verdict:verdict, proximoPasso:((clara&&clara.proximoPasso)||'—'),
-      genEmail:function(){ self.setState({emailModal:true}); }, alreadyAsked:function(){ self.setState({jaSolicitado:true}); self.toast('Registrado: solicitação ao agente.'); },
-      jaSolicitadoLabel:(st.jaSolicitado?'✓ Solicitado ao agente':'Já solicitei ao agente'),
-      emailModal:st.emailModal, emailTexto:(st.emailModal?this.emailSugerido():''),
-      onFecharEmail:function(){ self.setState({emailModal:false}); },
-      onCopiarEmail:function(){ try{ navigator.clipboard.writeText(self.emailSugerido()); }catch(e){} self.setState({emailModal:false}); self.toast('Texto copiado.'); },
-      stop:function(e){ if(e&&e.stopPropagation)e.stopPropagation(); },
+      onImport:function(){ self.onImport(); },
+      onStartAudit:function(){ if(!st.running) self.startAudit(); },
+      onBack:function(){ self.setState({screen:'discover'}); },
+      playbookLabel:pbLabel, playbooks:playbooks,
+      needAttach:!both, bothAttached:both, slots:slots,
+      execBg:'#4327E6', execColor:'#fff', execCursor:'pointer', execShadow:'0 12px 24px -13px rgba(67,39,230,.7)', onExecute:function(){ self.reprocessar(); },
+      viewers:viewers, page:st.page, pageCount:3, pagePrev:function(){self.pagePrev();}, pageNext:function(){self.pageNext();},
+      zoom:st.zoom, zoomLabel:st.zoom+'%', zoomIn:function(){self.zoomIn();}, zoomOut:function(){self.zoomOut();}, pageW:st.zoom+'%',
+      notRun:!st.ran, hasRun:st.ran,
+      emptyHint:'Selecione um processo e clique em Iniciar Auditoria.',
+      sum:{ total:String(rows.length), ok:String(cOk), crit:String(cCrit), manual:String(cMan) },
+      groups:groups, pendencias:pendencias, hasPend:pendencias.length>0, noPend:(st.ran&&pendencias.length===0), pendCount:String(pendencias.length),
+      verdict:this.buildVerdict(),
+      genEmail:function(){ try{ navigator.clipboard.writeText(self.emailSugerido()); }catch(e){} self.toast('E-mail sugerido gerado (rascunho copiado) com '+cCrit+' divergência(s).'); },
+      alreadyAsked:function(){ self.toast('Registrado: solicitação ao agente já enviada.'); },
       toastOn:!!st.toast, toastMsg:st.toast,
     };
   }
