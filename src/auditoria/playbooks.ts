@@ -42,6 +42,12 @@ export interface ContainerExtraido {
 export interface DocumentoExtraido {
   nome: string; // nome do arquivo (evidência de origem)
   tipo: DocTipo;
+  /**
+   * Tipo que o OCR *identificou pelo conteúdo* do documento (não pelo nome do
+   * arquivo). Usado para reclassificar anexos com nome genérico ("doc1.pdf")
+   * antes da comparação. Opcional: só a camada OCR preenche.
+   */
+  tipoDetectado?: DocTipo | null;
   conhecimento: string | null;
   portoOrigem: string | null;
   portoDestino: string | null;

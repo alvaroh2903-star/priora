@@ -86,6 +86,30 @@ function processBase(p: string): string {
   return p.replace(/-\d{2}$/, '');
 }
 
+/**
+ * Referências cruzadas (multi-conversa). Nem todo e-mail traz o código IM####;
+ * quando não traz, o processo é recuperado casando identificadores que
+ * aparecem TAMBÉM em e-mails que citam o IM: número de contêiner (ISO 6346),
+ * número de booking e número de conhecimento/BL. São identificadores globais e
+ * de baixa ambiguidade, então um casamento único é um vínculo confiável.
+ */
+const RE_REF_CONTAINER = /\b[A-Z]{4}\d{7}\b/g; // ISO 6346
+const RE_REF_BOOKING = /\bBOOKING\s*(?:NUMBER|NO\.?|#)?\s*[:#-]?\s*([A-Z0-9][A-Z0-9._/-]{4,30})\b/gi;
+// token alfanumérico (com letra E dígito), 9–17 chars: nº de BL/conhecimento.
+const RE_REF_BLTOKEN = /\b(?=[A-Z0-9]*[A-Z])(?=[A-Z0-9]*\d)[A-Z0-9]{9,17}\b/g;
+function extractRefs(text: string): string[] {
+  const up = (text || '').toUpperCase();
+  const out = new Set<string>();
+  for (const m of up.matchAll(RE_REF_CONTAINER)) out.add(m[0]);
+  for (const m of up.matchAll(RE_REF_BOOKING)) {
+    const t = (m[1] || '').replace(/[^A-Z0-9]/g, '');
+    if (t) out.add(t);
+  }
+  for (const m of up.matchAll(RE_REF_BLTOKEN)) out.add(m[0]);
+  // Um código IM não serve de referência (ele é o próprio identificador do processo).
+  return Array.from(out).filter((r) => r.length >= 6 && !/^IM\d{3,6}$/.test(r));
+}
+
 interface DocRef {
   nome: string;
   tipo: DocTipo | 'INVOICE' | 'PACKING';
@@ -121,6 +145,42 @@ async function buildProcessos(accessToken: string): Promise<{ processos: Process
     source = 'inbox';
   }
 
+  // Índice de referência cruzada: ref -> conjunto de bases (IM) que a citam.
+  // Construído a partir de TODAS as mensagens (o corpo já vem como texto),
+  // inclusive as sem anexo — o IM costuma estar num e-mail e o anexo em outro.
+  const refIndex = new Map<string, Set<string>>();
+  const baseToProc = new Map<string, string>(); // base -> código IM canônico (prefere sufixo -NN)
+  for (const m of messages) {
+    const texto = `${m.subject || ''}\n${m.body?.content || m.bodyPreview || ''}`;
+    const procs = extractProcesses(texto);
+    if (procs.length === 0) continue;
+    const refs = extractRefs(texto);
+    for (const p of procs) {
+      const base = processBase(p);
+      const cur = baseToProc.get(base);
+      if (!cur || (/-\d{2}$/.test(p) && !/-\d{2}$/.test(cur))) baseToProc.set(base, p);
+      for (const r of refs) {
+        let s = refIndex.get(r);
+        if (!s) {
+          s = new Set();
+          refIndex.set(r, s);
+        }
+        s.add(base);
+      }
+    }
+  }
+  /** Resolve o processo de um e-mail sem IM cruzando suas referências. */
+  const resolvePorReferencia = (texto: string): string | null => {
+    const bases = new Set<string>();
+    for (const r of extractRefs(texto)) {
+      const s = refIndex.get(r);
+      if (s) s.forEach((b) => bases.add(b));
+    }
+    if (bases.size !== 1) return null; // ambíguo ou sem casamento → não vincula
+    const base = Array.from(bases)[0];
+    return baseToProc.get(base) || null;
+  };
+
   const comAnexo = messages.filter((m) => m.hasAttachments).slice(0, 30);
   const fulls = await Promise.all(
     comAnexo.map((m) =>
@@ -135,8 +195,12 @@ async function buildProcessos(accessToken: string): Promise<{ processos: Process
   for (const full of fulls) {
     if (!full) continue;
     const texto = `${full.subject || ''}\n${full.body?.content || full.bodyPreview || ''}`;
-    const procs = extractProcesses(texto);
-    if (procs.length === 0) continue;
+    let procs = extractProcesses(texto);
+    if (procs.length === 0) {
+      const resolvido = resolvePorReferencia(texto);
+      if (!resolvido) continue; // sem IM e sem referência que resolva → ignora
+      procs = [resolvido];
+    }
     const atts = (full.attachments || []).filter((a) =>
       isDocumentAttachment(a.name, a.contentType, a.isInline),
     );
@@ -268,14 +332,32 @@ auditoriaRouter.get('/:processo/auditoria', async (req: AuthedRequest, res, next
       return res.status(404).json({ error: 'Processo não encontrado na caixa do Courier.' });
     }
 
-    // Só os documentos com Playbook (evita OCR desnecessário). Um por tipo.
+    // Documentos com Playbook, classificados pelo NOME do arquivo (um por tipo).
     const selecionados: DocRef[] = [];
     for (const t of TIPOS_AUDITAVEIS) {
       const d = proc.docs.find((x) => x.tipo === t);
       if (d) selecionados.push(d);
     }
 
-    const sig = selecionados.map((d) => `${d.tipo}:${d.nome}`).sort().join('|');
+    // O nome do anexo "às vezes" indica o tipo. Quando falta algum tipo
+    // auditável, também lemos anexos genéricos (OUTRO/Invoice/Packing) e deixamos
+    // o CONTEÚDO (tipoDetectado do OCR) reclassificá-los — assim um "doc1.pdf"
+    // que é um HBL passa a ser auditado. Limitado para não estourar o OCR.
+    const jaSel = new Set(selecionados.map((d) => d.nome.toLowerCase()));
+    const faltaTipo = TIPOS_AUDITAVEIS.some((t) => !selecionados.some((d) => d.tipo === t));
+    const extras: DocRef[] = faltaTipo
+      ? proc.docs
+          .filter(
+            (d) =>
+              !jaSel.has(d.nome.toLowerCase()) &&
+              (d.tipo === 'OUTRO' || d.tipo === 'INVOICE' || d.tipo === 'PACKING') &&
+              isDocumentAttachment(d.nome, d.contentType, false),
+          )
+          .slice(0, 4)
+      : [];
+    const candidatos: DocRef[] = [...selecionados, ...extras].slice(0, 6);
+
+    const sig = candidatos.map((d) => `${d.tipo}:${d.nome}`).sort().join('|');
     const refresh = String(req.query.refresh || '') === '1';
     const cacheKey = `${alvoBase}`;
     const cached = auditCache.get(cacheKey);
@@ -283,50 +365,70 @@ auditoriaRouter.get('/:processo/auditoria', async (req: AuthedRequest, res, next
       return res.json(cached.payload);
     }
 
-    if (selecionados.length === 0) {
-      const payload = {
-        processo: proc.processo,
-        cliente: proc.cliente,
-        semDocumentos: true,
-        docs: proc.docs.map((d) => ({ nome: d.nome, tipoLabel: d.tipoLabel })),
-        faltando: proc.faltando,
-        resultado: null,
-        clara: null,
-      };
-      return res.json(payload);
+    const semDocsPayload = () => ({
+      processo: proc.processo,
+      cliente: proc.cliente,
+      semDocumentos: true,
+      docs: proc.docs.map((d) => ({ nome: d.nome, tipoLabel: d.tipoLabel })),
+      faltando: proc.faltando,
+      resultado: null,
+      clara: null,
+    });
+    if (candidatos.length === 0) {
+      return res.json(semDocsPayload());
     }
+
+    const vazio = (nome: string, tipo: DocTipo): DocumentoExtraido => ({
+      nome,
+      tipo,
+      tipoDetectado: null,
+      conhecimento: null,
+      portoOrigem: null,
+      portoDestino: null,
+      navio: null,
+      shipper: null,
+      consignee: null,
+      notify: null,
+      freteValor: null,
+      freteMoeda: null,
+      thcValor: null,
+      cliente: null,
+      containers: [],
+      legivel: false,
+    });
+    const ehAuditavel = (t: string): t is DocTipo => (TIPOS_AUDITAVEIS as string[]).includes(t);
 
     // OCR/extração em paralelo (cada doc é defensivo: falha vira "ilegível").
     const extraidos: DocumentoExtraido[] = await Promise.all(
-      selecionados.map((d) =>
-        withTimeout(
-          extrairDocumento(req.accessToken!, d.emailId, d.attachmentId, d.nome, d.tipo as DocTipo),
+      candidatos.map((d) => {
+        const hint: DocTipo = ehAuditavel(d.tipo) ? d.tipo : 'OUTRO';
+        return withTimeout(
+          extrairDocumento(req.accessToken!, d.emailId, d.attachmentId, d.nome, hint),
           40000,
           'ocr',
-        ).catch(
-          () =>
-            ({
-              nome: d.nome,
-              tipo: d.tipo as DocTipo,
-              conhecimento: null,
-              portoOrigem: null,
-              portoDestino: null,
-              navio: null,
-              shipper: null,
-              consignee: null,
-              notify: null,
-              freteValor: null,
-              freteMoeda: null,
-              thcValor: null,
-              cliente: null,
-              containers: [],
-              legivel: false,
-            }) as DocumentoExtraido,
-        ),
-      ),
+        ).catch(() => vazio(d.nome, hint));
+      }),
     );
 
-    const resultado = executarAuditoria(extraidos);
+    // Reclassifica pelo CONTEÚDO os anexos cujo NOME não deu um tipo auditável.
+    for (const d of extraidos) {
+      if (!ehAuditavel(d.tipo) && d.tipoDetectado && ehAuditavel(d.tipoDetectado)) {
+        d.tipo = d.tipoDetectado;
+      }
+    }
+
+    // Um documento por tipo auditável (prefere legível). Só esses vão ao Playbook.
+    const paraAuditar: DocumentoExtraido[] = [];
+    for (const t of TIPOS_AUDITAVEIS) {
+      const doTipo = extraidos.filter((d) => d.tipo === t);
+      const escolhido = doTipo.find((d) => d.legivel) || doTipo[0];
+      if (escolhido) paraAuditar.push(escolhido);
+    }
+    if (paraAuditar.length === 0) {
+      return res.json(semDocsPayload());
+    }
+
+    const resultado = executarAuditoria(paraAuditar);
     const clara = await resumirAuditoria(resultado);
 
     // Cliente: primeiro que a extração conseguir ler (best-effort).
@@ -337,7 +439,7 @@ auditoriaRouter.get('/:processo/auditoria', async (req: AuthedRequest, res, next
       cliente,
       semDocumentos: false,
       qtdDocs: proc.qtdDocs,
-      docsAuditados: selecionados.map((d) => d.tipoLabel),
+      docsAuditados: paraAuditar.map((d) => TIPO_LABEL[d.tipo]),
       ilegiveis: extraidos.filter((d) => !d.legivel).map((d) => d.nome),
       resultado,
       clara,

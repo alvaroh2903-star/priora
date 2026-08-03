@@ -22,6 +22,7 @@ const ContainerSchema = z.object({
 
 const ExtractionSchema = z.object({
   legivel: z.boolean(),
+  tipoDetectado: z.enum(['MBL', 'HBL', 'CE_MASTER', 'CE_HOUSE', 'ITEM', 'OUTRO']),
   conhecimento: z.string().nullable(),
   portoOrigem: z.string().nullable(),
   portoDestino: z.string().nullable(),
@@ -49,6 +50,7 @@ REGRAS CRÍTICAS:
 
 Campos:
 - legivel: true se o documento é legível o suficiente para extração confiável.
+- tipoDetectado: que tipo de documento é ESTE, pelo CONTEÚDO (ignore o nome do arquivo). MBL = Master Bill of Lading (emitido pelo armador/carrier); HBL = House Bill of Lading (emitido pelo agente/freight forwarder); CE_MASTER = CE Mercante do conhecimento master; CE_HOUSE = CE Mercante do conhecimento house; ITEM = documento de item/contêiner isolado; OUTRO = qualquer outro (invoice, packing list, e-mail, etc.). Na dúvida entre MBL e HBL, use quem emitiu: carrier=MBL, agente/forwarder=HBL.
 - conhecimento: número do BL/conhecimento (MBL, HBL) ou do CE Mercante.
 - portoOrigem / portoDestino: portos (Port of Loading / Port of Discharge).
 - navio: nome do navio e viagem.
@@ -76,6 +78,7 @@ function docIlegivel(nome: string, tipo: DocTipo): DocumentoExtraido {
   return {
     nome,
     tipo,
+    tipoDetectado: null,
     conhecimento: null,
     portoOrigem: null,
     portoDestino: null,
@@ -129,6 +132,7 @@ export async function extrairDocumento(
     return {
       nome,
       tipo,
+      tipoDetectado: (ai.tipoDetectado as DocTipo) ?? null,
       conhecimento: ai.conhecimento,
       portoOrigem: ai.portoOrigem,
       portoDestino: ai.portoDestino,
