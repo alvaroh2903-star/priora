@@ -125,8 +125,19 @@ export const CARRIERS: CarrierMeta[] = [
     scac: ['HLCU', 'HLXU', 'UACU'],
     containerPrefixes: ['HLXU', 'HLBU', 'HPCU', 'HASU', 'UACU', 'CSQU'],
     trackingUrl: 'https://www.hapag-lloyd.com/en/online-business/track/track-by-booking-solution.html',
+    // Contêiner -> track-by-container; BL/booking -> track-by-booking.
+    // Nome do parâmetro (container=/booking=) a confirmar no site real; o scraper
+    // cai para o preenchimento do formulário caso a referência não apareça.
+    buildTrackingUrl: (ref, type) =>
+      type === 'container'
+        ? `https://www.hapag-lloyd.com/en/online-business/track/track-by-container-solution.html?container=${encodeURIComponent(
+            ref,
+          )}`
+        : `https://www.hapag-lloyd.com/en/online-business/track/track-by-booking-solution.html?booking=${encodeURIComponent(
+            ref,
+          )}`,
     needsLoginForDemurrage: true,
-    notes: 'páginas track-by-booking / track-by-container; deep link a confirmar. Verificar seletores.',
+    notes: 'páginas track-by-container / track-by-booking (aceita B/L). Scraper de eventos implementado; afinar seletores/param ao vivo.',
   },
   {
     id: 'cosco',

@@ -171,10 +171,19 @@ src/browser/
 └── carriers/
     ├── registry.ts       # 12 armadores (URLs, deep links, prefixos p/ detecção)
     ├── detect.ts         # detecta o armador (contêiner/BL) + valida ISO 6346
-    ├── scraper.ts        # scraper genérico (deep link/form, detecta login+captcha)
+    ├── pageUtils.ts      # cookies/login/captcha/preenchimento compartilhados
+    ├── scraper.ts        # despacho: scraper específico do armador ou o genérico
+    ├── scrapers/
+    │   ├── hapag.ts          # scraper da Hapag-Lloyd (eventos + gate-out/devolução)
+    │   └── hapagSelftest.ts  # self-test offline da extração (via setContent)
     ├── index.ts          # fachada: listCarriers / detect / trackShipment
     └── detectCli.ts      # CLI/teste de detecção (sem rede)
 ```
+
+**Hapag-Lloyd** é o primeiro portal com scraper específico: extrai os eventos
+de movimentação do rastreio público e deriva a **retirada (gate-out)** e a
+**devolução do vazio** — as datas que a aba Demurrage precisa. O `last free
+day`/valor exige login no portal comercial (fica `null`, próxima etapa).
 
 Armadores no registro: **Maersk, ONE, Yang Ming, MSC, PIL, Evergreen, HMM,
 CMA CGM, ZIM, Hapag-Lloyd, COSCO, OOCL**.
@@ -188,7 +197,18 @@ npm run browser:smoke        # -> [smoke] ✅ Playwright + Chromium OK
 
 # valida a detecção de armador (sem rede)
 npm run carriers:detect      # amostra dos 12 armadores
-npm run carriers:detect -- MSKU0439695 ONEY123456789
+npm run carriers:detect -- HLCUSHA2606GIPM7
+
+# valida a lógica de extração da Hapag (offline, via HTML de teste)
+npm run carriers:selftest
+```
+
+Rodar o rastreio **ao vivo** (precisa de acesso à internet — Render, ou local
+com rede/proxy; o build isolado não alcança os portais):
+
+```bash
+# no servidor, autenticado, com o Chromium instalado:
+curl "http://localhost:3000/api/demurrage/bot/track?ref=HLCUSHA2606GIPM7" --cookie "connect.sid=..."
 ```
 
 Rotas (protegidas por login, sob `/api/demurrage/bot`):
