@@ -105,6 +105,17 @@ export const config = {
     provider: (process.env.ANTICAPTCHA_PROVIDER || 'anti-captcha').trim(),
     apiKey: (process.env.ANTICAPTCHA_KEY || '').trim(),
   },
+  /**
+   * Parâmetros do loop de rastreio (bot de demurrage): por quanto tempo um
+   * resultado raspado é reaproveitado (cache) e quantos scrapers podem rodar em
+   * paralelo — proteção contra timeout/OOM no Render e bloqueio nos portais.
+   */
+  bot: {
+    resultTtlMs:
+      parseInt(process.env.BOT_RESULT_TTL_HOURS || '12', 10) * 60 * 60 * 1000,
+    concurrency: Math.max(1, parseInt(process.env.BOT_CONCURRENCY || '2', 10)),
+    maxBatch: Math.max(1, parseInt(process.env.BOT_MAX_BATCH || '10', 10)),
+  },
   /** Palavras-chave usadas para filtrar e-mails de logística/comércio exterior. */
   logisticsKeywords: (
     process.env.LOGISTICS_KEYWORDS ||

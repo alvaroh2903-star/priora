@@ -1,7 +1,16 @@
 import { Router } from 'express';
 import { requireAuth, AuthedRequest } from '../middleware/requireAuth';
-import { listCarriers, detect, trackShipment } from '../browser/carriers';
+import { listCarriers, detect, trackShipment, TrackingResult } from '../browser/carriers';
 import { withPage } from '../browser/browser';
+import { mapLimit } from '../browser/carriers/concurrency';
+import {
+  getBotResult,
+  saveBotResult,
+  isFresh,
+  getAllBotResults,
+} from '../demurrage/demurrageBotStore';
+import { trackingToDemurrageContainers } from '../demurrage/trackingMapper';
+import { organizeScrapedTracking } from '../demurrage/trackingOrganizer';
 import { config, hasProxy, isAntiCaptchaConfigured } from '../config';
 
 /**
@@ -29,6 +38,9 @@ demurrageBotRouter.get('/status', (_req: AuthedRequest, res) => {
     proxy: hasProxy(),
     antiCaptcha: isAntiCaptchaConfigured(),
     carriers: listCarriers().length,
+    cachedResults: Object.keys(getAllBotResults()).length,
+    cacheTtlHours: config.bot.resultTtlMs / 3_600_000,
+    concurrency: config.bot.concurrency,
   });
 });
 
@@ -95,4 +107,103 @@ demurrageBotRouter.get('/track', async (req: AuthedRequest, res, next) => {
   } catch (err) {
     next(err);
   }
+});
+
+/* ------------------------------------------------------------------ *
+ * O LOOP completo (enriquecimento): track (Playwright no portal) ->
+ * organiza (IA, se veio texto cru) -> cache -> formato do módulo Demurrage.
+ * É o que o botão "buscar no armador" e o disparo automático da aba chamam.
+ * ------------------------------------------------------------------ */
+
+/** Resposta enxuta e pronta para o cálculo de demurrage. */
+function shapeEnrich(result: TrackingResult) {
+  return {
+    carrier: { id: result.carrierId, name: result.carrierName },
+    reference: result.reference,
+    referenceType: result.referenceType,
+    ok: result.ok,
+    needsLogin: result.needsLogin,
+    needsCaptcha: result.needsCaptcha,
+    message: result.message,
+    sourceUrl: result.sourceUrl,
+    events: result.events,
+    demurrageContainers: trackingToDemurrageContainers(result),
+  };
+}
+
+/** Enriquece UMA referência (usa cache fresco; senão raspa e, se preciso, IA). */
+async function enrichOne(
+  ref: string,
+  carrierId: string | undefined,
+  refresh: boolean,
+) {
+  const cached = refresh ? null : getBotResult(ref);
+  if (cached && isFresh(cached, config.bot.resultTtlMs)) {
+    return { ...shapeEnrich(cached.result), cached: true, at: cached.at, organizedByAI: false };
+  }
+
+  const result = await trackShipment(ref, { carrierId });
+
+  // Se o scraper específico já trouxe datas, usamos direto. Se veio só texto
+  // cru (portal sem scraper próprio), a Clara organiza em datas/status.
+  const hasDates = result.containers.some(
+    (c) => c.gateOut || c.emptyReturn || c.lastFreeDay,
+  );
+  let organizedByAI = false;
+  if (!hasDates && result.raw) {
+    const organized = await organizeScrapedTracking(result.carrierName, ref, result.raw);
+    if (organized && organized.length) {
+      result.containers = organized;
+      organizedByAI = true;
+    }
+  }
+
+  const rec = saveBotResult(ref, result);
+  return { ...shapeEnrich(result), cached: false, at: rec.at, organizedByAI };
+}
+
+/** GET /api/demurrage/bot/enrich?ref=...[&carrier=][&refresh=1] — um BL. */
+demurrageBotRouter.get('/enrich', async (req: AuthedRequest, res, next) => {
+  try {
+    const ref = String(req.query.ref || '').trim();
+    if (!ref) return res.status(400).json({ error: 'Informe ?ref=<contêiner|BL|booking>.' });
+    const carrierId = req.query.carrier ? String(req.query.carrier).trim() : undefined;
+    const refresh = req.query.refresh === '1' || req.query.refresh === 'true';
+    res.json(await enrichOne(ref, carrierId, refresh));
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * POST /api/demurrage/bot/enrich-batch  { refs: string[], refresh?: boolean }
+ * Vários BLs (os que a IA achou no e-mail), com concorrência limitada e teto.
+ */
+demurrageBotRouter.post('/enrich-batch', async (req: AuthedRequest, res, next) => {
+  try {
+    const raw = Array.isArray(req.body?.refs) ? req.body.refs : [];
+    const refs = Array.from(
+      new Set(raw.map((r: unknown) => String(r || '').trim()).filter(Boolean)),
+    ).slice(0, config.bot.maxBatch) as string[];
+    if (refs.length === 0) {
+      return res.status(400).json({ error: 'Envie { refs: ["...", "..."] }.' });
+    }
+    const refresh = req.body?.refresh === true || req.body?.refresh === '1';
+    const results = await mapLimit(refs, config.bot.concurrency, async (ref) => {
+      try {
+        return await enrichOne(ref, undefined, refresh);
+      } catch (err) {
+        return { reference: ref, ok: false, error: (err as Error).message };
+      }
+    });
+    res.json({ count: results.length, results });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** GET /api/demurrage/bot/results — o que já está no cache (sem raspar). */
+demurrageBotRouter.get('/results', (_req: AuthedRequest, res) => {
+  const all = getAllBotResults();
+  res.json({ count: Object.keys(all).length, results: all });
 });

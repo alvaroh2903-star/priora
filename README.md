@@ -242,6 +242,17 @@ Rotas (protegidas por login, sob `/api/demurrage/bot`):
 | GET    | `/carriers` | Lista dos armadores suportados                        |
 | GET    | `/detect?ref=` | Detecta o armador de uma referência (sem browser)  |
 | GET    | `/track?ref=[&carrier=][&type=]` | Sobe o Chromium e consulta o portal |
+| GET    | `/ip`       | IP de saída do navegador (confirma o proxy)           |
+| GET    | `/enrich?ref=[&refresh=1]` | **Loop**: raspa → organiza (IA) → cache → formato demurrage |
+| POST   | `/enrich-batch` `{refs:[]}` | Vários BLs do e-mail, com concorrência limitada |
+| GET    | `/results`  | Resultados já em cache (sem raspar)                    |
+
+O **loop completo** (`/enrich`) é o que o botão *"buscar no armador"* aciona:
+`track` (Playwright digita o BL no portal) → se veio texto cru, a **Clara
+organiza** em datas/status → **cache** (não re-raspa) → devolve no formato de
+contêiner do Demurrage (`gateOut`→retirada, `emptyReturn`→devolução). O free
+time/diária continuam vindo do e-mail e são mesclados no cálculo
+(`mergeEmailAndPortal`).
 
 Uso na camada de scraping (próximas etapas — login, CAPTCHA e extração por portal):
 
