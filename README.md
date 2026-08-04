@@ -215,8 +215,8 @@ curl "http://localhost:3000/api/demurrage/bot/track?ref=HLCUSHA2606GIPM7" --cook
 
 Os portais bloqueiam IP de datacenter (a Hapag devolve **403** para requisições
 sem navegador/IP residencial). Por isso o rastreio ao vivo roda em **Docker**
-(imagem oficial do Playwright, com Chromium + libs) e, na prática, atrás de um
-**proxy residencial**.
+(base Node + Chromium/libs instalados pelo Playwright, ver `Dockerfile`) e, na
+prática, atrás de um **proxy residencial**.
 
 1. No Render, o Blueprint já usa o `Dockerfile` (runtime Docker) — faça o deploy da branch.
 2. Cadastre o proxy no painel do Render (Environment):

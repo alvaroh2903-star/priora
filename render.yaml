@@ -5,9 +5,9 @@
 services:
   - type: web
     name: priora
-    # Runtime Docker com a imagem oficial do Playwright (Chromium + libs de
-    # sistema já inclusos) — necessário para os scrapers de demurrage rodarem.
-    # O build e o start ficam no Dockerfile.
+    # Runtime Docker (ver Dockerfile): base Node + Chromium/libs instalados pelo
+    # Playwright — necessário para os scrapers de demurrage rodarem (o runtime
+    # nativo do Render não traz as bibliotecas de sistema do navegador).
     runtime: docker
     dockerfilePath: ./Dockerfile
     plan: free
