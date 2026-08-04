@@ -11,6 +11,7 @@ import { processRouter } from './routes/processRoutes';
 import { courierRouter } from './routes/courierRoutes';
 import { trackingRouter } from './routes/trackingRoutes';
 import { demurrageRouter } from './routes/demurrageRoutes';
+import { demurrageBotRouter } from './routes/demurrageBotRoutes';
 import { auditoriaRouter } from './routes/auditoriaRoutes';
 
 const app = express();
@@ -60,6 +61,7 @@ app.use('/api/parse', parseRouter);
 app.use('/api/processes', processRouter);
 app.use('/api/couriers', courierRouter);
 app.use('/api/tracking', trackingRouter);
+app.use('/api/demurrage/bot', demurrageBotRouter);
 app.use('/api/demurrage', demurrageRouter);
 app.use('/api/auditoria', auditoriaRouter);
 

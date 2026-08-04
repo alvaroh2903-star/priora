@@ -162,33 +162,51 @@ buscar os dados **na origem** (free time, datas de retirada/devolução e
 diárias nos portais de armadores/terminais), o projeto usa o **Playwright**
 (Node.js) — com suporte a **proxy** e, adiante, **resolução de CAPTCHA**.
 
-Esta etapa entrega a **fundação do navegador** (subir o Chromium de forma
-robusta, reaproveitar a instância e entregar uma página pronta, com proxy):
+Estrutura entregue:
 
 ```
 src/browser/
-├── browser.ts   # getBrowser / newContext / withPage / closeBrowser (+ proxy)
-└── smoke.ts     # teste de fumaça: sobe o Chromium, renderiza HTML e roda JS
+├── browser.ts            # getBrowser / newContext / withPage / closeBrowser (+ proxy)
+├── smoke.ts              # teste de fumaça: sobe o Chromium, renderiza HTML e roda JS
+└── carriers/
+    ├── registry.ts       # 12 armadores (URLs, deep links, prefixos p/ detecção)
+    ├── detect.ts         # detecta o armador (contêiner/BL) + valida ISO 6346
+    ├── scraper.ts        # scraper genérico (deep link/form, detecta login+captcha)
+    ├── index.ts          # fachada: listCarriers / detect / trackShipment
+    └── detectCli.ts      # CLI/teste de detecção (sem rede)
 ```
+
+Armadores no registro: **Maersk, ONE, Yang Ming, MSC, PIL, Evergreen, HMM,
+CMA CGM, ZIM, Hapag-Lloyd, COSCO, OOCL**.
 
 ```bash
 # instala o Playwright + navegador (no CI/Render: npx playwright install chromium)
 npm install
 
 # valida que o navegador sobe neste ambiente
-npm run browser:smoke
-# -> [smoke] ✅ Playwright + Chromium OK
+npm run browser:smoke        # -> [smoke] ✅ Playwright + Chromium OK
+
+# valida a detecção de armador (sem rede)
+npm run carriers:detect      # amostra dos 12 armadores
+npm run carriers:detect -- MSKU0439695 ONEY123456789
 ```
 
-Uso na camada de scraping (próximas etapas — login, CAPTCHA e cada portal):
+Rotas (protegidas por login, sob `/api/demurrage/bot`):
+
+| Método | Rota        | Descrição                                             |
+| ------ | ----------- | ----------------------------------------------------- |
+| GET    | `/status`   | O que está configurado (proxy, anti-captcha, nº de armadores) |
+| GET    | `/carriers` | Lista dos armadores suportados                        |
+| GET    | `/detect?ref=` | Detecta o armador de uma referência (sem browser)  |
+| GET    | `/track?ref=[&carrier=][&type=]` | Sobe o Chromium e consulta o portal |
+
+Uso na camada de scraping (próximas etapas — login, CAPTCHA e extração por portal):
 
 ```ts
-import { withPage } from './browser/browser';
+import { trackShipment, detect } from './browser/carriers';
 
-const titulo = await withPage(async (page) => {
-  await page.goto('https://portal-do-armador.exemplo/track');
-  return page.title();
-}); // o contexto é fechado automaticamente ao fim
+detect('MSKU0439695');            // { carrier: { id: 'maersk' }, referenceType: 'container', ... }
+await trackShipment('MSKU0439695'); // sobe o Chromium, consulta o portal do armador
 ```
 
 Configuração (ver `.env.example`): `BROWSER_HEADLESS`, `PROXY_SERVER`
