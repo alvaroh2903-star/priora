@@ -5,20 +5,14 @@
 services:
   - type: web
     name: priora
-    runtime: node
+    # Runtime Docker com a imagem oficial do Playwright (Chromium + libs de
+    # sistema já inclusos) — necessário para os scrapers de demurrage rodarem.
+    # O build e o start ficam no Dockerfile.
+    runtime: docker
+    dockerfilePath: ./Dockerfile
     plan: free
-    # --include=dev garante que o TypeScript (devDependency) exista para o build.
-    # `playwright install chromium` baixa o navegador do Chromium (não há browser
-    # pré-instalado no Render) para o cache padrão, que persiste até o runtime.
-    # Obs.: NÃO usamos `--with-deps` aqui porque ele roda apt-get (sem sudo no
-    # runtime nativo). Quando os scrapers forem ligados, migramos para o runtime
-    # Docker com a imagem oficial mcr.microsoft.com/playwright, que já traz as libs.
-    buildCommand: npm install --include=dev && npx playwright install chromium && npm run build
-    startCommand: npm start
     healthCheckPath: /health
     envVars:
-      - key: NODE_VERSION
-        value: "20"
       - key: NODE_ENV
         value: production
       - key: SESSION_SECRET

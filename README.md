@@ -211,6 +211,29 @@ com rede/proxy; o build isolado não alcança os portais):
 curl "http://localhost:3000/api/demurrage/bot/track?ref=HLCUSHA2606GIPM7" --cookie "connect.sid=..."
 ```
 
+### Deploy no Render (Docker) e teste do proxy
+
+Os portais bloqueiam IP de datacenter (a Hapag devolve **403** para requisições
+sem navegador/IP residencial). Por isso o rastreio ao vivo roda em **Docker**
+(imagem oficial do Playwright, com Chromium + libs) e, na prática, atrás de um
+**proxy residencial**.
+
+1. No Render, o Blueprint já usa o `Dockerfile` (runtime Docker) — faça o deploy da branch.
+2. Cadastre o proxy no painel do Render (Environment):
+   - `PROXY_SERVER` = `http://host:porta` (ou `socks5://host:porta`)
+   - `PROXY_USERNAME` / `PROXY_PASSWORD` (se autenticado)
+3. Confirme que o navegador sai pelo proxy:
+   ```
+   GET /api/demurrage/bot/ip
+   -> { "proxyConfigured": true, "exitIp": "<IP do proxy>", ... }
+   ```
+   Se `exitIp` for o IP do proxy (não o do Render), o proxy está ativo.
+4. Rode o rastreio: `GET /api/demurrage/bot/track?ref=HLCUSHA2606GIPM7`.
+
+Observações: o plano free do Render (512 MB) é apertado para o Chromium — se
+houver OOM, suba de plano para testes intensos. O self-test cobre a lógica de
+extração; o run ao vivo confirma os seletores reais da Hapag.
+
 Rotas (protegidas por login, sob `/api/demurrage/bot`):
 
 | Método | Rota        | Descrição                                             |

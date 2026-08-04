@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import { requireAuth, AuthedRequest } from '../middleware/requireAuth';
 import { listCarriers, detect, trackShipment } from '../browser/carriers';
-import { hasProxy, isAntiCaptchaConfigured } from '../config';
+import { withPage } from '../browser/browser';
+import { config, hasProxy, isAntiCaptchaConfigured } from '../config';
 
 /**
  * Priora — Módulo Demurrage / Rotas do bot de armadores (Playwright).
@@ -34,6 +35,42 @@ demurrageBotRouter.get('/status', (_req: AuthedRequest, res) => {
 /** Armadores suportados. */
 demurrageBotRouter.get('/carriers', (_req: AuthedRequest, res) => {
   res.json({ carriers: listCarriers() });
+});
+
+/**
+ * Diagnóstico do proxy: abre o navegador (passando pelo proxy, se configurado)
+ * e reporta o IP de saída. Use para confirmar que o proxy residencial está
+ * ativo ANTES de testar os portais.
+ *   GET /api/demurrage/bot/ip
+ */
+demurrageBotRouter.get('/ip', async (_req: AuthedRequest, res, next) => {
+  try {
+    const data = await withPage(async (page) => {
+      const resp = await page.goto('https://api.ipify.org?format=json', {
+        waitUntil: 'domcontentloaded',
+        timeout: 20000,
+      });
+      const body = (await page.textContent('body').catch(() => '')) || '';
+      let ip: string | null = null;
+      try {
+        ip = JSON.parse(body).ip;
+      } catch {
+        /* corpo não-JSON */
+      }
+      return { httpStatus: resp?.status() ?? null, ip, sample: body.slice(0, 120) };
+    });
+    res.json({
+      proxyConfigured: hasProxy(),
+      proxyServer: hasProxy() ? config.browser.proxy.server : null,
+      exitIp: data.ip,
+      httpStatus: data.httpStatus,
+      note: hasProxy()
+        ? 'exitIp deve ser o IP do proxy. Se for o IP do servidor, o proxy não está ativo.'
+        : 'Sem proxy configurado: exitIp é o IP do próprio servidor (Render).',
+    });
+  } catch (err) {
+    next(err);
+  }
 });
 
 /** Detecção (sem browser): dado um contêiner/BL, sugere o armador e o deep link. */

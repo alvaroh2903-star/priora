@@ -219,6 +219,11 @@ export async function scrapeHapag(page: Page, ctx: ScrapeContext): Promise<Scrap
     }
   }
 
+  // A tabela de resultados costuma renderizar via XHR após o load (SPA).
+  await page
+    .waitForSelector('table tr, [role="row"]', { timeout: 15000 })
+    .catch(() => undefined);
+
   const needsCaptcha = await detectCaptcha(page);
   const needsLogin = await detectLogin(page, body);
   const events = await extractEventsFromPage(page);

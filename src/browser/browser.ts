@@ -36,6 +36,8 @@ const LAUNCH_ARGS = [
   '--disable-setuid-sandbox',
   '--disable-dev-shm-usage', // evita crash por /dev/shm pequeno em containers
   '--disable-gpu',
+  // Reduz sinais óbvios de automação (não vence anti-bot avançado, mas ajuda).
+  '--disable-blink-features=AutomationControlled',
 ];
 
 /** Opções de proxy no formato do Playwright, ou undefined se não houver. */
@@ -85,8 +87,14 @@ export async function newContext(
     userAgent: DEFAULT_USER_AGENT,
     locale: 'pt-BR',
     timezoneId: 'America/Sao_Paulo',
+    viewport: { width: 1366, height: 768 },
+    extraHTTPHeaders: { 'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8' },
     ...(proxy ? { proxy } : {}),
     ...options,
+  });
+  // Mascara o sinal mais óbvio de automação (navigator.webdriver).
+  await ctx.addInitScript(() => {
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
   });
   ctx.setDefaultNavigationTimeout(config.browser.navigationTimeoutMs);
   ctx.setDefaultTimeout(config.browser.navigationTimeoutMs);
