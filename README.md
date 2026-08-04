@@ -155,6 +155,48 @@ curl -X POST http://localhost:3000/api/emails/send \
   }'
 ```
 
+## Bot de Demurrage (Playwright) — base
+
+O módulo Demurrage já monta a aba a partir do Outlook + IA (Clara). Para
+buscar os dados **na origem** (free time, datas de retirada/devolução e
+diárias nos portais de armadores/terminais), o projeto usa o **Playwright**
+(Node.js) — com suporte a **proxy** e, adiante, **resolução de CAPTCHA**.
+
+Esta etapa entrega a **fundação do navegador** (subir o Chromium de forma
+robusta, reaproveitar a instância e entregar uma página pronta, com proxy):
+
+```
+src/browser/
+├── browser.ts   # getBrowser / newContext / withPage / closeBrowser (+ proxy)
+└── smoke.ts     # teste de fumaça: sobe o Chromium, renderiza HTML e roda JS
+```
+
+```bash
+# instala o Playwright + navegador (no CI/Render: npx playwright install chromium)
+npm install
+
+# valida que o navegador sobe neste ambiente
+npm run browser:smoke
+# -> [smoke] ✅ Playwright + Chromium OK
+```
+
+Uso na camada de scraping (próximas etapas — login, CAPTCHA e cada portal):
+
+```ts
+import { withPage } from './browser/browser';
+
+const titulo = await withPage(async (page) => {
+  await page.goto('https://portal-do-armador.exemplo/track');
+  return page.title();
+}); // o contexto é fechado automaticamente ao fim
+```
+
+Configuração (ver `.env.example`): `BROWSER_HEADLESS`, `PROXY_SERVER`
+/`PROXY_USERNAME`/`PROXY_PASSWORD`, `ANTICAPTCHA_PROVIDER`/`ANTICAPTCHA_KEY`.
+No Render, o build baixa o Chromium (`npx playwright install chromium`); quando
+os scrapers forem ligados, o runtime Docker (imagem `mcr.microsoft.com/playwright`)
+passa a ser recomendado por já trazer as bibliotecas de sistema do navegador.
+
 ## Notas de produção
 
 - Use HTTPS (o cookie de sessão já usa `secure` quando `NODE_ENV=production`).

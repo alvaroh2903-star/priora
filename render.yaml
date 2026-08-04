@@ -8,7 +8,12 @@ services:
     runtime: node
     plan: free
     # --include=dev garante que o TypeScript (devDependency) exista para o build.
-    buildCommand: npm install --include=dev && npm run build
+    # `playwright install chromium` baixa o navegador do Chromium (não há browser
+    # pré-instalado no Render) para o cache padrão, que persiste até o runtime.
+    # Obs.: NÃO usamos `--with-deps` aqui porque ele roda apt-get (sem sudo no
+    # runtime nativo). Quando os scrapers forem ligados, migramos para o runtime
+    # Docker com a imagem oficial mcr.microsoft.com/playwright, que já traz as libs.
+    buildCommand: npm install --include=dev && npx playwright install chromium && npm run build
     startCommand: npm start
     healthCheckPath: /health
     envVars:
@@ -42,3 +47,16 @@ services:
         sync: false
       - key: DHL_BASE_URL
         value: https://api-eu.dhl.com
+      # --- Automação de navegador (Playwright) — base do bot de demurrage ---
+      - key: BROWSER_HEADLESS
+        value: "true"                # false só para depuração local com tela
+      - key: PROXY_SERVER
+        sync: false                  # http://host:porta ou socks5://host:porta (opcional)
+      - key: PROXY_USERNAME
+        sync: false                  # opcional (proxy autenticado)
+      - key: PROXY_PASSWORD
+        sync: false                  # opcional (proxy autenticado)
+      - key: ANTICAPTCHA_PROVIDER
+        value: anti-captcha          # anti-captcha | 2captcha (usado nas próximas etapas)
+      - key: ANTICAPTCHA_KEY
+        sync: false                  # chave do serviço de captcha (cole no painel)

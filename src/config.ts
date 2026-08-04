@@ -69,6 +69,42 @@ export const config = {
     apiSecret: (process.env.DHL_API_SECRET || '').trim(), // reservado (outras APIs DHL usam OAuth)
     baseUrl: (process.env.DHL_BASE_URL || 'https://api-eu.dhl.com').trim(),
   },
+  /**
+   * Automação de navegador (Playwright) — base dos scrapers que buscam os dados
+   * de demurrage direto nos portais de armadores/terminais (free time, datas de
+   * retirada/devolução, diárias). Login, captcha e proxy entram nas rotas de bot.
+   */
+  browser: {
+    /** headless=false só faz sentido em depuração local. Padrão: true. */
+    headless: (process.env.BROWSER_HEADLESS || 'true').trim().toLowerCase() !== 'false',
+    /**
+     * Caminho explícito do executável do Chromium. Normalmente vazio: o
+     * Playwright resolve sozinho o browser instalado (via PLAYWRIGHT_BROWSERS_PATH
+     * no ambiente ou pelo cache do `playwright install`).
+     */
+    executablePath: (process.env.PLAYWRIGHT_CHROMIUM_PATH || '').trim(),
+    /** Timeout padrão de navegação (ms). */
+    navigationTimeoutMs: parseInt(process.env.BROWSER_NAV_TIMEOUT_MS || '30000', 10),
+    /**
+     * Proxy de saída (residencial/datacenter) usado pelos scrapers para não
+     * bater sempre do mesmo IP. Sem PROXY_SERVER, roda sem proxy.
+     * Formato do server: "http://host:porta" ou "socks5://host:porta".
+     */
+    proxy: {
+      server: (process.env.PROXY_SERVER || '').trim(),
+      username: (process.env.PROXY_USERNAME || '').trim(),
+      password: (process.env.PROXY_PASSWORD || '').trim(),
+    },
+  },
+  /**
+   * Serviço de resolução de CAPTCHA (ex.: anti-captcha.com / 2captcha), usado
+   * pelos scrapers quando um portal exige. Sem a chave, o passo de captcha fica
+   * indisponível e o scraper falha graciosamente. (Ligado nas próximas etapas.)
+   */
+  antiCaptcha: {
+    provider: (process.env.ANTICAPTCHA_PROVIDER || 'anti-captcha').trim(),
+    apiKey: (process.env.ANTICAPTCHA_KEY || '').trim(),
+  },
   /** Palavras-chave usadas para filtrar e-mails de logística/comércio exterior. */
   logisticsKeywords: (
     process.env.LOGISTICS_KEYWORDS ||
@@ -84,4 +120,14 @@ export const authority = `https://login.microsoftonline.com/${config.azure.tenan
 /** Indica se o login com a Microsoft está configurado (client id + secret). */
 export function isAzureConfigured(): boolean {
   return Boolean(config.azure.clientId && config.azure.clientSecret);
+}
+
+/** Indica se há um proxy de saída configurado para os scrapers. */
+export function hasProxy(): boolean {
+  return Boolean(config.browser.proxy.server);
+}
+
+/** Indica se o serviço de resolução de CAPTCHA está configurado. */
+export function isAntiCaptchaConfigured(): boolean {
+  return Boolean(config.antiCaptcha.apiKey);
 }
