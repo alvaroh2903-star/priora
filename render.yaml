@@ -5,18 +5,14 @@
 services:
   - type: web
     name: priora
-    # App 100% Node. O Chromium NÃO roda no runtime nativo do Render (faltam as
-    # libs de sistema e o build não tem root p/ instalá-las), então o rastreio ao
-    # vivo passa a usar API HTTP (sem navegador). O Dockerfile permanece no repo
-    # caso um dia se opte pelo runtime Docker (aí seria "runtime: docker").
-    runtime: node
+    # Runtime Docker (ver Dockerfile): base Node + Chromium/libs instalados pelo
+    # Playwright — necessário para o bot de demurrage rodar (o runtime nativo do
+    # Render não traz as bibliotecas de sistema do navegador).
+    runtime: docker
+    dockerfilePath: ./Dockerfile
     plan: free
-    buildCommand: PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install --include=dev && npm run build
-    startCommand: npm start
     healthCheckPath: /health
     envVars:
-      - key: NODE_VERSION
-        value: "20"
       - key: NODE_ENV
         value: production
       - key: SESSION_SECRET
