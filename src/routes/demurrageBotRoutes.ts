@@ -11,6 +11,8 @@ import {
 } from '../demurrage/demurrageBotStore';
 import { trackingToDemurrageContainers } from '../demurrage/trackingMapper';
 import { organizeScrapedTracking } from '../demurrage/trackingOrganizer';
+import { calculateDemurrage } from '../demurrage/calculator';
+import { getDefaultTariff } from '../demurrage/tariffs';
 import { config, hasProxy, isAntiCaptchaConfigured } from '../config';
 
 /**
@@ -206,4 +208,31 @@ demurrageBotRouter.post('/enrich-batch', async (req: AuthedRequest, res, next) =
 demurrageBotRouter.get('/results', (_req: AuthedRequest, res) => {
   const all = getAllBotResults();
   res.json({ count: Object.keys(all).length, results: all });
+});
+
+/**
+ * POST /api/demurrage/bot/calc — calcula o demurrage (blueprint §8).
+ * body: { startDate, returnDate, freeTimeDays, carrier?, tariffTable? }
+ * Sem tariffTable, usa a tabela de EXEMPLO por armador (a real vem do cliente).
+ */
+demurrageBotRouter.post('/calc', (req: AuthedRequest, res) => {
+  const { startDate, returnDate, freeTimeDays, carrier, tariffTable } = req.body || {};
+  if (!startDate || !returnDate || freeTimeDays == null) {
+    return res
+      .status(400)
+      .json({ error: 'Informe startDate, returnDate e freeTimeDays.' });
+  }
+  try {
+    const table = tariffTable || getDefaultTariff(carrier);
+    res.json(
+      calculateDemurrage({
+        startDate,
+        returnDate,
+        freeTimeDays: Number(freeTimeDays),
+        tariffTable: table,
+      }),
+    );
+  } catch (err) {
+    res.status(400).json({ error: (err as Error).message });
+  }
 });

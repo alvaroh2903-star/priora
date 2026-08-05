@@ -13,7 +13,8 @@
     "typecheck": "tsc --noEmit",
     "browser:smoke": "ts-node src/browser/smoke.ts",
     "carriers:detect": "ts-node src/browser/carriers/detectCli.ts",
-    "carriers:selftest": "ts-node src/browser/carriers/scrapers/hapagSelftest.ts"
+    "carriers:selftest": "ts-node src/browser/carriers/scrapers/hapagSelftest.ts",
+    "demurrage:calc": "ts-node src/demurrage/calculatorSelftest.ts"
   },
   "keywords": [
     "outlook",
