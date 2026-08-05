@@ -13,6 +13,8 @@ import { trackingRouter } from './routes/trackingRoutes';
 import { demurrageRouter } from './routes/demurrageRoutes';
 import { demurrageBotRouter } from './routes/demurrageBotRoutes';
 import { auditoriaRouter } from './routes/auditoriaRoutes';
+import { chromium } from 'playwright';
+import { withPage } from './browser/browser';
 
 const app = express();
 
@@ -75,6 +77,50 @@ app.get('/api/me', (req, res) => {
 
 /** Health check. */
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
+
+/**
+ * Diagnóstico do navegador (SEM login): sobe o Chromium e renderiza um HTML
+ * trivial para provar que o Playwright funciona neste ambiente (ex.: Render).
+ * Não usa rede. Protegido por single-flight + cache curto para não virar vetor
+ * de abuso (cada chamada spawna um navegador).
+ */
+let browserHealthCache: { at: number; body: unknown } | null = null;
+let browserHealthInFlight: Promise<unknown> | null = null;
+
+async function browserHealth(): Promise<unknown> {
+  if (browserHealthCache && Date.now() - browserHealthCache.at < 60_000) {
+    return { ...(browserHealthCache.body as object), cached: true };
+  }
+  if (browserHealthInFlight) return browserHealthInFlight;
+  browserHealthInFlight = (async () => {
+    const startedAt = Date.now();
+    try {
+      const title = await withPage(async (page) => {
+        await page.setContent('<!doctype html><title>priora-browser-ok</title>');
+        return page.title();
+      });
+      const body = {
+        browser: title === 'priora-browser-ok' ? 'ok' : 'unexpected',
+        chromium: chromium.executablePath(),
+        title,
+        ms: Date.now() - startedAt,
+      };
+      browserHealthCache = { at: Date.now(), body };
+      return body;
+    } catch (err) {
+      const body = { browser: 'error', error: (err as Error).message, ms: Date.now() - startedAt };
+      browserHealthCache = { at: Date.now(), body };
+      return body;
+    } finally {
+      browserHealthInFlight = null;
+    }
+  })();
+  return browserHealthInFlight;
+}
+
+app.get('/health/browser', async (_req, res) => {
+  res.json(await browserHealth());
+});
 
 // Tratador de erros central.
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
