@@ -56,6 +56,8 @@ export async function organizeScrapedTracking(
       numero: c.numero,
       tipo: null,
       status: c.status,
+      dischargeDate: null, // o texto cru raramente separa; fica p/ refinamento
+      availableDate: null,
       gateOut: c.gateOut,
       emptyReturn: c.emptyReturn,
       lastFreeDay: c.lastFreeDay,

@@ -1,5 +1,6 @@
 import { Page } from 'playwright';
-import { ContainerInfo, TrackingEvent } from '../types';
+import { ContainerInfo, NormalizedEventType, TrackingEvent } from '../types';
+import { classifyEvent } from '../eventTypes';
 import { ScrapeContext, ScrapeOutput } from '../scraperTypes';
 import {
   acceptCookies,
@@ -126,7 +127,7 @@ function rowToEvent(cells: string[]): TrackingEvent | null {
     rest.find((x) => /[A-Za-zÀ-ÿ]/.test(x.c) && parseDateToISO(x.c) === null)?.c ||
     null;
 
-  return { date, status, location, vessel: null, voyage: null };
+  return { date, status, location, vessel: null, voyage: null, type: classifyEvent(status) };
 }
 
 function dedupe(events: TrackingEvent[]): TrackingEvent[] {
@@ -166,16 +167,14 @@ export async function extractEventsFromPage(page: Page): Promise<TrackingEvent[]
   return dedupe(events);
 }
 
-// Derivação das datas relevantes a demurrage a partir dos eventos.
-const GATE_OUT_RE = /(to consignee|delivered to|gate\s?out|full.*out|out\s?gate|picked up|import.*deliver|entregue|sa[ií]da.*cheio)/i;
-const EMPTY_RETURN_RE = /(empty.*return|return.*empty|empty container returned|empty received|returned.*depot|empty in\b|devolu)/i;
-
-function latestByRegex(events: TrackingEvent[], re: RegExp, excludeEmpty = false): string | null {
-  const matches = events
-    .filter((e) => e.date && re.test(e.status) && (!excludeEmpty || !/empty/i.test(e.status)))
+// Derivação das datas relevantes a demurrage a partir dos eventos TIPADOS.
+/** Data mais recente entre os eventos de um tipo (ou null). */
+function latestByType(events: TrackingEvent[], type: NormalizedEventType): string | null {
+  const dates = events
+    .filter((e) => e.date && e.type === type)
     .map((e) => e.date as string)
     .sort();
-  return matches.length ? matches[matches.length - 1] : null;
+  return dates.length ? dates[dates.length - 1] : null;
 }
 
 function latestEvent(events: TrackingEvent[]): TrackingEvent | null {
@@ -189,16 +188,16 @@ export function deriveContainers(
   containerHint: string | null,
 ): ContainerInfo[] {
   if (events.length === 0 && !containerHint) return [];
-  const gateOut = latestByRegex(events, GATE_OUT_RE, true);
-  const emptyReturn = latestByRegex(events, EMPTY_RETURN_RE);
   const last = latestEvent(events);
   return [
     {
       numero: containerHint,
       tipo: null,
       status: last?.status || null,
-      gateOut,
-      emptyReturn,
+      dischargeDate: latestByType(events, 'discharge'),
+      availableDate: latestByType(events, 'available'),
+      gateOut: latestByType(events, 'gate_out'),
+      emptyReturn: latestByType(events, 'empty_return'),
       lastFreeDay: null, // exige login no portal comercial (próxima etapa)
     },
   ];

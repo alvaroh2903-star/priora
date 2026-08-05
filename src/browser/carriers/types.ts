@@ -7,6 +7,15 @@
 /** Tipo da referência informada pelo operador. */
 export type ReferenceType = 'container' | 'bl' | 'booking' | 'unknown';
 
+/** Tipo de evento normalizado (blueprint §7). */
+export type NormalizedEventType =
+  | 'berth' // atracação
+  | 'discharge' // descarga
+  | 'available' // disponibilidade no terminal
+  | 'gate_out' // saída do cheio (retirada)
+  | 'empty_return' // devolução do vazio
+  | 'other';
+
 /** Um evento na linha do tempo do rastreio (gate-in, embarque, descarga…). */
 export interface TrackingEvent {
   /** Data do evento em ISO (AAAA-MM-DD…) quando parseável, senão null. */
@@ -16,6 +25,8 @@ export interface TrackingEvent {
   location: string | null;
   vessel: string | null;
   voyage: string | null;
+  /** Classificação normalizada do evento (blueprint §7). */
+  type?: NormalizedEventType;
 }
 
 /**
@@ -29,6 +40,10 @@ export interface ContainerInfo {
   tipo: string | null;
   /** Último status/movimento conhecido. */
   status: string | null;
+  /** Descarga do navio — possível início da contagem — ISO ou null. */
+  dischargeDate: string | null;
+  /** Disponibilidade no terminal — possível início da contagem — ISO ou null. */
+  availableDate: string | null;
   /** Saída do contêiner CHEIO do terminal (retirada) — ISO ou null. */
   gateOut: string | null;
   /** Devolução do contêiner VAZIO — ISO ou null. */

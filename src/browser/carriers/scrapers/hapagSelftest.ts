@@ -79,6 +79,12 @@ async function main(): Promise<void> {
   check('lastFreeDay null (exige login)', outBl.containers?.[0]?.lastFreeDay === null);
   check('numero null p/ B/L', outBl.containers?.[0]?.numero === null, outBl.containers?.[0]?.numero);
   check('evento tem location', outBl.events?.some((e) => e.location?.includes('Santos')) === true);
+  // Normalização de eventos (blueprint §7)
+  check('descarga derivada = 2026-06-14', outBl.containers?.[0]?.dischargeDate === '2026-06-14', outBl.containers?.[0]?.dischargeDate);
+  check('todos os eventos classificados (type)', outBl.events?.every((e) => !!e.type) === true, outBl.events?.map((e) => e.type));
+  check('evento discharge tipado', outBl.events?.some((e) => e.type === 'discharge') === true);
+  check('evento gate_out tipado', outBl.events?.some((e) => e.type === 'gate_out') === true);
+  check('evento empty_return tipado', outBl.events?.some((e) => e.type === 'empty_return') === true);
 
   console.log('[selftest] scrapeHapag sobre fixture (referência contêiner)');
   const outCt = await withPage(async (page) => {
