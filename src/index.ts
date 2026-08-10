@@ -3,6 +3,7 @@ import express, { NextFunction, Request, Response } from 'express';
 import session from 'express-session';
 import { config } from './config';
 import { createFileSessionStore } from './auth/fileSessionStore';
+import { getActiveAccount } from './auth/activeAccount';
 import { authRouter } from './auth/authRoutes';
 import { emailRouter } from './routes/emailRoutes';
 import { analysisRouter } from './routes/analysisRoutes';
@@ -65,7 +66,12 @@ app.use('/api/auditoria', auditoriaRouter);
 
 /** Estado de autenticação do usuário atual (para a UI). */
 app.get('/api/me', (req, res) => {
-  if (!req.session.homeAccountId) {
+  const homeAccountId = req.session.homeAccountId;
+  const active = getActiveAccount();
+  // Só está "autenticado" se a sessão pertence à conta Microsoft ATIVA. Uma
+  // sessão de uma conta trocada/desconectada conta como não autenticada — o
+  // front abre a tela "Entrar com a Microsoft".
+  if (!homeAccountId || !active || homeAccountId !== active.homeAccountId) {
     return res.json({ authenticated: false });
   }
   res.json({ authenticated: true, username: req.session.username });

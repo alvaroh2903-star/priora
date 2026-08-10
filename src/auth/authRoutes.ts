@@ -1,6 +1,10 @@
 import crypto from 'crypto';
 import { Router } from 'express';
 import { getMsalClient } from './msalClient';
+import {
+  connectMicrosoftAccount,
+  disconnectMicrosoftAccount,
+} from './microsoftConnection';
 import { config, isAzureConfigured } from '../config';
 
 export const authRouter = Router();
@@ -116,6 +120,15 @@ authRouter.get('/callback', async (req, res, next) => {
       return res.status(500).send('Nenhuma conta retornada pela Microsoft.');
     }
 
+    // Regra do MVP: uma conta Microsoft por vez. Se esta é diferente da que
+    // estava conectada, `connectMicrosoftAccount` faz o RESET COMPLETO da
+    // anterior (tokens + dados derivados) antes de ativar a nova — nada vaza nem
+    // se mistura entre contas.
+    await connectMicrosoftAccount(
+      result.account.homeAccountId,
+      result.account.username,
+    );
+
     req.session.homeAccountId = result.account.homeAccountId;
     req.session.username = result.account.username;
     res.redirect('/');
@@ -124,17 +137,15 @@ authRouter.get('/callback', async (req, res, next) => {
   }
 });
 
-/** Encerra a sessão local e remove a conta do cache do MSAL. */
+/**
+ * Encerra a sessão e DESCONECTA a conta Microsoft: reset completo (remove todos
+ * os tokens do cache do MSAL e todos os dados derivados) e zera a conta ativa.
+ * `disconnectMicrosoftAccount` é no-op de tokens quando o Azure não está
+ * configurado, então pode ser sempre chamado.
+ */
 authRouter.post('/logout', async (req, res, next) => {
   try {
-    const homeAccountId = req.session.homeAccountId;
-    if (homeAccountId && isAzureConfigured()) {
-      const cache = getMsalClient().getTokenCache();
-      const account = await cache.getAccountByHomeId(homeAccountId);
-      if (account) {
-        await cache.removeAccount(account);
-      }
-    }
+    await disconnectMicrosoftAccount();
     req.session.destroy(() => res.json({ status: 'logged_out' }));
   } catch (err) {
     next(err);

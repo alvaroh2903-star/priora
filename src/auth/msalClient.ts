@@ -43,3 +43,26 @@ export function getMsalClient(): ConfidentialClientApplication {
   }
   return cachedClient;
 }
+
+/**
+ * Remove do cache de tokens do MSAL TODAS as contas, exceto a de
+ * `keepHomeAccountId` (passe null para remover todas).
+ *
+ * O cache do MSAL é multi-conta: sem esta limpeza, os tokens da conta anterior
+ * sobreviveriam à troca e o backend poderia renovar/usar credenciais de duas
+ * contas. É a base do "reset" da conexão Microsoft do MVP (ver
+ * microsoftConnection.ts). Sem Azure configurado não há cliente/cache: no-op.
+ */
+export async function purgeMsalAccounts(
+  keepHomeAccountId: string | null,
+): Promise<void> {
+  if (!isAzureConfigured()) return;
+  const cache = getMsalClient().getTokenCache();
+  const accounts = await cache.getAllAccounts();
+  for (const account of accounts) {
+    if (keepHomeAccountId && account.homeAccountId === keepHomeAccountId) {
+      continue;
+    }
+    await cache.removeAccount(account);
+  }
+}

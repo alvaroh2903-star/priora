@@ -144,3 +144,25 @@ export function logAtividade(
 export function getAtividades(): AtividadeRegistro[] {
   return [...loadAtividades()];
 }
+
+/* ------------------------------------------------------------------ *
+ * Reset da conta Microsoft (MVP)
+ * ------------------------------------------------------------------ */
+
+/**
+ * Apaga minutas solicitadas e o log de atividades — memória E disco. Derivados
+ * dos processos da conta Microsoft conectada; some tudo ao trocar de conta para
+ * não vazar/misturar com a nova. Chamado pelo "reset" da conexão Microsoft
+ * (ver src/auth/microsoftConnection.ts).
+ */
+export function resetDemurrageStore(): void {
+  minutaCache = {};
+  ativCache = [];
+  for (const p of [MINUTA_PATH, ATIV_PATH]) {
+    try {
+      fs.rmSync(p, { force: true });
+    } catch (err) {
+      console.error('[demurrageStore] falha ao limpar', p, err);
+    }
+  }
+}

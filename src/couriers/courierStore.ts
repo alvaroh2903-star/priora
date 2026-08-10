@@ -227,3 +227,28 @@ export function setFollowUp(
   persistFup();
   return store[key];
 }
+
+/* ------------------------------------------------------------------ *
+ * Reset da conta Microsoft (MVP)
+ * ------------------------------------------------------------------ */
+
+/**
+ * Apaga TODOS os estados/conferências/follow-ups de courier — memória E disco.
+ *
+ * Estes dados são derivados dos e-mails (trackings/processos) da conta Microsoft
+ * conectada. Ao trocar de conta, precisam sumir por completo para não vazar nem
+ * se misturar com a nova conta. Chamado pelo "reset" da conexão Microsoft
+ * (ver src/auth/microsoftConnection.ts).
+ */
+export function resetCourierStore(): void {
+  cache = {};
+  confCache = {};
+  fupCache = {};
+  for (const p of [STORE_PATH, CONF_PATH, FUP_PATH]) {
+    try {
+      fs.rmSync(p, { force: true });
+    } catch (err) {
+      console.error('[courierStore] falha ao limpar', p, err);
+    }
+  }
+}
