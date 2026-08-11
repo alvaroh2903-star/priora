@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { getMsalClient } from '../auth/msalClient';
+import { getActiveHomeAccountId } from '../auth/microsoftAccount';
 import { config } from '../config';
 
 /** Request com o access token do Graph anexado pelo middleware. */
@@ -23,6 +24,17 @@ export async function requireAuth(
     const homeAccountId = req.session.homeAccountId;
     if (!homeAccountId) {
       res.status(401).json({ error: 'Não autenticado. Faça login em /auth/login.' });
+      return;
+    }
+
+    // MVP: uma conta Microsoft por vez. Se a sessão for de uma conta que não é
+    // mais a ATIVA (outra conta foi conectada), invalida — nada da conta antiga
+    // pode ser usado. O usuário precisa logar de novo com a conta atual.
+    if (homeAccountId !== getActiveHomeAccountId()) {
+      req.session.destroy(() => undefined);
+      res.status(401).json({
+        error: 'A conta Microsoft desta Priora foi trocada. Faça login novamente.',
+      });
       return;
     }
 

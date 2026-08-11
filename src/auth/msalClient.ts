@@ -43,3 +43,25 @@ export function getMsalClient(): ConfidentialClientApplication {
   }
   return cachedClient;
 }
+
+/**
+ * Remove do cache de tokens do MSAL TODAS as contas, exceto (opcionalmente) a
+ * indicada por `keepHomeAccountId`. Usado no fluxo de troca de conta do MVP para
+ * garantir que os tokens da conta anterior NÃO sejam reutilizados. Retorna
+ * quantas contas foram removidas.
+ */
+export async function clearAccountsExcept(
+  keepHomeAccountId?: string,
+): Promise<number> {
+  if (!isAzureConfigured()) return 0;
+  const cache = getMsalClient().getTokenCache();
+  const accounts = await cache.getAllAccounts();
+  let removed = 0;
+  for (const account of accounts) {
+    if (!keepHomeAccountId || account.homeAccountId !== keepHomeAccountId) {
+      await cache.removeAccount(account);
+      removed++;
+    }
+  }
+  return removed;
+}

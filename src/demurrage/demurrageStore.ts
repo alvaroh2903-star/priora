@@ -144,3 +144,19 @@ export function logAtividade(
 export function getAtividades(): AtividadeRegistro[] {
   return [...loadAtividades()];
 }
+
+/**
+ * Apaga TUDO deste store (minutas + atividades), em memória e em disco. Usado no
+ * reset de troca de conta Microsoft — estes dados pertencem à conta anterior.
+ */
+export function clearAll(): void {
+  minutaCache = {};
+  ativCache = [];
+  for (const p of [MINUTA_PATH, ATIV_PATH]) {
+    try {
+      fs.rmSync(p, { force: true });
+    } catch {
+      /* arquivo pode não existir */
+    }
+  }
+}

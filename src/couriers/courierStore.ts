@@ -227,3 +227,25 @@ export function setFollowUp(
   persistFup();
   return store[key];
 }
+
+/* ------------------------------------------------------------------ *
+ * Reset de troca de conta Microsoft (MVP)
+ * ------------------------------------------------------------------ */
+
+/**
+ * Apaga TODOS os dados de courier confirmados pelo operador (estados,
+ * conferências e follow-ups), em memória e em disco. Usado quando uma nova conta
+ * Microsoft é conectada — estes dados pertencem à conta anterior.
+ */
+export function clearAll(): void {
+  cache = {};
+  confCache = {};
+  fupCache = {};
+  for (const p of [STORE_PATH, CONF_PATH, FUP_PATH]) {
+    try {
+      fs.rmSync(p, { force: true });
+    } catch {
+      /* arquivo pode não existir */
+    }
+  }
+}

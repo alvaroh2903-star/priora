@@ -67,3 +67,16 @@ export function isFresh(rec: StoredBotResult, maxAgeMs: number): boolean {
   const t = Date.parse(rec.at);
   return Number.isFinite(t) && Date.now() - t < maxAgeMs;
 }
+
+/**
+ * Apaga TODO o cache de rastreio (memória + disco). Usado no reset de troca de
+ * conta Microsoft — os resultados vieram dos BLs da conta anterior.
+ */
+export function clearAll(): void {
+  cache = {};
+  try {
+    fs.rmSync(PATH, { force: true });
+  } catch {
+    /* arquivo pode não existir */
+  }
+}

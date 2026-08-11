@@ -1,9 +1,16 @@
 import crypto from 'crypto';
 import { Router } from 'express';
 import { getMsalClient } from './msalClient';
+import {
+  connectMicrosoftAccount,
+  disconnectMicrosoftAccount,
+} from './microsoftAccount';
 import { config, isAzureConfigured } from '../config';
 
 export const authRouter = Router();
+
+/** Origem pública da app (para as mensagens), derivada do redirect URI. */
+const APP_ORIGIN = config.azure.redirectUri.replace(/\/auth\/callback\/?$/, '');
 
 /**
  * CSRF do OAuth SEM depender da sessão. No Render gratuito a instância dorme /
@@ -84,7 +91,7 @@ authRouter.get('/callback', async (req, res, next) => {
         .send(
           `A Microsoft recusou o login: ${oauthError}\n\n` +
             `${oauthErrorDescription || ''}\n\n` +
-            `Volte para http://localhost:${config.port} e tente novamente.`,
+            `Volte para ${APP_ORIGIN} e tente novamente.`,
         );
     }
 
@@ -93,7 +100,7 @@ authRouter.get('/callback', async (req, res, next) => {
         .status(400)
         .send(
           'Código de autorização ausente. Comece o login pela página inicial ' +
-            `(http://localhost:${config.port}) clicando em "Entrar com a Microsoft" — ` +
+            `(${APP_ORIGIN}) clicando em "Entrar com a Microsoft" — ` +
             'não abra /auth/callback diretamente nem recarregue essa página.',
         );
     }
@@ -116,6 +123,13 @@ authRouter.get('/callback', async (req, res, next) => {
       return res.status(500).send('Nenhuma conta retornada pela Microsoft.');
     }
 
+    // MVP: uma conta Microsoft por vez. Se esta for diferente da anterior, faz o
+    // RESET completo (tokens + dados) da conta anterior antes de assumir a nova.
+    await connectMicrosoftAccount(
+      result.account.homeAccountId,
+      result.account.username,
+    );
+
     req.session.homeAccountId = result.account.homeAccountId;
     req.session.username = result.account.username;
     res.redirect('/');
@@ -124,16 +138,14 @@ authRouter.get('/callback', async (req, res, next) => {
   }
 });
 
-/** Encerra a sessão local e remove a conta do cache do MSAL. */
+/**
+ * Desconecta a conta Microsoft: reset TOTAL (remove todos os tokens do MSAL,
+ * apaga os dados derivados e limpa a conta ativa) + destrói a sessão local.
+ */
 authRouter.post('/logout', async (req, res, next) => {
   try {
-    const homeAccountId = req.session.homeAccountId;
-    if (homeAccountId && isAzureConfigured()) {
-      const cache = getMsalClient().getTokenCache();
-      const account = await cache.getAccountByHomeId(homeAccountId);
-      if (account) {
-        await cache.removeAccount(account);
-      }
+    if (isAzureConfigured()) {
+      await disconnectMicrosoftAccount();
     }
     req.session.destroy(() => res.json({ status: 'logged_out' }));
   } catch (err) {

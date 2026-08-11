@@ -15,6 +15,7 @@ import { demurrageBotRouter } from './routes/demurrageBotRoutes';
 import { auditoriaRouter } from './routes/auditoriaRoutes';
 import { chromium } from 'playwright';
 import { withPage } from './browser/browser';
+import { getActiveHomeAccountId } from './auth/microsoftAccount';
 
 const app = express();
 
@@ -69,7 +70,12 @@ app.use('/api/auditoria', auditoriaRouter);
 
 /** Estado de autenticação do usuário atual (para a UI). */
 app.get('/api/me', (req, res) => {
-  if (!req.session.homeAccountId) {
+  // MVP: só está autenticado quem é a conta Microsoft ATIVA. Se outra conta foi
+  // conectada, sessões antigas passam a contar como não autenticadas.
+  if (
+    !req.session.homeAccountId ||
+    req.session.homeAccountId !== getActiveHomeAccountId()
+  ) {
     return res.json({ authenticated: false });
   }
   res.json({ authenticated: true, username: req.session.username });
