@@ -54,3 +54,10 @@ services:
         value: anti-captcha          # anti-captcha | 2captcha (usado nas próximas etapas)
       - key: ANTICAPTCHA_KEY
         sync: false                  # chave do serviço de captcha (cole no painel)
+      # --- Supabase (multiusuário: contas Priora isoladas) ---
+      - key: SUPABASE_URL
+        sync: false                  # Project Settings → API → Project URL
+      - key: SUPABASE_ANON_KEY
+        sync: false                  # Project Settings → API → anon public key
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false                  # Project Settings → API → service_role (SECRETA)

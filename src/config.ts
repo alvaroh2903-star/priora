@@ -116,6 +116,16 @@ export const config = {
     concurrency: Math.max(1, parseInt(process.env.BOT_CONCURRENCY || '2', 10)),
     maxBatch: Math.max(1, parseInt(process.env.BOT_MAX_BATCH || '10', 10)),
   },
+  /**
+   * Supabase — persistência multiusuário (contas Priora isoladas). Enquanto não
+   * configurado, o app roda no modo MVP de conta única (arquivos locais). A
+   * service role key é SECRETA (só no servidor) — nunca exponha ao navegador.
+   */
+  supabase: {
+    url: (process.env.SUPABASE_URL || '').trim(),
+    anonKey: (process.env.SUPABASE_ANON_KEY || '').trim(),
+    serviceRoleKey: (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim(),
+  },
   /** Palavras-chave usadas para filtrar e-mails de logística/comércio exterior. */
   logisticsKeywords: (
     process.env.LOGISTICS_KEYWORDS ||
@@ -141,4 +151,12 @@ export function hasProxy(): boolean {
 /** Indica se o serviço de resolução de CAPTCHA está configurado. */
 export function isAntiCaptchaConfigured(): boolean {
   return Boolean(config.antiCaptcha.apiKey);
+}
+
+/**
+ * Indica se o Supabase está configurado (URL + service role key). Sem isto, o
+ * app cai no modo MVP de conta Microsoft única (persistência em arquivos locais).
+ */
+export function isSupabaseConfigured(): boolean {
+  return Boolean(config.supabase.url && config.supabase.serviceRoleKey);
 }
