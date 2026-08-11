@@ -16,6 +16,7 @@ import { auditoriaRouter } from './routes/auditoriaRoutes';
 import { chromium } from 'playwright';
 import { withPage } from './browser/browser';
 import { getActiveHomeAccountId } from './auth/microsoftAccount';
+import { prioraAuthRouter } from './auth/prioraAuthRoutes';
 
 const app = express();
 
@@ -58,6 +59,7 @@ app.get('/', (_req, res) => {
 
 // Rotas de autenticação e de e-mail.
 app.use('/auth', authRouter);
+app.use('/api/priora', prioraAuthRouter);
 app.use('/api/emails', emailRouter);
 app.use('/api/analysis', analysisRouter);
 app.use('/api/parse', parseRouter);

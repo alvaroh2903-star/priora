@@ -9,5 +9,9 @@ declare module 'express-session' {
     username?: string;
     /** Valor anti-CSRF do fluxo OAuth (parâmetro `state`). */
     authState?: string;
+    /** ID da conta PRIORA logada (auth.users.id do Supabase). */
+    prioraUserId?: string;
+    /** E-mail da conta Priora, para exibição. */
+    prioraEmail?: string;
   }
 }
