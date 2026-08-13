@@ -61,3 +61,10 @@ services:
         sync: false                  # Project Settings → API → anon public key
       - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false                  # Project Settings → API → service_role (SECRETA)
+      # --- Rocket / Head Cargo (fonte dos processos IMxxxx) ---
+      - key: ROCKET_BASE_URL
+        value: https://myrocket.rocketlogistics.com.br
+      - key: ROCKET_API_KEY
+        sync: false                  # X-API-KEY (SECRETO)
+      - key: ROCKET_WORKSPACE_ID
+        sync: false                  # x-workspace-id

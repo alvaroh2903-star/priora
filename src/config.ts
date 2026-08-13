@@ -126,6 +126,19 @@ export const config = {
     anonKey: (process.env.SUPABASE_ANON_KEY || '').trim(),
     serviceRoleKey: (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim(),
   },
+  /**
+   * Rocket / Head Cargo — sistema de gestão de importação (fonte dos processos
+   * IMxxxx). Fornece a DATA DE DESCARGA (início do demurrage) e o vínculo
+   * BL↔processo por API JSON — atalho ao lado do scraping. Acesso "emprestado":
+   * o scraping continua sendo o caminho próprio/durável.
+   */
+  rocket: {
+    baseUrl: (
+      process.env.ROCKET_BASE_URL || 'https://myrocket.rocketlogistics.com.br'
+    ).trim().replace(/\/+$/, ''),
+    apiKey: (process.env.ROCKET_API_KEY || '').trim(),
+    workspaceId: (process.env.ROCKET_WORKSPACE_ID || '').trim(),
+  },
   /** Palavras-chave usadas para filtrar e-mails de logística/comércio exterior. */
   logisticsKeywords: (
     process.env.LOGISTICS_KEYWORDS ||
@@ -159,4 +172,9 @@ export function isAntiCaptchaConfigured(): boolean {
  */
 export function isSupabaseConfigured(): boolean {
   return Boolean(config.supabase.url && config.supabase.serviceRoleKey);
+}
+
+/** Indica se a API do Rocket/Head Cargo está configurada (API key + workspace). */
+export function isRocketConfigured(): boolean {
+  return Boolean(config.rocket.apiKey && config.rocket.workspaceId);
 }

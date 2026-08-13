@@ -17,6 +17,7 @@ import { chromium } from 'playwright';
 import { withPage } from './browser/browser';
 import { getActiveHomeAccountId } from './auth/microsoftAccount';
 import { prioraAuthRouter } from './auth/prioraAuthRoutes';
+import { rocketRouter } from './routes/rocketRoutes';
 
 const app = express();
 
@@ -68,6 +69,7 @@ app.use('/api/couriers', courierRouter);
 app.use('/api/tracking', trackingRouter);
 app.use('/api/demurrage/bot', demurrageBotRouter);
 app.use('/api/demurrage', demurrageRouter);
+app.use('/api/rocket', rocketRouter);
 app.use('/api/auditoria', auditoriaRouter);
 
 /** Estado de autenticação do usuário atual (para a UI). */

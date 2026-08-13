@@ -15,7 +15,8 @@
     "carriers:detect": "ts-node src/browser/carriers/detectCli.ts",
     "carriers:selftest": "ts-node src/browser/carriers/scrapers/hapagSelftest.ts",
     "demurrage:calc": "ts-node src/demurrage/calculatorSelftest.ts",
-    "auth:selftest": "ts-node src/auth/accountSwitchSelftest.ts"
+    "auth:selftest": "ts-node src/auth/accountSwitchSelftest.ts",
+    "rocket:selftest": "ts-node src/rocket/rocketSelftest.ts"
   },
   "keywords": [
     "outlook",
