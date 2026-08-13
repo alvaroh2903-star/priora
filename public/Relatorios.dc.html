@@ -32,7 +32,8 @@
       <sc-if value="{{ errored }}" hint-placeholder-val="{{ false }}">
         <div class="card" style="text-align:center;max-width:440px;margin:60px auto;padding:38px 30px">
           <div style="font-size:17px;font-weight:800;color:#161A2E;margin-bottom:8px">Não foi possível carregar</div>
-          <div style="font-size:13.5px;line-height:1.6;color:#6B7192">{{ errorMsg }}</div>
+          <div style="font-size:13.5px;line-height:1.6;color:#6B7192;margin-bottom:18px">{{ errorMsg }}</div>
+          <button onClick="{{ onRetry }}" style="background:#4327E6;color:#fff;border:none;border-radius:10px;padding:11px 20px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer">Tentar novamente</button>
         </div>
       </sc-if>
 
@@ -197,16 +198,30 @@ class Component extends DCLogic {
   }
 
   load(){
-    var self=this;
     // MESMA fonte da aba Couriers (/api/couriers): os couriers de lá aparecem AQUI.
-    this.fetchJson('/api/couriers', 25000).then(function(d){
-      if(!self._alive) return;
-      if(d) self.setState({ resp:d, status:'done' });
-      else self.setState({ status:'error:Não foi possível carregar os couriers (tempo esgotado).' });
-    });
+    this.loadCouriers(0);
     // Custo de demurrage: OPCIONAL. Se o módulo estiver fora/lento a tela
     // funciona sem ele; re-tentamos para INCORPORAR automaticamente quando voltar.
     this.loadDemurrage(0);
+  }
+
+  // A 1ª requisição costuma cair no "cold start" do Render (plano gratuito: a
+  // instância dorme por inatividade e leva dezenas de segundos para acordar),
+  // estourando os 25s e voltando vazia. Re-tentamos automaticamente — na 2ª/3ª
+  // tentativa a instância já respondeu. Só exibimos erro (com botão para repetir)
+  // depois de esgotar as tentativas.
+  loadCouriers(attempt){
+    var self=this;
+    if(this.state.status!=='loading') this.setState({ status:'loading' });
+    this.fetchJson('/api/couriers', 25000).then(function(d){
+      if(!self._alive) return;
+      if(d){ self.setState({ resp:d, status:'done' }); return; }
+      if(attempt < 2){
+        setTimeout(function(){ if(self._alive) self.loadCouriers(attempt+1); }, 4000*(attempt+1));
+        return;
+      }
+      self.setState({ status:'error:Não conseguimos carregar os couriers. Se a instância estava dormindo (plano gratuito do Render), ela já deve ter acordado — toque em "Tentar novamente".' });
+    });
   }
 
   loadDemurrage(attempt){
@@ -270,9 +285,9 @@ class Component extends DCLogic {
   }
 
   renderVals(){
-    var resp=this.state.resp, st=this.state.status;
+    var self=this, resp=this.state.resp, st=this.state.status;
     var loading=(st==='loading'), errored=(st.indexOf('error')===0), ready=(st==='done'&&!!resp);
-    if (!ready) return { loading:loading, errored:errored, ready:false, errorMsg:(errored?st.slice(st.indexOf(':')+1):'') };
+    if (!ready) return { loading:loading, errored:errored, ready:false, errorMsg:(errored?st.slice(st.indexOf(':')+1):''), onRetry:function(){ self.loadCouriers(0); } };
 
     var s=this.computeStats(resp.couriers||[], (resp.processosSemCourier||[]).length);
     var PURPLE='#4327E6', PURPLE_SOFT='#C9C2F7', GREEN='#177D54', AMBER='#E08A1E', RED='#C2333A', MUTED='#9AA0B4';
