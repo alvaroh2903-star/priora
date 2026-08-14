@@ -52,6 +52,16 @@ leia-o para o desenho pretendido. Este arquivo resume o **estado atual** e as
 - **Nunca inventar dados**: campo ausente = `null` (regra da Clara), inclusive nos scrapers.
 - Cada armador = um scraper isolado; seletores mudam, cobrir com self-test offline (`setContent`).
 
+## Multi-empresa (workspaces) — norte oficial
+Modelo de contas/organizações: **[docs/ARQUITETURA_MULTIEMPRESA.md](docs/ARQUITETURA_MULTIEMPRESA.md)**.
+Resumo: a conta operacional pertence ao **workspace da empresa que convidou** o
+usuário; **quem determina pertencimento é o admin** (não o Graph). Admin compra/
+gerencia plano e convida analistas (convite por e-mail, o analista define a
+senha); cada analista conecta o **próprio** Microsoft como fonte de dados. A
+Priora agrega por `company_id`; RLS: analista vê `user_id`, gestor vê
+`company_id`. Isto **substitui** o MVP de conta Microsoft única quando o
+multi-tenant entrar (etapas no doc).
+
 ## Decisões confirmadas pelo usuário (§14)
 1. Contexto do cliente (free time/tarifas): vem do **e-mail via Graph/Clara**
    (não Excel/SharePoint/Dynamics).

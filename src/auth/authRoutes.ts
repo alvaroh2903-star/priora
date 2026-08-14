@@ -132,7 +132,8 @@ authRouter.get('/callback', async (req, res, next) => {
 
     req.session.homeAccountId = result.account.homeAccountId;
     req.session.username = result.account.username;
-    res.redirect('/');
+    // Após conectar a Microsoft, entra direto no PAINEL (não na landing "/").
+    res.redirect('/Priora.dc.html');
   } catch (err) {
     next(err);
   }
