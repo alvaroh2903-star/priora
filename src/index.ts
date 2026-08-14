@@ -53,9 +53,11 @@ const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 // Painel Priora (front-end) + assets, servidos na mesma origem que a API.
 app.use(express.static(PUBLIC_DIR));
 
-// A raiz serve o shell do painel (Priora.dc.html), que importa os demais módulos.
+// A raiz serve a LANDING page (marketing). "Entrar" leva ao Login (conta Priora),
+// que após autenticar leva ao painel (Priora.dc.html). O painel segue acessível
+// em /Priora.dc.html (servido estático).
 app.get('/', (_req, res) => {
-  res.sendFile(path.join(PUBLIC_DIR, 'Priora.dc.html'));
+  res.sendFile(path.join(PUBLIC_DIR, 'Landing.dc.html'));
 });
 
 // Rotas de autenticação e de e-mail.

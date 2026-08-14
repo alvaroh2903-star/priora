@@ -1,0 +1,995 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    html{scroll-behavior:smooth}
+    body{font-family:'Plus Jakarta Sans',sans-serif;background:#070A14;color:#F2F4FD;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+    a{color:#A79BFF;text-decoration:none}a:hover{color:#C9C1FF}
+    ::selection{background:rgba(67,39,230,.45)}
+    ::-webkit-scrollbar{width:10px}::-webkit-scrollbar-thumb{background:#222944;border-radius:8px}::-webkit-scrollbar-track{background:#070A14}
+    @keyframes hubPulse{from{stroke-dashoffset:100}to{stroke-dashoffset:0}}
+    @keyframes ringPulse{0%{transform:scale(1);opacity:.55}100%{transform:scale(1.85);opacity:0}}
+    @keyframes claraFloat{0%,100%{transform:translateY(0) rotate(-.4deg)}50%{transform:translateY(-14px) rotate(.4deg)}}
+    @keyframes cardFloatA{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
+    @keyframes cardFloatB{0%,100%{transform:translateY(0)}50%{transform:translateY(6px)}}
+    @keyframes dotBlink{0%,100%{opacity:1}50%{opacity:.3}}
+    @keyframes marquee{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+    @keyframes auroraA{0%,100%{transform:translate(-50%,0) scale(1)}50%{transform:translate(-46%,26px) scale(1.12)}}
+    @keyframes auroraB{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(-30px,-24px) scale(1.1)}}
+    @keyframes scanline{0%{transform:translateY(-100%)}100%{transform:translateY(900%)}}
+    @keyframes barGrow{from{width:0}}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    @keyframes shipSail{from{transform:translateX(-380px)}to{transform:translateX(calc(100vw + 380px))}}
+    @keyframes shipSailCard{from{transform:translateX(-320px)}to{transform:translateX(1320px)}}
+    @keyframes hullRock{0%,100%{transform:translateX(-3px) rotate(-.45deg)}50%{transform:translateX(3px) rotate(.45deg)}}
+    @keyframes waterDrift{0%,100%{transform:translateX(0)}50%{transform:translateX(-9px)}}
+    @keyframes birdFly{0%,100%{transform:translate(0,0)}50%{transform:translate(8px,-5px)}}
+    @keyframes beacon{0%,100%{opacity:.25}45%,55%{opacity:1}}
+    @keyframes shine{0%{transform:translate3d(-160%,0,0) skewX(-14deg)}52%,100%{transform:translate3d(680%,0,0) skewX(-14deg)}}
+    @keyframes meterFill{from{width:0}}
+    @keyframes clockTick{0%,100%{transform:rotate(0)}50%{transform:rotate(180deg)}}
+  </style>
+</helmet>
+
+<div style="position:fixed;inset:0;pointer-events:none;z-index:0;transform:translateZ(0);background-image:linear-gradient(rgba(255,255,255,.028) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.028) 1px,transparent 1px);background-size:68px 68px;mask-image:radial-gradient(ellipse 80% 60% at 50% 0%,#000 20%,transparent 78%);-webkit-mask-image:radial-gradient(ellipse 80% 60% at 50% 0%,#000 20%,transparent 78%)"></div>
+
+<nav style="position:sticky;top:0;z-index:60;background:rgba(7,10,20,.78);backdrop-filter:blur(16px);border-bottom:1px solid rgba(255,255,255,.07)">
+  <div style="max-width:1200px;margin:0 auto;padding:0 32px;height:70px;display:flex;align-items:center;justify-content:space-between;gap:24px">
+    <a href="#topo" style="display:flex;align-items:center;gap:10px">
+      <img src="assets/logo-p-white.png" alt="Priora" style="height:30px;width:auto;display:block">
+      <span style="font-size:21px;font-weight:800;letter-spacing:-.02em;color:#F2F4FD">priora</span>
+    </a>
+    <div style="display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600">
+      <a href="#produto" style="padding:8px 14px;border-radius:9px;color:#AEB5D2" style-hover="background:rgba(255,255,255,.06);color:#FFFFFF">Produto</a>
+      <a href="#armadores" style="padding:8px 14px;border-radius:9px;color:#AEB5D2" style-hover="background:rgba(255,255,255,.06);color:#FFFFFF">Armadores</a>
+      <a href="#recursos" style="padding:8px 14px;border-radius:9px;color:#AEB5D2" style-hover="background:rgba(255,255,255,.06);color:#FFFFFF">Recursos</a>
+      <a href="#planos" style="padding:8px 14px;border-radius:9px;color:#AEB5D2" style-hover="background:rgba(255,255,255,.06);color:#FFFFFF">Planos</a>
+    </div>
+    <div style="display:flex;align-items:center;gap:12px">
+      <a href="Login.dc.html" style="padding:10px 18px;border-radius:11px;border:1px solid rgba(255,255,255,.14);font-size:14px;font-weight:700;color:#E7EAF8;transition:all .18s ease" style-hover="background:rgba(255,255,255,.07);color:#FFFFFF">Entrar</a>
+      <a href="Registro.dc.html" style="padding:11px 20px;border-radius:11px;background:linear-gradient(135deg,#5438FF,#3B1FD6);font-size:14px;font-weight:700;color:#FFFFFF;box-shadow:0 8px 24px rgba(67,39,230,.4);transition:all .18s ease" style-hover="transform:translateY(-1px);box-shadow:0 12px 30px rgba(67,39,230,.55);color:#FFFFFF">Testar grátis</a>
+    </div>
+  </div>
+</nav>
+
+<header id="topo" style="position:relative;overflow:hidden;z-index:1">
+  <div style="position:absolute;top:-280px;left:50%;width:1200px;height:720px;background:radial-gradient(ellipse at center,rgba(67,39,230,.30) 0%,rgba(67,39,230,0) 62%);pointer-events:none;animation:auroraA 14s ease-in-out infinite"></div>
+  <div style="position:absolute;top:120px;right:-160px;width:640px;height:640px;background:radial-gradient(circle at center,rgba(120,80,255,.18) 0%,rgba(120,80,255,0) 65%);pointer-events:none;animation:auroraB 17s ease-in-out infinite"></div>
+  <div aria-hidden="true" style="position:absolute;left:0;right:0;bottom:0;height:230px;overflow:hidden;pointer-events:none;z-index:0">
+    <div style="position:absolute;left:0;right:0;top:0;height:1px;background:linear-gradient(90deg,transparent,rgba(139,108,255,.35),rgba(139,108,255,.35),transparent)"></div>
+    <div style="position:absolute;left:0;right:0;top:0;bottom:0;background:linear-gradient(180deg,rgba(16,22,58,.55) 0%,rgba(9,13,34,.9) 60%,#070A14 100%)"></div>
+    <svg viewBox="356 528 352 172" width="176" height="86" fill="none" style="position:absolute;bottom:150px;left:0;opacity:.32;animation:shipSail 150s linear -40s infinite">
+      <g style="animation:hullRock 11s ease-in-out infinite;transform-origin:528px 632px">
+        <g fill="#2A3159"><rect x="392" y="596" width="40" height="26" rx="2"></rect><rect x="434" y="596" width="40" height="26" rx="2"></rect><rect x="476" y="596" width="40" height="26" rx="2"></rect><rect x="518" y="596" width="40" height="26" rx="2"></rect><rect x="560" y="596" width="40" height="26" rx="2"></rect><rect x="602" y="596" width="40" height="26" rx="2"></rect></g>
+        <g fill="#333B6B"><rect x="416" y="568" width="40" height="26" rx="2"></rect><rect x="458" y="568" width="40" height="26" rx="2"></rect><rect x="500" y="568" width="40" height="26" rx="2"></rect><rect x="542" y="568" width="40" height="26" rx="2"></rect><rect x="584" y="568" width="40" height="26" rx="2"></rect></g>
+        <g fill="#2A3159"><rect x="458" y="540" width="40" height="26" rx="2"></rect><rect x="500" y="540" width="40" height="26" rx="2"></rect><rect x="542" y="540" width="40" height="26" rx="2"></rect></g>
+        <rect x="650" y="556" width="40" height="66" rx="3" fill="#3C4478"></rect>
+        <rect x="660" y="544" width="20" height="14" rx="2" fill="#333B6B"></rect>
+        <path d="M356 624 H700 L664 690 H392 Z" fill="#232A4E"></path>
+        <rect x="356" y="622" width="344" height="7" fill="#1C2242"></rect>
+      </g>
+    </svg>
+    <svg viewBox="0 0 1440 230" preserveAspectRatio="xMidYMax slice" style="position:absolute;inset:0;width:100%;height:100%" fill="none">
+      <g stroke="#A2A9C8" stroke-width="2" stroke-linecap="round" fill="none" opacity=".22">
+        <g style="animation:birdFly 9s ease-in-out infinite"><path d="M300 34 q9 -7 18 0 q9 -7 18 0"></path></g>
+        <g style="animation:birdFly 11s ease-in-out infinite .7s"><path d="M366 14 q7 -6 14 0 q7 -6 14 0"></path></g>
+        <g style="animation:birdFly 12s ease-in-out infinite .3s"><path d="M1092 22 q8 -6 16 0 q8 -6 16 0"></path></g>
+      </g>
+      <g opacity=".85">
+        <path d="M112 132 q26 -46 62 -46 q22 0 36 16 q18 -26 44 -26 q40 0 56 56 z" fill="#131A3C"></path>
+        <path d="M186 86 q16 -34 44 -34 q30 0 44 40 q-42 12 -88 -6 z" fill="#0F1533"></path>
+        <rect x="268" y="72" width="11" height="42" rx="2.5" fill="#1A2148"></rect>
+        <rect x="266" y="66" width="15" height="7" rx="2" fill="#252D5C"></rect>
+        <circle cx="273.5" cy="62" r="3.6" fill="#8F76FF" style="animation:beacon 4s ease-in-out infinite"></circle>
+        <circle cx="273.5" cy="62" r="9" fill="#8F76FF" opacity=".18" style="animation:beacon 4s ease-in-out infinite"></circle>
+      </g>
+      <g stroke="#7A83C4" stroke-width="2.2" stroke-linecap="round" opacity=".2" style="animation:waterDrift 12s ease-in-out infinite">
+        <path d="M60 158 H240 M300 158 H470 M540 158 H700 M780 158 H960 M1030 158 H1200 M1260 158 H1400 M30 190 H220 M300 190 H500 M580 190 H760 M840 190 H1020 M1100 190 H1290"></path>
+      </g>
+      <g stroke="#6E77B8" stroke-width="2" stroke-linecap="round" opacity=".14" style="animation:waterDrift 16s ease-in-out infinite reverse">
+        <path d="M150 174 H330 M400 206 H600 M660 174 H860 M920 206 H1120 M1180 174 H1380"></path>
+      </g>
+    </svg>
+    <svg viewBox="356 528 352 172" width="270" height="132" fill="none" style="position:absolute;bottom:34px;left:0;opacity:.6;animation:shipSail 96s linear -12s infinite">
+      <g style="animation:hullRock 9s ease-in-out infinite;transform-origin:528px 632px">
+        <g fill="#333B6B"><rect x="392" y="596" width="40" height="26" rx="2"></rect><rect x="434" y="596" width="40" height="26" rx="2"></rect><rect x="476" y="596" width="40" height="26" rx="2"></rect><rect x="518" y="596" width="40" height="26" rx="2"></rect><rect x="560" y="596" width="40" height="26" rx="2"></rect><rect x="602" y="596" width="40" height="26" rx="2"></rect></g>
+        <g fill="#414A85"><rect x="416" y="568" width="40" height="26" rx="2"></rect><rect x="458" y="568" width="40" height="26" rx="2"></rect><rect x="500" y="568" width="40" height="26" rx="2"></rect><rect x="542" y="568" width="40" height="26" rx="2"></rect><rect x="584" y="568" width="40" height="26" rx="2"></rect></g>
+        <g fill="#4C3FA0"><rect x="458" y="540" width="40" height="26" rx="2"></rect><rect x="500" y="540" width="40" height="26" rx="2"></rect><rect x="542" y="540" width="40" height="26" rx="2"></rect></g>
+        <rect x="650" y="556" width="40" height="66" rx="3" fill="#4C5595"></rect>
+        <rect x="660" y="544" width="20" height="14" rx="2" fill="#414A85"></rect>
+        <path d="M356 624 H700 L664 690 H392 Z" fill="#2A3159"></path>
+        <rect x="356" y="622" width="344" height="7" fill="#212747"></rect>
+      </g>
+    </svg>
+  </div>
+  <div style="max-width:1200px;margin:0 auto;padding:76px 32px 190px;display:grid;grid-template-columns:1.06fr .94fr;gap:40px;align-items:center;position:relative;z-index:1">
+    <div>
+      <div data-reveal style="display:inline-flex;align-items:center;gap:9px;padding:8px 14px;border-radius:999px;border:1px solid rgba(139,108,255,.35);background:rgba(67,39,230,.12);font-family:'JetBrains Mono',monospace;font-size:11.5px;font-weight:700;letter-spacing:.12em;color:#B9A6FF">
+        <span style="width:7px;height:7px;border-radius:50%;background:#8F76FF;box-shadow:0 0 10px #8F76FF;animation:dotBlink 2.2s ease-in-out infinite"></span>
+        INTELIGÊNCIA PARA IMPORTAÇÃO
+      </div>
+      <h1 data-reveal data-reveal-delay="80" style="margin-top:22px;font-size:60px;font-weight:800;letter-spacing:-.034em;line-height:1.04;color:#F5F6FE">Cada processo de importação, <span style="background:linear-gradient(100deg,#A88FFF 0%,#6B4BFF 55%,#B9A6FF 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent">auditado em tempo real</span>.</h1>
+      <p data-reveal data-reveal-delay="160" style="margin-top:22px;font-size:17.5px;line-height:1.65;color:#98A0BF;max-width:520px;text-wrap:pretty">A Priora lê os e-mails do courier, identifica os documentos, executa auditorias de Pré-Alerta e CE Mercante e monitora demurrage e liberação nos maiores armadores do mundo — automaticamente.</p>
+      <div data-reveal data-reveal-delay="240" style="margin-top:32px;display:flex;align-items:center;gap:14px">
+        <a href="Registro.dc.html" style="display:inline-flex;align-items:center;gap:10px;padding:16px 28px;border-radius:13px;background:linear-gradient(135deg,#5438FF,#3B1FD6);font-size:16px;font-weight:800;color:#FFFFFF;box-shadow:0 14px 36px rgba(67,39,230,.45);transition:all .2s cubic-bezier(.22,1,.36,1)" style-hover="transform:translateY(-2px);box-shadow:0 20px 46px rgba(67,39,230,.6);color:#FFFFFF">Testar grátis
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M5 12h14M13 6l6 6-6 6"></path></svg></a>
+        <a href="#produto" style="display:inline-flex;align-items:center;gap:10px;padding:16px 24px;border-radius:13px;border:1px solid rgba(255,255,255,.16);font-size:15.5px;font-weight:700;color:#E7EAF8;transition:all .2s ease" style-hover="background:rgba(255,255,255,.07);border:1px solid rgba(139,108,255,.5);color:#FFFFFF">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5l11 7-11 7z"></path></svg>Ver a plataforma</a>
+      </div>
+      <div data-reveal data-reveal-delay="300" style="margin-top:20px;display:flex;align-items:center;gap:16px;font-family:'JetBrains Mono',monospace;font-size:11.5px;color:#6E7694;flex-wrap:wrap">
+        <span style="display:inline-flex;align-items:center;gap:6px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#4ADE80" stroke-width="3"><path d="M4 12l5 5L20 6"></path></svg>14 dias grátis</span>
+        <span style="display:inline-flex;align-items:center;gap:6px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#4ADE80" stroke-width="3"><path d="M4 12l5 5L20 6"></path></svg>Sem cartão de crédito</span>
+        <span style="display:inline-flex;align-items:center;gap:6px"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#4ADE80" stroke-width="3"><path d="M4 12l5 5L20 6"></path></svg>Cancele quando quiser</span>
+      </div>
+    </div>
+    <div ref="{{ refPalco }}" style="position:relative;min-height:520px;display:flex;align-items:center;justify-content:center">
+      <div style="position:absolute;width:440px;height:440px;border-radius:50%;background:radial-gradient(circle,rgba(120,90,255,.30) 0%,rgba(120,90,255,0) 68%)"></div>
+      <div style="position:absolute;bottom:52px;width:300px;height:26px;border-radius:50%;background:radial-gradient(ellipse,rgba(80,50,220,.45),rgba(80,50,220,0) 70%);filter:blur(6px)"></div>
+      <div style="position:relative;animation:claraFloat 6s ease-in-out infinite;filter:drop-shadow(0 34px 60px rgba(60,30,220,.45))">
+        <img ref="{{ refClara }}" src="assets/clara.png" alt="Clara, a IA da Priora" style="display:block;height:430px;width:auto">
+        <svg viewBox="0 0 779 911" aria-hidden="true" style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none">
+          <defs>
+            <radialGradient id="prVisor" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stop-color="#04081E"></stop>
+              <stop offset="58%" stop-color="#04081E"></stop>
+              <stop offset="100%" stop-color="#04081E" stop-opacity="0"></stop>
+            </radialGradient>
+            <linearGradient id="prOlho" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#B6FBFF"></stop>
+              <stop offset="48%" stop-color="#3BE0FF"></stop>
+              <stop offset="100%" stop-color="#00A2FF"></stop>
+            </linearGradient>
+            <radialGradient id="prHalo" cx="50%" cy="50%" r="50%">
+              <stop offset="30%" stop-color="#3BE0FF" stop-opacity=".55"></stop>
+              <stop offset="62%" stop-color="#12B9FF" stop-opacity=".22"></stop>
+              <stop offset="100%" stop-color="#0090FF" stop-opacity="0"></stop>
+            </radialGradient>
+          </defs>
+          <g>
+            <ellipse cx="283" cy="189" rx="68" ry="52" fill="url(#prVisor)"></ellipse>
+            <ellipse cx="414" cy="193" rx="64" ry="50" fill="url(#prVisor)"></ellipse>
+          </g>
+          <g>
+            <g ref="{{ refOlhoE }}" style="transform-box:fill-box;transform-origin:50% 50%">
+              <ellipse cx="281" cy="189" rx="62" ry="58" fill="url(#prHalo)"></ellipse>
+              <rect x="253" y="162" width="56" height="54" rx="21" fill="url(#prOlho)"></rect>
+              <ellipse cx="271" cy="178" rx="9" ry="7" fill="#F2FEFF" opacity=".9"></ellipse>
+            </g>
+            <g ref="{{ refOlhoD }}" style="transform-box:fill-box;transform-origin:50% 50%">
+              <ellipse cx="414" cy="193" rx="62" ry="58" fill="url(#prHalo)"></ellipse>
+              <rect x="386" y="166" width="56" height="54" rx="21" fill="url(#prOlho)"></rect>
+              <ellipse cx="404" cy="182" rx="9" ry="7" fill="#F2FEFF" opacity=".9"></ellipse>
+            </g>
+          </g>
+        </svg>
+      </div>
+      <div style="position:absolute;top:0;right:-16px;width:260px;padding:14px 16px;border-radius:15px;background:rgba(13,19,38,.92);border:1px solid rgba(255,255,255,.10);box-shadow:0 22px 50px rgba(0,0,0,.5);animation:cardFloatA 6.5s ease-in-out infinite">
+        <div style="display:flex;align-items:center;gap:9px">
+          <span style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:8px;background:rgba(63,190,120,.16)"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#4ADE80" stroke-width="3"><path d="M4 12l5 5L20 6"></path></svg></span>
+          <span style="font-size:12.5px;font-weight:700;color:#E7EAF8">Pré-Alerta concluído</span>
+        </div>
+        <div style="margin-top:11px;display:flex;gap:6px">
+          <div style="flex:1;text-align:center;padding:7px 0;border-radius:8px;background:rgba(74,222,128,.10)"><div style="font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:700;color:#4ADE80">15</div><div style="font-size:9px;color:#6E7694;font-weight:600">OK</div></div>
+          <div style="flex:1;text-align:center;padding:7px 0;border-radius:8px;background:rgba(244,63,94,.10)"><div style="font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:700;color:#FB7185">4</div><div style="font-size:9px;color:#6E7694;font-weight:600">Críticas</div></div>
+          <div style="flex:1;text-align:center;padding:7px 0;border-radius:8px;background:rgba(245,166,35,.10)"><div style="font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:700;color:#F5A623">2</div><div style="font-size:9px;color:#6E7694;font-weight:600">Validar</div></div>
+        </div>
+      </div>
+      <div style="position:absolute;bottom:20px;left:-24px;width:250px;padding:14px 16px;border-radius:15px;background:rgba(13,19,38,.92);border:1px solid rgba(255,255,255,.10);box-shadow:0 22px 50px rgba(0,0,0,.5);animation:cardFloatB 7.5s ease-in-out infinite">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+          <span style="display:inline-flex;align-items:center;gap:8px;font-size:12.5px;font-weight:700;color:#E7EAF8"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#F5A623" stroke-width="2.4"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 3"></path></svg>Demurrage</span>
+          <span style="font-family:'JetBrains Mono',monospace;font-size:10.5px;font-weight:700;color:#F5A623">3 DIAS</span>
+        </div>
+        <div style="margin-top:9px;font-family:'JetBrains Mono',monospace;font-size:10.5px;color:#6E7694">FANU1234567 · MAERSK</div>
+        <div style="margin-top:9px;height:5px;border-radius:99px;background:rgba(255,255,255,.08);overflow:hidden"><div style="width:82%;height:100%;border-radius:99px;background:linear-gradient(90deg,#F5A623,#FB7185);animation:barGrow 1.6s cubic-bezier(.22,1,.36,1)"></div></div>
+      </div>
+      <div style="position:absolute;top:186px;left:-40px;display:flex;align-items:center;gap:8px;padding:9px 13px;border-radius:12px;background:rgba(13,19,38,.92);border:1px solid rgba(139,108,255,.28);box-shadow:0 18px 40px rgba(0,0,0,.45);animation:cardFloatB 6s ease-in-out infinite;animation-delay:-2s">
+        <span style="width:14px;height:14px;border-radius:50%;border:2px solid rgba(139,108,255,.3);border-top-color:#8F76FF;animation:spin 1s linear infinite"></span>
+        <span style="font-family:'JetBrains Mono',monospace;font-size:10.5px;font-weight:600;color:#B9A6FF">Lendo courier DHL…</span>
+      </div>
+    </div>
+  </div>
+</header>
+
+<div style="position:relative;z-index:1;border-top:1px solid rgba(255,255,255,.07);border-bottom:1px solid rgba(255,255,255,.07);background:rgba(8,12,24,.6);padding:20px 0">
+  <div style="max-width:1200px;margin:0 auto;padding:0 32px;display:flex;align-items:center;gap:28px">
+    <span style="flex-shrink:0;font-family:'JetBrains Mono',monospace;font-size:10.5px;font-weight:700;letter-spacing:.14em;color:#565E7C">DADOS DIRETO DE</span>
+    <div style="flex:1;overflow:hidden;mask-image:linear-gradient(90deg,transparent,#000 6%,#000 94%,transparent);-webkit-mask-image:linear-gradient(90deg,transparent,#000 6%,#000 94%,transparent)">
+      <div style="display:flex;width:max-content;animation:marquee 34s linear infinite">
+        <div style="display:flex;align-items:center;gap:40px;padding-right:40px;font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;letter-spacing:.06em;color:#7C849F;white-space:nowrap">
+          <span>MAERSK</span><span>MSC</span><span>CMA CGM</span><span>COSCO</span><span>HAPAG-LLOYD</span><span>ONE</span><span>EVERGREEN</span><span>HMM</span><span>YANG MING</span><span>ZIM</span><span>PIL</span><span>OOCL</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:40px;padding-right:40px;font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;letter-spacing:.06em;color:#7C849F;white-space:nowrap">
+          <span>MAERSK</span><span>MSC</span><span>CMA CGM</span><span>COSCO</span><span>HAPAG-LLOYD</span><span>ONE</span><span>EVERGREEN</span><span>HMM</span><span>YANG MING</span><span>ZIM</span><span>PIL</span><span>OOCL</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<section id="produto" style="position:relative;z-index:1;padding:96px 0 88px">
+  <div style="max-width:1200px;margin:0 auto;padding:0 32px">
+    <div data-reveal style="text-align:center">
+      <div style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;letter-spacing:.16em;color:#8F76FF">A PLATAFORMA</div>
+      <h2 style="margin-top:14px;font-size:44px;font-weight:800;letter-spacing:-.028em;line-height:1.1">Da caixa de entrada à mesa<br>de auditoria em um clique</h2>
+      <p style="margin:16px auto 0;font-size:16.5px;line-height:1.6;color:#98A0BF;max-width:520px;text-wrap:pretty">Quatro telas, uma operação inteira sob controle. Navegue pelas abas.</p>
+    </div>
+    <div data-reveal data-reveal-delay="100" style="margin-top:34px;display:flex;justify-content:center">
+      <div style="display:inline-flex;padding:5px;border-radius:14px;background:#0B0F20;border:1px solid rgba(255,255,255,.09);gap:4px;flex-wrap:wrap;justify-content:center">
+        <sc-for list="{{ telas }}" as="t" hint-placeholder-count="4">
+          <button onClick="{{ t.pick }}" style="padding:10px 18px;border-radius:10px;border:none;background:{{ t.bg }};font-family:inherit;font-size:13.5px;font-weight:700;color:{{ t.color }};cursor:pointer;transition:all .18s ease;white-space:nowrap">{{ t.label }}</button>
+        </sc-for>
+      </div>
+    </div>
+    <div data-reveal data-reveal-delay="160" style="margin-top:30px;position:relative">
+      <div style="position:absolute;inset:40px 60px -20px;background:radial-gradient(ellipse at center,rgba(80,50,255,.35),rgba(80,50,255,0) 70%);filter:blur(60px);pointer-events:none"></div>
+      <div style="position:relative;border-radius:18px;background:linear-gradient(160deg,rgba(139,108,255,.5),rgba(139,108,255,.08) 40%,rgba(255,255,255,.05));padding:1.5px;box-shadow:0 50px 130px rgba(30,14,120,.55)">
+        <div style="border-radius:16.5px;background:#0A0E1C;overflow:hidden">
+          <div style="display:flex;align-items:center;gap:14px;padding:12px 16px;border-bottom:1px solid rgba(255,255,255,.07);background:rgba(255,255,255,.02)">
+            <div style="display:flex;gap:7px">
+              <span style="width:11px;height:11px;border-radius:50%;background:#FF5F57"></span>
+              <span style="width:11px;height:11px;border-radius:50%;background:#FEBC2E"></span>
+              <span style="width:11px;height:11px;border-radius:50%;background:#28C840"></span>
+            </div>
+            <div style="flex:1;max-width:360px;margin:0 auto;padding:6px 14px;border-radius:8px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.06);font-family:'JetBrains Mono',monospace;font-size:11px;color:#8E96B8;text-align:center">app.priora.com.br/{{ telaPath }}</div>
+            <div style="width:62px"></div>
+          </div>
+          <div style="position:relative;background:#0A0E1C">
+            <sc-if value="{{ ehInicio }}" hint-placeholder-val="{{ true }}">
+              <img src="assets/app-inicio.png" alt="Priora — Início" width="1627" height="899" style="width:100%;height:auto;aspect-ratio:1627/899;display:block">
+            </sc-if>
+            <sc-if value="{{ ehAuditoria }}" hint-placeholder-val="{{ false }}">
+              <img src="assets/app-auditoria.png" alt="Priora — Auditoria Documental" width="1619" height="902" style="width:100%;height:auto;aspect-ratio:1619/902;display:block">
+            </sc-if>
+            <sc-if value="{{ ehMesa }}" hint-placeholder-val="{{ false }}">
+              <img src="assets/app-mesa.png" alt="Priora — Mesa de Auditoria" width="1380" height="891" style="width:100%;height:auto;aspect-ratio:1380/891;display:block">
+            </sc-if>
+            <sc-if value="{{ ehCouriers }}" hint-placeholder-val="{{ false }}">
+              <img src="assets/app-couriers.png" alt="Priora — Couriers" width="1363" height="887" style="width:100%;height:auto;aspect-ratio:1363/887;display:block">
+            </sc-if>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div data-reveal data-reveal-delay="220" style="margin-top:22px;text-align:center;font-size:14px;color:#7C849F">{{ telaLegenda }}</div>
+  </div>
+</section>
+
+<section style="position:relative;z-index:1;border-top:1px solid rgba(255,255,255,.07);border-bottom:1px solid rgba(255,255,255,.07);background:#080C18">
+  <div style="max-width:1200px;margin:0 auto;padding:34px 32px;display:grid;grid-template-columns:repeat(4,1fr);gap:24px;text-align:center">
+    <div data-reveal><div data-count="12" style="font-family:'JetBrains Mono',monospace;font-size:34px;font-weight:700;letter-spacing:-.02em;color:#F2F4FD">12</div><div style="margin-top:4px;font-size:12.5px;font-weight:600;color:#6E7694">armadores conectados</div></div>
+    <div data-reveal data-reveal-delay="80"><div data-count="21" style="font-family:'JetBrains Mono',monospace;font-size:34px;font-weight:700;letter-spacing:-.02em;color:#F2F4FD">21</div><div style="margin-top:4px;font-size:12.5px;font-weight:600;color:#6E7694">verificações por processo</div></div>
+    <div data-reveal data-reveal-delay="160"><div data-count="96" data-count-suffix="%" style="font-family:'JetBrains Mono',monospace;font-size:34px;font-weight:700;letter-spacing:-.02em;color:#F2F4FD">96%</div><div style="margin-top:4px;font-size:12.5px;font-weight:600;color:#6E7694">dos processos dentro do prazo</div></div>
+    <div data-reveal data-reveal-delay="240"><div style="font-family:'JetBrains Mono',monospace;font-size:34px;font-weight:700;letter-spacing:-.02em;color:#F2F4FD">24/7</div><div style="margin-top:4px;font-size:12.5px;font-weight:600;color:#6E7694">monitoramento automático</div></div>
+  </div>
+</section>
+
+<section style="position:relative;z-index:1;padding:96px 0">
+  <div style="max-width:1200px;margin:0 auto;padding:0 32px">
+    <div data-reveal style="text-align:center">
+      <div style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;letter-spacing:.16em;color:#8F76FF">O ANTES E O DEPOIS</div>
+      <h2 style="margin-top:14px;font-size:44px;font-weight:800;letter-spacing:-.028em;line-height:1.1">Conferir BL na mão custa caro</h2>
+    </div>
+    <div style="margin-top:46px;display:grid;grid-template-columns:1fr 1fr;gap:22px">
+      <div data-reveal style="padding:32px;border-radius:20px;background:#0A0E1C;border:1px solid rgba(255,255,255,.08)">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="width:9px;height:9px;border-radius:50%;background:#FB7185"></span>
+          <span style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;letter-spacing:.1em;color:#FB7185">SEM A PRIORA</span>
+        </div>
+        <div style="margin-top:22px;display:flex;flex-direction:column;gap:16px">
+          <div data-reveal data-reveal-delay="0" style="display:flex;gap:12px;align-items:flex-start"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#5A6180" stroke-width="2.4" style="flex-shrink:0;margin-top:2px"><path d="M6 6l12 12M18 6L6 18"></path></svg><div><div style="font-size:15px;font-weight:700;color:#C6CCE4">Documento conferido campo a campo</div><div style="margin-top:3px;font-size:13.5px;line-height:1.55;color:#6E7694">40 a 60 minutos por processo, com dois PDFs abertos lado a lado.</div></div></div>
+          <div data-reveal data-reveal-delay="90" style="display:flex;gap:12px;align-items:flex-start"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#5A6180" stroke-width="2.4" style="flex-shrink:0;margin-top:2px"><path d="M6 6l12 12M18 6L6 18"></path></svg><div><div style="font-size:15px;font-weight:700;color:#C6CCE4">Uma aba por armador</div><div style="margin-top:3px;font-size:13.5px;line-height:1.55;color:#6E7694">Tracking e free time consultados manualmente em 12 sites diferentes.</div></div></div>
+          <div data-reveal data-reveal-delay="180" style="display:flex;gap:12px;align-items:flex-start"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#5A6180" stroke-width="2.4" style="flex-shrink:0;margin-top:2px"><path d="M6 6l12 12M18 6L6 18"></path></svg><div><div style="font-size:15px;font-weight:700;color:#C6CCE4">Divergência descoberta tarde demais</div><div style="margin-top:3px;font-size:13.5px;line-height:1.55;color:#6E7694">Retificação de CE, multa e demurrage entram na conta do cliente.</div></div></div>
+          <div data-reveal data-reveal-delay="270" style="display:flex;gap:12px;align-items:flex-start"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#5A6180" stroke-width="2.4" style="flex-shrink:0;margin-top:2px"><path d="M6 6l12 12M18 6L6 18"></path></svg><div><div style="font-size:15px;font-weight:700;color:#C6CCE4">Controle em planilha</div><div style="margin-top:3px;font-size:13.5px;line-height:1.55;color:#6E7694">Cada analista com a sua versão, nenhum histórico auditável.</div></div></div>
+        </div>
+        <div data-reveal data-reveal-delay="360" style="margin-top:26px;padding-top:20px;border-top:1px solid rgba(255,255,255,.07)">
+          <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px">
+            <span style="font-size:12.5px;font-weight:600;color:#6E7694">Tempo por processo</span>
+            <span data-count="48" data-count-suffix=" min" style="font-family:'JetBrains Mono',monospace;font-size:22px;font-weight:700;color:#FB7185">48 min</span>
+          </div>
+          <div style="margin-top:10px;height:6px;border-radius:99px;background:rgba(255,255,255,.06);overflow:hidden"><div style="width:92%;height:100%;border-radius:99px;background:linear-gradient(90deg,#7F1D3A,#FB7185);animation:meterFill 1.9s cubic-bezier(.22,1,.36,1)"></div></div>
+        </div>
+      </div>
+      <div data-reveal data-reveal-delay="120" style="position:relative;overflow:hidden;padding:32px;border-radius:20px;background:linear-gradient(170deg,#141B3C 0%,#0A0E1C 70%);border:1px solid rgba(139,108,255,.4);box-shadow:0 30px 80px rgba(40,20,160,.28)">
+        <div aria-hidden="true" style="position:absolute;top:0;bottom:0;left:0;width:110px;background:linear-gradient(90deg,rgba(255,255,255,0),rgba(167,146,255,.13),rgba(255,255,255,0));will-change:transform;animation:shine 7.5s cubic-bezier(.45,0,.35,1) infinite;pointer-events:none"></div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="width:9px;height:9px;border-radius:50%;background:#4ADE80;box-shadow:0 0 10px #4ADE80"></span>
+          <span style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;letter-spacing:.1em;color:#4ADE80">COM A PRIORA</span>
+        </div>
+        <div style="margin-top:22px;display:flex;flex-direction:column;gap:16px">
+          <div data-reveal data-reveal-delay="120" style="display:flex;gap:12px;align-items:flex-start"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#4ADE80" stroke-width="3" style="flex-shrink:0;margin-top:2px"><path d="M4 12l5 5L20 6"></path></svg><div><div style="font-size:15px;font-weight:700;color:#F2F4FD">21 verificações em segundos</div><div style="margin-top:3px;font-size:13.5px;line-height:1.55;color:#98A0BF">Os playbooks comparam MBL × HBL e CE Master × CE House sozinhos.</div></div></div>
+          <div data-reveal data-reveal-delay="210" style="display:flex;gap:12px;align-items:flex-start"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#4ADE80" stroke-width="3" style="flex-shrink:0;margin-top:2px"><path d="M4 12l5 5L20 6"></path></svg><div><div style="font-size:15px;font-weight:700;color:#F2F4FD">Um radar para os 12 armadores</div><div style="margin-top:3px;font-size:13.5px;line-height:1.55;color:#98A0BF">Status, ETA e free time atualizados sem ninguém abrir nada.</div></div></div>
+          <div data-reveal data-reveal-delay="300" style="display:flex;gap:12px;align-items:flex-start"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#4ADE80" stroke-width="3" style="flex-shrink:0;margin-top:2px"><path d="M4 12l5 5L20 6"></path></svg><div><div style="font-size:15px;font-weight:700;color:#F2F4FD">Alerta antes de virar custo</div><div style="margin-top:3px;font-size:13.5px;line-height:1.55;color:#98A0BF">Divergência crítica e demurrage aparecem na fila com dias de folga.</div></div></div>
+          <div data-reveal data-reveal-delay="390" style="display:flex;gap:12px;align-items:flex-start"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#4ADE80" stroke-width="3" style="flex-shrink:0;margin-top:2px"><path d="M4 12l5 5L20 6"></path></svg><div><div style="font-size:15px;font-weight:700;color:#F2F4FD">Trilha auditável por processo</div><div style="margin-top:3px;font-size:13.5px;line-height:1.55;color:#98A0BF">Quem validou o quê, quando e com qual documento em mãos.</div></div></div>
+        </div>
+        <div data-reveal data-reveal-delay="480" style="position:relative;margin-top:26px;padding-top:20px;border-top:1px solid rgba(255,255,255,.09)">
+          <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px">
+            <span style="font-size:12.5px;font-weight:600;color:#8E96B8">Tempo por processo</span>
+            <span data-count="40" data-count-suffix=" s" style="font-family:'JetBrains Mono',monospace;font-size:22px;font-weight:700;color:#4ADE80">40 s</span>
+          </div>
+          <div style="margin-top:10px;height:6px;border-radius:99px;background:rgba(255,255,255,.07);overflow:hidden"><div style="width:9%;height:100%;border-radius:99px;background:linear-gradient(90deg,#166534,#4ADE80);animation:meterFill 1.9s cubic-bezier(.22,1,.36,1)"></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="como-funciona" style="position:relative;z-index:1;padding:96px 0;background:#080C18;border-top:1px solid rgba(255,255,255,.07);border-bottom:1px solid rgba(255,255,255,.07)">
+  <div style="max-width:1200px;margin:0 auto;padding:0 32px">
+    <div data-reveal>
+      <div style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;letter-spacing:.16em;color:#8F76FF">COMO FUNCIONA</div>
+      <h2 style="margin-top:14px;font-size:44px;font-weight:800;letter-spacing:-.028em;line-height:1.1;max-width:620px">Você conecta. A Priora confere. Você decide.</h2>
+    </div>
+    <div style="margin-top:48px;position:relative">
+      <div style="position:absolute;top:52px;left:12%;right:12%;height:1px;background:linear-gradient(90deg,transparent,rgba(139,108,255,.35),rgba(139,108,255,.35),transparent)"></div>
+      <div style="position:relative;display:grid;grid-template-columns:repeat(3,1fr);gap:22px">
+        <div data-reveal style="padding:30px 28px;border-radius:18px;background:#0A0E1C;border:1px solid rgba(255,255,255,.09);transition:all .25s ease" style-hover="border:1px solid rgba(139,108,255,.45);transform:translateY(-4px)">
+          <div style="width:44px;height:44px;border-radius:13px;background:linear-gradient(140deg,rgba(84,56,255,.35),rgba(67,39,230,.12));border:1px solid rgba(139,108,255,.35);display:flex;align-items:center;justify-content:center;font-family:'JetBrains Mono',monospace;font-size:15px;font-weight:700;color:#B9A6FF">01</div>
+          <h3 style="margin-top:18px;font-size:21px;font-weight:800;letter-spacing:-.015em">Conecte o courier</h3>
+          <p style="margin-top:10px;font-size:14.5px;line-height:1.65;color:#98A0BF;text-wrap:pretty">A Priora importa os e-mails do Outlook e identifica MBL, HBL, CE Mercante e itens de cada processo — sem digitação.</p>
+          <div style="margin-top:18px;display:flex;flex-wrap:wrap;gap:6px">
+            <span style="padding:5px 10px;border-radius:7px;background:rgba(255,255,255,.05);font-family:'JetBrains Mono',monospace;font-size:10.5px;color:#8E96B8">MBL</span>
+            <span style="padding:5px 10px;border-radius:7px;background:rgba(255,255,255,.05);font-family:'JetBrains Mono',monospace;font-size:10.5px;color:#8E96B8">HBL</span>
+            <span style="padding:5px 10px;border-radius:7px;background:rgba(255,255,255,.05);font-family:'JetBrains Mono',monospace;font-size:10.5px;color:#8E96B8">CE MASTER</span>
+            <span style="padding:5px 10px;border-radius:7px;background:rgba(255,255,255,.05);font-family:'JetBrains Mono',monospace;font-size:10.5px;color:#8E96B8">CE HOUSE</span>
+          </div>
+        </div>
+        <div data-reveal data-reveal-delay="120" style="padding:30px 28px;border-radius:18px;background:#0A0E1C;border:1px solid rgba(255,255,255,.09);transition:all .25s ease" style-hover="border:1px solid rgba(139,108,255,.45);transform:translateY(-4px)">
+          <div style="width:44px;height:44px;border-radius:13px;background:linear-gradient(140deg,rgba(84,56,255,.35),rgba(67,39,230,.12));border:1px solid rgba(139,108,255,.35);display:flex;align-items:center;justify-content:center;font-family:'JetBrains Mono',monospace;font-size:15px;font-weight:700;color:#B9A6FF">02</div>
+          <h3 style="margin-top:18px;font-size:21px;font-weight:800;letter-spacing:-.015em">A IA audita</h3>
+          <p style="margin-top:10px;font-size:14.5px;line-height:1.65;color:#98A0BF;text-wrap:pretty">Playbooks de Pré-Alerta e CE Mercante comparam documento contra documento, campo a campo, e classificam cada divergência.</p>
+          <div style="margin-top:18px;display:flex;flex-direction:column;gap:7px">
+            <div style="display:flex;align-items:center;gap:8px;font-size:11.5px;color:#8E96B8"><span style="flex:1;height:4px;border-radius:99px;background:rgba(255,255,255,.07);overflow:hidden"><span style="display:block;width:100%;height:100%;background:#4ADE80;animation:barGrow 1.8s cubic-bezier(.22,1,.36,1)"></span></span><span style="font-family:'JetBrains Mono',monospace">100%</span></div>
+            <div style="display:flex;align-items:center;gap:8px;font-size:11.5px;color:#8E96B8"><span style="flex:1;height:4px;border-radius:99px;background:rgba(255,255,255,.07);overflow:hidden"><span style="display:block;width:76%;height:100%;background:#8F76FF;animation:barGrow 2.2s cubic-bezier(.22,1,.36,1)"></span></span><span style="font-family:'JetBrains Mono',monospace">76%</span></div>
+          </div>
+        </div>
+        <div data-reveal data-reveal-delay="240" style="padding:30px 28px;border-radius:18px;background:#0A0E1C;border:1px solid rgba(255,255,255,.09);transition:all .25s ease" style-hover="border:1px solid rgba(139,108,255,.45);transform:translateY(-4px)">
+          <div style="width:44px;height:44px;border-radius:13px;background:linear-gradient(140deg,rgba(84,56,255,.35),rgba(67,39,230,.12));border:1px solid rgba(139,108,255,.35);display:flex;align-items:center;justify-content:center;font-family:'JetBrains Mono',monospace;font-size:15px;font-weight:700;color:#B9A6FF">03</div>
+          <h3 style="margin-top:18px;font-size:21px;font-weight:800;letter-spacing:-.015em">Você decide</h3>
+          <p style="margin-top:10px;font-size:14.5px;line-height:1.65;color:#98A0BF;text-wrap:pretty">As pendências chegam priorizadas na Fila de Decisões, e a Clara explica e já redige o e-mail para o agente ou courier.</p>
+          <div style="margin-top:18px;display:flex;gap:6px">
+            <span style="padding:7px 12px;border-radius:8px;background:rgba(74,222,128,.12);font-size:11.5px;font-weight:700;color:#4ADE80">Aprovar</span>
+            <span style="padding:7px 12px;border-radius:8px;background:rgba(251,113,133,.12);font-size:11.5px;font-weight:700;color:#FB7185">Contestar</span>
+            <span style="padding:7px 12px;border-radius:8px;background:rgba(255,255,255,.06);font-size:11.5px;font-weight:700;color:#98A0BF">Delegar</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="armadores" style="position:relative;z-index:1;overflow:hidden;padding:100px 0 88px">
+  <div style="position:absolute;top:140px;left:50%;transform:translateX(-50%);width:980px;height:620px;background:radial-gradient(ellipse at center,rgba(67,39,230,.17) 0%,rgba(67,39,230,0) 65%);pointer-events:none"></div>
+  <div data-reveal style="max-width:1200px;margin:0 auto;padding:0 32px;text-align:center;position:relative">
+    <div style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;letter-spacing:.16em;color:#8F76FF">RADAR DE ARMADORES</div>
+    <h2 style="margin-top:14px;font-size:44px;font-weight:800;letter-spacing:-.028em;line-height:1.1">Conectada aos principais<br>armadores do mundo</h2>
+    <p style="margin:16px auto 0;font-size:16.5px;line-height:1.6;color:#98A0BF;max-width:560px;text-wrap:pretty">Tracking, liberação e demurrage puxados direto da fonte, sem planilha e sem aba aberta em cada site de armador.</p>
+  </div>
+  <div data-reveal data-reveal-delay="120" style="max-width:1140px;margin:52px auto 0;position:relative">
+    <div style="display:grid;grid-template-columns:repeat(12,1fr);gap:0">
+      <sc-for list="{{ armadores }}" as="a" hint-placeholder-count="12">
+        <div style="justify-self:center;padding:10px 9px;border-radius:10px;background:{{ a.bg }};border:1px solid {{ a.border }};font-family:'JetBrains Mono',monospace;font-size:10.5px;font-weight:700;letter-spacing:.03em;color:{{ a.color }};white-space:nowrap;transition:all .2s ease" style-hover="border:1px solid rgba(139,108,255,.75);color:#DCD4FF">{{ a.sigla }}</div>
+      </sc-for>
+    </div>
+    <svg viewBox="0 0 1140 260" fill="none" style="display:block;width:100%;height:auto">
+      <path d="M47.5 0 C47.5 130, 570 118, 570 252" stroke="rgba(130,106,255,.16)" stroke-width="1.5"></path>
+      <path d="M142.5 0 C142.5 130, 570 118, 570 252" stroke="rgba(130,106,255,.16)" stroke-width="1.5"></path>
+      <path d="M237.5 0 C237.5 130, 570 118, 570 252" stroke="rgba(130,106,255,.16)" stroke-width="1.5"></path>
+      <path d="M332.5 0 C332.5 130, 570 118, 570 252" stroke="rgba(130,106,255,.16)" stroke-width="1.5"></path>
+      <path d="M427.5 0 C427.5 130, 570 118, 570 252" stroke="rgba(130,106,255,.16)" stroke-width="1.5"></path>
+      <path d="M522.5 0 C522.5 130, 570 118, 570 252" stroke="rgba(130,106,255,.16)" stroke-width="1.5"></path>
+      <path d="M617.5 0 C617.5 130, 570 118, 570 252" stroke="rgba(130,106,255,.16)" stroke-width="1.5"></path>
+      <path d="M712.5 0 C712.5 130, 570 118, 570 252" stroke="rgba(130,106,255,.16)" stroke-width="1.5"></path>
+      <path d="M807.5 0 C807.5 130, 570 118, 570 252" stroke="rgba(130,106,255,.16)" stroke-width="1.5"></path>
+      <path d="M902.5 0 C902.5 130, 570 118, 570 252" stroke="rgba(130,106,255,.16)" stroke-width="1.5"></path>
+      <path d="M997.5 0 C997.5 130, 570 118, 570 252" stroke="rgba(130,106,255,.16)" stroke-width="1.5"></path>
+      <path d="M1092.5 0 C1092.5 130, 570 118, 570 252" stroke="rgba(130,106,255,.16)" stroke-width="1.5"></path>
+      <path d="M47.5 0 C47.5 130, 570 118, 570 252" pathLength="100" stroke="#8F76FF" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="10 90" style="animation:hubPulse 3.6s linear infinite;animation-delay:0s"></path>
+      <path d="M142.5 0 C142.5 130, 570 118, 570 252" pathLength="100" stroke="#8F76FF" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="10 90" style="animation:hubPulse 3.6s linear infinite;animation-delay:-1.7s"></path>
+      <path d="M237.5 0 C237.5 130, 570 118, 570 252" pathLength="100" stroke="#8F76FF" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="10 90" style="animation:hubPulse 3.6s linear infinite;animation-delay:-0.6s"></path>
+      <path d="M332.5 0 C332.5 130, 570 118, 570 252" pathLength="100" stroke="#8F76FF" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="10 90" style="animation:hubPulse 3.6s linear infinite;animation-delay:-2.5s"></path>
+      <path d="M427.5 0 C427.5 130, 570 118, 570 252" pathLength="100" stroke="#8F76FF" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="10 90" style="animation:hubPulse 3.6s linear infinite;animation-delay:-1.1s"></path>
+      <path d="M522.5 0 C522.5 130, 570 118, 570 252" pathLength="100" stroke="#8F76FF" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="10 90" style="animation:hubPulse 3.6s linear infinite;animation-delay:-3.1s"></path>
+      <path d="M617.5 0 C617.5 130, 570 118, 570 252" pathLength="100" stroke="#8F76FF" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="10 90" style="animation:hubPulse 3.6s linear infinite;animation-delay:-0.3s"></path>
+      <path d="M712.5 0 C712.5 130, 570 118, 570 252" pathLength="100" stroke="#8F76FF" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="10 90" style="animation:hubPulse 3.6s linear infinite;animation-delay:-2.1s"></path>
+      <path d="M807.5 0 C807.5 130, 570 118, 570 252" pathLength="100" stroke="#8F76FF" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="10 90" style="animation:hubPulse 3.6s linear infinite;animation-delay:-1.4s"></path>
+      <path d="M902.5 0 C902.5 130, 570 118, 570 252" pathLength="100" stroke="#8F76FF" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="10 90" style="animation:hubPulse 3.6s linear infinite;animation-delay:-2.9s"></path>
+      <path d="M997.5 0 C997.5 130, 570 118, 570 252" pathLength="100" stroke="#8F76FF" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="10 90" style="animation:hubPulse 3.6s linear infinite;animation-delay:-0.9s"></path>
+      <path d="M1092.5 0 C1092.5 130, 570 118, 570 252" pathLength="100" stroke="#8F76FF" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="10 90" style="animation:hubPulse 3.6s linear infinite;animation-delay:-2.3s"></path>
+    </svg>
+    <div style="display:flex;flex-direction:column;align-items:center;margin-top:-6px">
+      <button onClick="{{ toggleHub }}" aria-expanded="{{ hubAberto }}" style="position:relative;width:120px;height:120px;padding:0;border:none;background:transparent;cursor:pointer;transition:transform .3s cubic-bezier(.22,1,.36,1)" style-hover="transform:scale(1.06)" style-active="transform:scale(.97)">
+        <div style="position:absolute;inset:0;border-radius:50%;border:1.5px solid rgba(139,108,255,.5);animation:ringPulse 2.6s ease-out infinite"></div>
+        <div style="position:absolute;inset:0;border-radius:50%;border:1.5px solid rgba(139,108,255,.5);animation:ringPulse 2.6s ease-out infinite;animation-delay:1.3s"></div>
+        <div style="position:absolute;inset:6px;border-radius:50%;background:radial-gradient(circle at 38% 30%,#1A2140,#080C1C);border:1px solid {{ hubBorda }};display:flex;align-items:center;justify-content:center;box-shadow:{{ hubGlow }};transition:border-color .3s ease,box-shadow .3s ease">
+          <img src="assets/logo-p-white.png" alt="Priora" style="width:54px;height:auto;display:block">
+        </div>
+      </button>
+      <div style="width:1.5px;height:30px;background:linear-gradient(rgba(139,108,255,.5),rgba(139,108,255,.12))"></div>
+      <div style="display:inline-flex;align-items:center;gap:10px;padding:13px 22px;border-radius:13px;background:#0B0F20;border:1px solid rgba(139,108,255,.32);box-shadow:0 0 40px rgba(67,39,230,.22);font-size:14px;font-weight:800;color:#E7EAF8">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8F76FF" stroke-width="2.2"><rect x="3" y="8" width="18" height="12" rx="2"></rect><path d="M8 8V6a4 4 0 0 1 8 0v2"></path></svg>
+        Sua operação
+      </div>
+      <div style="margin-top:14px;display:inline-flex;align-items:center;gap:7px;padding:6px 13px;border-radius:999px;border:1px solid rgba(139,108,255,.28);background:rgba(67,39,230,.10);font-family:'JetBrains Mono',monospace;font-size:10.5px;font-weight:700;letter-spacing:.08em;color:#B9A6FF">
+        {{ hubDica }}
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" style="transform:{{ hubSeta }};transition:transform .3s ease"><path d="M6 9l6 6 6-6"></path></svg>
+      </div>
+      <div style="width:100%;max-width:900px;overflow:hidden;max-height:{{ hubAltura }};opacity:{{ hubOpacidade }};transition:max-height .55s cubic-bezier(.22,1,.36,1),opacity .4s ease">
+        <div style="margin-top:20px;padding:26px 28px;border-radius:18px;background:rgba(10,14,28,.85);border:1px solid rgba(139,108,255,.3);box-shadow:0 30px 70px rgba(30,14,120,.4);text-align:left">
+          <div style="display:flex;align-items:center;gap:10px">
+            <span style="width:7px;height:7px;border-radius:50%;background:#4ADE80;box-shadow:0 0 10px #4ADE80;animation:dotBlink 2s ease-in-out infinite"></span>
+            <span style="font-size:14.5px;font-weight:800;color:#F2F4FD">O que a Priora puxa de cada armador</span>
+          </div>
+          <div style="margin-top:18px;display:grid;grid-template-columns:repeat(4,1fr);gap:14px">
+            <sc-for list="{{ hubDados }}" as="d" hint-placeholder-count="8">
+              <div style="padding:14px 15px;border-radius:13px;background:#0C1122;border:1px solid rgba(255,255,255,.08)">
+                <div style="font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:700;letter-spacing:.1em;color:#8F76FF">{{ d.tag }}</div>
+                <div style="margin-top:7px;font-size:13.5px;font-weight:700;color:#E7EAF8">{{ d.titulo }}</div>
+                <div style="margin-top:4px;font-size:12px;line-height:1.5;color:#7C849F">{{ d.desc }}</div>
+              </div>
+            </sc-for>
+          </div>
+          <div style="margin-top:18px;padding-top:16px;border-top:1px solid rgba(255,255,255,.07);display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap">
+            <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#6E7694">Atualização automática a cada 6 h · sem ninguém abrir o site do armador</span>
+            <a href="Registro.dc.html" style="font-size:13px;font-weight:800;color:#B9A6FF" style-hover="color:#DCD4FF">Testar grátis →</a>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div style="margin:30px auto 0;text-align:center;font-family:'JetBrains Mono',monospace;font-size:11.5px;line-height:1.9;color:#6E7694;max-width:880px">Maersk · MSC · CMA CGM · COSCO · Hapag-Lloyd · ONE (Ocean Network Express) · Evergreen (ShipmentLink) · HMM · Yang Ming · ZIM · PIL (Pacific International Lines) · OOCL</div>
+  </div>
+</section>
+
+<section id="recursos" style="position:relative;z-index:1;padding:88px 0;background:#080C18;border-top:1px solid rgba(255,255,255,.07);border-bottom:1px solid rgba(255,255,255,.07)">
+  <div style="max-width:1200px;margin:0 auto;padding:0 32px">
+    <div data-reveal style="text-align:center">
+      <div style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;letter-spacing:.16em;color:#8F76FF">RECURSOS</div>
+      <h2 style="margin-top:14px;font-size:44px;font-weight:800;letter-spacing:-.028em;line-height:1.1">Tudo o que sua operação<br>confere na mão, automatizado</h2>
+    </div>
+    <div style="margin-top:46px;display:grid;grid-template-columns:repeat(3,1fr);gap:20px">
+      <sc-for list="{{ recursos }}" as="r" hint-placeholder-count="6">
+        <div data-reveal style="position:relative;padding:28px;border-radius:18px;background:#0A0E1C;border:1px solid rgba(255,255,255,.09);transition:all .25s cubic-bezier(.22,1,.36,1)" style-hover="border:1px solid rgba(139,108,255,.5);transform:translateY(-5px);box-shadow:0 24px 60px rgba(30,14,120,.4)">
+          <div style="width:44px;height:44px;border-radius:13px;background:linear-gradient(140deg,rgba(84,56,255,.32),rgba(67,39,230,.10));border:1px solid rgba(139,108,255,.3);display:flex;align-items:center;justify-content:center">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#A88FFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="{{ r.icon }}"></path></svg>
+          </div>
+          <h3 style="margin-top:17px;font-size:17.5px;font-weight:800;letter-spacing:-.01em">{{ r.titulo }}</h3>
+          <p style="margin-top:9px;font-size:14px;line-height:1.6;color:#98A0BF;text-wrap:pretty">{{ r.texto }}</p>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+</section>
+
+<section style="position:relative;z-index:1;overflow:hidden;padding:96px 0">
+  <div style="position:absolute;bottom:-120px;left:-100px;width:600px;height:600px;background:radial-gradient(circle,rgba(120,80,255,.14),rgba(120,80,255,0) 65%);pointer-events:none"></div>
+  <div style="max-width:1200px;margin:0 auto;padding:0 32px;display:grid;grid-template-columns:.85fr 1.15fr;gap:52px;align-items:center;position:relative">
+    <div data-reveal style="position:relative;display:flex;justify-content:center">
+      <div style="position:absolute;top:30px;width:340px;height:340px;border-radius:50%;background:radial-gradient(circle,rgba(120,90,255,.26) 0%,rgba(120,90,255,0) 70%)"></div>
+      <img src="assets/clara.png" alt="Clara IA" style="position:relative;height:390px;width:auto;animation:claraFloat 6.5s ease-in-out infinite;filter:drop-shadow(0 26px 50px rgba(60,30,220,.4))">
+    </div>
+    <div data-reveal data-reveal-delay="120">
+      <div style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;letter-spacing:.16em;color:#8F76FF">CLARA IA</div>
+      <h2 style="margin-top:14px;font-size:42px;font-weight:800;letter-spacing:-.028em;line-height:1.1">Uma analista que nunca deixa passar um campo</h2>
+      <p style="margin-top:16px;font-size:16px;line-height:1.65;color:#98A0BF;max-width:480px;text-wrap:pretty">A Clara acompanha cada auditoria, aponta o que precisa de validação humana e responde sobre qualquer processo — em português, com o documento na mão.</p>
+      <div style="margin-top:26px;padding:20px;border-radius:18px;background:rgba(10,14,28,.8);border:1px solid rgba(255,255,255,.08);max-width:540px">
+        <div style="display:flex;align-items:center;gap:9px;padding-bottom:14px;border-bottom:1px solid rgba(255,255,255,.06)">
+          <img src="assets/clara.png" alt="" style="width:26px;height:26px;object-fit:cover;object-position:top;border-radius:50%;background:#141A33;border:1px solid rgba(139,108,255,.4)">
+          <span style="font-size:13px;font-weight:800;color:#E7EAF8">Clara</span>
+          <span style="padding:3px 8px;border-radius:6px;background:rgba(84,56,255,.2);font-family:'JetBrains Mono',monospace;font-size:9.5px;font-weight:700;color:#B9A6FF">IA</span>
+          <span style="margin-left:auto;display:inline-flex;align-items:center;gap:6px;font-size:11px;color:#4ADE80"><span style="width:6px;height:6px;border-radius:50%;background:#4ADE80;animation:dotBlink 2s ease-in-out infinite"></span>Online</span>
+        </div>
+        <div style="margin-top:14px;display:flex;flex-direction:column;gap:11px">
+          <div style="padding:13px 15px;border-radius:4px 15px 15px 15px;background:#111735;border:1px solid rgba(255,255,255,.07);font-size:13.5px;line-height:1.55;color:#D6DAF0">Encontrei <strong style="color:#FFFFFF">2 divergências</strong> no IM2866: o peso total do HBL difere do MBL em 180 kg e o frete está USD 250 acima do combinado.</div>
+          <div style="align-self:flex-end;padding:13px 15px;border-radius:15px 4px 15px 15px;background:linear-gradient(135deg,#5438FF,#3B1FD6);font-size:13.5px;font-weight:600;color:#FFFFFF">Gera o e-mail de contestação e marca o Diogo.</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <span style="padding:9px 14px;border-radius:10px;border:1px solid rgba(139,108,255,.35);background:rgba(67,39,230,.10);font-size:12.5px;font-weight:700;color:#C3B4FF">Explicar divergências</span>
+            <span style="padding:9px 14px;border-radius:10px;border:1px solid rgba(139,108,255,.35);background:rgba(67,39,230,.10);font-size:12.5px;font-weight:700;color:#C3B4FF">Gerar e-mail</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="planos" style="position:relative;z-index:1;padding:92px 0;background:#080C18;border-top:1px solid rgba(255,255,255,.07)">
+  <div style="max-width:1200px;margin:0 auto;padding:0 32px">
+    <div data-reveal style="text-align:center">
+      <div style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;letter-spacing:.16em;color:#8F76FF">PLANOS</div>
+      <h2 style="margin-top:14px;font-size:44px;font-weight:800;letter-spacing:-.028em;line-height:1.1">Comece grátis. Cresça quando<br>a operação crescer.</h2>
+      <div style="margin-top:24px;position:relative;display:inline-flex;padding:5px;border-radius:13px;background:#0B0F20;border:1px solid rgba(255,255,255,.1)">
+        <div aria-hidden="true" style="position:absolute;top:5px;bottom:5px;left:5px;width:150px;border-radius:9px;background:linear-gradient(135deg,#5438FF,#3B1FD6);box-shadow:0 8px 22px rgba(67,39,230,.45);translate:0px;transition:translate .46s cubic-bezier(.6,-.02,.24,1.02)" ref="{{ refPill }}"></div>
+        <button onClick="{{ setMensal }}" style="position:relative;z-index:1;min-width:150px;padding:10px 22px;border-radius:9px;border:none;background:transparent;font-family:inherit;font-size:13.5px;font-weight:700;color:{{ corMensal }};cursor:pointer;transition:color .3s ease">Mensal</button>
+        <button onClick="{{ setAnual }}" style="position:relative;z-index:1;min-width:150px;padding:10px 22px;border-radius:9px;border:none;background:transparent;font-family:inherit;font-size:13.5px;font-weight:700;color:{{ corAnual }};cursor:pointer;transition:color .3s ease">Anual <span style="color:{{ corDesconto }};transition:color .3s ease">−17%</span></button>
+      </div>
+    </div>
+    <div style="margin-top:44px;display:grid;grid-template-columns:repeat(3,1fr);gap:20px;align-items:stretch">
+      <div data-reveal style="display:flex;flex-direction:column;padding:32px 30px;border-radius:20px;background:#0A0E1C;border:1px solid rgba(255,255,255,.09);transition:all .25s ease" style-hover="border:1px solid rgba(139,108,255,.4)">
+        <div style="font-size:16px;font-weight:800">Essencial</div>
+        <div style="margin-top:4px;font-size:13px;color:#6E7694">Para quem está começando a organizar a operação.</div>
+        <div style="margin-top:22px;display:flex;align-items:baseline;gap:6px">
+          <span style="font-size:19px;font-weight:700;color:#8E96B8">R$</span>
+          <span ref="{{ refEssencial }}" style="display:inline-block;font-family:'JetBrains Mono',monospace;font-size:40px;font-weight:700;letter-spacing:-.03em">490</span>
+          <span style="font-size:13px;color:#6E7694">/mês</span>
+        </div>
+        <div ref="{{ refNotaA }}" style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#6E7694;margin-top:5px;min-height:14px">{{ notaCobranca }}</div>
+        <div style="margin-top:24px;padding-top:22px;border-top:1px solid rgba(255,255,255,.07);display:flex;flex-direction:column;gap:11px;font-size:13.5px;color:#C6CCE4;flex:1">
+          <div style="display:flex;gap:9px;align-items:flex-start"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8F76FF" stroke-width="3" style="flex-shrink:0;margin-top:2px"><path d="M4 12l5 5L20 6"></path></svg>Até 30 processos/mês</div>
+          <div style="display:flex;gap:9px;align-items:flex-start"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8F76FF" stroke-width="3" style="flex-shrink:0;margin-top:2px"><path d="M4 12l5 5L20 6"></path></svg>Auditoria Pré-Alerta (MBL × HBL)</div>
+          <div style="display:flex;gap:9px;align-items:flex-start"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8F76FF" stroke-width="3" style="flex-shrink:0;margin-top:2px"><path d="M4 12l5 5L20 6"></path></svg>Tracking e liberação nos 12 armadores</div>
+          <div style="display:flex;gap:9px;align-items:flex-start"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8F76FF" stroke-width="3" style="flex-shrink:0;margin-top:2px"><path d="M4 12l5 5L20 6"></path></svg>2 usuários</div>
+          <div style="display:flex;gap:9px;align-items:flex-start"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8F76FF" stroke-width="3" style="flex-shrink:0;margin-top:2px"><path d="M4 12l5 5L20 6"></path></svg>Suporte por e-mail</div>
+        </div>
+        <a href="Registro.dc.html" style="margin-top:26px;display:block;text-align:center;padding:14px;border-radius:12px;border:1px solid rgba(139,108,255,.5);font-size:14.5px;font-weight:800;color:#CBBDFF;transition:all .2s ease" style-hover="background:rgba(67,39,230,.18);color:#E4DCFF">Testar grátis</a>
+      </div>
+      <div data-reveal data-reveal-delay="100" style="position:relative;border-radius:22px;background:linear-gradient(150deg,rgba(139,108,255,.85),rgba(139,108,255,.15) 45%,rgba(139,108,255,.5));padding:1.5px;box-shadow:0 34px 90px rgba(50,25,200,.35)">
+        <div style="display:flex;flex-direction:column;height:100%;padding:32px 30px;border-radius:20.5px;background:linear-gradient(180deg,#141B3C 0%,#0A0E1C 65%)">
+          <div style="position:absolute;top:-13px;left:50%;transform:translateX(-50%);padding:6px 14px;border-radius:999px;background:linear-gradient(135deg,#5438FF,#3B1FD6);font-family:'JetBrains Mono',monospace;font-size:10.5px;font-weight:700;letter-spacing:.08em;color:#FFFFFF;box-shadow:0 8px 20px rgba(67,39,230,.5)">MAIS POPULAR</div>
+          <div style="font-size:16px;font-weight:800">Operação</div>
+          <div style="margin-top:4px;font-size:13px;color:#8E96B8">Para operações que auditam todo dia.</div>
+          <div style="margin-top:22px;display:flex;align-items:baseline;gap:6px">
+            <span style="font-size:19px;font-weight:700;color:#AEB5D2">R$</span>
+            <span ref="{{ refOperacao }}" style="display:inline-block;font-family:'JetBrains Mono',monospace;font-size:40px;font-weight:700;letter-spacing:-.03em">990</span>
+            <span style="font-size:13px;color:#8E96B8">/mês</span>
+          </div>
+          <div ref="{{ refNotaB }}" style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#8E96B8;margin-top:5px;min-height:14px">{{ notaCobranca }}</div>
+          <div style="margin-top:24px;padding-top:22px;border-top:1px solid rgba(255,255,255,.09);display:flex;flex-direction:column;gap:11px;font-size:13.5px;color:#D6DAF0;flex:1">
+            <div style="display:flex;gap:9px;align-items:flex-start"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#4ADE80" stroke-width="3" style="flex-shrink:0;margin-top:2px"><path d="M4 12l5 5L20 6"></path></svg>Até 150 processos/mês</div>
+            <div style="display:flex;gap:9px;align-items:flex-start"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#4ADE80" stroke-width="3" style="flex-shrink:0;margin-top:2px"><path d="M4 12l5 5L20 6"></path></svg>Tudo do Essencial</div>
+            <div style="display:flex;gap:9px;align-items:flex-start"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#4ADE80" stroke-width="3" style="flex-shrink:0;margin-top:2px"><path d="M4 12l5 5L20 6"></path></svg>Auditoria CE Mercante (Master × House)</div>
+            <div style="display:flex;gap:9px;align-items:flex-start"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#4ADE80" stroke-width="3" style="flex-shrink:0;margin-top:2px"><path d="M4 12l5 5L20 6"></path></svg>Demurrage com alertas por container</div>
+            <div style="display:flex;gap:9px;align-items:flex-start"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#4ADE80" stroke-width="3" style="flex-shrink:0;margin-top:2px"><path d="M4 12l5 5L20 6"></path></svg>Fila de Decisões + Clara IA</div>
+            <div style="display:flex;gap:9px;align-items:flex-start"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#4ADE80" stroke-width="3" style="flex-shrink:0;margin-top:2px"><path d="M4 12l5 5L20 6"></path></svg>10 usuários</div>
+          </div>
+          <a href="Registro.dc.html" style="margin-top:26px;display:block;text-align:center;padding:15px;border-radius:12px;background:linear-gradient(135deg,#5438FF,#3B1FD6);font-size:14.5px;font-weight:800;color:#FFFFFF;box-shadow:0 12px 30px rgba(67,39,230,.45);transition:all .2s cubic-bezier(.22,1,.36,1)" style-hover="transform:translateY(-2px);box-shadow:0 18px 40px rgba(67,39,230,.6);color:#FFFFFF">Testar grátis</a>
+        </div>
+      </div>
+      <div data-reveal data-reveal-delay="200" style="display:flex;flex-direction:column;padding:32px 30px;border-radius:20px;background:#0A0E1C;border:1px solid rgba(255,255,255,.09);transition:all .25s ease" style-hover="border:1px solid rgba(139,108,255,.4)">
+        <div style="font-size:16px;font-weight:800">Enterprise</div>
+        <div style="margin-top:4px;font-size:13px;color:#6E7694">Para grandes volumes e times de comex.</div>
+        <div style="margin-top:22px;display:flex;align-items:baseline;gap:6px;height:52px">
+          <span style="font-family:'JetBrains Mono',monospace;font-size:30px;font-weight:700;letter-spacing:-.03em">Sob consulta</span>
+        </div>
+        <div style="font-family:'JetBrains Mono',monospace;font-size:11px;color:#6E7694;margin-top:5px;min-height:14px">contrato anual</div>
+        <div style="margin-top:24px;padding-top:22px;border-top:1px solid rgba(255,255,255,.07);display:flex;flex-direction:column;gap:11px;font-size:13.5px;color:#C6CCE4;flex:1">
+          <div style="display:flex;gap:9px;align-items:flex-start"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8F76FF" stroke-width="3" style="flex-shrink:0;margin-top:2px"><path d="M4 12l5 5L20 6"></path></svg>Processos ilimitados</div>
+          <div style="display:flex;gap:9px;align-items:flex-start"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8F76FF" stroke-width="3" style="flex-shrink:0;margin-top:2px"><path d="M4 12l5 5L20 6"></path></svg>Tudo do Operação</div>
+          <div style="display:flex;gap:9px;align-items:flex-start"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8F76FF" stroke-width="3" style="flex-shrink:0;margin-top:2px"><path d="M4 12l5 5L20 6"></path></svg>API e integração com ERP</div>
+          <div style="display:flex;gap:9px;align-items:flex-start"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8F76FF" stroke-width="3" style="flex-shrink:0;margin-top:2px"><path d="M4 12l5 5L20 6"></path></svg>Portal do cliente com sua marca</div>
+          <div style="display:flex;gap:9px;align-items:flex-start"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8F76FF" stroke-width="3" style="flex-shrink:0;margin-top:2px"><path d="M4 12l5 5L20 6"></path></svg>Usuários ilimitados + SSO</div>
+          <div style="display:flex;gap:9px;align-items:flex-start"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8F76FF" stroke-width="3" style="flex-shrink:0;margin-top:2px"><path d="M4 12l5 5L20 6"></path></svg>Onboarding dedicado e SLA</div>
+        </div>
+        <a href="mailto:contato@priora.com.br" style="margin-top:26px;display:block;text-align:center;padding:14px;border-radius:12px;border:1px solid rgba(255,255,255,.16);font-size:14.5px;font-weight:800;color:#E7EAF8;transition:all .2s ease" style-hover="background:rgba(255,255,255,.07);color:#FFFFFF">Falar com vendas</a>
+      </div>
+    </div>
+    <div data-reveal style="margin-top:26px;text-align:center;font-size:13px;color:#6E7694">Todos os planos começam com <strong style="color:#AEB5D2">14 dias grátis</strong>, sem cartão de crédito. Cancele quando quiser.</div>
+  </div>
+</section>
+
+<sc-if value="{{ mostrarFaq }}" hint-placeholder-val="{{ true }}">
+<section id="faq" style="position:relative;z-index:1;padding:92px 0">
+  <div style="max-width:780px;margin:0 auto;padding:0 32px">
+    <div data-reveal style="text-align:center">
+      <div style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;letter-spacing:.16em;color:#8F76FF">FAQ</div>
+      <h2 style="margin-top:14px;font-size:40px;font-weight:800;letter-spacing:-.028em;line-height:1.1">Perguntas frequentes</h2>
+    </div>
+    <div style="margin-top:38px;display:flex;flex-direction:column;gap:12px">
+      <sc-for list="{{ faqs }}" as="f" hint-placeholder-count="4">
+        <div data-reveal style="border:1px solid {{ f.border }};border-radius:15px;background:{{ f.bg }};overflow:hidden;transition:all .22s ease">
+          <button onClick="{{ f.toggle }}" style="width:100%;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:20px 22px;background:transparent;border:none;cursor:pointer;font-family:inherit;font-size:15.5px;font-weight:700;color:#E7EAF8;text-align:left">
+            {{ f.q }}
+            <span style="flex-shrink:0;display:flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:8px;background:rgba(139,108,255,.14);font-family:'JetBrains Mono',monospace;font-size:15px;font-weight:700;color:#B9A6FF">{{ f.sign }}</span>
+          </button>
+          <sc-if value="{{ f.open }}" hint-placeholder-val="{{ false }}">
+            <div style="padding:0 22px 21px;font-size:14.5px;line-height:1.7;color:#98A0BF;text-wrap:pretty">{{ f.a }}</div>
+          </sc-if>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+</section>
+</sc-if>
+
+<section style="position:relative;z-index:1;padding:0 0 96px">
+  <div style="max-width:1200px;margin:0 auto;padding:0 32px">
+    <div data-reveal style="position:relative;overflow:hidden;border-radius:26px;border:1px solid rgba(139,108,255,.35);background:linear-gradient(180deg,#151C40 0%,#0A0E1F 100%);padding:76px 40px;text-align:center">
+      <div style="position:absolute;top:-180px;left:50%;transform:translateX(-50%);width:820px;height:420px;background:radial-gradient(ellipse at center,rgba(90,60,255,.38) 0%,rgba(90,60,255,0) 65%);pointer-events:none"></div>
+      <div style="position:absolute;inset:0;background-image:linear-gradient(rgba(255,255,255,.03) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.03) 1px,transparent 1px);background-size:52px 52px;mask-image:radial-gradient(ellipse 70% 70% at 50% 0%,#000,transparent 75%);-webkit-mask-image:radial-gradient(ellipse 70% 70% at 50% 0%,#000,transparent 75%);pointer-events:none"></div>
+      <div aria-hidden="true" style="position:absolute;left:0;right:0;bottom:0;height:120px;overflow:hidden;pointer-events:none">
+        <svg viewBox="356 528 352 172" width="196" height="96" fill="none" style="position:absolute;bottom:26px;left:0;opacity:.34;animation:shipSailCard 64s linear -8s infinite">
+          <g style="animation:hullRock 10s ease-in-out infinite;transform-origin:528px 632px">
+            <g fill="#2E3767"><rect x="392" y="596" width="40" height="26" rx="2"></rect><rect x="434" y="596" width="40" height="26" rx="2"></rect><rect x="476" y="596" width="40" height="26" rx="2"></rect><rect x="518" y="596" width="40" height="26" rx="2"></rect><rect x="560" y="596" width="40" height="26" rx="2"></rect><rect x="602" y="596" width="40" height="26" rx="2"></rect></g>
+            <g fill="#3B4681"><rect x="416" y="568" width="40" height="26" rx="2"></rect><rect x="458" y="568" width="40" height="26" rx="2"></rect><rect x="500" y="568" width="40" height="26" rx="2"></rect><rect x="542" y="568" width="40" height="26" rx="2"></rect><rect x="584" y="568" width="40" height="26" rx="2"></rect></g>
+            <g fill="#2E3767"><rect x="458" y="540" width="40" height="26" rx="2"></rect><rect x="500" y="540" width="40" height="26" rx="2"></rect><rect x="542" y="540" width="40" height="26" rx="2"></rect></g>
+            <rect x="650" y="556" width="40" height="66" rx="3" fill="#46508F"></rect>
+            <rect x="660" y="544" width="20" height="14" rx="2" fill="#3B4681"></rect>
+            <path d="M356 624 H700 L664 690 H392 Z" fill="#262E58"></path>
+            <rect x="356" y="622" width="344" height="7" fill="#1F2648"></rect>
+          </g>
+        </svg>
+        <svg viewBox="0 0 1200 120" preserveAspectRatio="xMidYMax slice" style="position:absolute;inset:0;width:100%;height:100%" fill="none">
+          <g stroke="#7A83C4" stroke-width="2.2" stroke-linecap="round" opacity=".18" style="animation:waterDrift 13s ease-in-out infinite">
+            <path d="M40 66 H210 M270 66 H430 M500 66 H660 M730 66 H900 M960 66 H1140 M20 96 H200 M280 96 H470 M540 96 H720 M800 96 H980 M1050 96 H1180"></path>
+          </g>
+        </svg>
+      </div>
+      <h2 style="position:relative;font-size:46px;font-weight:800;letter-spacing:-.03em;line-height:1.06">Pare de conferir BL na mão.</h2>
+      <p style="position:relative;margin:16px auto 0;font-size:16.5px;color:#AEB5D2;max-width:460px;line-height:1.6">Conecte o courier hoje e veja a primeira auditoria pronta em minutos.</p>
+      <a href="Registro.dc.html" style="position:relative;margin-top:32px;display:inline-flex;align-items:center;gap:10px;padding:18px 34px;border-radius:14px;background:linear-gradient(135deg,#5438FF,#3B1FD6);font-size:16.5px;font-weight:800;color:#FFFFFF;box-shadow:0 16px 44px rgba(67,39,230,.55);transition:all .2s cubic-bezier(.22,1,.36,1)" style-hover="transform:translateY(-2px);box-shadow:0 24px 60px rgba(67,39,230,.7);color:#FFFFFF">Testar grátis
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M5 12h14M13 6l6 6-6 6"></path></svg></a>
+      <div style="position:relative;margin-top:16px;font-family:'JetBrains Mono',monospace;font-size:12px;color:#8E96B8">14 dias grátis · Sem cartão de crédito</div>
+    </div>
+  </div>
+</section>
+
+<footer style="position:relative;z-index:1;border-top:1px solid rgba(255,255,255,.07);background:#05070F">
+  <div style="max-width:1200px;margin:0 auto;padding:52px 32px 40px;display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr;gap:40px">
+    <div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <img src="assets/logo-p-white.png" alt="Priora" style="height:26px;width:auto;display:block">
+        <span style="font-size:19px;font-weight:800;letter-spacing:-.02em">priora</span>
+      </div>
+      <p style="margin-top:14px;font-size:13.5px;line-height:1.65;color:#6E7694;max-width:280px">Inteligência para importação: auditoria documental, demurrage e liberação em um só lugar.</p>
+    </div>
+    <div>
+      <div style="font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700;letter-spacing:.14em;color:#8E96B8">PRODUTO</div>
+      <div style="margin-top:14px;display:flex;flex-direction:column;gap:10px;font-size:13.5px;font-weight:600">
+        <a href="#produto" style="color:#98A0BF" style-hover="color:#FFFFFF">A plataforma</a>
+        <a href="#recursos" style="color:#98A0BF" style-hover="color:#FFFFFF">Recursos</a>
+        <a href="#armadores" style="color:#98A0BF" style-hover="color:#FFFFFF">Armadores</a>
+        <a href="#planos" style="color:#98A0BF" style-hover="color:#FFFFFF">Planos e preços</a>
+      </div>
+    </div>
+    <div>
+      <div style="font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700;letter-spacing:.14em;color:#8E96B8">RECURSOS</div>
+      <div style="margin-top:14px;display:flex;flex-direction:column;gap:10px;font-size:13.5px;font-weight:600">
+        <a href="#como-funciona" style="color:#98A0BF" style-hover="color:#FFFFFF">Como funciona</a>
+        <a href="#faq" style="color:#98A0BF" style-hover="color:#FFFFFF">FAQ</a>
+        <a href="#topo" style="color:#98A0BF" style-hover="color:#FFFFFF">Segurança dos dados</a>
+      </div>
+    </div>
+    <div>
+      <div style="font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700;letter-spacing:.14em;color:#8E96B8">CONTATO</div>
+      <div style="margin-top:14px;display:flex;flex-direction:column;gap:10px;font-size:13.5px;font-weight:600">
+        <a href="mailto:contato@priora.com.br" style="color:#98A0BF" style-hover="color:#FFFFFF">contato@priora.com.br</a>
+        <a href="#planos" style="color:#98A0BF" style-hover="color:#FFFFFF">Falar com vendas</a>
+      </div>
+    </div>
+  </div>
+  <div style="border-top:1px solid rgba(255,255,255,.06)">
+    <div style="max-width:1200px;margin:0 auto;padding:18px 32px;display:flex;justify-content:space-between;font-family:'JetBrains Mono',monospace;font-size:11px;color:#4E5670">
+      <span>© 2026 Priora. Todos os direitos reservados.</span>
+      <span>Feito para operações de comércio exterior no Brasil</span>
+    </div>
+  </div>
+</footer>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{
+  &quot;cobranca&quot;: {&quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;mensal&quot;, &quot;anual&quot;], &quot;default&quot;: &quot;mensal&quot;, &quot;tsType&quot;: &quot;'mensal'|'anual'&quot;, &quot;section&quot;: &quot;Planos&quot;},
+  &quot;telaInicial&quot;: {&quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;inicio&quot;, &quot;auditoria&quot;, &quot;mesa&quot;, &quot;couriers&quot;], &quot;default&quot;: &quot;inicio&quot;, &quot;tsType&quot;: &quot;string&quot;, &quot;section&quot;: &quot;Produto&quot;},
+  &quot;mostrarFaq&quot;: {&quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Seções&quot;}
+}">
+class Component extends DCLogic {
+  state = { open: 0, cobranca: null, tela: null };
+
+  telaData = [
+    { id: 'inicio', label: 'Início', path: 'inicio', legenda: 'Central de atenção operacional — o que precisa de você hoje, priorizado pela Clara.' },
+    { id: 'auditoria', label: 'Auditoria Documental', path: 'auditorias/nova', legenda: 'A Priora identifica os documentos nos e-mails do courier e prepara as auditorias disponíveis.' },
+    { id: 'mesa', label: 'Mesa de Auditoria', path: 'auditorias/IM2866', legenda: 'MBL e HBL lado a lado, com as 21 verificações classificadas por criticidade.' },
+    { id: 'couriers', label: 'Couriers', path: 'couriers', legenda: 'Cada envelope agrupa os processos, com ETA, conteúdo esperado e o que ainda não chegou.' },
+  ];
+
+  armadoresData = [
+    ['MAERSK', 1], ['MSC', 0], ['CMA CGM', 0], ['COSCO', 1], ['HAPAG-LLOYD', 0], ['ONE', 1],
+    ['EVERGREEN', 0], ['HMM', 0], ['YANG MING', 1], ['ZIM', 0], ['PIL', 0], ['OOCL', 1],
+  ];
+
+  recursosData = [
+    { titulo: 'Auditoria Pré-Alerta', texto: 'MBL × HBL comparados antes da chegada: consignatário, pesos, frete, portos e containers.', icon: 'M8 3h8l4 4v14H8zM4 7v14h12' },
+    { titulo: 'Auditoria CE Mercante', texto: 'CE Master × CE House conferidos automaticamente, com divergências classificadas por criticidade.', icon: 'M5 3h14v18H5zM9 12l2 2 4-4' },
+    { titulo: 'Demurrage sob controle', texto: 'Free time por container e por armador, com alerta antes de o prazo virar custo.', icon: 'M12 3a9 9 0 1 1 0 18 9 9 0 0 1 0-18zM12 7v5l3 3' },
+    { titulo: 'Liberação e tracking', texto: 'Status de liberação e rastreamento consultados direto nos 12 armadores integrados.', icon: 'M3 17l3-9h12l3 9M3 17h18M12 8V4M8 4h8' },
+    { titulo: 'Fila de Decisões', texto: 'Toda pendência vira uma decisão priorizada por impacto: aprovar, contestar ou delegar.', icon: 'M4 6h16M4 12h16M4 18h10' },
+    { titulo: 'Clara IA', texto: 'Explica cada divergência em linguagem simples e redige o e-mail de contestação em segundos.', icon: 'M12 3l2.2 6.8L21 12l-6.8 2.2L12 21l-2.2-6.8L3 12l6.8-2.2z' },
+  ];
+
+  hubDadosData = [
+    { tag: 'TRACKING', titulo: 'Posição do container', desc: 'Último evento, porto e navio em que a carga está.' },
+    { tag: 'ETA', titulo: 'Chegada prevista', desc: 'ETA e ETD atualizados a cada nova escala do navio.' },
+    { tag: 'FREE TIME', titulo: 'Demurrage', desc: 'Dias livres por container e data em que vira custo.' },
+    { tag: 'LIBERAÇÃO', titulo: 'Status de liberação', desc: 'Se o BL está liberado, retido ou aguardando pagamento.' },
+    { tag: 'BL', titulo: 'Dados do conhecimento', desc: 'Consignatário, portos, pesos e frete direto da fonte.' },
+    { tag: 'CONTAINERS', titulo: 'Lista e tipos', desc: 'Números, tamanho e tipo de cada equipamento do processo.' },
+    { tag: 'ESCALAS', titulo: 'Rota do navio', desc: 'Transbordos e portos intermediários até o destino.' },
+    { tag: 'ALERTAS', titulo: 'Mudanças de rota', desc: 'Atraso, troca de navio ou de terminal chegam na sua fila.' },
+  ];
+
+  faqData = [
+    { q: 'Preciso trocar meu sistema atual?', a: 'Não. A Priora funciona ao lado do seu ERP ou sistema de despacho: ela lê os e-mails do courier, audita os documentos e devolve as pendências prontas para decisão. No plano Enterprise, integramos via API.' },
+    { q: 'Quais armadores são suportados?', a: 'Maersk, MSC, CMA CGM, COSCO, Hapag-Lloyd, ONE (Ocean Network Express), Evergreen (ShipmentLink), HMM, Yang Ming, ZIM, PIL (Pacific International Lines) e OOCL — com novos armadores entrando no radar a cada trimestre.' },
+    { q: 'Como a Priora acessa meus documentos?', a: 'Com uma conexão de leitura autorizada à caixa de e-mails do courier (Outlook). Os documentos são processados de forma criptografada e nunca são compartilhados com terceiros.' },
+    { q: 'O que conta como um processo?', a: 'Cada referência de importação (ex.: IM2866) com documentos auditados dentro do mês. Tracking e consultas de liberação não consomem processos do plano.' },
+    { q: 'Quanto tempo leva para começar?', a: 'Minutos. Você conecta a caixa do courier, a Priora importa os e-mails existentes e a primeira auditoria fica pronta na mesma sessão — sem implantação e sem migração de dados.' },
+  ];
+
+  componentDidMount() {
+    this.watched = new WeakSet();
+    this.scan();
+    this.timers = [120, 400, 900, 1800, 3000].map(t => setTimeout(() => this.scan(), t));
+    this.onScroll = () => this.sweep();
+    window.addEventListener('scroll', this.onScroll, { passive: true });
+    window.addEventListener('resize', this.onScroll, { passive: true });
+    this.timers.push(setTimeout(() => this.rescue(), 4000));
+  }
+
+  componentWillUnmount() {
+    if (this.io) this.io.disconnect();
+    (this.timers || []).forEach(clearTimeout);
+    if (this.claraRaf) cancelAnimationFrame(this.claraRaf);
+    if (this.claraTimer) clearTimeout(this.claraTimer);
+    window.removeEventListener('scroll', this.onScroll);
+    window.removeEventListener('resize', this.onScroll);
+  }
+
+  sweep() {
+    if (this.sweepAgendado) return;
+    this.sweepAgendado = true;
+    requestAnimationFrame(() => {
+      this.sweepAgendado = false;
+      const alvos = document.querySelectorAll('[data-reveal]:not([data-shown])');
+      if (!alvos.length) { window.removeEventListener('scroll', this.onScroll); return; }
+      const lim = window.innerHeight * 0.92;
+      alvos.forEach(el => { if (el.getBoundingClientRect().top < lim) this.show(el); });
+    });
+  }
+
+  rescue() {
+    document.querySelectorAll('[data-reveal]').forEach(el => {
+      if (el.style.opacity === '0' && el.getBoundingClientRect().top < window.innerHeight) this.show(el);
+    });
+  }
+
+  count(el) {
+    if (el.dataset.counted) return;
+    el.dataset.counted = '1';
+    const target = parseFloat(el.getAttribute('data-count'));
+    const suffix = el.getAttribute('data-count-suffix') || '';
+    if (!isFinite(target)) return;
+    const t0 = performance.now(), dur = 1200;
+    const step = (t) => {
+      const p = Math.min(1, (t - t0) / dur);
+      el.textContent = Math.round(target * (1 - Math.pow(1 - p, 3))) + suffix;
+      if (p < 1) requestAnimationFrame(step);
+    };
+    el.textContent = '0' + suffix;
+    requestAnimationFrame(step);
+  }
+
+  show(el) {
+    if (el.dataset.shown) return;
+    el.dataset.shown = '1';
+    if (this.io) this.io.unobserve(el);
+    const d = parseInt(el.getAttribute('data-reveal-delay') || '0', 10);
+    setTimeout(() => { el.style.opacity = '1'; el.style.transform = 'none'; }, d);
+    setTimeout(() => {
+      const alvos = el.matches('[data-count]') ? [el] : Array.from(el.querySelectorAll('[data-count]'));
+      alvos.forEach(n => this.count(n));
+    }, d + 60);
+  }
+
+  scan() {
+    if (!this.watched) this.watched = new WeakSet();
+    if (typeof IntersectionObserver === 'undefined') { this.rescue(); return; }
+    if (!this.io) {
+      this.io = new IntersectionObserver((entries) => {
+        entries.forEach(e => { if (e.isIntersecting) { this.show(e.target); this.io.unobserve(e.target); } });
+      }, { rootMargin: '0px 0px -8% 0px', threshold: 0.05 });
+    }
+    document.querySelectorAll('[data-reveal]').forEach(el => {
+      if (this.watched.has(el) || el.dataset.shown) return;
+      this.watched.add(el);
+      el.style.transition = 'opacity .8s cubic-bezier(.22,1,.36,1), transform .8s cubic-bezier(.22,1,.36,1)';
+      el.style.willChange = 'opacity, transform';
+      el.style.opacity = '0';
+      el.style.transform = 'translateY(28px)';
+      this.io.observe(el);
+    });
+    this.sweep();
+  }
+
+  iniciarClara(el) {
+    if (!el || this.palco === el) return;
+    this.palco = el;
+    const desktop = !window.matchMedia || window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+    if (!desktop) return;
+    const s = this.cla = { mx: -1e5, my: -1e5, ax: 0, ay: 0, apx: 0, apy: 0, on: 0, aon: 0, visivel: true, rodando: false, piscada: 0, proxima: 0 };
+
+    const tick = (t) => {
+      if (!this.claraImg) { s.rodando = false; return; }
+      const r = s.rect || (s.rect = this.claraImg.getBoundingClientRect());
+      const ex = r.left + (348 / 779) * r.width;
+      const ey = r.top + (191 / 911) * r.height;
+      let dx = 0, dy = 0;
+      if (s.dentro && s.mx > -1e4) {
+        const bruto = s.mx - ex;
+        dx = Math.max(-1, Math.min(1, bruto / (bruto > 0 ? 720 : 520)));
+        dy = Math.max(-1, Math.min(1, (s.my - ey) / 420));
+      }
+      s.ax += (dx - s.ax) * .11;
+      s.ay += (dy - s.ay) * .11;
+      s.aon += (s.on - s.aon) * .1;
+      s.apx += (s.px - s.apx) * .16;
+      s.apy += (s.py - s.apy) * .16;
+
+      let fecho = 1;
+      if (s.piscada) {
+        const q = (t - s.piscada) / 160;
+        if (q >= 1) s.piscada = 0; else fecho = 1 - Math.sin(Math.PI * q) * .94;
+      }
+
+      const k = s.aon;
+      const tx = s.ax * 21, ty = s.ay * 14, esc = 1 + .07 * k;
+      if (this.olhoE) this.olhoE.style.transform = `translate(${tx}px, ${ty}px) scale(${esc}, ${(esc * fecho).toFixed(3)})`;
+      if (this.olhoD) this.olhoD.style.transform = `translate(${tx * .94}px, ${ty}px) scale(${esc}, ${(esc * fecho).toFixed(3)})`;
+
+      const parado = !s.dentro && !s.piscada && k < .004 &&
+        Math.abs(s.ax - dx) < .004 && Math.abs(s.ay - dy) < .004;
+      if (!s.visivel || parado) { s.rodando = false; return; }
+      s.rect = null;
+      this.claraRaf = requestAnimationFrame(tick);
+    };
+    const acordar = () => { if (!s.rodando && s.visivel) { s.rodando = true; s.rect = null; this.claraRaf = requestAnimationFrame(tick); } };
+    const piscar = () => {
+      this.claraTimer = setTimeout(() => {
+        if (s.visivel) { s.piscada = performance.now(); acordar(); }
+        piscar();
+      }, 2800 + Math.random() * 4200);
+    };
+    piscar();
+
+    window.addEventListener('mousemove', (e) => {
+      s.mx = e.clientX; s.my = e.clientY;
+      if (!s.zona) {
+        s.zona = el.getBoundingClientRect();
+        requestAnimationFrame(() => { s.zona = null; });
+      }
+      const z = s.zona;
+      s.dentro = e.clientX > z.left - 130 && e.clientX < z.right + 250 && e.clientY > z.top - 100 && e.clientY < z.bottom + 100;
+      s.on = s.dentro ? 1 : 0;
+      acordar();
+    }, { passive: true });
+
+    if (typeof IntersectionObserver !== 'undefined') {
+      new IntersectionObserver((en) => {
+        s.visivel = en[0].isIntersecting;
+        if (s.visivel) acordar();
+      }, { threshold: 0 }).observe(el);
+    }
+    acordar();
+  }
+
+  precos(anual) { return { ess: anual ? 408 : 490, op: anual ? 825 : 990 }; }
+
+  componentDidUpdate(prevProps, prevState) {
+    const antes = prevState.cobranca ?? prevProps.cobranca ?? 'mensal';
+    const agora = this.state.cobranca ?? this.props.cobranca ?? 'mensal';
+    if (antes !== agora) this.animarPrecos();
+    this.scan();
+  }
+
+  animarPrecos() {
+    const p = this.precos((this.state.cobranca ?? this.props.cobranca ?? 'mensal') === 'anual');
+    this.tween(this.elEss, p.ess);
+    this.tween(this.elOp, p.op);
+    [this.elNotaA, this.elNotaB].forEach(el => {
+      if (!el) return;
+      el.style.transition = 'none';
+      el.style.opacity = '0';
+      el.style.transform = 'translateY(5px)';
+      requestAnimationFrame(() => {
+        el.style.transition = 'opacity .4s ease, transform .4s cubic-bezier(.22,1,.36,1)';
+        el.style.opacity = '1';
+        el.style.transform = 'none';
+      });
+    });
+  }
+
+  tween(el, alvo) {
+    if (!el) return;
+    const de = parseInt((el.textContent || '0').replace(/[^0-9]/g, ''), 10) || 0;
+    if (de === alvo) return;
+    if (el._raf) cancelAnimationFrame(el._raf);
+    const t0 = performance.now(), dur = 560;
+    const step = (t) => {
+      const q = Math.min(1, (t - t0) / dur), e = 1 - Math.pow(1 - q, 3);
+      el.textContent = Math.round(de + (alvo - de) * e);
+      if (q < 1) { el._raf = requestAnimationFrame(step); } else { el._raf = 0; el.textContent = alvo; }
+    };
+    el._raf = requestAnimationFrame(step);
+    el.style.transition = 'none';
+    el.style.transform = 'translateY(-6px) scale(1.07)';
+    el.style.color = '#C3B4FF';
+    requestAnimationFrame(() => {
+      el.style.transition = 'transform .5s cubic-bezier(.22,1,.36,1), color .6s ease';
+      el.style.transform = 'none';
+      el.style.color = '';
+    });
+  }
+
+  renderVals() {
+    const cobranca = this.state.cobranca ?? this.props.cobranca ?? 'mensal';
+    const anual = cobranca === 'anual';
+    const p = this.precos(anual);
+    const tela = this.state.tela ?? this.props.telaInicial ?? 'inicio';
+    const atual = this.telaData.find(t => t.id === tela) || this.telaData[0];
+    return {
+      telas: this.telaData.map(t => ({
+        label: t.label,
+        bg: t.id === tela ? 'linear-gradient(135deg,#5438FF,#3B1FD6)' : 'transparent',
+        color: t.id === tela ? '#FFFFFF' : '#8E96B8',
+        pick: () => this.setState({ tela: t.id }),
+      })),
+      ehInicio: tela === 'inicio',
+      ehAuditoria: tela === 'auditoria',
+      ehMesa: tela === 'mesa',
+      ehCouriers: tela === 'couriers',
+      telaPath: atual.path,
+      telaLegenda: atual.legenda,
+      armadores: this.armadoresData.map(([sigla, on]) => ({
+        sigla,
+        bg: on ? 'rgba(67,39,230,.16)' : '#0A0E1C',
+        border: on ? 'rgba(139,108,255,.55)' : 'rgba(255,255,255,.10)',
+        color: on ? '#B9A6FF' : '#8E96B8',
+      })),
+      refPalco: (el) => this.iniciarClara(el),
+      refClara: (el) => { this.claraImg = el; },
+      refOlhoE: (el) => { if (el) { this.olhoE = el; el.style.willChange = 'transform'; } },
+      refOlhoD: (el) => { if (el) { this.olhoD = el; el.style.willChange = 'transform'; } },
+      recursos: this.recursosData,
+      hubDados: this.hubDadosData,
+      hubAberto: !!this.state.hub,
+      toggleHub: () => this.setState(s => ({ hub: !s.hub }), () => this.scan()),
+      hubBorda: this.state.hub ? 'rgba(167,146,255,.95)' : 'rgba(139,108,255,.5)',
+      hubGlow: this.state.hub ? '0 0 90px rgba(120,90,255,.65)' : '0 0 70px rgba(90,60,255,.4)',
+      hubDica: this.state.hub ? 'FECHAR' : 'CLIQUE NA LOGO',
+      hubSeta: this.state.hub ? 'rotate(180deg)' : 'rotate(0deg)',
+      hubAltura: this.state.hub ? '460px' : '0px',
+      hubOpacidade: this.state.hub ? '1' : '0',
+      isMensal: !anual,
+      isAnual: anual,
+      setMensal: () => { if (this.elPill) this.elPill.style.translate = '0px'; this.setState({ cobranca: 'mensal' }, () => this.animarPrecos()); },
+      setAnual: () => { if (this.elPill) this.elPill.style.translate = '150px'; this.setState({ cobranca: 'anual' }, () => this.animarPrecos()); },
+      refPill: (el) => { if (el) { this.elPill = el; el.style.translate = anual ? '150px' : '0px'; } },
+      corMensal: anual ? '#8E96B8' : '#FFFFFF',
+      corAnual: anual ? '#FFFFFF' : '#8E96B8',
+      corDesconto: anual ? '#B7F7CF' : '#4ADE80',
+      refEssencial: (el) => { if (!el) return; this.elEss = el; if (!el._raf) el.textContent = p.ess; },
+      refOperacao: (el) => { if (!el) return; this.elOp = el; if (!el._raf) el.textContent = p.op; },
+      refNotaA: (el) => { this.elNotaA = el; },
+      refNotaB: (el) => { this.elNotaB = el; },
+      notaCobranca: anual ? 'cobrado anualmente · 2 meses grátis' : 'cobrança mensal, sem fidelidade',
+      mostrarFaq: this.props.mostrarFaq ?? true,
+      faqs: this.faqData.map((f, i) => {
+        const open = this.state.open === i;
+        return {
+          q: f.q, a: f.a, open,
+          sign: open ? '−' : '+',
+          bg: open ? '#0C1226' : '#0A0E1C',
+          border: open ? 'rgba(139,108,255,.45)' : 'rgba(255,255,255,.09)',
+          toggle: () => this.setState(s => ({ open: s.open === i ? -1 : i })),
+        };
+      }),
+    };
+  }
+}
+</script>
+</body>
+</html>
