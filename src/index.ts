@@ -18,6 +18,7 @@ import { withPage } from './browser/browser';
 import { getActiveHomeAccountId } from './auth/microsoftAccount';
 import { prioraAuthRouter } from './auth/prioraAuthRoutes';
 import { rocketRouter } from './routes/rocketRoutes';
+import { getSupabase, isSupabaseConfigured } from './db/supabase';
 
 const app = express();
 
@@ -134,6 +135,28 @@ app.get('/health/browser', async (_req, res) => {
   res.json(await browserHealth());
 });
 
+/**
+ * Keep-alive do Supabase (SEM login): faz uma consulta LEVE (só contagem, sem
+ * linhas) que "toca" o projeto para o plano free não pausar por inatividade
+ * (~7 dias). Ideal para ser chamado por um cron externo — de quebra mantém a
+ * instância do Render acordada.
+ */
+app.get('/health/supabase', async (_req, res) => {
+  if (!isSupabaseConfigured()) return res.json({ supabase: 'not_configured' });
+  try {
+    const { error } = await getSupabase()
+      .from('profiles')
+      .select('id', { count: 'exact', head: true });
+    res.json(
+      error
+        ? { supabase: 'error', error: error.message }
+        : { supabase: 'ok', at: new Date().toISOString() },
+    );
+  } catch (e) {
+    res.json({ supabase: 'error', error: (e as Error).message });
+  }
+});
+
 // Tratador de erros central.
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   console.error(err);
@@ -146,3 +169,19 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
 app.listen(config.port, () => {
   console.log(`Priora rodando em http://localhost:${config.port}`);
 });
+
+// Ping interno periódico ao Supabase, enquanto o processo estiver acordado, para
+// reduzir a chance de pausa por inatividade no plano free. O cron externo (ver
+// .github/workflows/keepalive.yml) é o keep-alive confiável — este é o reforço.
+if (isSupabaseConfigured()) {
+  const pingSupabase = async () => {
+    try {
+      await getSupabase().from('profiles').select('id', { count: 'exact', head: true });
+      console.log('[keepalive] supabase ok', new Date().toISOString());
+    } catch (e) {
+      console.error('[keepalive] supabase falhou:', (e as Error).message);
+    }
+  };
+  void pingSupabase();
+  setInterval(() => void pingSupabase(), 6 * 60 * 60 * 1000); // a cada 6h
+}

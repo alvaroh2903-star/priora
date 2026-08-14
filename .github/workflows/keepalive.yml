@@ -1,0 +1,27 @@
+name: Keep Supabase awake
+
+# Mantém o projeto Supabase (plano free pausa após ~7 dias de inatividade) e a
+# instância do Render acordados, batendo no endpoint /health/supabase — que faz
+# uma consulta leve ao banco. Roda a cada 6 horas.
+#
+# ATENÇÃO: workflows agendados (schedule) só rodam a partir da BRANCH PADRÃO do
+# repositório. Enquanto este código estiver só na branch de feature, use o
+# gatilho manual (workflow_dispatch) ou um cron externo (ex.: cron-job.org)
+# apontando para https://SUA-URL.onrender.com/health/supabase.
+
+on:
+  schedule:
+    - cron: '0 */6 * * *' # a cada 6 horas (UTC)
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping /health/supabase
+        run: |
+          URL="${{ vars.KEEPALIVE_URL }}"
+          URL="${URL:-https://priora-1.onrender.com}"
+          echo "Pingando $URL/health/supabase"
+          # --max-time alto porque a instância free do Render pode levar ~50s p/ acordar.
+          curl -fsS --max-time 120 "$URL/health/supabase" && echo "" || echo "ping falhou (segue mesmo assim)"
