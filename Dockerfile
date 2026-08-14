@@ -5,7 +5,9 @@
 # com a versão do playwright do package.json (1.56.1 -> Chromium build 1194),
 # sem depender de uma tag específica da imagem oficial do Playwright existir.
 # `--with-deps` roda apt-get (permitido no build Docker, que executa como root).
-FROM node:20-bookworm
+# Node 22: além de LTS, expõe o WebSocket nativo que o @supabase/supabase-js
+# exige (no Node 20 o signup/login quebra com "native WebSocket not found").
+FROM node:22-bookworm
 
 WORKDIR /app
 
