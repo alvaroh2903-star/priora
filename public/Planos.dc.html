@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<title>Priora — Escolha seu plano</title>
+<link rel="icon" type="image/png" href="assets/logo-p-navy.png?v=2">
+<link rel="shortcut icon" type="image/png" href="assets/logo-p-navy.png?v=2">
+<link rel="apple-touch-icon" href="assets/logo-p-navy.png?v=2">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Plus Jakarta Sans',sans-serif;-webkit-font-smoothing:antialiased}
+  @keyframes riseIn{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+  ::placeholder{color:#9AA0B4}
+  input:focus{outline:none}
+</style>
+</helmet>
+<div style="min-height:100vh;width:100%;background:linear-gradient(120deg,#FDFDFE 0%,#F1F2F9 55%,#E9EBF5 100%);font-family:'Plus Jakarta Sans',sans-serif;padding:44px 20px 60px;display:flex;flex-direction:column;align-items:center">
+
+  <!-- brand -->
+  <div style="display:flex;align-items:center;gap:14px;animation:riseIn .6s both">
+    <img src="assets/logo-p-navy.png" alt="Priora" style="height:46px;width:auto">
+    <div style="font-size:26px;font-weight:800;letter-spacing:.06em;color:#0D1227">PRIORA</div>
+  </div>
+
+  <h1 style="font-size:34px;font-weight:800;color:#0D1227;letter-spacing:-.02em;margin-top:22px;text-align:center;animation:riseIn .7s .05s both">Escolha seu plano<span style="color:#4327E6">.</span></h1>
+  <p style="font-size:16px;color:#6F7693;margin-top:10px;text-align:center;max-width:580px;animation:riseIn .7s .1s both">O plano define quantos analistas sua empresa pode ter. A <strong>empresa é criada quando você assina</strong> — aí você entra na Priora e adiciona os e-mails da equipe.</p>
+
+  <!-- test-mode banner -->
+  <div style="margin-top:18px;display:flex;align-items:center;gap:9px;background:#FFF7E6;border:1px solid #FCE4B0;color:#8A5A00;border-radius:999px;padding:8px 16px;font-size:13px;font-weight:600;animation:riseIn .7s .15s both">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#B8860B" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/></svg>
+    Modo teste — nenhuma cobrança é feita agora.
+  </div>
+
+  <!-- plan cards -->
+  <div style="display:flex;gap:18px;margin-top:34px;flex-wrap:wrap;justify-content:center;width:100%;max-width:920px">
+
+    <button onClick="{{ pick3 }}" style="flex:1;min-width:250px;max-width:290px;text-align:left;cursor:pointer;font-family:inherit;background:{{ c3Bg }};border:2px solid {{ c3Border }};border-radius:22px;padding:26px 26px;box-shadow:{{ c3Shadow }};transition:all .16s;animation:riseIn .7s .2s both">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <span style="font-size:18px;font-weight:800;color:#0D1227">Time</span>
+        <span style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:{{ c3Dot }};border:2px solid {{ c3DotBorder }}"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.4" style="opacity:{{ c3Check }}"><path d="m5 12 5 5 9-10"/></svg></span>
+      </div>
+      <div style="margin-top:14px;line-height:1"><span style="font-size:40px;font-weight:800;color:#0D1227">3</span><span style="font-size:15px;font-weight:600;color:#6F7693;margin-left:7px">analistas</span></div>
+      <div style="font-size:14px;color:#6F7693;margin-top:9px">Até 3 e-mails conectados</div>
+      <div style="font-size:13px;color:#9AA0B4;margin-top:18px;font-weight:600">Preço a definir</div>
+    </button>
+
+    <button onClick="{{ pick5 }}" style="flex:1;min-width:250px;max-width:290px;text-align:left;cursor:pointer;font-family:inherit;background:{{ c5Bg }};border:2px solid {{ c5Border }};border-radius:22px;padding:26px 26px;box-shadow:{{ c5Shadow }};transition:all .16s;position:relative;animation:riseIn .7s .27s both">
+      <span style="position:absolute;top:-11px;left:26px;background:#4327E6;color:#fff;font-size:11px;font-weight:700;letter-spacing:.04em;padding:4px 11px;border-radius:20px">MAIS ESCOLHIDO</span>
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <span style="font-size:18px;font-weight:800;color:#0D1227">Equipe</span>
+        <span style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:{{ c5Dot }};border:2px solid {{ c5DotBorder }}"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.4" style="opacity:{{ c5Check }}"><path d="m5 12 5 5 9-10"/></svg></span>
+      </div>
+      <div style="margin-top:14px;line-height:1"><span style="font-size:40px;font-weight:800;color:#0D1227">5</span><span style="font-size:15px;font-weight:600;color:#6F7693;margin-left:7px">analistas</span></div>
+      <div style="font-size:14px;color:#6F7693;margin-top:9px">Até 5 e-mails conectados</div>
+      <div style="font-size:13px;color:#9AA0B4;margin-top:18px;font-weight:600">Preço a definir</div>
+    </button>
+
+    <button onClick="{{ pick10 }}" style="flex:1;min-width:250px;max-width:290px;text-align:left;cursor:pointer;font-family:inherit;background:{{ c10Bg }};border:2px solid {{ c10Border }};border-radius:22px;padding:26px 26px;box-shadow:{{ c10Shadow }};transition:all .16s;animation:riseIn .7s .34s both">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <span style="font-size:18px;font-weight:800;color:#0D1227">Operação</span>
+        <span style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:{{ c10Dot }};border:2px solid {{ c10DotBorder }}"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.4" style="opacity:{{ c10Check }}"><path d="m5 12 5 5 9-10"/></svg></span>
+      </div>
+      <div style="margin-top:14px;line-height:1"><span style="font-size:40px;font-weight:800;color:#0D1227">10</span><span style="font-size:15px;font-weight:600;color:#6F7693;margin-left:7px">analistas</span></div>
+      <div style="font-size:14px;color:#6F7693;margin-top:9px">Até 10 e-mails conectados</div>
+      <div style="font-size:13px;color:#9AA0B4;margin-top:18px;font-weight:600">Preço a definir</div>
+    </button>
+
+  </div>
+
+  <!-- empresa + assinar -->
+  <div style="width:100%;max-width:470px;margin-top:32px;background:rgba(255,255,255,.72);backdrop-filter:blur(24px);border:1px solid rgba(255,255,255,.9);border-radius:24px;padding:32px 32px;box-shadow:0 44px 90px -40px rgba(31,38,80,.4);animation:riseIn .7s .4s both">
+    <label style="display:block;font-size:13.5px;font-weight:600;color:#3C4258;margin-bottom:10px">Nome da empresa</label>
+    <div style="display:flex;align-items:center;gap:13px;background:rgba(255,255,255,.7);border:1.5px solid #E6E8F2;border-radius:15px;padding:0 17px;height:58px;transition:border-color .2s,box-shadow .2s" onfocusin="this.style.borderColor='#4327E6';this.style.boxShadow='0 0 0 4px rgba(67,39,230,.1)'" onfocusout="this.style.borderColor='#E6E8F2';this.style.boxShadow='none'">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#9AA0B4" stroke-width="2"><path d="M3 21h18M5 21V7l7-4 7 4v14M9 21v-6h6v6"/></svg>
+      <input value="{{ empresa }}" onChange="{{ onEmpresa }}" type="text" placeholder="Ex.: Rocket Logistics" style="flex:1;border:none;background:transparent;font-family:inherit;font-size:15.5px;color:#161A2E;height:100%">
+    </div>
+
+    <sc-if value="{{ erro }}"><div style="margin-top:16px;background:#FEF2F2;border:1px solid #FCA5A5;color:#B91C1C;border-radius:13px;padding:13px 16px;font-size:14px;font-weight:600;text-align:center">{{ erro }}</div></sc-if>
+
+    <button onClick="{{ assinar }}" style="width:100%;margin-top:22px;display:flex;align-items:center;justify-content:center;gap:12px;height:60px;border:none;border-radius:16px;font-family:inherit;transition:transform .15s,box-shadow .2s,background .2s;background:#0D1227;cursor:pointer;box-shadow:0 16px 34px -12px rgba(13,18,39,.5)" onmouseover="this.style.background='#161D3C';this.style.transform='translateY(-2px)'" onmouseout="this.style.background='#0D1227';this.style.transform='none'">
+      <span style="color:#fff;font-size:16.5px;font-weight:700">{{ ctaLabel }}</span>
+      <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+    </button>
+
+    <p style="font-size:13px;color:#9197AE;text-align:center;margin-top:16px">Ao assinar, criamos a empresa <strong>{{ plano }}</strong> e você vira o administrador dela.</p>
+  </div>
+
+  <a href="Login.dc.html" style="margin-top:22px;font-size:14px;color:#6F7693;text-decoration:none;font-weight:600">Sair</a>
+
+  <template id="__bundler_thumbnail">
+    <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="100" fill="#0D1227"/><circle cx="50" cy="44" r="12" fill="#4327E6"/><text x="50" y="78" font-family="sans-serif" font-size="20" font-weight="800" fill="#fff" text-anchor="middle">P</text></svg>
+  </template>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = { plano:'time_5', empresa:'', tipo:'operador', erro:'', carregando:false };
+
+  // Nomes de exibição por id de plano (o backend valida o id e define os assentos).
+  PLAN_NAMES = { time_3:'Time', time_5:'Equipe', time_10:'Operação' };
+
+  componentDidMount(){
+    // Guarda: precisa de conta logada; se já tem empresa, vai direto ao painel.
+    fetch('/api/priora/me', { credentials:'same-origin' })
+      .then((r)=>r.json())
+      .then((d)=>{
+        if(!d || !d.authenticated){ window.location.href='Login.dc.html'; return; }
+        if(d.org){ window.location.href='Priora.dc.html'; return; }
+        const it = d.intent || {};
+        this.setState({ empresa: it.empresa || '', tipo: it.tipo || 'operador' });
+      })
+      .catch(()=>{});
+  }
+
+  cardStyle(id){
+    const on = this.state.plano === id;
+    return {
+      bg: on ? '#F5F3FF' : '#fff',
+      border: on ? '#4327E6' : '#E6E8F2',
+      shadow: on ? '0 22px 44px -20px rgba(67,39,230,.45)' : '0 14px 30px -18px rgba(31,38,80,.2)',
+      dot: on ? '#4327E6' : '#fff',
+      dotBorder: on ? '#4327E6' : '#C7CBDA',
+      check: on ? 1 : 0,
+    };
+  }
+
+  renderVals(){
+    const st = this.state;
+    const c3 = this.cardStyle('time_3'), c5 = this.cardStyle('time_5'), c10 = this.cardStyle('time_10');
+    return {
+      pick3:()=>this.setState({plano:'time_3'}),
+      pick5:()=>this.setState({plano:'time_5'}),
+      pick10:()=>this.setState({plano:'time_10'}),
+      c3Bg:c3.bg, c3Border:c3.border, c3Shadow:c3.shadow, c3Dot:c3.dot, c3DotBorder:c3.dotBorder, c3Check:c3.check,
+      c5Bg:c5.bg, c5Border:c5.border, c5Shadow:c5.shadow, c5Dot:c5.dot, c5DotBorder:c5.dotBorder, c5Check:c5.check,
+      c10Bg:c10.bg, c10Border:c10.border, c10Shadow:c10.shadow, c10Dot:c10.dot, c10DotBorder:c10.dotBorder, c10Check:c10.check,
+      empresa: st.empresa, onEmpresa:(e)=>this.setState({empresa:e.target.value}),
+      erro: st.erro,
+      plano: st.empresa.trim() ? st.empresa.trim() : (this.PLAN_NAMES[st.plano] || ''),
+      ctaLabel: st.carregando ? 'Assinando…' : 'Assinar e criar empresa',
+      assinar: async ()=>{
+        const x = this.state;
+        if(!x.empresa.trim()){ this.setState({erro:'Informe o nome da empresa.'}); return; }
+        if(x.carregando) return;
+        this.setState({carregando:true, erro:''});
+        try{
+          const res = await fetch('/api/priora/assinar', {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({ plano:x.plano, empresa:x.empresa.trim(), tipo:x.tipo }),
+          });
+          const data = await res.json().catch(()=>({}));
+          if(res.ok && data.ok){ window.location.href='Priora.dc.html'; }
+          else if(res.status===401){ window.location.href='Login.dc.html'; }
+          else { this.setState({carregando:false, erro:data.error||'Não foi possível assinar. Tente novamente.'}); }
+        }catch(e){ this.setState({carregando:false, erro:'Falha de conexão. Tente novamente.'}); }
+      },
+    };
+  }
+}
+</script>
+</body>
+</html>

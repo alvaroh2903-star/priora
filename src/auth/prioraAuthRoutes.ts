@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { getSupabase, isSupabaseConfigured } from '../db/supabase';
+import { getPlan } from '../billing/plans';
 
 /**
  * Priora — Auth da CONTA PRIORA (Supabase Auth, e-mail + senha).
@@ -22,6 +23,12 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 interface Creds {
   email: string;
   password: string;
+}
+
+/** Normaliza o tipo de empresa vindo do formulário. Padrão: operador. */
+function normTipo(v: string): 'operador' | 'cliente' {
+  const t = (v || '').trim().toLowerCase();
+  return t === 'cli' || t === 'cliente' ? 'cliente' : 'operador';
 }
 
 /** Valida e normaliza e-mail + senha do corpo. Null se inválido. */
@@ -73,10 +80,11 @@ async function loadOrgContext(userId: string): Promise<OrgContext | null> {
 }
 
 /**
- * Cadastro (comprador/admin): cria a conta no Supabase Auth, cria a EMPRESA
- * (organização) e torna este usuário o ADMIN dela. É o dono do workspace — os
- * analistas depois entram por convite (não por este cadastro). Ver
- * docs/ARQUITETURA_MULTIEMPRESA.md.
+ * Cadastro: cria SÓ a conta (aberto a qualquer um). A EMPRESA ainda NÃO nasce
+ * aqui — ela é criada quando o usuário ASSINA um plano (POST /assinar), que é o
+ * ponto onde o pagamento entra. Guardamos o nome da empresa/tipo como intenção
+ * (metadados do usuário) para pré-preencher a tela de planos. Ver
+ * docs/ARQUITETURA_MULTIEMPRESA.md (fluxo 1: conta → plano/pagamento → admin).
  */
 prioraAuthRouter.post('/signup', async (req, res, next) => {
   try {
@@ -84,21 +92,19 @@ prioraAuthRouter.post('/signup', async (req, res, next) => {
     const creds = parseCreds(req.body);
     if ('error' in creds) return res.status(400).json({ error: creds.error });
 
-    // Campos da empresa/admin, além de e-mail+senha.
     const b = (req.body || {}) as Record<string, unknown>;
     const fullName = String(b.nome ?? b.full_name ?? '').trim();
-    const orgName = String(b.empresa ?? b.org ?? '').trim();
-    const tipo = String(b.tipo ?? b.role ?? '').trim().toLowerCase();
-    const orgType = tipo === 'cli' || tipo === 'cliente' ? 'cliente' : 'operador';
+    const empresa = String(b.empresa ?? b.org ?? '').trim();
+    const tipo = normTipo(String(b.tipo ?? b.role ?? ''));
     if (fullName.length < 2) return res.status(400).json({ error: 'Informe seu nome completo.' });
-    if (orgName.length < 2) return res.status(400).json({ error: 'Informe o nome da empresa.' });
 
     const sb = getSupabase();
     const { data, error } = await sb.auth.admin.createUser({
       email: creds.email,
       password: creds.password,
       email_confirm: true, // MVP: sem etapa de confirmação por e-mail
-      user_metadata: { full_name: fullName },
+      // Intenção guardada de forma durável (sobrevive a novo login antes de assinar).
+      user_metadata: { full_name: fullName, empresa, tipo },
     });
     if (error || !data.user) {
       const exists = /registered|already|exists|duplicate/i.test(error?.message || '');
@@ -110,49 +116,99 @@ prioraAuthRouter.post('/signup', async (req, res, next) => {
     }
     const userId = data.user.id;
 
-    // Cria a empresa + vínculo de admin. Se qualquer passo falhar, desfaz o
-    // usuário recém-criado para não deixar o e-mail "preso" numa conta quebrada.
-    try {
-      const { data: org, error: orgErr } = await sb
-        .from('organizations')
-        .insert({ name: orgName, type: orgType, created_by: userId })
-        .select('id, name')
-        .single();
-      if (orgErr || !org) throw orgErr || new Error('Falha ao criar a empresa.');
+    // Completa o profile (o trigger on_auth_user_created já criou a linha).
+    await sb.from('profiles').upsert({
+      id: userId,
+      email: data.user.email || creds.email,
+      full_name: fullName,
+    });
 
-      const { error: memErr } = await sb.from('memberships').insert({
-        user_id: userId,
-        org_id: org.id,
-        role: 'admin',
-        status: 'active',
-      });
-      if (memErr) throw memErr;
+    req.session.prioraUserId = userId;
+    req.session.prioraEmail = data.user.email || creds.email;
+    req.session.prioraEmpresaIntent = empresa || undefined;
+    req.session.prioraTipoIntent = tipo;
+    // org: null → a UI leva para a tela de planos (a empresa nasce ao assinar).
+    return res.json({
+      ok: true,
+      user: { id: userId, email: data.user.email },
+      org: null,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
 
-      // O trigger on_auth_user_created já criou o profile; completamos os campos.
-      const { error: profErr } = await sb.from('profiles').upsert({
-        id: userId,
-        email: data.user.email || creds.email,
-        full_name: fullName,
-        org_id: org.id,
-      });
-      if (profErr) throw profErr;
-
-      req.session.prioraUserId = userId;
-      req.session.prioraEmail = data.user.email || creds.email;
-      req.session.prioraOrgId = org.id as string;
-      req.session.prioraOrgName = org.name as string;
-      req.session.prioraRole = 'admin';
-      return res.json({
-        ok: true,
-        user: { id: userId, email: data.user.email },
-        org: { id: org.id, name: org.name, role: 'admin' },
-      });
-    } catch (e) {
-      await sb.auth.admin.deleteUser(userId).catch(() => {});
-      return res.status(500).json({
-        error: 'Não foi possível criar a empresa. Tente novamente.',
-      });
+/**
+ * Assinar um plano → CRIA A EMPRESA e torna o usuário ADMIN dela. É AQUI que o
+ * pagamento entra no fluxo: hoje aprova em MODO TESTE (sem cobrança real);
+ * quando o Stripe entrar, este passo passa a ser disparado pelo webhook de
+ * "pagamento aprovado". O plano define o limite de assentos (analistas).
+ */
+prioraAuthRouter.post('/assinar', async (req, res, next) => {
+  try {
+    if (!ensureSupabase(res)) return;
+    const userId = req.session.prioraUserId;
+    if (!userId) {
+      return res.status(401).json({ error: 'Faça login na Priora primeiro.' });
     }
+
+    const b = (req.body || {}) as Record<string, unknown>;
+    const plano = getPlan(String(b.plano ?? b.plan ?? ''));
+    if (!plano) return res.status(400).json({ error: 'Plano inválido.' });
+
+    const empresa = String(b.empresa ?? req.session.prioraEmpresaIntent ?? '').trim();
+    const tipo = normTipo(String(b.tipo ?? req.session.prioraTipoIntent ?? ''));
+    if (empresa.length < 2) return res.status(400).json({ error: 'Informe o nome da empresa.' });
+
+    const sb = getSupabase();
+
+    // Uma empresa por conta: se já pertence a uma, não cria outra.
+    const existing = await loadOrgContext(userId);
+    if (existing) {
+      return res.status(409).json({ error: 'Sua conta já pertence a uma empresa.' });
+    }
+
+    // Cria a empresa com o limite de assentos do plano.
+    const { data: org, error: orgErr } = await sb
+      .from('organizations')
+      .insert({
+        name: empresa,
+        type: tipo,
+        plan: plano.id,
+        seat_limit: plano.seats,
+        created_by: userId,
+      })
+      .select('id, name')
+      .single();
+    if (orgErr || !org) throw orgErr || new Error('Falha ao criar a empresa.');
+
+    // Vincula como ADMIN. Se falhar, desfaz a empresa órfã para permitir retry.
+    const { error: memErr } = await sb.from('memberships').insert({
+      user_id: userId,
+      org_id: org.id,
+      role: 'admin',
+      status: 'active',
+    });
+    if (memErr) {
+      await sb.from('organizations').delete().eq('id', org.id);
+      throw memErr;
+    }
+
+    await sb.from('profiles').update({ org_id: org.id }).eq('id', userId);
+
+    req.session.prioraOrgId = org.id as string;
+    req.session.prioraOrgName = org.name as string;
+    req.session.prioraRole = 'admin';
+    return res.json({
+      ok: true,
+      org: {
+        id: org.id,
+        name: org.name,
+        role: 'admin',
+        plan: plano.id,
+        seats: plano.seats,
+      },
+    });
   } catch (err) {
     next(err);
   }
@@ -187,6 +243,11 @@ prioraAuthRouter.post('/login', async (req, res, next) => {
       req.session.prioraOrgId = ctx.orgId;
       req.session.prioraOrgName = ctx.orgName || undefined;
       req.session.prioraRole = ctx.role;
+    } else {
+      // Ainda sem empresa: recupera a intenção dos metadados p/ a tela de planos.
+      const meta = (data.user.user_metadata || {}) as Record<string, unknown>;
+      req.session.prioraEmpresaIntent = String(meta.empresa || '') || undefined;
+      req.session.prioraTipoIntent = normTipo(String(meta.tipo || ''));
     }
     res.json({
       ok: true,
@@ -208,15 +269,23 @@ prioraAuthRouter.get('/me', (req, res) => {
   if (!req.session.prioraUserId) {
     return res.json({ authenticated: false });
   }
+  const hasOrg = !!req.session.prioraOrgId;
   res.json({
     authenticated: true,
     user: { id: req.session.prioraUserId, email: req.session.prioraEmail },
-    org: req.session.prioraOrgId
+    org: hasOrg
       ? {
           id: req.session.prioraOrgId,
           name: req.session.prioraOrgName || null,
           role: req.session.prioraRole || null,
         }
       : null,
+    // Sem empresa ainda: intenção do cadastro p/ pré-preencher a tela de planos.
+    intent: hasOrg
+      ? null
+      : {
+          empresa: req.session.prioraEmpresaIntent || '',
+          tipo: req.session.prioraTipoIntent || 'operador',
+        },
   });
 });

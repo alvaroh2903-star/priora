@@ -34,6 +34,14 @@ Outlook do gestor.
 2. A conta da compra vira **Administrador** da empresa (organização criada).
 3. Pode alterar o e-mail de login depois.
 
+> **Estado atual:** o cadastro (`POST /api/priora/signup`) cria **só a conta**
+> (aberta a qualquer um) e guarda o nome da empresa/tipo como intenção. A
+> **empresa nasce ao assinar** um plano (`POST /api/priora/assinar`), que hoje
+> aprova em **modo teste** (sem cobrança). O plano define o `seat_limit`
+> (assentos/analistas). Quando o Stripe entrar (etapa 7), `/assinar` passa a ser
+> o destino do webhook de "pagamento aprovado" — o resto do fluxo não muda.
+> Catálogo de planos em `src/billing/plans.ts`.
+
 ### 2. Primeiro acesso do admin
 1. Entra na Priora → aparece **Conectar com Microsoft**.
 2. Conecta o **backup corporativo** → associado à empresa (conexão CORPORATE).

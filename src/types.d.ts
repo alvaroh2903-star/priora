@@ -19,5 +19,9 @@ declare module 'express-session' {
     prioraOrgName?: string;
     /** Papel do usuário na empresa: admin (comprador) ou analyst (convidado). */
     prioraRole?: 'admin' | 'analyst';
+    /** Nome de empresa informado no cadastro, antes de assinar (pré-preenche a tela de planos). */
+    prioraEmpresaIntent?: string;
+    /** Tipo de empresa pretendido (operador/cliente), antes de assinar. */
+    prioraTipoIntent?: 'operador' | 'cliente';
   }
 }
