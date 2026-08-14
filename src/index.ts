@@ -1,7 +1,7 @@
 import path from 'path';
 import express, { NextFunction, Request, Response } from 'express';
 import session from 'express-session';
-import { config } from './config';
+import { config, hasProxy } from './config';
 import { createFileSessionStore } from './auth/fileSessionStore';
 import { authRouter } from './auth/authRoutes';
 import { emailRouter } from './routes/emailRoutes';
@@ -133,6 +133,71 @@ async function browserHealth(): Promise<unknown> {
 
 app.get('/health/browser', async (_req, res) => {
   res.json(await browserHealth());
+});
+
+/**
+ * Diagnóstico do PROXY (SEM login): abre o Chromium (passando pelo proxy, se
+ * configurado) e reporta o IP de saída visto por um serviço externo (ipify).
+ * Serve para confirmar que o proxy residencial está ATIVO logo após configurar
+ * as variáveis no Render — sem precisar concluir o login com a Microsoft (a rota
+ * autenticada /api/demurrage/bot/ip exige sessão). Protegido por single-flight +
+ * cache curto porque cada chamada sobe um navegador e faz uma requisição externa.
+ */
+let proxyHealthCache: { at: number; body: unknown } | null = null;
+let proxyHealthInFlight: Promise<unknown> | null = null;
+
+async function proxyHealth(): Promise<unknown> {
+  if (proxyHealthCache && Date.now() - proxyHealthCache.at < 30_000) {
+    return { ...(proxyHealthCache.body as object), cached: true };
+  }
+  if (proxyHealthInFlight) return proxyHealthInFlight;
+  proxyHealthInFlight = (async () => {
+    const startedAt = Date.now();
+    try {
+      const data = await withPage(async (page) => {
+        const resp = await page.goto('https://api.ipify.org?format=json', {
+          waitUntil: 'domcontentloaded',
+          timeout: 20_000,
+        });
+        const raw = (await page.textContent('body').catch(() => '')) || '';
+        let ip: string | null = null;
+        try {
+          ip = JSON.parse(raw).ip;
+        } catch {
+          /* corpo não-JSON */
+        }
+        return { httpStatus: resp?.status() ?? null, ip };
+      });
+      const body = {
+        proxyConfigured: hasProxy(),
+        proxyServer: hasProxy() ? config.browser.proxy.server : null,
+        exitIp: data.ip,
+        httpStatus: data.httpStatus,
+        note: hasProxy()
+          ? 'exitIp deve ser o IP do proxy. Se for o IP do Render, o proxy não está ativo.'
+          : 'Sem proxy: exitIp é o IP do próprio servidor (Render).',
+        ms: Date.now() - startedAt,
+      };
+      proxyHealthCache = { at: Date.now(), body };
+      return body;
+    } catch (err) {
+      const body = {
+        proxyConfigured: hasProxy(),
+        proxyServer: hasProxy() ? config.browser.proxy.server : null,
+        error: (err as Error).message,
+        ms: Date.now() - startedAt,
+      };
+      proxyHealthCache = { at: Date.now(), body };
+      return body;
+    } finally {
+      proxyHealthInFlight = null;
+    }
+  })();
+  return proxyHealthInFlight;
+}
+
+app.get('/health/proxy', async (_req, res) => {
+  res.json(await proxyHealth());
 });
 
 /**

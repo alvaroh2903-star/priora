@@ -54,15 +54,22 @@ export function proxyOption(): BrowserContextOptions['proxy'] | undefined {
 /**
  * Sobe (uma única vez) e reaproveita a instância do Chromium. Lançar o browser
  * é caro; contextos é que são baratos e descartáveis — um por sessão/scraper.
+ *
+ * IMPORTANTE (pegadinha do Playwright): um proxy definido só no `newContext` é
+ * IGNORADO se o navegador não tiver sido LANÇADO com proxy. Por isso, quando há
+ * proxy configurado, passamos ele já no launch — assim o proxy por-contexto
+ * (mesmo valor hoje, ou um diferente por scraper amanhã) passa a valer de fato.
  */
 export async function getBrowser(): Promise<Browser> {
   if (!browserPromise) {
+    const proxy = proxyOption();
     browserPromise = chromium
       .launch({
         headless: config.browser.headless,
         ...(config.browser.executablePath
           ? { executablePath: config.browser.executablePath }
           : {}),
+        ...(proxy ? { proxy } : {}),
         args: LAUNCH_ARGS,
       })
       .catch((err) => {
