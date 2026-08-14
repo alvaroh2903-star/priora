@@ -139,7 +139,7 @@
         <label style="display:block;font-size:13.5px;font-weight:600;color:#3C4258;margin-bottom:10px">{{ orgLabel }}</label>
         <div style="display:flex;align-items:center;gap:13px;background:rgba(255,255,255,.7);border:1.5px solid #E6E8F2;border-radius:15px;padding:0 17px;height:58px;transition:border-color .2s,box-shadow .2s" onfocusin="this.style.borderColor='#4327E6';this.style.boxShadow='0 0 0 4px rgba(67,39,230,.1)'" onfocusout="this.style.borderColor='#E6E8F2';this.style.boxShadow='none'">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#9AA0B4" stroke-width="2"><path d="M3 21h18M5 21V7l7-4 7 4v14M9 21v-6h6v6"/></svg>
-          <input type="text" placeholder="{{ orgPlaceholder }}" style="flex:1;border:none;background:transparent;font-family:inherit;font-size:15.5px;color:#161A2E;height:100%">
+          <input value="{{ org }}" onChange="{{ onOrg }}" type="text" placeholder="{{ orgPlaceholder }}" style="flex:1;border:none;background:transparent;font-family:inherit;font-size:15.5px;color:#161A2E;height:100%">
         </div>
       </div>
 
@@ -212,7 +212,7 @@
 </x-dc>
 <script type="text/x-dc" data-dc-script>
 class Component extends DCLogic {
-  state = { showPw:false, terms:false, role:'oper', name:'', email:'', pw:'', carregando:false, toastOn:false, toastMsg:'' };
+  state = { showPw:false, terms:false, role:'oper', name:'', org:'', email:'', pw:'', carregando:false, toastOn:false, toastMsg:'' };
 
   toast(msg){ clearTimeout(this._t); this.setState({toastOn:true, toastMsg:msg}); this._t=setTimeout(()=>this.setState({toastOn:false}), 2800); }
 
@@ -236,7 +236,7 @@ class Component extends DCLogic {
     const idle={ bg:'rgba(255,255,255,.7)', color:'#3C4258', border:'#E6E8F2', shadow:'none' };
     const o=oper?sel:idle, c=oper?idle:sel;
     const s=this.strength(st.pw);
-    const ready = st.terms && st.name.trim().length>1;
+    const ready = st.terms && st.name.trim().length>1 && st.org.trim().length>1;
     return {
       pwType: st.showPw?'text':'password',
       togglePw:(e)=>{ e.preventDefault(); this.setState(x=>({showPw:!x.showPw})); },
@@ -248,6 +248,7 @@ class Component extends DCLogic {
       orgLabel: oper?'Empresa / Filial':'Empresa importadora',
       orgPlaceholder: oper?'Ex.: Rocket Logistics — Itajaí/SC':'Ex.: BRA TRADE',
       name:st.name, onName:(e)=>this.setState({name:e.target.value}),
+      org:st.org, onOrg:(e)=>this.setState({org:e.target.value}),
       email:st.email, onEmail:(e)=>this.setState({email:e.target.value}),
       pw:st.pw, onPw:(e)=>this.setState({pw:e.target.value}),
       pwPct:s.pct, pwColor:s.color, pwLabel:s.label,
@@ -256,6 +257,7 @@ class Component extends DCLogic {
       onSubmit: async ()=>{
         const x=this.state;
         if(!x.name.trim()){ this.toast('Informe seu nome completo.'); return; }
+        if(!x.org.trim()){ this.toast('Informe o nome da empresa.'); return; }
         const em=(x.email||'').trim();
         if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)){ this.toast('Informe um e-mail válido.'); return; }
         if((x.pw||'').length<8){ this.toast('A senha precisa de ao menos 8 caracteres.'); return; }
@@ -263,7 +265,7 @@ class Component extends DCLogic {
         if(x.carregando) return;
         this.setState({carregando:true});
         try{
-          const res=await fetch('/api/priora/signup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:em,password:x.pw})});
+          const res=await fetch('/api/priora/signup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:em,password:x.pw,nome:x.name.trim(),empresa:x.org.trim(),tipo:x.role})});
           const data=await res.json().catch(()=>({}));
           if(res.ok && data.ok){ this.toast('Conta criada! Redirecionando…'); setTimeout(()=>{ window.location.href='Priora.dc.html'; },1200); }
           else { this.setState({carregando:false}); this.toast(data.error||'Não foi possível criar a conta.'); }

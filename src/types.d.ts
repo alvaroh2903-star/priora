@@ -13,5 +13,11 @@ declare module 'express-session' {
     prioraUserId?: string;
     /** E-mail da conta Priora, para exibição. */
     prioraEmail?: string;
+    /** ID da empresa (organização) a que a conta pertence. */
+    prioraOrgId?: string;
+    /** Nome da empresa, para exibição. */
+    prioraOrgName?: string;
+    /** Papel do usuário na empresa: admin (comprador) ou analyst (convidado). */
+    prioraRole?: 'admin' | 'analyst';
   }
 }

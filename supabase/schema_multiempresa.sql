@@ -16,6 +16,11 @@ create table if not exists public.organizations (
   created_at timestamptz not null default now()
 );
 
+-- Tipo da empresa (operador logístico x cliente importador), vindo do cadastro.
+alter table public.organizations
+  add column if not exists type text not null default 'operador'
+  check (type in ('operador', 'cliente'));
+
 -- Membros: user ↔ empresa (1 empresa por usuário no modelo operacional) -------
 create table if not exists public.memberships (
   user_id uuid primary key references auth.users (id) on delete cascade,

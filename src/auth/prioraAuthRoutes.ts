@@ -44,17 +44,61 @@ function ensureSupabase(res: import('express').Response): boolean {
   return true;
 }
 
-/** Cadastro: cria a conta no Supabase Auth (já confirmada) e faz login. */
+/** Contexto da empresa (organização) do usuário, lido da tabela memberships. */
+interface OrgContext {
+  orgId: string;
+  role: 'admin' | 'analyst';
+  status: 'invited' | 'active' | 'disabled';
+  orgName: string | null;
+}
+
+/**
+ * Carrega a empresa + papel do usuário. Null se ele ainda não pertence a
+ * nenhuma (ex.: contas antigas criadas antes do multi-empresa).
+ */
+async function loadOrgContext(userId: string): Promise<OrgContext | null> {
+  const { data, error } = await getSupabase()
+    .from('memberships')
+    .select('org_id, role, status, organizations(name)')
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (error || !data) return null;
+  const org = (data as { organizations?: { name?: string } | null }).organizations;
+  return {
+    orgId: data.org_id as string,
+    role: data.role as OrgContext['role'],
+    status: data.status as OrgContext['status'],
+    orgName: org?.name ?? null,
+  };
+}
+
+/**
+ * Cadastro (comprador/admin): cria a conta no Supabase Auth, cria a EMPRESA
+ * (organização) e torna este usuário o ADMIN dela. É o dono do workspace — os
+ * analistas depois entram por convite (não por este cadastro). Ver
+ * docs/ARQUITETURA_MULTIEMPRESA.md.
+ */
 prioraAuthRouter.post('/signup', async (req, res, next) => {
   try {
     if (!ensureSupabase(res)) return;
     const creds = parseCreds(req.body);
     if ('error' in creds) return res.status(400).json({ error: creds.error });
 
-    const { data, error } = await getSupabase().auth.admin.createUser({
+    // Campos da empresa/admin, além de e-mail+senha.
+    const b = (req.body || {}) as Record<string, unknown>;
+    const fullName = String(b.nome ?? b.full_name ?? '').trim();
+    const orgName = String(b.empresa ?? b.org ?? '').trim();
+    const tipo = String(b.tipo ?? b.role ?? '').trim().toLowerCase();
+    const orgType = tipo === 'cli' || tipo === 'cliente' ? 'cliente' : 'operador';
+    if (fullName.length < 2) return res.status(400).json({ error: 'Informe seu nome completo.' });
+    if (orgName.length < 2) return res.status(400).json({ error: 'Informe o nome da empresa.' });
+
+    const sb = getSupabase();
+    const { data, error } = await sb.auth.admin.createUser({
       email: creds.email,
       password: creds.password,
       email_confirm: true, // MVP: sem etapa de confirmação por e-mail
+      user_metadata: { full_name: fullName },
     });
     if (error || !data.user) {
       const exists = /registered|already|exists|duplicate/i.test(error?.message || '');
@@ -64,10 +108,51 @@ prioraAuthRouter.post('/signup', async (req, res, next) => {
           : error?.message || 'Não foi possível criar a conta.',
       });
     }
+    const userId = data.user.id;
 
-    req.session.prioraUserId = data.user.id;
-    req.session.prioraEmail = data.user.email || creds.email;
-    res.json({ ok: true, user: { id: data.user.id, email: data.user.email } });
+    // Cria a empresa + vínculo de admin. Se qualquer passo falhar, desfaz o
+    // usuário recém-criado para não deixar o e-mail "preso" numa conta quebrada.
+    try {
+      const { data: org, error: orgErr } = await sb
+        .from('organizations')
+        .insert({ name: orgName, type: orgType, created_by: userId })
+        .select('id, name')
+        .single();
+      if (orgErr || !org) throw orgErr || new Error('Falha ao criar a empresa.');
+
+      const { error: memErr } = await sb.from('memberships').insert({
+        user_id: userId,
+        org_id: org.id,
+        role: 'admin',
+        status: 'active',
+      });
+      if (memErr) throw memErr;
+
+      // O trigger on_auth_user_created já criou o profile; completamos os campos.
+      const { error: profErr } = await sb.from('profiles').upsert({
+        id: userId,
+        email: data.user.email || creds.email,
+        full_name: fullName,
+        org_id: org.id,
+      });
+      if (profErr) throw profErr;
+
+      req.session.prioraUserId = userId;
+      req.session.prioraEmail = data.user.email || creds.email;
+      req.session.prioraOrgId = org.id as string;
+      req.session.prioraOrgName = org.name as string;
+      req.session.prioraRole = 'admin';
+      return res.json({
+        ok: true,
+        user: { id: userId, email: data.user.email },
+        org: { id: org.id, name: org.name, role: 'admin' },
+      });
+    } catch (e) {
+      await sb.auth.admin.deleteUser(userId).catch(() => {});
+      return res.status(500).json({
+        error: 'Não foi possível criar a empresa. Tente novamente.',
+      });
+    }
   } catch (err) {
     next(err);
   }
@@ -88,9 +173,26 @@ prioraAuthRouter.post('/login', async (req, res, next) => {
       return res.status(401).json({ error: 'E-mail ou senha inválidos.' });
     }
 
+    // Carrega a empresa/papel. Contas desativadas pelo admin não entram.
+    const ctx = await loadOrgContext(data.user.id);
+    if (ctx?.status === 'disabled') {
+      return res.status(403).json({
+        error: 'Seu acesso foi desativado pelo administrador da empresa.',
+      });
+    }
+
     req.session.prioraUserId = data.user.id;
     req.session.prioraEmail = data.user.email || creds.email;
-    res.json({ ok: true, user: { id: data.user.id, email: data.user.email } });
+    if (ctx) {
+      req.session.prioraOrgId = ctx.orgId;
+      req.session.prioraOrgName = ctx.orgName || undefined;
+      req.session.prioraRole = ctx.role;
+    }
+    res.json({
+      ok: true,
+      user: { id: data.user.id, email: data.user.email },
+      org: ctx ? { id: ctx.orgId, name: ctx.orgName, role: ctx.role } : null,
+    });
   } catch (err) {
     next(err);
   }
@@ -109,5 +211,12 @@ prioraAuthRouter.get('/me', (req, res) => {
   res.json({
     authenticated: true,
     user: { id: req.session.prioraUserId, email: req.session.prioraEmail },
+    org: req.session.prioraOrgId
+      ? {
+          id: req.session.prioraOrgId,
+          name: req.session.prioraOrgName || null,
+          role: req.session.prioraRole || null,
+        }
+      : null,
   });
 });
