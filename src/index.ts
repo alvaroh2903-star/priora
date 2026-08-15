@@ -265,9 +265,23 @@ function rawProxyConnectCheck(
   });
 }
 
+/** Mascara um segredo p/ diagnóstico: mostra início/fim e o tamanho, sem expor. */
+function maskSecret(s: string): string {
+  if (!s) return '(vazio)';
+  if (s.length <= 4) return `***(${s.length})`;
+  return `${s.slice(0, 2)}…${s.slice(-2)} (${s.length} chars)`;
+}
+
 app.get('/health/proxy-raw', async (_req, res) => {
   const r = await rawProxyConnectCheck();
-  res.json({ proxyServer: hasProxy() ? config.browser.proxy.server : null, ...r });
+  res.json({
+    proxyServer: hasProxy() ? config.browser.proxy.server : null,
+    // Credenciais MASCARADAS (só início/fim + tamanho) para conferir se o Render
+    // carregou o valor certo — comparar com o que está no painel da IPRoyal.
+    usernameLoaded: maskSecret(config.browser.proxy.username),
+    passwordLoaded: maskSecret(config.browser.proxy.password),
+    ...r,
+  });
 });
 
 /**
