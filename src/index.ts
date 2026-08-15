@@ -443,8 +443,10 @@ app.get('/health/unblock', async (req, res, next) => {
 
     // render liga o JS rendering do unblocker (necessário p/ SPA). Default: on.
     const render = String(req.query.render ?? '1') !== '0';
+    // country: geo do IP de saída (ex.: de, us, br). Ajuda em anti-bot geo-sensível.
+    const country = String(req.query.country || '').trim().toLowerCase() || undefined;
     const startedAt = Date.now();
-    const { status, html, headers } = await fetchViaUnblocker(url, { render });
+    const { status, html, headers } = await fetchViaUnblocker(url, { render, country });
     // Texto simples (sem scripts/tags) para inspecionar o conteúdo liberado.
     const text = html
       .replace(/<script[\s\S]*?<\/script>/gi, ' ')
@@ -459,6 +461,7 @@ app.get('/health/unblock', async (req, res, next) => {
       carrier: carrierName,
       ms: Date.now() - startedAt,
       render,
+      country: country || null,
       httpStatus: status,
       htmlLen: html.length,
       isCloudflareChallenge,

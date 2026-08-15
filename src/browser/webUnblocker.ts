@@ -34,6 +34,12 @@ export interface UnblockOptions {
    * (padrão da IPRoyal). Default: true.
    */
   render?: boolean;
+  /**
+   * Geo do IP de saída (código de país ISO, ex.: 'de', 'us', 'br'). Vai como
+   * sufixo `_country-XX` na senha. Ajuda em desafios anti-bot sensíveis a
+   * geografia/reputação de IP. Sem valor, o unblocker escolhe.
+   */
+  country?: string;
 }
 
 /** Busca a URL PASSANDO pelo Web Unblocker e devolve o HTML liberado. */
@@ -45,8 +51,10 @@ export async function fetchViaUnblocker(
     throw new Error('Web Unblocker não configurado (defina WEB_UNBLOCKER_SERVER/USERNAME/PASSWORD).');
   }
   const { server, username, password } = config.unblocker;
-  // Render de JS: sufixo _render-1 na senha (padrão IPRoyal, como _country-br).
-  const effectivePassword = opts.render === false ? password : `${password}_render-1`;
+  // Parâmetros da IPRoyal vão como sufixos na senha (padrão _chave-valor).
+  let effectivePassword = password;
+  if (opts.render !== false) effectivePassword += '_render-1';
+  if (opts.country) effectivePassword += `_country-${opts.country}`;
   const u = new URL(server);
   const proxyUri = `${u.protocol}//${encodeURIComponent(username)}:${encodeURIComponent(
     effectivePassword,
