@@ -1,4 +1,5 @@
 import path from 'path';
+import net from 'net';
 import express, { NextFunction, Request, Response } from 'express';
 import session from 'express-session';
 import { config, hasProxy } from './config';
@@ -211,6 +212,62 @@ async function proxyHealth(): Promise<unknown> {
 
 app.get('/health/proxy', async (_req, res) => {
   res.json(await proxyHealth());
+});
+
+/**
+ * Diagnóstico CRU do proxy (SEM login, SEM navegador): abre um socket direto ao
+ * proxy e faz um CONNECT para api.ipify.org:443, devolvendo a PRIMEIRA linha da
+ * resposta HTTP do proxy. Diferencia de forma inequívoca os casos que o Chromium
+ * esconde atrás de "ERR_TUNNEL_CONNECTION_FAILED":
+ *   - "HTTP/1.1 200 Connection established" → credenciais e rede OK.
+ *   - "HTTP/1.1 407 Proxy Authentication Required" → usuário/senha errados.
+ *   - erro ETIMEDOUT/ECONNREFUSED/ENOTFOUND → não alcança o proxy (rede/host).
+ */
+function rawProxyConnectCheck(
+  targetHost = 'api.ipify.org',
+  targetPort = 443,
+): Promise<{ ok: boolean; statusLine?: string; error?: string }> {
+  return new Promise((resolve) => {
+    if (!hasProxy()) return resolve({ ok: false, error: 'PROXY_SERVER não configurado.' });
+    const { server, username, password } = config.browser.proxy;
+    let u: URL;
+    try {
+      u = new URL(server);
+    } catch {
+      return resolve({ ok: false, error: `PROXY_SERVER inválido: ${server}` });
+    }
+    const proxyPort = Number(u.port) || (u.protocol === 'https:' ? 443 : 80);
+    const socket = net.connect({ host: u.hostname, port: proxyPort });
+    const done = (r: { ok: boolean; statusLine?: string; error?: string }) => {
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(r);
+    };
+    const timer = setTimeout(() => done({ ok: false, error: 'timeout (15s) conectando ao proxy' }), 15_000);
+    socket.on('connect', () => {
+      const auth = Buffer.from(`${username}:${password}`).toString('base64');
+      const req =
+        `CONNECT ${targetHost}:${targetPort} HTTP/1.1\r\n` +
+        `Host: ${targetHost}:${targetPort}\r\n` +
+        (username || password ? `Proxy-Authorization: Basic ${auth}\r\n` : '') +
+        `\r\n`;
+      socket.write(req);
+    });
+    let buf = '';
+    socket.on('data', (d) => {
+      buf += d.toString('utf8');
+      if (buf.includes('\r\n')) {
+        const statusLine = buf.split('\r\n')[0];
+        done({ ok: /^HTTP\/\d(?:\.\d)? 200/.test(statusLine), statusLine });
+      }
+    });
+    socket.on('error', (e) => done({ ok: false, error: (e as Error).message }));
+  });
+}
+
+app.get('/health/proxy-raw', async (_req, res) => {
+  const r = await rawProxyConnectCheck();
+  res.json({ proxyServer: hasProxy() ? config.browser.proxy.server : null, ...r });
 });
 
 /**
