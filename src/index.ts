@@ -442,7 +442,7 @@ app.get('/health/unblock', async (req, res, next) => {
     if (!url) return res.status(400).json({ error: 'Informe ?url=<URL> ou ?ref=<BL|contêiner>.' });
 
     const startedAt = Date.now();
-    const { status, html } = await fetchViaUnblocker(url);
+    const { status, html, headers } = await fetchViaUnblocker(url);
     // Texto simples (sem scripts/tags) para inspecionar o conteúdo liberado.
     const text = html
       .replace(/<script[\s\S]*?<\/script>/gi, ' ')
@@ -460,6 +460,8 @@ app.get('/health/unblock', async (req, res, next) => {
       htmlLen: html.length,
       isCloudflareChallenge,
       mentionsRef: ref ? html.toUpperCase().includes(ref.toUpperCase()) : null,
+      // Headers da resposta do unblocker (o motivo do 422 costuma vir aqui).
+      responseHeaders: headers,
       textSnippet: text.slice(0, 3500),
     });
   } catch (err) {

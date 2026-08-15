@@ -23,6 +23,7 @@ const DEFAULT_USER_AGENT =
 export interface UnblockResult {
   status: number;
   html: string;
+  headers: Record<string, string>;
 }
 
 /** Busca a URL PASSANDO pelo Web Unblocker e devolve o HTML liberado. */
@@ -58,7 +59,11 @@ export async function fetchViaUnblocker(url: string): Promise<UnblockResult> {
       },
     });
     const html = await res.body.text();
-    return { status: res.statusCode, html };
+    const headers: Record<string, string> = {};
+    for (const [k, v] of Object.entries(res.headers)) {
+      if (v != null) headers[k] = Array.isArray(v) ? v.join(', ') : String(v);
+    }
+    return { status: res.statusCode, html, headers };
   } finally {
     await agent.close().catch(() => {
       /* best-effort */
