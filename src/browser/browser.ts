@@ -5,6 +5,7 @@ import {
   BrowserContextOptions,
   Page,
 } from 'playwright';
+import { anonymizeProxy, closeAnonymizedProxy } from 'proxy-chain';
 import { config, hasProxy } from '../config';
 
 /**
@@ -51,6 +52,30 @@ export function proxyOption(): BrowserContextOptions['proxy'] | undefined {
   };
 }
 
+/** URL do proxy LOCAL anônimo (proxy-chain) que encapsula as credenciais. */
+let anonymizedProxyUrl: string | null = null;
+
+/**
+ * Resolve o `server` de proxy a passar no LAUNCH do Chromium.
+ *
+ * Proxy AUTENTICADO no Chromium headless estoura net::ERR_PROXY_AUTH_UNSUPPORTED
+ * (usuário/senha não são suportados nesse caminho). A saída robusta e padrão de
+ * mercado é subir um proxy LOCAL anônimo (proxy-chain) que ENCAMINHA para o
+ * upstream já com as credenciais: o Chromium enxerga só 127.0.0.1, sem
+ * autenticação. Sem usuário/senha, devolve o próprio server (proxy aberto).
+ */
+async function resolveLaunchProxyServer(): Promise<string | undefined> {
+  if (!hasProxy()) return undefined;
+  const { server, username, password } = config.browser.proxy;
+  if (!username && !password) return server; // proxy sem auth: usa direto
+  const u = new URL(server);
+  const upstream = `${u.protocol}//${encodeURIComponent(username)}:${encodeURIComponent(
+    password,
+  )}@${u.host}`;
+  anonymizedProxyUrl = await anonymizeProxy(upstream);
+  return anonymizedProxyUrl;
+}
+
 /**
  * Sobe (uma única vez) e reaproveita a instância do Chromium. Lançar o browser
  * é caro; contextos é que são baratos e descartáveis — um por sessão/scraper.
@@ -62,21 +87,22 @@ export function proxyOption(): BrowserContextOptions['proxy'] | undefined {
  */
 export async function getBrowser(): Promise<Browser> {
   if (!browserPromise) {
-    const proxy = proxyOption();
-    browserPromise = chromium
-      .launch({
+    browserPromise = (async () => {
+      // Proxy resolvido para o LAUNCH (local anônimo se houver auth — ver acima).
+      const proxyServer = await resolveLaunchProxyServer();
+      return chromium.launch({
         headless: config.browser.headless,
         ...(config.browser.executablePath
           ? { executablePath: config.browser.executablePath }
           : {}),
-        ...(proxy ? { proxy } : {}),
+        ...(proxyServer ? { proxy: { server: proxyServer } } : {}),
         args: LAUNCH_ARGS,
-      })
-      .catch((err) => {
-        // Permite nova tentativa numa próxima chamada em vez de "grudar" o erro.
-        browserPromise = null;
-        throw err;
       });
+    })().catch((err) => {
+      // Permite nova tentativa numa próxima chamada em vez de "grudar" o erro.
+      browserPromise = null;
+      throw err;
+    });
   }
   return browserPromise;
 }
@@ -130,13 +156,22 @@ export async function withPage<T>(
   }
 }
 
-/** Encerra o Chromium (usado no shutdown gracioso e nos testes). */
+/** Encerra o Chromium (e o proxy local, se houver) — shutdown e testes. */
 export async function closeBrowser(): Promise<void> {
-  if (!browserPromise) return;
-  const browser = await browserPromise.catch(() => null);
-  browserPromise = null;
-  if (browser) {
-    await browser.close().catch(() => {
+  if (browserPromise) {
+    const browser = await browserPromise.catch(() => null);
+    browserPromise = null;
+    if (browser) {
+      await browser.close().catch(() => {
+        /* best-effort */
+      });
+    }
+  }
+  // Derruba o proxy local anônimo, se foi criado (libera a porta/recursos).
+  if (anonymizedProxyUrl) {
+    const url = anonymizedProxyUrl;
+    anonymizedProxyUrl = null;
+    await closeAnonymizedProxy(url, true).catch(() => {
       /* best-effort */
     });
   }
