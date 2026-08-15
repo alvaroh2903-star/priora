@@ -91,8 +91,18 @@ app.get('/api/me', (req, res) => {
   res.json({ authenticated: true, username: req.session.username });
 });
 
-/** Health check. */
-app.get('/health', (_req, res) => res.json({ status: 'ok' }));
+/**
+ * Health check. Expõe o commit/branch que o Render está rodando (variáveis que o
+ * Render injeta), para confirmar QUAL build está no ar — útil para saber se um
+ * deploy recente já subiu antes de testar.
+ */
+app.get('/health', (_req, res) =>
+  res.json({
+    status: 'ok',
+    commit: (process.env.RENDER_GIT_COMMIT || '').slice(0, 7) || null,
+    branch: process.env.RENDER_GIT_BRANCH || null,
+  }),
+);
 
 /**
  * Diagnóstico do navegador (SEM login): sobe o Chromium e renderiza um HTML
