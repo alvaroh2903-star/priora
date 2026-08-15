@@ -395,8 +395,18 @@ app.get('/health/scrape-debug', async (req, res, next) => {
             /* ignora */
           }
         });
-        const nav = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 40_000 });
-        await page.waitForTimeout(1500);
+        // Navega com o sinal MAIS CEDO ('commit' = chegaram os headers da
+        // resposta). Não deixa o timeout derrubar tudo: captura o erro e segue,
+        // pra ao menos ver a rede/conteúdo parcial (portais lentos, ex.: HMM).
+        let navStatus: number | null = null;
+        let navError: string | null = null;
+        try {
+          const nav = await page.goto(url, { waitUntil: 'commit', timeout: 30_000 });
+          navStatus = nav?.status() ?? null;
+        } catch (e) {
+          navError = (e as Error).message;
+        }
+        await page.waitForTimeout(2000);
         // aceita o banner de cookies (OneTrust) para liberar a renderização.
         await page.locator('#onetrust-accept-btn-handler').click({ timeout: 3000 }).catch(() => {});
         // ?fill=<ref>: preenche o formulário de busca e submete (portais sem deep
@@ -421,7 +431,8 @@ app.get('/health/scrape-debug', async (req, res, next) => {
           (x) => /json/i.test(x.type) || /api|graphql|track|shipment|booking|event|milestone|rest/i.test(x.url),
         );
         return {
-          navStatus: nav?.status() ?? null,
+          navStatus,
+          navError,
           title,
           filled,
           htmlLen: html.length,
