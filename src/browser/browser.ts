@@ -39,6 +39,9 @@ const LAUNCH_ARGS = [
   '--disable-gpu',
   // Reduz sinais óbvios de automação (não vence anti-bot avançado, mas ajuda).
   '--disable-blink-features=AutomationControlled',
+  // Força HTTP/1.1: alguns portais (ex.: HMM) + proxy estouram
+  // net::ERR_HTTP2_PROTOCOL_ERROR no HTTP/2. HTTP/1.1 é mais estável via proxy.
+  '--disable-http2',
 ];
 
 /** Opções de proxy no formato do Playwright, ou undefined se não houver. */
