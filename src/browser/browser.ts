@@ -89,14 +89,17 @@ export async function newContext(
   options: BrowserContextOptions = {},
 ): Promise<BrowserContext> {
   const browser = await getBrowser();
-  const proxy = proxyOption();
+  // ATENÇÃO: o proxy NÃO é definido por-contexto aqui de propósito. A
+  // AUTENTICAÇÃO de proxy (usuário/senha) só funciona quando o proxy é passado no
+  // LAUNCH (ver getBrowser). Definir um proxy autenticado por-contexto faz o
+  // Chromium falhar com net::ERR_PROXY_AUTH_UNSUPPORTED. O proxy do launch já
+  // vale para todos os contextos deste navegador.
   const ctx = await browser.newContext({
     userAgent: DEFAULT_USER_AGENT,
     locale: 'pt-BR',
     timezoneId: 'America/Sao_Paulo',
     viewport: { width: 1366, height: 768 },
     extraHTTPHeaders: { 'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8' },
-    ...(proxy ? { proxy } : {}),
     ...options,
   });
   // Mascara o sinal mais óbvio de automação (navigator.webdriver).
