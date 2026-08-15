@@ -11,6 +11,8 @@ import {
   tryFillSearch,
 } from './pageUtils';
 import { scrapeHapag } from './scrapers/hapag';
+import { solveCaptchaIfPresent } from '../antiCaptcha';
+import { isAntiCaptchaConfigured } from '../../config';
 
 /**
  * Priora — Despacho de scraping dos portais de armadores.
@@ -92,10 +94,33 @@ export async function scrapeCarrier(
     return await withPage(async (page) => {
       await page.goto(sourceUrl, { waitUntil: 'domcontentloaded' });
 
+      // Anti-captcha (se configurado): tenta resolver um captcha logo na entrada.
+      await solveCaptchaIfPresent(page, sourceUrl);
+
       const specific = SCRAPERS[carrier.id];
-      const partial = specific
-        ? await specific(page, ctx)
-        : await genericScrape(page, ctx, usedDeepLink);
+      const run = () =>
+        specific ? specific(page, ctx) : genericScrape(page, ctx, usedDeepLink);
+
+      let partial = await run();
+
+      // Se o portal AINDA exige captcha, tenta resolver e roda o scraper 1x mais.
+      if (partial.needsCaptcha) {
+        const solved = await solveCaptchaIfPresent(page, sourceUrl);
+        if (solved) {
+          await page.waitForLoadState('networkidle').catch(() => undefined);
+          partial = await run();
+        }
+      }
+
+      // Mensagem final honesta quando o captcha persiste.
+      if (partial.needsCaptcha) {
+        partial = {
+          ...partial,
+          message: isAntiCaptchaConfigured()
+            ? 'Portal exigiu CAPTCHA e a resolução automática não teve sucesso (ver logs do anti-captcha).'
+            : 'Portal exigiu CAPTCHA e não há serviço de resolução configurado (defina ANTICAPTCHA_KEY).',
+        };
+      }
 
       return { ...base, ...partial };
     });

@@ -16,6 +16,8 @@ import { auditoriaRouter } from './routes/auditoriaRoutes';
 import { chromium } from 'playwright';
 import { withPage } from './browser/browser';
 import { trackShipment } from './browser/carriers';
+import { getAntiCaptchaBalance } from './browser/antiCaptcha';
+import { isAntiCaptchaConfigured } from './config';
 import { getActiveHomeAccountId } from './auth/microsoftAccount';
 import { prioraAuthRouter } from './auth/prioraAuthRoutes';
 import { rocketRouter } from './routes/rocketRoutes';
@@ -211,6 +213,23 @@ app.get('/health/proxy', async (_req, res) => {
  *   GET /health/scrape?ref=<BL|contêiner>&token=<DIAG_TOKEN>[&carrier=hapag]
  */
 let scrapeInFlight = false;
+
+/**
+ * Diagnóstico do ANTI-CAPTCHA (SEM login): confirma que a chave é aceita pelo
+ * serviço consultando o saldo da conta — sem gastar uma resolução. Útil logo
+ * após configurar ANTICAPTCHA_KEY no Render.
+ */
+app.get('/health/anticaptcha', async (_req, res) => {
+  if (!isAntiCaptchaConfigured()) {
+    return res.json({ antiCaptcha: 'not_configured' });
+  }
+  try {
+    const balance = await getAntiCaptchaBalance();
+    res.json({ antiCaptcha: 'ok', provider: config.antiCaptcha.provider, balance });
+  } catch (e) {
+    res.json({ antiCaptcha: 'error', error: (e as Error).message });
+  }
+});
 
 app.get('/health/scrape', async (req, res, next) => {
   try {
