@@ -16,7 +16,7 @@ import { demurrageBotRouter } from './routes/demurrageBotRoutes';
 import { auditoriaRouter } from './routes/auditoriaRoutes';
 import { chromium } from 'playwright';
 import { withPage } from './browser/browser';
-import { trackShipment } from './browser/carriers';
+import { trackShipment, detect } from './browser/carriers';
 import { getAntiCaptchaBalance } from './browser/antiCaptcha';
 import { isAntiCaptchaConfigured } from './config';
 import { getActiveHomeAccountId } from './auth/microsoftAccount';
@@ -334,6 +334,77 @@ app.get('/health/scrape', async (req, res, next) => {
       const startedAt = Date.now();
       const result = await trackShipment(ref, { carrierId });
       res.json({ ms: Date.now() - startedAt, proxy: hasProxy(), result });
+    } finally {
+      scrapeInFlight = false;
+    }
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * Debug de scraping (SEM login, gated por DIAG_TOKEN): abre a página do armador
+ * pelo proxy e devolve RECONHECIMENTO cru — texto visível, tamanho do HTML,
+ * quantas linhas de tabela existem e, principalmente, TODAS as requisições de
+ * rede (para caçar a API JSON interna do portal, muito mais robusta que raspar o
+ * DOM de uma SPA). Uso: /health/scrape-debug?ref=<BL>&token=<DIAG_TOKEN>
+ */
+app.get('/health/scrape-debug', async (req, res, next) => {
+  try {
+    const token = (process.env.DIAG_TOKEN || '').trim();
+    if (!token) return res.status(404).json({ error: 'Debug desativado (defina DIAG_TOKEN).' });
+    if (String(req.query.token || '') !== token) return res.status(401).json({ error: 'token inválido.' });
+    const ref = String(req.query.ref || '').trim();
+    if (!ref) return res.status(400).json({ error: 'Informe ?ref=<BL|contêiner>.' });
+    if (scrapeInFlight) return res.status(429).json({ error: 'Já há uma raspagem em andamento.' });
+
+    const d = detect(ref);
+    const url = d.carrier?.trackingUrl;
+    if (!url) return res.status(400).json({ error: 'Não identifiquei o armador/URL da referência.' });
+
+    scrapeInFlight = true;
+    try {
+      const out = await withPage(async (page) => {
+        const seen = new Set<string>();
+        const responses: { url: string; status: number; type: string }[] = [];
+        page.on('response', (r) => {
+          try {
+            const u = r.url();
+            if (seen.has(u) || responses.length >= 120) return;
+            seen.add(u);
+            responses.push({ url: u, status: r.status(), type: r.headers()['content-type'] || '' });
+          } catch {
+            /* ignora */
+          }
+        });
+        const nav = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 40_000 });
+        await page.waitForTimeout(1500);
+        // aceita o banner de cookies (OneTrust) para liberar a renderização.
+        await page.locator('#onetrust-accept-btn-handler').click({ timeout: 3000 }).catch(() => {});
+        // deixa os XHR da SPA carregarem os dados de rastreio.
+        await page.waitForTimeout(9000);
+
+        const title = await page.title().catch(() => '');
+        const html = await page.content().catch(() => '');
+        const text = ((await page.textContent('body').catch(() => '')) || '')
+          .replace(/\s+/g, ' ')
+          .trim();
+        const rowCount = await page.locator('table tr, [role="row"]').count().catch(() => 0);
+        // Requisições "candidatas a API": JSON no content-type ou URL sugestiva.
+        const apiLike = responses.filter(
+          (x) => /json/i.test(x.type) || /api|graphql|track|shipment|booking|event|milestone|rest/i.test(x.url),
+        );
+        return {
+          navStatus: nav?.status() ?? null,
+          title,
+          htmlLen: html.length,
+          rowCount,
+          totalResponses: responses.length,
+          apiLike,
+          textSnippet: text.slice(0, 3500),
+        };
+      });
+      res.json({ url, carrier: d.carrier?.name, ...out });
     } finally {
       scrapeInFlight = false;
     }
