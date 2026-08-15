@@ -441,8 +441,10 @@ app.get('/health/unblock', async (req, res, next) => {
     }
     if (!url) return res.status(400).json({ error: 'Informe ?url=<URL> ou ?ref=<BL|contêiner>.' });
 
+    // render liga o JS rendering do unblocker (necessário p/ SPA). Default: on.
+    const render = String(req.query.render ?? '1') !== '0';
     const startedAt = Date.now();
-    const { status, html, headers } = await fetchViaUnblocker(url);
+    const { status, html, headers } = await fetchViaUnblocker(url, { render });
     // Texto simples (sem scripts/tags) para inspecionar o conteúdo liberado.
     const text = html
       .replace(/<script[\s\S]*?<\/script>/gi, ' ')
@@ -456,6 +458,7 @@ app.get('/health/unblock', async (req, res, next) => {
       url,
       carrier: carrierName,
       ms: Date.now() - startedAt,
+      render,
       httpStatus: status,
       htmlLen: html.length,
       isCloudflareChallenge,

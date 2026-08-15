@@ -26,15 +26,30 @@ export interface UnblockResult {
   headers: Record<string, string>;
 }
 
+export interface UnblockOptions {
+  /**
+   * Renderizar o JS num navegador headless (do lado do unblocker) antes de
+   * devolver o HTML. Necessário para portais SPA (ex.: Hapag), que sem JS só
+   * retornam o esqueleto. Ligado via sufixo `_render-1` na senha do proxy
+   * (padrão da IPRoyal). Default: true.
+   */
+  render?: boolean;
+}
+
 /** Busca a URL PASSANDO pelo Web Unblocker e devolve o HTML liberado. */
-export async function fetchViaUnblocker(url: string): Promise<UnblockResult> {
+export async function fetchViaUnblocker(
+  url: string,
+  opts: UnblockOptions = {},
+): Promise<UnblockResult> {
   if (!isUnblockerConfigured()) {
     throw new Error('Web Unblocker não configurado (defina WEB_UNBLOCKER_SERVER/USERNAME/PASSWORD).');
   }
   const { server, username, password } = config.unblocker;
+  // Render de JS: sufixo _render-1 na senha (padrão IPRoyal, como _country-br).
+  const effectivePassword = opts.render === false ? password : `${password}_render-1`;
   const u = new URL(server);
   const proxyUri = `${u.protocol}//${encodeURIComponent(username)}:${encodeURIComponent(
-    password,
+    effectivePassword,
   )}@${u.host}`;
 
   // requestTls.rejectUnauthorized=false: o unblocker apresenta o próprio
