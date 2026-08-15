@@ -425,12 +425,21 @@ app.get('/health/unblock', async (req, res, next) => {
     if (!token) return res.status(404).json({ error: 'Debug desativado (defina DIAG_TOKEN).' });
     if (String(req.query.token || '') !== token) return res.status(401).json({ error: 'token inválido.' });
     if (!isUnblockerConfigured()) return res.json({ unblocker: 'not_configured' });
-    const ref = String(req.query.ref || '').trim();
-    if (!ref) return res.status(400).json({ error: 'Informe ?ref=<BL|contêiner>.' });
 
-    const d = detect(ref);
-    const url = d.carrier?.trackingUrl;
-    if (!url) return res.status(400).json({ error: 'Não identifiquei o armador/URL da referência.' });
+    // Aceita ?url=<URL crua> (para testar o encanamento com uma página leve) OU
+    // ?ref=<BL> (resolve a URL do armador).
+    const rawUrl = String(req.query.url || '').trim();
+    const ref = String(req.query.ref || '').trim();
+    let url: string | undefined;
+    let carrierName: string | null = null;
+    if (rawUrl) {
+      url = rawUrl;
+    } else if (ref) {
+      const d = detect(ref);
+      url = d.carrier?.trackingUrl || undefined;
+      carrierName = d.carrier?.name ?? null;
+    }
+    if (!url) return res.status(400).json({ error: 'Informe ?url=<URL> ou ?ref=<BL|contêiner>.' });
 
     const startedAt = Date.now();
     const { status, html } = await fetchViaUnblocker(url);
@@ -445,12 +454,12 @@ app.get('/health/unblock', async (req, res, next) => {
       /_cf_chl_opt|challenges\.cloudflare\.com|Enable JavaScript and cookies|Just a moment|Um momento/i.test(html);
     res.json({
       url,
-      carrier: d.carrier?.name,
+      carrier: carrierName,
       ms: Date.now() - startedAt,
       httpStatus: status,
       htmlLen: html.length,
       isCloudflareChallenge,
-      mentionsRef: html.toUpperCase().includes(ref.toUpperCase()),
+      mentionsRef: ref ? html.toUpperCase().includes(ref.toUpperCase()) : null,
       textSnippet: text.slice(0, 3500),
     });
   } catch (err) {

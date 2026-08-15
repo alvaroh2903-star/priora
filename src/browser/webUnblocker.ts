@@ -37,10 +37,13 @@ export async function fetchViaUnblocker(url: string): Promise<UnblockResult> {
   )}@${u.host}`;
 
   // requestTls.rejectUnauthorized=false: o unblocker apresenta o próprio
-  // certificado (MITM), então não validamos a cadeia do alvo.
+  // certificado (MITM), então não validamos a cadeia do alvo. Timeouts ALTOS no
+  // próprio agente: o unblocker resolve Cloudflare + renderiza JS, o que demora.
   const agent = new ProxyAgent({
     uri: proxyUri,
     requestTls: { rejectUnauthorized: false },
+    headersTimeout: 150_000,
+    bodyTimeout: 150_000,
   });
   // Segue redirecionamentos (equivale ao -L do curl) via interceptor.
   const dispatcher = agent.compose(interceptors.redirect({ maxRedirections: 5 }));
@@ -53,8 +56,6 @@ export async function fetchViaUnblocker(url: string): Promise<UnblockResult> {
         accept:
           'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
       },
-      headersTimeout: 120_000,
-      bodyTimeout: 120_000,
     });
     const html = await res.body.text();
     return { status: res.statusCode, html };
