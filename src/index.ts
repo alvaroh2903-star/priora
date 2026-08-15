@@ -18,6 +18,7 @@ import { chromium } from 'playwright';
 import { withPage } from './browser/browser';
 import { trackShipment, detect } from './browser/carriers';
 import { getAntiCaptchaBalance } from './browser/antiCaptcha';
+import { fetchViaUnblocker, isUnblockerConfigured } from './browser/webUnblocker';
 import { isAntiCaptchaConfigured } from './config';
 import { getActiveHomeAccountId } from './auth/microsoftAccount';
 import { prioraAuthRouter } from './auth/prioraAuthRoutes';
@@ -408,6 +409,50 @@ app.get('/health/scrape-debug', async (req, res, next) => {
     } finally {
       scrapeInFlight = false;
     }
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * Debug do Web Unblocker (gated por DIAG_TOKEN): busca a página do armador PELO
+ * Web Unblocker e reporta se o anti-bot foi furado (sem challenge da Cloudflare)
+ * e se o HTML já traz o rastreio. Uso: /health/unblock?ref=<BL>&token=<DIAG_TOKEN>
+ */
+app.get('/health/unblock', async (req, res, next) => {
+  try {
+    const token = (process.env.DIAG_TOKEN || '').trim();
+    if (!token) return res.status(404).json({ error: 'Debug desativado (defina DIAG_TOKEN).' });
+    if (String(req.query.token || '') !== token) return res.status(401).json({ error: 'token inválido.' });
+    if (!isUnblockerConfigured()) return res.json({ unblocker: 'not_configured' });
+    const ref = String(req.query.ref || '').trim();
+    if (!ref) return res.status(400).json({ error: 'Informe ?ref=<BL|contêiner>.' });
+
+    const d = detect(ref);
+    const url = d.carrier?.trackingUrl;
+    if (!url) return res.status(400).json({ error: 'Não identifiquei o armador/URL da referência.' });
+
+    const startedAt = Date.now();
+    const { status, html } = await fetchViaUnblocker(url);
+    // Texto simples (sem scripts/tags) para inspecionar o conteúdo liberado.
+    const text = html
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const isCloudflareChallenge =
+      /_cf_chl_opt|challenges\.cloudflare\.com|Enable JavaScript and cookies|Just a moment|Um momento/i.test(html);
+    res.json({
+      url,
+      carrier: d.carrier?.name,
+      ms: Date.now() - startedAt,
+      httpStatus: status,
+      htmlLen: html.length,
+      isCloudflareChallenge,
+      mentionsRef: html.toUpperCase().includes(ref.toUpperCase()),
+      textSnippet: text.slice(0, 3500),
+    });
   } catch (err) {
     next(err);
   }

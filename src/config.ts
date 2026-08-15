@@ -97,6 +97,18 @@ export const config = {
     },
   },
   /**
+   * Web Unblocker (ex.: IPRoyal): proxy que FURA anti-bot (Cloudflare etc.) e
+   * devolve o HTML já liberado. Usado só para armadores protegidos (ex.: Hapag),
+   * pois é pago por requisição. Proxy SEPARADO do residencial, com credenciais
+   * próprias. Formato do server: "http://host:porta". Faz MITM no HTTPS, então o
+   * certificado do alvo é ignorado ao passar por ele.
+   */
+  unblocker: {
+    server: (process.env.WEB_UNBLOCKER_SERVER || '').trim(),
+    username: (process.env.WEB_UNBLOCKER_USERNAME || '').trim(),
+    password: (process.env.WEB_UNBLOCKER_PASSWORD || '').trim(),
+  },
+  /**
    * Serviço de resolução de CAPTCHA (ex.: anti-captcha.com / 2captcha), usado
    * pelos scrapers quando um portal exige. Sem a chave, o passo de captcha fica
    * indisponível e o scraper falha graciosamente. (Ligado nas próximas etapas.)
@@ -159,6 +171,11 @@ export function isAzureConfigured(): boolean {
 /** Indica se há um proxy de saída configurado para os scrapers. */
 export function hasProxy(): boolean {
   return Boolean(config.browser.proxy.server);
+}
+
+/** Indica se o Web Unblocker (bypass de anti-bot) está configurado. */
+export function isUnblockerConfigured(): boolean {
+  return Boolean(config.unblocker.server && config.unblocker.username);
 }
 
 /** Indica se o serviço de resolução de CAPTCHA está configurado. */

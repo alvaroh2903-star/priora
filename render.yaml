@@ -50,6 +50,12 @@ services:
         sync: false                  # opcional (proxy autenticado)
       - key: PROXY_PASSWORD
         sync: false                  # opcional (proxy autenticado)
+      - key: WEB_UNBLOCKER_SERVER
+        sync: false                  # opcional: proxy anti-bot (ex.: http://unblocker.iproyal.com:12323)
+      - key: WEB_UNBLOCKER_USERNAME
+        sync: false                  # opcional
+      - key: WEB_UNBLOCKER_PASSWORD
+        sync: false                  # opcional
       - key: DIAG_TOKEN
         sync: false                  # opcional: liga /health/scrape p/ testar raspagem sem login
       - key: ANTICAPTCHA_PROVIDER
