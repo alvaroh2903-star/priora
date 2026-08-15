@@ -50,6 +50,8 @@ services:
         sync: false                  # opcional (proxy autenticado)
       - key: PROXY_PASSWORD
         sync: false                  # opcional (proxy autenticado)
+      - key: DIAG_TOKEN
+        sync: false                  # opcional: liga /health/scrape p/ testar raspagem sem login
       - key: ANTICAPTCHA_PROVIDER
         value: anti-captcha          # anti-captcha | 2captcha (usado nas próximas etapas)
       - key: ANTICAPTCHA_KEY

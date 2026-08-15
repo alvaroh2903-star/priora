@@ -15,6 +15,7 @@ import { demurrageBotRouter } from './routes/demurrageBotRoutes';
 import { auditoriaRouter } from './routes/auditoriaRoutes';
 import { chromium } from 'playwright';
 import { withPage } from './browser/browser';
+import { trackShipment } from './browser/carriers';
 import { getActiveHomeAccountId } from './auth/microsoftAccount';
 import { prioraAuthRouter } from './auth/prioraAuthRoutes';
 import { rocketRouter } from './routes/rocketRoutes';
@@ -198,6 +199,47 @@ async function proxyHealth(): Promise<unknown> {
 
 app.get('/health/proxy', async (_req, res) => {
   res.json(await proxyHealth());
+});
+
+/**
+ * Diagnóstico de SCRAPING ao vivo (SEM login), para testar a raspagem num portal
+ * real de armador em ISOLAMENTO — sem depender do login Microsoft (as rotas do
+ * bot em /api/demurrage/bot/* exigem sessão). Fica DESLIGADO por padrão: só
+ * responde se a variável de ambiente DIAG_TOKEN estiver definida, e exige
+ * ?token= igual a ela. Cada chamada sobe um navegador e bate num portal externo,
+ * por isso há trava de concorrência (uma raspagem por vez).
+ *   GET /health/scrape?ref=<BL|contêiner>&token=<DIAG_TOKEN>[&carrier=hapag]
+ */
+let scrapeInFlight = false;
+
+app.get('/health/scrape', async (req, res, next) => {
+  try {
+    const token = (process.env.DIAG_TOKEN || '').trim();
+    if (!token) {
+      return res
+        .status(404)
+        .json({ error: 'Diagnóstico de scraping desativado (defina DIAG_TOKEN no ambiente).' });
+    }
+    if (String(req.query.token || '') !== token) {
+      return res.status(401).json({ error: 'token inválido.' });
+    }
+    const ref = String(req.query.ref || '').trim();
+    if (!ref) return res.status(400).json({ error: 'Informe ?ref=<BL|contêiner>.' });
+    if (scrapeInFlight) {
+      return res.status(429).json({ error: 'Já há uma raspagem em andamento. Aguarde e tente de novo.' });
+    }
+    const carrierId = req.query.carrier ? String(req.query.carrier).trim() : undefined;
+    scrapeInFlight = true;
+    try {
+      const startedAt = Date.now();
+      const result = await trackShipment(ref, { carrierId });
+      res.json({ ms: Date.now() - startedAt, proxy: hasProxy(), result });
+    } finally {
+      scrapeInFlight = false;
+    }
+  } catch (err) {
+    next(err);
+  }
 });
 
 /**
