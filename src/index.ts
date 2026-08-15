@@ -295,7 +295,14 @@ app.get('/health/proxy-raw', async (_req, res) => {
  * por isso há trava de concorrência (uma raspagem por vez).
  *   GET /health/scrape?ref=<BL|contêiner>&token=<DIAG_TOKEN>[&carrier=hapag]
  */
-let scrapeInFlight = false;
+// Trava de concorrência das raspagens de diagnóstico, AUTO-LIBERÁVEL: guarda o
+// instante em que travou; se uma raspagem pendurar e nunca liberar, a trava
+// expira sozinha após SCRAPE_LOCK_TTL (evita 429 permanente).
+let scrapeLockAt: number | null = null;
+const SCRAPE_LOCK_TTL_MS = 180_000;
+function scrapeLocked(): boolean {
+  return scrapeLockAt !== null && Date.now() - scrapeLockAt < SCRAPE_LOCK_TTL_MS;
+}
 
 /**
  * Diagnóstico do ANTI-CAPTCHA (SEM login): confirma que a chave é aceita pelo
@@ -327,17 +334,17 @@ app.get('/health/scrape', async (req, res, next) => {
     }
     const ref = String(req.query.ref || '').trim();
     if (!ref) return res.status(400).json({ error: 'Informe ?ref=<BL|contêiner>.' });
-    if (scrapeInFlight) {
+    if (scrapeLocked()) {
       return res.status(429).json({ error: 'Já há uma raspagem em andamento. Aguarde e tente de novo.' });
     }
     const carrierId = req.query.carrier ? String(req.query.carrier).trim() : undefined;
-    scrapeInFlight = true;
+    scrapeLockAt = Date.now();
     try {
       const startedAt = Date.now();
       const result = await trackShipment(ref, { carrierId });
       res.json({ ms: Date.now() - startedAt, proxy: hasProxy(), result });
     } finally {
-      scrapeInFlight = false;
+      scrapeLockAt = null;
     }
   } catch (err) {
     next(err);
@@ -356,7 +363,7 @@ app.get('/health/scrape-debug', async (req, res, next) => {
     const token = (process.env.DIAG_TOKEN || '').trim();
     if (!token) return res.status(404).json({ error: 'Debug desativado (defina DIAG_TOKEN).' });
     if (String(req.query.token || '') !== token) return res.status(401).json({ error: 'token inválido.' });
-    if (scrapeInFlight) return res.status(429).json({ error: 'Já há uma raspagem em andamento.' });
+    if (scrapeLocked()) return res.status(429).json({ error: 'Já há uma raspagem em andamento.' });
 
     // Aceita ?url=<URL crua> (útil quando a referência não auto-detecta o armador)
     // OU ?ref=<BL> (resolve a URL do armador pela detecção).
@@ -373,7 +380,7 @@ app.get('/health/scrape-debug', async (req, res, next) => {
     }
     if (!url) return res.status(400).json({ error: 'Informe ?url=<URL> ou ?ref=<BL|contêiner>.' });
 
-    scrapeInFlight = true;
+    scrapeLockAt = Date.now();
     try {
       const out = await withPage(async (page) => {
         const seen = new Set<string>();
@@ -426,7 +433,7 @@ app.get('/health/scrape-debug', async (req, res, next) => {
       });
       res.json({ url, carrier: carrierName, ...out });
     } finally {
-      scrapeInFlight = false;
+      scrapeLockAt = null;
     }
   } catch (err) {
     next(err);
