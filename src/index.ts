@@ -17,6 +17,7 @@ import { auditoriaRouter } from './routes/auditoriaRoutes';
 import { chromium } from 'playwright';
 import { withPage } from './browser/browser';
 import { trackShipment, detect } from './browser/carriers';
+import { tryFillSearch } from './browser/carriers/pageUtils';
 import { getAntiCaptchaBalance } from './browser/antiCaptcha';
 import { fetchViaUnblocker, isUnblockerConfigured } from './browser/webUnblocker';
 import { isAntiCaptchaConfigured } from './config';
@@ -355,13 +356,22 @@ app.get('/health/scrape-debug', async (req, res, next) => {
     const token = (process.env.DIAG_TOKEN || '').trim();
     if (!token) return res.status(404).json({ error: 'Debug desativado (defina DIAG_TOKEN).' });
     if (String(req.query.token || '') !== token) return res.status(401).json({ error: 'token inválido.' });
-    const ref = String(req.query.ref || '').trim();
-    if (!ref) return res.status(400).json({ error: 'Informe ?ref=<BL|contêiner>.' });
     if (scrapeInFlight) return res.status(429).json({ error: 'Já há uma raspagem em andamento.' });
 
-    const d = detect(ref);
-    const url = d.carrier?.trackingUrl;
-    if (!url) return res.status(400).json({ error: 'Não identifiquei o armador/URL da referência.' });
+    // Aceita ?url=<URL crua> (útil quando a referência não auto-detecta o armador)
+    // OU ?ref=<BL> (resolve a URL do armador pela detecção).
+    const rawUrl = String(req.query.url || '').trim();
+    const ref = String(req.query.ref || '').trim();
+    let url: string | undefined;
+    let carrierName: string | null = null;
+    if (rawUrl) {
+      url = rawUrl;
+    } else if (ref) {
+      const d = detect(ref);
+      url = d.carrier?.trackingUrl || undefined;
+      carrierName = d.carrier?.name ?? null;
+    }
+    if (!url) return res.status(400).json({ error: 'Informe ?url=<URL> ou ?ref=<BL|contêiner>.' });
 
     scrapeInFlight = true;
     try {
@@ -382,7 +392,15 @@ app.get('/health/scrape-debug', async (req, res, next) => {
         await page.waitForTimeout(1500);
         // aceita o banner de cookies (OneTrust) para liberar a renderização.
         await page.locator('#onetrust-accept-btn-handler').click({ timeout: 3000 }).catch(() => {});
-        // deixa os XHR da SPA carregarem os dados de rastreio.
+        // ?fill=<ref>: preenche o formulário de busca e submete (portais sem deep
+        // link, ex.: HMM). Sem fill, só carrega a página.
+        const fill = String(req.query.fill || '').trim();
+        let filled = false;
+        if (fill) {
+          filled = await tryFillSearch(page, fill).catch(() => false);
+          await page.waitForLoadState('networkidle').catch(() => undefined);
+        }
+        // deixa os XHR da SPA/resultado carregarem.
         await page.waitForTimeout(9000);
 
         const title = await page.title().catch(() => '');
@@ -398,6 +416,7 @@ app.get('/health/scrape-debug', async (req, res, next) => {
         return {
           navStatus: nav?.status() ?? null,
           title,
+          filled,
           htmlLen: html.length,
           rowCount,
           totalResponses: responses.length,
@@ -405,7 +424,7 @@ app.get('/health/scrape-debug', async (req, res, next) => {
           textSnippet: text.slice(0, 3500),
         };
       });
-      res.json({ url, carrier: d.carrier?.name, ...out });
+      res.json({ url, carrier: carrierName, ...out });
     } finally {
       scrapeInFlight = false;
     }
