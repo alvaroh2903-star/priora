@@ -401,12 +401,12 @@ app.get('/health/scrape-debug', async (req, res, next) => {
         let navStatus: number | null = null;
         let navError: string | null = null;
         try {
-          const nav = await page.goto(url, { waitUntil: 'commit', timeout: 30_000 });
+          const nav = await page.goto(url, { waitUntil: 'commit', timeout: 20_000 });
           navStatus = nav?.status() ?? null;
         } catch (e) {
           navError = (e as Error).message;
         }
-        await page.waitForTimeout(2000);
+        await page.waitForTimeout(1500);
         // aceita o banner de cookies (OneTrust) para liberar a renderização.
         await page.locator('#onetrust-accept-btn-handler').click({ timeout: 3000 }).catch(() => {});
         // ?fill=<ref>: preenche o formulário de busca e submete (portais sem deep
@@ -415,10 +415,10 @@ app.get('/health/scrape-debug', async (req, res, next) => {
         let filled = false;
         if (fill) {
           filled = await tryFillSearch(page, fill).catch(() => false);
-          await page.waitForLoadState('networkidle').catch(() => undefined);
+          await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => undefined);
         }
-        // deixa os XHR da SPA/resultado carregarem.
-        await page.waitForTimeout(9000);
+        // deixa os XHR da SPA/resultado carregarem (curto p/ não segurar a trava).
+        await page.waitForTimeout(6000);
 
         const title = await page.title().catch(() => '');
         const html = await page.content().catch(() => '');
