@@ -304,6 +304,15 @@ function scrapeLocked(): boolean {
   return scrapeLockAt !== null && Date.now() - scrapeLockAt < SCRAPE_LOCK_TTL_MS;
 }
 
+/** Garante que uma promise resolva/rejeite em no máximo `ms` (evita pendurar a
+ * trava se o navegador/portal travar num ponto sem timeout próprio). */
+function hardTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(label)), ms)),
+  ]);
+}
+
 /**
  * Diagnóstico do ANTI-CAPTCHA (SEM login): confirma que a chave é aceita pelo
  * serviço consultando o saldo da conta — sem gastar uma resolução. Útil logo
@@ -382,7 +391,7 @@ app.get('/health/scrape-debug', async (req, res, next) => {
 
     scrapeLockAt = Date.now();
     try {
-      const out = await withPage(async (page) => {
+      const out = await hardTimeout(withPage(async (page) => {
         const seen = new Set<string>();
         const responses: { url: string; status: number; type: string }[] = [];
         page.on('response', (r) => {
@@ -441,7 +450,7 @@ app.get('/health/scrape-debug', async (req, res, next) => {
           apiLike,
           textSnippet: text.slice(0, 3500),
         };
-      });
+      }), 55_000, 'debug excedeu 55s (portal muito lento ou sem resposta)');
       res.json({ url, carrier: carrierName, ...out });
     } finally {
       scrapeLockAt = null;
