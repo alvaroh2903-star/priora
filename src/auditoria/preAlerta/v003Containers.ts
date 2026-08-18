@@ -2,12 +2,17 @@
  * PB-001 — Família V-003 · Containers (fonte da verdade: MBL)
  *
  * Roda PRIMEIRO no DAG: constrói o relacionamento Master↔House por contêiner,
- * pré-requisito das famílias por-contêiner (V-005/006/007/008). Q1: são 3
- * subvalidações — Existência, Correspondência, Relacionamento (sem "Quantidade").
+ * pré-requisito das famílias por-contêiner (V-005/006/007/008). Q1: 3
+ * subvalidações — Existência, Correspondência, Relacionamento.
+ *
+ * Pareamento (Q9): primeiro por número EXATO. Sobras são adiadas; quando houver
+ * exatamente 1 contêiner sobrando de cada lado (1 MBL × 1 HBL), eles são
+ * pareados APENAS para diagnóstico de correspondência — número diferente vira
+ * V-003.2 Divergência (não "dois contêineres ausentes"). O relacionamento
+ * (V-003.3) só nasce após a correspondência ser confirmada.
  */
 import { consolidar, Criticidade, ResultadoValidacao } from './estados';
 import { normalizarCodigo } from './normalizacao';
-import { cmpCodigo } from './comparadores';
 import {
   ContainerDoc,
   Evidencia,
@@ -35,10 +40,13 @@ function incerto(c: ContainerDoc, campo: string): boolean {
   return (c.leituraIncerta ?? []).includes(campo);
 }
 
-/**
- * Executa a Família V-003. Retorna os relacionamentos (para as famílias
- * seguintes) e as evidências. Master ausente/ilegível → família Não Avaliada.
- */
+function par(hid: string, cm: ContainerDoc | null, ch: ContainerDoc | null): Evidencia['valores'] {
+  return [
+    { doc: 'MBL', valor: cm?.numero ?? '—' },
+    { doc: `HBL ${hid}`, valor: ch?.numero ?? '—' },
+  ];
+}
+
 export function familiaV003(op: Operacao): {
   relacoes: RelacaoContainer[];
   familia: ResultadoFamilia;
@@ -52,14 +60,14 @@ export function familiaV003(op: Operacao): {
     return { relacoes, familia: { familia: 'V-003', resultado: 'NaoAvaliada', evidencias: ev } };
   }
 
-  // Índice dos contêineres do MBL por número normalizado.
   const idxMaster = new Map<string, ContainerDoc>();
   for (const c of master.containers) {
     const k = c.numero ? normalizarCodigo(c.numero) : '';
     if (k) idxMaster.set(k, c);
   }
-  const vinculados = new Set<string>(); // contêineres com relacionamento criado (V-003.3)
-  const vistosNoHouse = new Set<string>(); // contêineres do MBL que existem em algum House (V-003.1)
+  const vistos = new Set<string>(); // contêineres do MBL casados por número exato
+  const vinculados = new Set<string>(); // contêineres com relacionamento criado
+  const houseLeftover: Array<{ houseId: string; ch: ContainerDoc }> = []; // sobras (Q9)
 
   for (const house of op.houses) {
     const hid = house.nome;
@@ -67,46 +75,52 @@ export function familiaV003(op: Operacao): {
       ev.push(mk('V-003.1', 'Existência de contêiner', 'NaoAvaliada', 'Alta', hid, null, [], `HBL ${hid} ilegível.`));
       continue;
     }
-
     for (const ch of house.containers) {
       const kh = ch.numero ? normalizarCodigo(ch.numero) : '';
       const cm = kh ? idxMaster.get(kh) ?? null : null;
-      const par: Evidencia['valores'] = [
-        { doc: 'MBL', valor: cm?.numero ?? '—' },
-        { doc: `HBL ${hid}`, valor: ch.numero ?? '—' },
-      ];
-
-      // V-003.1 — Existência
       if (!cm) {
-        ev.push(mk('V-003.1', 'Existência de contêiner', 'Divergencia', 'Alta', hid, ch.numero, par, `Contêiner ${ch.numero ?? '(sem número)'} do House não foi localizado no MBL.`));
-        continue; // sem par no MBL não há o que corresponder/relacionar
+        houseLeftover.push({ houseId: hid, ch }); // adiado — pode virar par 1×1 (Q9)
+        continue;
       }
-      vistosNoHouse.add(kh);
-      ev.push(mk('V-003.1', 'Existência de contêiner', 'Consistente', 'Alta', hid, cm.numero, par, `Contêiner ${cm.numero} presente no MBL e no HBL.`));
-
-      // V-003.2 — Correspondência (char-a-char; leitura incerta → Validação Humana)
-      const cmp = cmpCodigo(cm.numero, ch.numero, incerto(cm, 'numero') || incerto(ch, 'numero'));
-      ev.push(mk('V-003.2', 'Número do contêiner', cmp.resultado, 'Critica', hid, cm.numero, par, cmp.motivo));
-
-      // V-003.3 — Relacionamento (só quando existência+correspondência confirmadas; unicidade: um contêiner, um vínculo)
-      if (cmp.resultado === 'Consistente') {
+      vistos.add(kh);
+      // V-003.1 — Existência
+      ev.push(mk('V-003.1', 'Existência de contêiner', 'Consistente', 'Alta', hid, cm.numero, par(hid, cm, ch), `Contêiner ${cm.numero} presente no MBL e no HBL.`));
+      // V-003.2 — Correspondência (números casaram; só leitura incerta desvia p/ 👤)
+      const inc = incerto(cm, 'numero') || incerto(ch, 'numero');
+      const corr: ResultadoValidacao = inc ? 'ValidacaoHumana' : 'Consistente';
+      ev.push(mk('V-003.2', 'Número do contêiner', corr, 'Critica', hid, cm.numero, par(hid, cm, ch), inc ? 'Leitura incerta — confirmar número no documento.' : 'Número confere entre MBL e HBL.'));
+      // V-003.3 — Relacionamento (só após correspondência confirmada; unicidade)
+      if (corr === 'Consistente') {
         if (vinculados.has(kh)) {
-          ev.push(mk('V-003.3', 'Relacionamento MBL↔HBL', 'Divergencia', 'Critica', hid, cm.numero, par, `Contêiner ${cm.numero} já vinculado a outro House — relacionamento ambíguo.`));
+          ev.push(mk('V-003.3', 'Relacionamento MBL↔HBL', 'Divergencia', 'Critica', hid, cm.numero, par(hid, cm, ch), `Contêiner ${cm.numero} já vinculado a outro House — relacionamento ambíguo.`));
         } else {
           vinculados.add(kh);
           relacoes.push({ numero: kh, houseId: hid, master: cm, house: ch });
           ev.push(mk('V-003.3', 'Relacionamento MBL↔HBL', 'Consistente', 'Critica', hid, cm.numero, [], `Relacionamento criado para o contêiner ${cm.numero}.`));
         }
       } else {
-        const r: ResultadoValidacao = cmp.resultado === 'ValidacaoHumana' ? 'ValidacaoHumana' : 'NaoAvaliada';
-        ev.push(mk('V-003.3', 'Relacionamento MBL↔HBL', r, 'Critica', hid, ch.numero, [], `Relacionamento não criado (correspondência: ${cmp.resultado}).`));
+        ev.push(mk('V-003.3', 'Relacionamento MBL↔HBL', 'ValidacaoHumana', 'Critica', hid, cm.numero, [], 'Relacionamento não criado — correspondência pendente de confirmação.'));
       }
     }
   }
 
-  // Contêineres do MBL que não apareceram em nenhum House (existência).
-  for (const [k, cm] of idxMaster) {
-    if (!vistosNoHouse.has(k)) {
+  const masterLeftover = [...idxMaster.entries()].filter(([k]) => !vistos.has(k)).map(([, cm]) => cm);
+
+  // Q9 — Fallback 1×1: pareia para diagnóstico de correspondência.
+  if (masterLeftover.length === 1 && houseLeftover.length === 1) {
+    const cm = masterLeftover[0];
+    const { houseId, ch } = houseLeftover[0];
+    ev.push(mk('V-003.1', 'Existência de contêiner', 'Consistente', 'Alta', houseId, cm.numero, par(houseId, cm, ch), 'Um contêiner em cada documento — pareados para conferência do número.'));
+    const inc = incerto(cm, 'numero') || incerto(ch, 'numero');
+    const corr: ResultadoValidacao = inc ? 'ValidacaoHumana' : 'Divergencia';
+    ev.push(mk('V-003.2', 'Número do contêiner', corr, 'Critica', houseId, cm.numero, par(houseId, cm, ch),
+      inc ? 'Leitura incerta do número — confirmar no documento.' : `Número do contêiner divergente: MBL ${cm.numero} × HBL ${ch.numero}.`));
+    ev.push(mk('V-003.3', 'Relacionamento MBL↔HBL', inc ? 'ValidacaoHumana' : 'NaoAvaliada', 'Critica', houseId, ch.numero, [], 'Relacionamento não criado — correspondência não confirmada.'));
+  } else {
+    for (const { houseId, ch } of houseLeftover) {
+      ev.push(mk('V-003.1', 'Existência de contêiner', 'Divergencia', 'Alta', houseId, ch.numero, par(houseId, null, ch), `Contêiner ${ch.numero ?? '(sem número)'} do House não foi localizado no MBL.`));
+    }
+    for (const cm of masterLeftover) {
       ev.push(mk('V-003.1', 'Existência de contêiner', 'Divergencia', 'Alta', null, cm.numero, [
         { doc: 'MBL', valor: cm.numero ?? '—' },
         { doc: 'HBL', valor: '—' },

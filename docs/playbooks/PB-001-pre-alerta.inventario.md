@@ -217,6 +217,9 @@ V-007.1 por Contêiner · V-007.2 Total (soma Houses) · V-007.3 Consistência. 
 - **Q4 ✔** V-015 (Frete) **no v1**, porém **depois** das validações documentais básicas (depende de DN + histórico de negociação + perfil de relacionamento).
 - **Q5 ✔** Enquanto **Shipping Instructions** não forem ingeridas, adiar **apenas** as partes de V-010/V-015 que dependem delas. O restante de V-010 segue normal.
 - **Q6 ✔** **Zero tolerância** para peso bruto, peso líquido e cubagem. Após normalização numérica, **qualquer diferença = divergência**.
+- **Q7 ✔** Consolidação com precedência uniforme: `⚠ Divergência > 👤 Validação Humana > ⏸ Não Avaliada > ✔ Consistente`. Estados individuais preservados; o consolidado fica em Divergência se houver qualquer divergência objetiva (não é "escondida" por outra dimensão em validação humana).
+- **Q8 ✔** Convenção numérica: `20.000→20000`, `12,5→12.5`, `30,780→30.78` (ponto = milhar em grupos de 3; vírgula = decimal); comparação após normalização.
+- **Q9 ✔** Pareamento de contêiner: casa por número exato; **fallback 1×1** (1 no MBL, 1 no HBL) pareia para diagnóstico — número diferente → **V-003.2 Divergência** (não "dois ausentes"); leitura incerta → 👤; o relacionamento (V-003.3) só nasce após a correspondência confirmada.
 
 **Faseamento do v1 (aprovado):**
 1. **Fase 1 — núcleo documental determinístico:** V-003 (relacionamento Master↔House) → V-005/006/007 (pesos/cubagem, zero tolerância) → V-004 (volumes) → V-008 (lacres) → V-009 (portos, UN/LOCODE) → V-012.1/.2 (NCM documental) → V-011.1 → V-010 (parte não dependente de SI). Sem IA nova, sem infra contextual.
