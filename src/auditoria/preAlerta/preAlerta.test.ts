@@ -17,6 +17,7 @@ import { familiaV008 } from './v008Lacres';
 import { familiaV009 } from './v009Portos';
 import { familiaV012, ncmCompativeis } from './v012Ncm';
 import { equivalenciaPorto, resolveUnlocode } from './unlocode';
+import { Extracao, mapExtracaoParaDoc, montarOperacao } from './extracaoPreAlerta';
 import { executarPreAlerta } from './index';
 
 const C1 = 'BMOU9784013';
@@ -279,4 +280,41 @@ test('executarPreAlerta: caminho feliz consolida Consistente (8 famílias)', () 
   assert.equal(r.resultado, 'Consistente');
   assert.equal(r.familias.length, 8); // V-003,004,005,006,007,008,009,012
   assert.ok(r.evidencias.length > 0);
+});
+
+// ---- extração → modelo (wiring, funções puras) ----
+function aiVazio(over: Partial<Extracao> = {}): Extracao {
+  return {
+    legivel: true, tipoDetectado: 'MBL',
+    pol: null, pod: null, placeOfReceipt: null, placeOfDelivery: null, transbordos: [],
+    pesoBrutoTotalKg: null, pesoLiquidoTotalKg: null, cubagemTotalM3: null,
+    qtdVolumesTotal: null, tipoVolume: null, descricaoMercadoria: null, ncm: [], containers: [],
+    ...over,
+  };
+}
+
+test('mapExtracaoParaDoc: mapeia campos do conhecimento e contêineres', () => {
+  const ai = aiVazio({
+    pol: 'Qingdao', pod: 'Paranagua', pesoBrutoTotalKg: 27162.3, cubagemTotalM3: 30.78,
+    qtdVolumesTotal: 1890, tipoVolume: 'CARTONS', ncm: ['3214', '3506'],
+    containers: [{ numero: 'BMOU9784013', pesoBrutoKg: 27162.3, pesoLiquidoKg: 22000, cubagemM3: 30.78, lacre: 'M7636999', ncm: ['3214'] }],
+  });
+  const d = mapExtracaoParaDoc(ai, 'MBL.pdf', 'MBL');
+  assert.equal(d.tipo, 'MBL');
+  assert.equal(d.pol, 'Qingdao');
+  assert.equal(d.pesoBrutoTotalKg, 27162.3);
+  assert.equal(d.containers.length, 1);
+  assert.equal(d.containers[0].lacre, 'M7636999');
+  assert.equal(d.containers[0].pesoLiquidoKg, 22000);
+});
+
+test('montarOperacao: agrupa 1 Master × N Houses', () => {
+  const docs = [
+    mapExtracaoParaDoc(aiVazio(), 'MBL.pdf', 'MBL'),
+    mapExtracaoParaDoc(aiVazio(), 'HBL1.pdf', 'HBL'),
+    mapExtracaoParaDoc(aiVazio(), 'HBL2.pdf', 'HBL'),
+  ];
+  const op = montarOperacao('IM23', docs);
+  assert.equal(op.master?.nome, 'MBL.pdf');
+  assert.equal(op.houses.length, 2);
 });
