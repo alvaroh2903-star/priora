@@ -1,10 +1,10 @@
 /**
  * PB-001 — Pré-Alerta · Motor (Fase 1, núcleo documental determinístico)
  *
- * Orquestra as Famílias na ordem do DAG. Nesta fatia: V-003 (relacionamento) e
- * as famílias numéricas por contêiner V-005/006/007. As demais famílias da
- * Fase 1 (V-004, V-008, V-009, V-011.1, V-012.1/.2, V-010 sem-SI) entram na
- * sequência, no mesmo padrão de módulo por família.
+ * Orquestra as Famílias na ordem do DAG. Nesta fatia: V-003 (relacionamento),
+ * V-004 (volumes), V-005/006/007 (numéricas por contêiner), V-008 (lacres) e
+ * V-012 (NCM documental). Faltam da Fase 1: V-009 (portos, UN/LOCODE), V-010
+ * (participantes, sem-SI) e V-011 (mercadoria — junto da semântica na Fase 2).
  *
  * STATELESS: opera sobre a Operacao já extraída — não depende de persistência.
  * A camada contextual (ETL/Context Builder) e a persistência (POP, pendências,
@@ -13,17 +13,23 @@
 import { comparaPrioridade, consolidar, ResultadoValidacao } from './estados';
 import { Evidencia, Operacao, ResultadoFamilia } from './modelo';
 import { familiaV003 } from './v003Containers';
+import { familiaV004 } from './v004Volumes';
 import { familiaV005 } from './v005PesoBruto';
 import { familiaV006 } from './v006PesoLiquido';
 import { familiaV007 } from './v007Cubagem';
+import { familiaV008 } from './v008Lacres';
+import { familiaV012 } from './v012Ncm';
 
 export * from './estados';
 export * from './modelo';
 export { familiaNumericaPorContainer } from './familiaNumerica';
 export { familiaV003 } from './v003Containers';
+export { familiaV004 } from './v004Volumes';
 export { familiaV005 } from './v005PesoBruto';
 export { familiaV006 } from './v006PesoLiquido';
 export { familiaV007 } from './v007Cubagem';
+export { familiaV008 } from './v008Lacres';
+export { familiaV012 } from './v012Ncm';
 
 export interface ResultadoPreAlerta {
   processo: string;
@@ -39,10 +45,19 @@ export function executarPreAlerta(op: Operacao): ResultadoPreAlerta {
   const { relacoes, familia: v003 } = familiaV003(op);
   familias.push(v003);
 
+  // V-004 Volumes (nível do conhecimento).
+  familias.push(familiaV004(op));
+
   // Famílias numéricas por contêiner (dependem de V-003).
   familias.push(familiaV005(op, relacoes));
   familias.push(familiaV006(op, relacoes));
   familias.push(familiaV007(op, relacoes));
+
+  // V-008 Lacres (por contêiner + unicidade da operação).
+  familias.push(familiaV008(op, relacoes));
+
+  // V-012 NCM (documental — .3 contextual fica na Fase 2).
+  familias.push(familiaV012(op));
 
   const evidencias = familias.flatMap((f) => f.evidencias).sort(comparaPrioridade);
   const resultado = consolidar(familias.map((f) => f.resultado));

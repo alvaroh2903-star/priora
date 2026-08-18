@@ -9,9 +9,12 @@ import assert from 'node:assert/strict';
 import { normalizarNumero, numeroIgual, validaISO6346 } from './normalizacao';
 import { ContainerDoc, DocPreAlerta, Operacao, Evidencia } from './modelo';
 import { familiaV003 } from './v003Containers';
+import { familiaV004 } from './v004Volumes';
 import { familiaV005 } from './v005PesoBruto';
 import { familiaV006 } from './v006PesoLiquido';
 import { familiaV007 } from './v007Cubagem';
+import { familiaV008 } from './v008Lacres';
+import { familiaV012, ncmCompativeis } from './v012Ncm';
 import { executarPreAlerta } from './index';
 
 const C1 = 'BMOU9784013';
@@ -19,10 +22,15 @@ const C2 = 'TEMU1234565';
 
 // ---- fábricas ----
 function ct(numero: string | null, over: Partial<ContainerDoc> = {}): ContainerDoc {
-  return { numero, pesoBrutoKg: null, pesoLiquidoKg: null, cubagemM3: null, lacre: null, ncm: [], qtdVolumes: null, tipoVolume: null, ...over };
+  return { numero, pesoBrutoKg: null, pesoLiquidoKg: null, cubagemM3: null, lacre: null, ncm: [], ...over };
 }
-function doc(tipo: 'MBL' | 'HBL', nome: string, containers: ContainerDoc[], totals: Partial<DocPreAlerta> = {}): DocPreAlerta {
-  return { tipo, nome, legivel: true, containers, pesoBrutoTotalKg: null, pesoLiquidoTotalKg: null, cubagemTotalM3: null, ...totals };
+function doc(tipo: 'MBL' | 'HBL', nome: string, containers: ContainerDoc[], over: Partial<DocPreAlerta> = {}): DocPreAlerta {
+  return {
+    tipo, nome, legivel: true, containers,
+    pesoBrutoTotalKg: null, pesoLiquidoTotalKg: null, cubagemTotalM3: null,
+    qtdVolumesTotal: null, tipoVolume: null, descricaoMercadoria: null, ncm: [],
+    ...over,
+  };
 }
 const sub = (evs: Evidencia[], s: string): Evidencia | undefined => evs.find((e) => e.subvalidacao === s);
 
@@ -155,15 +163,81 @@ test('V-007: cubagem — equivalência de formato 30.780 == 30,78', () => {
   assert.equal(fam.resultado, 'Consistente');
 });
 
-// ---- pipeline ----
-test('executarPreAlerta: caminho feliz consolida Consistente (V-003+V-005+V-006+V-007)', () => {
-  const op: Operacao = {
-    processo: 'IM9',
-    master: doc('MBL', 'MBL.pdf', [ct(C1, { pesoBrutoKg: 8000, pesoLiquidoKg: 7000, cubagemM3: 30.78 })], { pesoBrutoTotalKg: 8000, pesoLiquidoTotalKg: 7000, cubagemTotalM3: 30.78 }),
-    houses: [doc('HBL', 'HBL-A', [ct(C1, { pesoBrutoKg: 8000, pesoLiquidoKg: 7000, cubagemM3: 30.78 })], { pesoBrutoTotalKg: 8000, pesoLiquidoTotalKg: 7000, cubagemTotalM3: 30.78 })],
+// ---- V-004 Volumes ----
+test('V-004: quantidade + tipo consistentes; divergência de tipo (literal, Q2)', () => {
+  const ok: Operacao = {
+    processo: 'IM10',
+    master: doc('MBL', 'MBL.pdf', [ct(C1)], { qtdVolumesTotal: 100, tipoVolume: 'CARTONS' }),
+    houses: [doc('HBL', 'HBL-A', [ct(C1)], { qtdVolumesTotal: 100, tipoVolume: 'CARTONS' })],
   };
+  assert.equal(familiaV004(ok).resultado, 'Consistente');
+
+  const tipoDif: Operacao = {
+    processo: 'IM11',
+    master: doc('MBL', 'MBL.pdf', [ct(C1)], { qtdVolumesTotal: 100, tipoVolume: 'CARTONS' }),
+    houses: [doc('HBL', 'HBL-A', [ct(C1)], { qtdVolumesTotal: 100, tipoVolume: 'PACKAGES' })],
+  };
+  assert.equal(sub(familiaV004(tipoDif).evidencias, 'V-004.2')?.resultado, 'Divergencia');
+  assert.equal(familiaV004(tipoDif).resultado, 'Divergencia');
+});
+
+// ---- V-008 Lacres ----
+test('V-008: correspondência OK; lacre divergente; ausência → Não Avaliada', () => {
+  const ok: Operacao = { processo: 'IM12', master: doc('MBL', 'MBL.pdf', [ct(C1, { lacre: 'ML123' })]), houses: [doc('HBL', 'HBL-A', [ct(C1, { lacre: 'ml123' })])] };
+  const fOk = familiaV008(ok, familiaV003(ok).relacoes);
+  assert.equal(sub(fOk.evidencias, 'V-008.2')?.resultado, 'Consistente'); // normaliza caixa
+
+  const dif: Operacao = { processo: 'IM13', master: doc('MBL', 'MBL.pdf', [ct(C1, { lacre: 'ML123' })]), houses: [doc('HBL', 'HBL-A', [ct(C1, { lacre: 'ML124' })])] };
+  assert.equal(sub(familiaV008(dif, familiaV003(dif).relacoes).evidencias, 'V-008.2')?.resultado, 'Divergencia');
+
+  const ausente: Operacao = { processo: 'IM14', master: doc('MBL', 'MBL.pdf', [ct(C1, { lacre: 'ML123' })]), houses: [doc('HBL', 'HBL-A', [ct(C1)])] };
+  assert.equal(sub(familiaV008(ausente, familiaV003(ausente).relacoes).evidencias, 'V-008.1')?.resultado, 'NaoAvaliada');
+});
+
+test('V-008.3: lacre repetido em dois contêineres → divergência de unicidade', () => {
+  const op: Operacao = {
+    processo: 'IM15',
+    master: doc('MBL', 'MBL.pdf', [ct(C1, { lacre: 'ML123' }), ct(C2, { lacre: 'ML123' })]),
+    houses: [doc('HBL', 'HBL-A', [ct(C1, { lacre: 'ML123' }), ct(C2, { lacre: 'ML123' })])],
+  };
+  const fam = familiaV008(op, familiaV003(op).relacoes);
+  assert.equal(sub(fam.evidencias, 'V-008.3')?.resultado, 'Divergencia');
+});
+
+// ---- V-012 NCM ----
+test('ncmCompativeis: menor nível de dígitos comum', () => {
+  assert.equal(ncmCompativeis('3926', '39269090'), true);
+  assert.equal(ncmCompativeis('392690', '39269090'), true);
+  assert.equal(ncmCompativeis('392690', '392790'), false);
+  assert.equal(ncmCompativeis('39269090', '39269099'), false);
+});
+
+test('V-012: correspondência por prefixo; código ausente → divergência', () => {
+  const ok: Operacao = {
+    processo: 'IM16',
+    master: doc('MBL', 'MBL.pdf', [ct(C1)], { ncm: ['3926', '8471'] }),
+    houses: [doc('HBL', 'HBL-A', [ct(C1)], { ncm: ['84713012', '39269090'] })],
+  };
+  assert.equal(familiaV012(ok).resultado, 'Consistente'); // ordem irrelevante + prefixo
+
+  const falta: Operacao = {
+    processo: 'IM17',
+    master: doc('MBL', 'MBL.pdf', [ct(C1)], { ncm: ['3926', '8471', '8504'] }),
+    houses: [doc('HBL', 'HBL-A', [ct(C1)], { ncm: ['39269090', '84713012'] })],
+  };
+  assert.equal(sub(familiaV012(falta).evidencias, 'V-012.2')?.resultado, 'Divergencia');
+});
+
+// ---- pipeline ----
+test('executarPreAlerta: caminho feliz consolida Consistente (7 famílias)', () => {
+  const cheio = (nome: 'MBL' | 'HBL', file: string): DocPreAlerta =>
+    doc(nome, file, [ct(C1, { pesoBrutoKg: 8000, pesoLiquidoKg: 7000, cubagemM3: 30.78, lacre: 'ML123', ncm: ['3926'] })], {
+      pesoBrutoTotalKg: 8000, pesoLiquidoTotalKg: 7000, cubagemTotalM3: 30.78,
+      qtdVolumesTotal: 100, tipoVolume: 'CARTONS', descricaoMercadoria: 'SILICONE SEALANT', ncm: ['3926'],
+    });
+  const op: Operacao = { processo: 'IM18', master: cheio('MBL', 'MBL.pdf'), houses: [cheio('HBL', 'HBL-A')] };
   const r = executarPreAlerta(op);
   assert.equal(r.resultado, 'Consistente');
-  assert.equal(r.familias.length, 4);
+  assert.equal(r.familias.length, 7); // V-003,004,005,006,007,008,012
   assert.ok(r.evidencias.length > 0);
 });

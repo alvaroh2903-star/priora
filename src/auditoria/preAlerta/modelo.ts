@@ -17,9 +17,7 @@ export interface ContainerDoc {
   pesoLiquidoKg: number | null;
   cubagemM3: number | null;
   lacre: string | null;
-  ncm: string[];
-  qtdVolumes: number | null;
-  tipoVolume: string | null;
+  ncm: string[]; // NCMs vinculados ao contêiner, quando o documento os traz por item
   /**
    * Campos que o OCR sinalizou como leitura incerta (ex.: ['numero','lacre']).
    * Na Fase 2 (confiança por campo) isto roteia a comparação para Validação
@@ -34,10 +32,16 @@ export interface DocPreAlerta {
   nome: string; // nome do arquivo — evidência de origem
   legivel: boolean;
   containers: ContainerDoc[];
-  // Totais no nível do conhecimento (Dados Gerais).
+  // Totais / campos no nível do conhecimento (Dados Gerais).
   pesoBrutoTotalKg: number | null;
   pesoLiquidoTotalKg: number | null;
   cubagemTotalM3: number | null;
+  qtdVolumesTotal: number | null;
+  tipoVolume: string | null; // ex.: "CARTONS" (comparação literal no v1 — Q2)
+  descricaoMercadoria: string | null;
+  ncm: string[]; // conjunto de NCMs do conhecimento (ordem irrelevante)
+  /** Campos do conhecimento com leitura incerta (ex.: ['qtdVolumesTotal']). */
+  leituraIncerta?: string[];
 }
 
 /** A operação a auditar: 1 Master + N Houses. */
