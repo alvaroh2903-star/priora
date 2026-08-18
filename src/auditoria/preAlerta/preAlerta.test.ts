@@ -14,7 +14,9 @@ import { familiaV005 } from './v005PesoBruto';
 import { familiaV006 } from './v006PesoLiquido';
 import { familiaV007 } from './v007Cubagem';
 import { familiaV008 } from './v008Lacres';
+import { familiaV009 } from './v009Portos';
 import { familiaV012, ncmCompativeis } from './v012Ncm';
+import { equivalenciaPorto, resolveUnlocode } from './unlocode';
 import { executarPreAlerta } from './index';
 
 const C1 = 'BMOU9784013';
@@ -29,6 +31,7 @@ function doc(tipo: 'MBL' | 'HBL', nome: string, containers: ContainerDoc[], over
     tipo, nome, legivel: true, containers,
     pesoBrutoTotalKg: null, pesoLiquidoTotalKg: null, cubagemTotalM3: null,
     qtdVolumesTotal: null, tipoVolume: null, descricaoMercadoria: null, ncm: [],
+    pol: null, pod: null, placeOfReceipt: null, placeOfDelivery: null, transbordos: [],
     ...over,
   };
 }
@@ -228,16 +231,52 @@ test('V-012: correspondência por prefixo; código ausente → divergência', ()
   assert.equal(sub(familiaV012(falta).evidencias, 'V-012.2')?.resultado, 'Divergencia');
 });
 
+// ---- V-009 Portos (UN/LOCODE) ----
+test('resolveUnlocode / equivalenciaPorto: nome↔código, sem inferência geográfica', () => {
+  assert.equal(resolveUnlocode('Shanghai'), 'CNSHA');
+  assert.equal(resolveUnlocode('SHANGHAI, CHINA'), 'CNSHA');
+  assert.equal(resolveUnlocode('BRSSZ'), 'BRSSZ');
+  assert.equal(resolveUnlocode('Portinho Desconhecido'), null);
+  assert.equal(equivalenciaPorto('Santos', 'BRSSZ'), 'igual');
+  assert.equal(equivalenciaPorto('Qingdao', 'CNTAO'), 'igual');
+  assert.equal(equivalenciaPorto('Shanghai', 'Ningbo'), 'diferente');
+  assert.equal(equivalenciaPorto('Portinho X', 'Portinho Y'), 'incerto');
+});
+
+test('V-009: rota consistente; POD divergente; origem/destino invertidos', () => {
+  const ok: Operacao = {
+    processo: 'IM19',
+    master: doc('MBL', 'MBL.pdf', [ct(C1)], { pol: 'Qingdao', pod: 'Paranagua' }),
+    houses: [doc('HBL', 'HBL-A', [ct(C1)], { pol: 'CNTAO', pod: 'BRPNG' })],
+  };
+  assert.equal(familiaV009(ok).resultado, 'Consistente');
+
+  const podDif: Operacao = {
+    processo: 'IM20',
+    master: doc('MBL', 'MBL.pdf', [ct(C1)], { pol: 'Qingdao', pod: 'Santos' }),
+    houses: [doc('HBL', 'HBL-A', [ct(C1)], { pol: 'Qingdao', pod: 'Paranagua' })],
+  };
+  assert.equal(familiaV009(podDif).resultado, 'Divergencia');
+
+  const invertido: Operacao = {
+    processo: 'IM21',
+    master: doc('MBL', 'MBL.pdf', [ct(C1)], { pol: 'Qingdao', pod: 'Santos' }),
+    houses: [doc('HBL', 'HBL-A', [ct(C1)], { pol: 'Santos', pod: 'Qingdao' })],
+  };
+  assert.equal(sub(familiaV009(invertido).evidencias, 'V-009.3')?.resultado, 'Divergencia');
+});
+
 // ---- pipeline ----
-test('executarPreAlerta: caminho feliz consolida Consistente (7 famílias)', () => {
+test('executarPreAlerta: caminho feliz consolida Consistente (8 famílias)', () => {
   const cheio = (nome: 'MBL' | 'HBL', file: string): DocPreAlerta =>
     doc(nome, file, [ct(C1, { pesoBrutoKg: 8000, pesoLiquidoKg: 7000, cubagemM3: 30.78, lacre: 'ML123', ncm: ['3926'] })], {
       pesoBrutoTotalKg: 8000, pesoLiquidoTotalKg: 7000, cubagemTotalM3: 30.78,
       qtdVolumesTotal: 100, tipoVolume: 'CARTONS', descricaoMercadoria: 'SILICONE SEALANT', ncm: ['3926'],
+      pol: 'Qingdao', pod: 'Paranagua',
     });
-  const op: Operacao = { processo: 'IM18', master: cheio('MBL', 'MBL.pdf'), houses: [cheio('HBL', 'HBL-A')] };
+  const op: Operacao = { processo: 'IM22', master: cheio('MBL', 'MBL.pdf'), houses: [cheio('HBL', 'HBL-A')] };
   const r = executarPreAlerta(op);
   assert.equal(r.resultado, 'Consistente');
-  assert.equal(r.familias.length, 7); // V-003,004,005,006,007,008,012
+  assert.equal(r.familias.length, 8); // V-003,004,005,006,007,008,009,012
   assert.ok(r.evidencias.length > 0);
 });

@@ -40,6 +40,12 @@ export interface DocPreAlerta {
   tipoVolume: string | null; // ex.: "CARTONS" (comparação literal no v1 — Q2)
   descricaoMercadoria: string | null;
   ncm: string[]; // conjunto de NCMs do conhecimento (ordem irrelevante)
+  // Portos (V-009). POL/POD são obrigatórios; os demais, condicionais.
+  pol: string | null; // Port of Loading
+  pod: string | null; // Port of Discharge
+  placeOfReceipt: string | null;
+  placeOfDelivery: string | null;
+  transbordos: string[]; // portos de transbordo, quando informados
   /** Campos do conhecimento com leitura incerta (ex.: ['qtdVolumesTotal']). */
   leituraIncerta?: string[];
 }

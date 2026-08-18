@@ -1,10 +1,10 @@
 /**
  * PB-001 — Pré-Alerta · Motor (Fase 1, núcleo documental determinístico)
  *
- * Orquestra as Famílias na ordem do DAG. Nesta fatia: V-003 (relacionamento),
- * V-004 (volumes), V-005/006/007 (numéricas por contêiner), V-008 (lacres) e
- * V-012 (NCM documental). Faltam da Fase 1: V-009 (portos, UN/LOCODE), V-010
- * (participantes, sem-SI) e V-011 (mercadoria — junto da semântica na Fase 2).
+ * Orquestra as Famílias na ordem do DAG. Núcleo documental determinístico
+ * completo: V-003 (relacionamento), V-004 (volumes), V-005/006/007 (numéricas),
+ * V-008 (lacres), V-009 (portos, UN/LOCODE) e V-012 (NCM documental). V-010
+ * (participantes, requer POP/SI) e V-011 (mercadoria, requer FRO) → Fase 2/3.
  *
  * STATELESS: opera sobre a Operacao já extraída — não depende de persistência.
  * A camada contextual (ETL/Context Builder) e a persistência (POP, pendências,
@@ -18,6 +18,7 @@ import { familiaV005 } from './v005PesoBruto';
 import { familiaV006 } from './v006PesoLiquido';
 import { familiaV007 } from './v007Cubagem';
 import { familiaV008 } from './v008Lacres';
+import { familiaV009 } from './v009Portos';
 import { familiaV012 } from './v012Ncm';
 
 export * from './estados';
@@ -29,6 +30,7 @@ export { familiaV005 } from './v005PesoBruto';
 export { familiaV006 } from './v006PesoLiquido';
 export { familiaV007 } from './v007Cubagem';
 export { familiaV008 } from './v008Lacres';
+export { familiaV009 } from './v009Portos';
 export { familiaV012 } from './v012Ncm';
 
 export interface ResultadoPreAlerta {
@@ -55,6 +57,9 @@ export function executarPreAlerta(op: Operacao): ResultadoPreAlerta {
 
   // V-008 Lacres (por contêiner + unicidade da operação).
   familias.push(familiaV008(op, relacoes));
+
+  // V-009 Portos (existência + equivalência canônica UN/LOCODE + rota).
+  familias.push(familiaV009(op));
 
   // V-012 NCM (documental — .3 contextual fica na Fase 2).
   familias.push(familiaV012(op));
