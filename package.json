@@ -10,7 +10,8 @@
     "dev": "ts-node src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node -r ts-node/register --test src/auditoria/preAlerta/*.test.ts"
   },
   "keywords": [
     "outlook",
