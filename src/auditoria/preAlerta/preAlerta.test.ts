@@ -318,3 +318,42 @@ test('montarOperacao: agrupa 1 Master × N Houses', () => {
   assert.equal(op.master?.nome, 'MBL.pdf');
   assert.equal(op.houses.length, 2);
 });
+
+// ---- fixture do PROCESSO REAL (QGD3084071 × QDOS038996) ----
+// Valores extraídos dos documentos reais enviados. Peso líquido não consta nos
+// BLs → V-006 fica Não Avaliada (auditoria parcial), o resto bate.
+const famRes = (r: { familias: { familia: string; resultado: string }[] }, cod: string) =>
+  r.familias.find((f) => f.familia === cod)?.resultado;
+
+function processoReal(over: Partial<import('./modelo').ContainerDoc> = {}): Operacao {
+  const cont = (o: Partial<import('./modelo').ContainerDoc> = {}) =>
+    ct('BMOU9784013', { pesoBrutoKg: 27162.3, cubagemM3: 30.78, lacre: 'M7636999', ncm: ['3214', '3506'], ...o });
+  const geral = {
+    pesoBrutoTotalKg: 27162.3, cubagemTotalM3: 30.78, qtdVolumesTotal: 1890, tipoVolume: 'CARTONS',
+    descricaoMercadoria: 'PU MS SILICONE SEALANT', ncm: ['3214', '3506'],
+  };
+  return {
+    processo: 'IM-REAL',
+    master: doc('MBL', 'QGD3084071.pdf', [cont()], { ...geral, pol: 'Qingdao', pod: 'Paranagua' }),
+    houses: [doc('HBL', 'QDOS038996.pdf', [cont(over)], { ...geral, pol: 'CNTAO', pod: 'BRPNG' })],
+  };
+}
+
+test('PROCESSO REAL: consistente nos campos avaliáveis; parcial por falta de peso líquido', () => {
+  const r = executarPreAlerta(processoReal());
+  assert.equal(famRes(r, 'V-003'), 'Consistente'); // contêiner BMOU9784013
+  assert.equal(famRes(r, 'V-004'), 'Consistente'); // 1890 CARTONS
+  assert.equal(famRes(r, 'V-005'), 'Consistente'); // 27162.3 kg
+  assert.equal(famRes(r, 'V-006'), 'NaoAvaliada'); // peso líquido ausente nos BLs
+  assert.equal(famRes(r, 'V-007'), 'Consistente'); // 30.78 m³
+  assert.equal(famRes(r, 'V-008'), 'Consistente'); // lacre M7636999
+  assert.equal(famRes(r, 'V-009'), 'Consistente'); // Qingdao(CNTAO) → Paranaguá(BRPNG)
+  assert.equal(famRes(r, 'V-012'), 'Consistente'); // NCM 3214/3506
+  assert.equal(r.resultado, 'NaoAvaliada'); // parcial: não avaliou tudo (peso líquido)
+});
+
+test('PROCESSO REAL: lacre divergente no House → V-008 e consolidado em Divergência', () => {
+  const r = executarPreAlerta(processoReal({ lacre: 'M7636998' })); // 1 caractere diferente
+  assert.equal(famRes(r, 'V-008'), 'Divergencia');
+  assert.equal(r.resultado, 'Divergencia');
+});
