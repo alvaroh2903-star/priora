@@ -17,7 +17,7 @@
 | Documentos principais | Master BL (MBL), House BL (HBL) |
 | Fontes de apoio citadas | Shipping Instructions (SI), Debit Note (DN), Draft, Invoice, Packing List, histórico de e-mails (ETL), POP |
 | Playbook dependente | **PB-002 — CE Mercante** (volume separado; reutiliza o conhecimento validado aqui) |
-| Escopo | **13 famílias (V-003 → V-015), 51 subvalidações** |
+| Escopo | **13 famílias (V-003 → V-015), 50 subvalidações** |
 
 **Fora deste volume (pré-condições do Core — declaradas como dependência, não reimplementadas):**
 - **V-001** = existência/identificação do processo;
@@ -79,17 +79,16 @@
 
 ---
 
-## 3. Inventário das 13 famílias / 51 subvalidações
+## 3. Inventário das 13 famílias / 50 subvalidações
 
 Legenda IA: **OCR** = IA só para extrair o valor · **Não** = determinístico puro · **FRO** = IA semântica engaiolada · **Ctx** = IA só p/ desambiguar histórico.
 
-### V-003 — Containers · *Crítica* · fonte MBL · dep: (Core)
+### V-003 — Containers · *Crítica* · fonte MBL · dep: (Core) · **3 subvalidações** (Q1 ✔)
 | Sub | Nome | Regra | Estados | Crit | IA |
 |---|---|---|---|---|---|
 | V-003.1 | Existência | p/ cada contêiner do MBL, existe no HBL do House? (por-House) | 4 | Alta | OCR |
-| V-003.2 | Correspondência | nº do contêiner **char-a-char** (norm: caixa/espaços); ambíguo→👤 | 4 | Não |
-| V-003.3 | **Relacionamento** | cria vínculo único MBL↔HBL por contêiner; 1 relacionamento/contêiner; por-House | 4 | Não |
-| — | ⚠ inconsistência do doc | tabela lista `V-003.3 Quantidade` + `V-003.4 Relacionamento`; corpo detalha só Existência/Correspondência/Relacionamento → **ver Q1** | | | |
+| V-003.2 | Correspondência | nº do contêiner **char-a-char** (norm: caixa/espaços); ambíguo→👤 | 4 | Crítica | OCR |
+| V-003.3 | **Relacionamento** | cria vínculo único MBL↔HBL por contêiner; 1 relacionamento/contêiner; por-House | 4 | Crítica | Não |
 
 ### V-004 — Volumes da Carga · fonte MBL · dep: V-003
 | Sub | Nome | Regra | Crit | IA |
@@ -203,19 +202,28 @@ V-007.1 por Contêiner · V-007.2 Total (soma Houses) · V-007.3 Consistência. 
 
 ## 5. Inconsistências / resíduos no documento (revisar na fonte)
 - **Ficha Técnica desatualizada:** lista **10** famílias; o corpo implementa **13** (faltam V-004 Volumes, V-011 Mercadoria, V-014 Navio).
-- **V-003.3:** a tabela da família chama `.3 Quantidade` + `.4 Relacionamento`; o corpo detalha só Existência/Correspondência/**Relacionamento** (sem "Quantidade" própria). → **Q1**.
+- **V-003.3:** a tabela da família chama `.3 Quantidade` + `.4 Relacionamento`; o corpo detalha só Existência/Correspondência/**Relacionamento**. **Resolvido (Q1):** V-003 = 3 subvalidações; "Quantidade" não existe.
 - **Resíduos de edição colados no texto:** perguntas do autor sobre portos (cap. 9, antes do 9.1); **V-009.2 duplicada**; `"hoje 12:27 / boa, continue"`; `"Bora. Então eu substituiria a V-012.3 anterior inteira…"` (antes de 12.12).
 - **V-014.4** usa numeração `2.13`/`12.13` trocada em pontos; cross-refs esporádicos mislabelados (`V-009 — NCM`).
 
 ---
 
-## 6. Perguntas em aberto (para você responder)
-- **Q1.** V-003 tem uma subvalidação **"Quantidade" (V-003.3)** separada do **Relacionamento (V-003.4)**, ou são 3 subvalidações (Existência/Correspondência/Relacionamento)?
-- **Q2.** **Tabelas de equivalência** (embalagem V-004.2, portos UN/LOCODE V-009, madeira V-013): o doc marca a de embalagem como *futuro*; a de portos como *necessária*. Confirmo: portos com UN/LOCODE já no v1, embalagem literal (sem tabela) no v1?
-- **Q3.** **Camada contextual (ETL + Context Builder)** entra no **v1** do PB-001, ou entregamos primeiro as validações **documentais** (V-003…V-011 determinísticas) e o contextual (V-012.3/13.3/14.3/15.7) numa segunda fase?
-- **Q4.** **V-015 (Frete)** depende de **Debit Note + histórico de negociação + perfil de relacionamento** — nenhum no pipeline hoje. Entra no v1 ou fica para depois (só documental primeiro)?
-- **Q5.** **Shipping Instructions** (usada em V-010/V-015) não é ingerida hoje. Adiar as partes dependentes de SI?
-- **Q6.** Confirmo **zero tolerância** de peso/cubagem após normalização (corrigindo o 1%/2% do código atual)?
+## 6. Decisões travadas (Q1–Q6) e faseamento
+
+**Decisões:**
+- **Q1 ✔** V-003 = **3 subvalidações** (Existência / Correspondência / Relacionamento). "Quantidade" não existe.
+- **Q2 ✔** Portos com **UN/LOCODE no v1**. Tipo de embalagem (V-004.2): **comparação literal no v1**, sem tabela de equivalência.
+- **Q3 ✔** ETL + Context Builder **fazem parte do v1**, mas **implementados depois** do núcleo documental determinístico. PB-001 só é considerado completo com a camada contextual funcionando.
+- **Q4 ✔** V-015 (Frete) **no v1**, porém **depois** das validações documentais básicas (depende de DN + histórico de negociação + perfil de relacionamento).
+- **Q5 ✔** Enquanto **Shipping Instructions** não forem ingeridas, adiar **apenas** as partes de V-010/V-015 que dependem delas. O restante de V-010 segue normal.
+- **Q6 ✔** **Zero tolerância** para peso bruto, peso líquido e cubagem. Após normalização numérica, **qualquer diferença = divergência**.
+
+**Faseamento do v1 (aprovado):**
+1. **Fase 1 — núcleo documental determinístico:** V-003 (relacionamento Master↔House) → V-005/006/007 (pesos/cubagem, zero tolerância) → V-004 (volumes) → V-008 (lacres) → V-009 (portos, UN/LOCODE) → V-012.1/.2 (NCM documental) → V-011.1 → V-010 (parte não dependente de SI). Sem IA nova, sem infra contextual.
+2. **Fase 2 — camada contextual + semântica:** ETL + Context Builder; V-012.3 / V-013.3 / V-014.3; V-011.2 (FRO); V-013 / V-014.
+3. **Fase 3 — comercial + fontes novas:** V-015 (Frete) + Debit Note + histórico de negociação + perfil de relacionamento; partes de V-010/V-015 dependentes de Shipping Instructions; POP persistido.
+
+> Nota de engenharia: as famílias da Fase 1 são **stateless** (comparação sobre docs extraídos) e **não** exigem a persistência. A fundação de persistência (POP, pendências, histórico, "confirmar auditoria") entra quando a primeira feature *stateful* precisar dela — evitando construir o banco antes de haver o que persistir.
 
 ---
 
