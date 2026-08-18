@@ -78,7 +78,7 @@ function mimeSuportado(ct: string, nome: string): string | null {
   return null;
 }
 
-function docIlegivel(nome: string, tipo: TipoDoc): DocPreAlerta {
+export function docIlegivelPreAlerta(nome: string, tipo: TipoDoc): DocPreAlerta {
   return {
     tipo, nome, legivel: false, containers: [],
     pesoBrutoTotalKg: null, pesoLiquidoTotalKg: null, cubagemTotalM3: null,
@@ -139,9 +139,9 @@ export async function extrairDocPreAlerta(
 ): Promise<{ doc: DocPreAlerta; tipoDetectado: Extracao['tipoDetectado'] | null }> {
   try {
     const content = await getAttachmentContent(accessToken, messageId, attachmentId);
-    if (!content) return { doc: docIlegivel(nome, tipo), tipoDetectado: null };
+    if (!content) return { doc: docIlegivelPreAlerta(nome, tipo), tipoDetectado: null };
     const mime = mimeSuportado(content.contentType, content.name);
-    if (!mime) return { doc: docIlegivel(nome, tipo), tipoDetectado: null };
+    if (!mime) return { doc: docIlegivelPreAlerta(nome, tipo), tipoDetectado: null };
 
     const ai = await generateStructuredFromDocument(
       ExtractionSchema,
@@ -151,6 +151,6 @@ export async function extrairDocPreAlerta(
     );
     return { doc: mapExtracaoParaDoc(ai, nome, tipo), tipoDetectado: ai.tipoDetectado ?? null };
   } catch {
-    return { doc: docIlegivel(nome, tipo), tipoDetectado: null };
+    return { doc: docIlegivelPreAlerta(nome, tipo), tipoDetectado: null };
   }
 }

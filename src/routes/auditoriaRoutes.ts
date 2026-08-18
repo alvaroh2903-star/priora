@@ -10,6 +10,12 @@ import { isAiConfigured } from '../ai/geminiClient';
 import { extrairDocumento } from '../auditoria/docExtractor';
 import { executarAuditoria, DocumentoExtraido, DocTipo } from '../auditoria/playbooks';
 import { resumirAuditoria } from '../auditoria/auditClara';
+import {
+  extrairDocPreAlerta,
+  montarOperacao,
+  docIlegivelPreAlerta,
+} from '../auditoria/preAlerta/extracaoPreAlerta';
+import { executarPreAlerta, DocPreAlerta, TipoDoc } from '../auditoria/preAlerta';
 
 /**
  * Módulo Auditoria Documental (Blueprint completo).
@@ -446,6 +452,87 @@ auditoriaRouter.get('/:processo/auditoria', async (req: AuthedRequest, res, next
       data: proc.data,
     };
     auditCache.set(cacheKey, { sig, at: Date.now(), payload });
+    res.json(payload);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/* ------------------------------------------------------------------ *
+ * Motor NOVO — PB-001 Pré-Alerta determinístico (multi-House). Rota
+ * PARALELA à /:processo/auditoria: não altera o caminho antigo, permite
+ * comparar old × new antes de aposentar o playbooks.ts.
+ * ------------------------------------------------------------------ */
+const preAlertaCache = new Map<string, { sig: string; payload: unknown }>();
+
+auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, next) => {
+  try {
+    if (!isAiConfigured()) {
+      return res.status(503).json({
+        error: 'A leitura de documentos (OCR) exige a IA. Defina GEMINI_API_KEY no servidor.',
+      });
+    }
+    const alvoBase = processBase(String(req.params.processo || '').toUpperCase());
+    const { processos } = await buildProcessos(req.accessToken!);
+    const proc = processos.find((p) => processBase(p.processo) === alvoBase);
+    if (!proc) {
+      return res.status(404).json({ error: 'Processo não encontrado na caixa do Courier.' });
+    }
+
+    // Candidatos: BLs por nome + genéricos (fallback p/ reclassificação por conteúdo).
+    const bls = proc.docs.filter((d) => d.tipo === 'MBL' || d.tipo === 'HBL');
+    const jaNomes = new Set(bls.map((d) => d.nome.toLowerCase()));
+    const genericos = proc.docs.filter(
+      (d) =>
+        !jaNomes.has(d.nome.toLowerCase()) &&
+        (d.tipo === 'OUTRO' || d.tipo === 'INVOICE' || d.tipo === 'PACKING') &&
+        isDocumentAttachment(d.nome, d.contentType, false),
+    );
+    const candidatos = [...bls, ...genericos].slice(0, 8); // permite multi-House
+
+    if (candidatos.length === 0) {
+      return res.json({ processo: proc.processo, cliente: proc.cliente, semDocumentos: true, resultado: null });
+    }
+
+    const sig = candidatos.map((d) => `${d.tipo}:${d.nome}`).sort().join('|');
+    const refresh = String(req.query.refresh || '') === '1';
+    const cached = preAlertaCache.get(alvoBase);
+    if (!refresh && cached && cached.sig === sig) {
+      return res.json(cached.payload);
+    }
+
+    // OCR + reclassificação (nome concreto MBL/HBL prevalece; senão, conteúdo).
+    const extraidos = await Promise.all(
+      candidatos.map(async (d) => {
+        const hint: TipoDoc = d.tipo === 'HBL' ? 'HBL' : 'MBL';
+        const { doc, tipoDetectado } = await withTimeout(
+          extrairDocPreAlerta(req.accessToken!, d.emailId, d.attachmentId, d.nome, hint),
+          40000,
+          'ocr',
+        ).catch(() => ({ doc: docIlegivelPreAlerta(d.nome, hint), tipoDetectado: null }));
+        let tipoFinal: TipoDoc | null = null;
+        if (d.tipo === 'MBL' || d.tipo === 'HBL') tipoFinal = d.tipo;
+        else if (tipoDetectado === 'MBL' || tipoDetectado === 'HBL') tipoFinal = tipoDetectado;
+        return tipoFinal ? ({ ...doc, tipo: tipoFinal } as DocPreAlerta) : null;
+      }),
+    );
+    const docs = extraidos.filter((d): d is DocPreAlerta => d !== null);
+
+    const op = montarOperacao(proc.processo, docs);
+    const resultado = executarPreAlerta(op);
+
+    const payload = {
+      processo: proc.processo,
+      cliente: proc.cliente,
+      master: op.master ? op.master.nome : null,
+      houses: op.houses.map((h) => h.nome),
+      ilegiveis: docs.filter((d) => !d.legivel).map((d) => d.nome),
+      resultado: resultado.resultado,
+      familias: resultado.familias,
+      evidencias: resultado.evidencias,
+      data: proc.data,
+    };
+    preAlertaCache.set(alvoBase, { sig, payload });
     res.json(payload);
   } catch (err) {
     next(err);
