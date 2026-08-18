@@ -44,6 +44,45 @@ function isValidAuthState(state: string | undefined): boolean {
   return age >= 0 && age < STATE_TTL_MS;
 }
 
+/** Escapa texto para interpolar com segurança no HTML (evita XSS refletido). */
+function esc(s: string | undefined): string {
+  return String(s || '').replace(
+    /[&<>"']/g,
+    (c) =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[
+        c
+      ] as string,
+  );
+}
+
+/**
+ * Página de erro do login com um botão que RECOMEÇA o fluxo (`/auth/login`).
+ * URL relativa: funciona igual em localhost, no *.onrender.com ou num domínio
+ * próprio (o texto antigo apontava para http://localhost e não tinha link).
+ */
+function loginErrorPage(
+  res: import('express').Response,
+  status: number,
+  title: string,
+  detail: string,
+): void {
+  res
+    .status(status)
+    .type('html')
+    .send(
+      '<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">' +
+        '<meta name="viewport" content="width=device-width,initial-scale=1">' +
+        `<title>Priora — ${esc(title)}</title></head>` +
+        '<body style="margin:0;background:#0D1227;color:#fff;font-family:system-ui,-apple-system,sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:24px">' +
+        '<div style="max-width:420px;text-align:center">' +
+        '<div style="font-size:26px;font-weight:800;margin-bottom:12px">Priora</div>' +
+        `<div style="font-size:16px;font-weight:700;margin-bottom:8px">${esc(title)}</div>` +
+        `<div style="font-size:14px;line-height:1.6;color:#AEB4CC;margin-bottom:26px">${esc(detail)}</div>` +
+        '<a href="/auth/login" style="display:inline-block;background:#4327E6;color:#fff;text-decoration:none;padding:13px 22px;border-radius:12px;font-weight:700;font-size:15px">Entrar com a Microsoft novamente</a>' +
+        '</div></body></html>',
+    );
+}
+
 /** Inicia o login: redireciona o usuário para a tela "Entrar com a Microsoft". */
 authRouter.get('/login', async (req, res, next) => {
   try {
@@ -83,31 +122,31 @@ authRouter.get('/callback', async (req, res, next) => {
     // A Microsoft pode redirecionar de volta com um erro (ex.: consentimento
     // recusado). Surfamos o motivo real em vez de "código ausente".
     if (oauthError) {
-      return res
-        .status(400)
-        .send(
-          `A Microsoft recusou o login: ${oauthError}\n\n` +
-            `${oauthErrorDescription || ''}\n\n` +
-            `Volte para http://localhost:${config.port} e tente novamente.`,
-        );
+      return loginErrorPage(
+        res,
+        400,
+        'A Microsoft recusou o login',
+        `${oauthError}${oauthErrorDescription ? ' — ' + oauthErrorDescription : ''}`,
+      );
     }
 
     if (!code) {
-      return res
-        .status(400)
-        .send(
-          'Código de autorização ausente. Comece o login pela página inicial ' +
-            `(http://localhost:${config.port}) clicando em "Entrar com a Microsoft" — ` +
-            'não abra /auth/callback diretamente nem recarregue essa página.',
-        );
+      return loginErrorPage(
+        res,
+        400,
+        'Código de autorização ausente',
+        'Comece o login pela página inicial clicando em "Entrar com a Microsoft". ' +
+          'Não abra /auth/callback diretamente nem recarregue esta página.',
+      );
     }
     if (!isValidAuthState(state)) {
-      return res
-        .status(400)
-        .send(
-          'Sessão de login expirada ou inválida. Volte à página inicial e clique ' +
-            'em "Entrar com a Microsoft" novamente (não reabra/recarregue esta página).',
-        );
+      return loginErrorPage(
+        res,
+        400,
+        'Sessão de login expirada',
+        'O login demorou demais (mais de 15 min) ou a página foi recarregada. ' +
+          'Clique abaixo para recomeçar e conclua em seguida, sem recarregar esta página.',
+      );
     }
 
     const result = await getMsalClient().acquireTokenByCode({
