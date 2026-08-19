@@ -150,21 +150,33 @@ class Component extends DCLogic {
    tiver expirado), mostra uma tela de conexão por cima do painel.
    Vanilla JS — não interfere no runtime do DesignCode. */
 (function(){
+  // Uma vez dispensado o aviso de conectar a Microsoft, não reabre sozinho
+  // (o usuário JÁ está logado na Priora; conectar o Outlook é a fonte de dados).
+  var connectDismissed = false;
   function showConnect(expired){
+    if (connectDismissed) return;
     if (document.getElementById('priora-connect')) return;
     var msg = expired
-      ? 'Sua sessão expirou. Entre de novo com a Microsoft para continuar vendo seus processos, couriers e a análise da Clara.'
-      : 'Conecte sua conta do Outlook para ver seus processos, couriers, documentos e a análise da Clara com seus e-mails reais.';
+      ? 'Sua conexão com a Microsoft expirou. Reconecte para continuar vendo seus processos, couriers e a análise da Clara com seus e-mails.'
+      : 'Você está na Priora! Para ver seus processos, couriers e a análise da Clara com dados reais, conecte sua conta do Outlook (fonte de dados).';
     var o = document.createElement('div');
     o.id = 'priora-connect';
     o.style.cssText = 'position:fixed;inset:0;z-index:99999;background:#0D1227;display:flex;align-items:center;justify-content:center;font-family:sans-serif;padding:24px';
     o.innerHTML =
-      '<div style="text-align:center;color:#fff;max-width:400px">'
+      '<div style="text-align:center;color:#fff;max-width:420px">'
       + '<div style="font-size:28px;font-weight:800;margin-bottom:12px">Priora</div>'
       + '<div style="font-size:15px;line-height:1.5;color:#AEB4CC;margin-bottom:26px">' + msg + '</div>'
-      + '<a href="/auth/login" style="display:inline-block;background:#4327E6;color:#fff;text-decoration:none;padding:14px 24px;border-radius:12px;font-weight:700;font-size:15px">Entrar com a Microsoft</a>'
+      + '<a href="/auth/login" style="display:inline-block;background:#4327E6;color:#fff;text-decoration:none;padding:14px 24px;border-radius:12px;font-weight:700;font-size:15px">Conectar Microsoft</a>'
+      + '<div style="margin-top:18px"><a id="priora-connect-skip" href="#" style="color:#8891B0;font-size:13.5px;text-decoration:none">Agora não — entrar no painel</a></div>'
       + '</div>';
     document.body.appendChild(o);
+    var skip = document.getElementById('priora-connect-skip');
+    if (skip) skip.addEventListener('click', function(e){
+      e.preventDefault();
+      connectDismissed = true;
+      var el = document.getElementById('priora-connect');
+      if (el && el.parentNode) el.parentNode.removeChild(el);
+    });
   }
   // Exposto para os módulos poderem reagir a um 401 se precisarem.
   window.PrioraAuth = { showConnect: showConnect };
@@ -186,9 +198,18 @@ class Component extends DCLogic {
   }
 
   function check(){
-    fetch('/api/me', { credentials:'same-origin' })
+    // 1) Exige a CONTA PRIORA logada (o login por e-mail/senha da landing).
+    //    Sem ela, o painel não é acessível → volta para a tela de login.
+    fetch('/api/priora/me', { credentials:'same-origin' })
       .then(function(r){ return r.json(); })
-      .then(function(d){ if (!d || !d.authenticated) showConnect(false); })
+      .then(function(d){
+        if (!d || !d.authenticated) { window.location.href = 'Login.dc.html'; return; }
+        // 2) Logado na Priora. A Microsoft é a fonte de dados: se não estiver
+        //    conectada, sugere conectar (aviso dispensável, não um muro).
+        return fetch('/api/me', { credentials:'same-origin' })
+          .then(function(r){ return r.json(); })
+          .then(function(m){ if (!m || !m.authenticated) showConnect(false); });
+      })
       .catch(function(){});
   }
   if (document.readyState === 'loading') window.addEventListener('DOMContentLoaded', function(){ setTimeout(check, 400); });
