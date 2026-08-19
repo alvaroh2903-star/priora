@@ -106,7 +106,7 @@ async function ensureOrgForUser(
 
   const { data: org, error: orgErr } = await sb
     .from('organizations')
-    .insert({ name: empresa, type: tipo, plan: 'free', seat_limit: 3, created_by: userId })
+    .insert({ name: empresa, plan: 'free', seat_limit: 3, created_by: userId })
     .select('id, name')
     .single();
   if (orgErr || !org) throw orgErr || new Error('Falha ao criar a empresa.');
@@ -222,7 +222,6 @@ prioraAuthRouter.post('/assinar', async (req, res, next) => {
       .from('organizations')
       .insert({
         name: empresa,
-        type: tipo,
         plan: plano.id,
         seat_limit: plano.seats,
         created_by: userId,
@@ -370,7 +369,7 @@ prioraAuthRouter.get('/org', async (req, res, next) => {
     const sb = getSupabase();
     const { data: org } = await sb
       .from('organizations')
-      .select('id, name, plan, seat_limit, type')
+      .select('id, name, plan, seat_limit')
       .eq('id', ctx.orgId)
       .single();
     const { count } = await sb
