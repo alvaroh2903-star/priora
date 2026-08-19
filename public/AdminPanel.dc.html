@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<title>Priora — Painel do Admin</title>
+<link rel="icon" type="image/png" href="assets/logo-p-navy.png?v=2">
+<link rel="shortcut icon" type="image/png" href="assets/logo-p-navy.png?v=2">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Plus Jakarta Sans',sans-serif;-webkit-font-smoothing:antialiased}
+  input:focus{outline:none;border-color:#4327E6!important}
+</style>
+</helmet>
+<div style="min-height:100vh;background:linear-gradient(120deg,#FDFDFE 0%,#F1F2F9 55%,#E9EBF5 100%);padding:34px 20px 60px;font-family:'Plus Jakarta Sans',sans-serif">
+  <div style="max-width:920px;margin:0 auto">
+
+    <!-- header -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:26px;flex-wrap:wrap;gap:12px">
+      <div style="display:flex;align-items:center;gap:12px">
+        <img src="assets/logo-p-navy.png" alt="Priora" style="height:38px;width:auto">
+        <div style="font-size:22px;font-weight:800;color:#0D1227;letter-spacing:.05em">PRIORA</div>
+        <span style="font-size:11px;font-weight:700;color:#4327E6;background:#EEEBFF;padding:4px 10px;border-radius:20px;letter-spacing:.04em">ADMIN</span>
+      </div>
+      <a href="Priora.dc.html" style="font-size:14px;font-weight:700;color:#4327E6;text-decoration:none">← Voltar ao painel</a>
+    </div>
+
+    <!-- empresa -->
+    <div id="org-card" style="background:#fff;border:1px solid #EAEBF4;border-radius:20px;padding:26px 28px;box-shadow:0 22px 50px -32px rgba(31,38,80,.35);margin-bottom:22px">
+      <div style="color:#6F7693">Carregando empresa…</div>
+    </div>
+
+    <!-- adicionar analista -->
+    <div id="invite-card" style="background:#fff;border:1px solid #EAEBF4;border-radius:20px;padding:26px 28px;box-shadow:0 22px 50px -32px rgba(31,38,80,.35);margin-bottom:22px">
+      <div style="font-size:18px;font-weight:800;color:#0D1227">Adicionar analista</div>
+      <div style="font-size:14px;color:#6F7693;margin-top:4px;margin-bottom:18px">Cria a conta do analista com uma senha temporária (ele troca depois). Respeita o limite de assentos do plano.</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <input id="a-nome" type="text" placeholder="Nome do analista" style="width:100%;height:52px;border:1.5px solid #E6E8F2;border-radius:12px;padding:0 16px;font-family:inherit;font-size:15px;color:#161A2E;background:#fff">
+        <input id="a-email" type="email" placeholder="email@empresa.com" style="width:100%;height:52px;border:1.5px solid #E6E8F2;border-radius:12px;padding:0 16px;font-family:inherit;font-size:15px;color:#161A2E;background:#fff">
+        <input id="a-senha" type="text" placeholder="Senha temporária (mín. 8)" style="width:100%;height:52px;border:1.5px solid #E6E8F2;border-radius:12px;padding:0 16px;font-family:inherit;font-size:15px;color:#161A2E;background:#fff">
+        <button id="a-add" type="button" style="width:100%;height:52px;background:#0D1227;color:#fff;border:none;border-radius:12px;font-family:inherit;font-size:15px;font-weight:700;cursor:pointer">Adicionar analista</button>
+      </div>
+      <div id="a-msg" style="margin-top:12px;font-size:14px;font-weight:600;min-height:18px"></div>
+    </div>
+
+    <!-- equipe -->
+    <div id="team-card" style="background:#fff;border:1px solid #EAEBF4;border-radius:20px;padding:26px 28px;box-shadow:0 22px 50px -32px rgba(31,38,80,.35)">
+      <div style="font-size:18px;font-weight:800;color:#0D1227;margin-bottom:6px">Equipe</div>
+      <div id="team-list"><div style="color:#6F7693;padding:12px 0">Carregando…</div></div>
+    </div>
+
+  </div>
+  <template id="__bundler_thumbnail"><svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><rect width="100" height="100" fill="#0D1227"/><text x="50" y="62" font-family="sans-serif" font-size="42" font-weight="800" fill="#fff" text-anchor="middle">A</text></svg></template>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic { renderVals(){ return {}; } }
+</script>
+<script>
+/* Painel do Admin — lógica em JS puro (roda após o render do DC). */
+(function(){
+  function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
+  function $(id){ return document.getElementById(id); }
+  async function jget(u){ var r = await fetch(u,{credentials:'same-origin'}); return r.json(); }
+
+  var PLAN_NAMES = { free:'Free', time_3:'Time (3)', time_5:'Equipe (5)', time_10:'Operação (10)' };
+
+  async function loadOrg(){
+    try{
+      var d = await jget('/api/priora/org');
+      var o = d.org; if(!o) return;
+      $('org-card').innerHTML =
+        '<div style="font-size:12.5px;font-weight:700;color:#6F7693;text-transform:uppercase;letter-spacing:.06em">Empresa</div>'
+        + '<div style="font-size:26px;font-weight:800;color:#0D1227;margin-top:4px">'+esc(o.name)+'</div>'
+        + '<div style="display:flex;gap:32px;margin-top:18px;flex-wrap:wrap">'
+        +   '<div><div style="font-size:12px;color:#6F7693">Plano</div><div style="font-size:16px;font-weight:700;color:#0D1227">'+esc(PLAN_NAMES[o.plan]||o.plan)+'</div></div>'
+        +   '<div><div style="font-size:12px;color:#6F7693">Assentos usados</div><div style="font-size:16px;font-weight:700;color:#0D1227">'+o.seatsUsed+' / '+o.seat_limit+'</div></div>'
+        +   '<div><div style="font-size:12px;color:#6F7693">Tipo</div><div style="font-size:16px;font-weight:700;color:#0D1227">'+(o.type==='cliente'?'Cliente':'Operador')+'</div></div>'
+        + '</div>';
+    }catch(e){}
+  }
+
+  async function loadTeam(){
+    try{
+      var d = await jget('/api/priora/analysts');
+      var list = d.analysts || [];
+      if(!list.length){ $('team-list').innerHTML='<div style="color:#6F7693;padding:12px 0">Nenhum membro ainda.</div>'; return; }
+      $('team-list').innerHTML = list.map(function(a){
+        var isAdmin = a.role==='admin';
+        var badge = isAdmin
+          ? '<span style="font-size:11px;font-weight:700;color:#4327E6;background:#EEEBFF;padding:3px 9px;border-radius:20px;margin-left:8px">ADMIN</span>'
+          : '<span style="font-size:11px;font-weight:700;color:#0D7A4E;background:#E3F6ED;padding:3px 9px;border-radius:20px;margin-left:8px">ANALISTA</span>';
+        var disabled = a.status==='disabled';
+        var statusTxt = disabled
+          ? '<span style="color:#B91C1C;font-weight:600;font-size:13px">Desativado</span>'
+          : '<span style="color:#1F9D6B;font-weight:600;font-size:13px">Ativo</span>';
+        var action = isAdmin ? '' : (disabled
+          ? '<button type="button" data-uid="'+a.userId+'" data-toggle="active" style="background:#E3F6ED;color:#0D7A4E;font-weight:700;padding:8px 14px;border:none;border-radius:10px;font-size:13px;cursor:pointer">Reativar</button>'
+          : '<button type="button" data-uid="'+a.userId+'" data-toggle="disabled" style="background:#FEF2F2;color:#B91C1C;font-weight:700;padding:8px 14px;border:none;border-radius:10px;font-size:13px;cursor:pointer">Desativar</button>');
+        return '<div style="display:flex;align-items:center;justify-content:space-between;padding:14px 0;border-bottom:1px solid #F0F1F7">'
+          + '<div style="min-width:0"><div style="font-weight:700;color:#161A2E">'+esc(a.fullName||'—')+badge+'</div>'
+          + '<div style="font-size:13.5px;color:#6F7693;margin-top:2px">'+esc(a.email||'—')+'</div></div>'
+          + '<div style="display:flex;align-items:center;gap:14px;flex-shrink:0">'+statusTxt+action+'</div>'
+          + '</div>';
+      }).join('');
+    }catch(e){}
+  }
+
+  async function addAnalyst(){
+    var msg = $('a-msg');
+    var nome = $('a-nome').value.trim();
+    var email = $('a-email').value.trim();
+    var senha = $('a-senha').value;
+    if(!email || !senha){ msg.style.color='#B91C1C'; msg.textContent='Informe e-mail e senha (mín. 8).'; return; }
+    msg.style.color='#6F7693'; msg.textContent='Adicionando…';
+    try{
+      var res = await fetch('/api/priora/analysts',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify({nome:nome,email:email,password:senha})});
+      var d = await res.json().catch(function(){ return {}; });
+      if(res.ok && d.ok){
+        msg.style.color='#1F9D6B'; msg.textContent='Analista adicionado! Senha temporária: '+senha;
+        $('a-nome').value=''; $('a-email').value=''; $('a-senha').value='';
+        loadTeam(); loadOrg();
+      } else { msg.style.color='#B91C1C'; msg.textContent = d.error || 'Falha ao adicionar.'; }
+    }catch(e){ msg.style.color='#B91C1C'; msg.textContent='Falha de conexão.'; }
+  }
+
+  async function toggleStatus(uid, status){
+    try{
+      var res = await fetch('/api/priora/analysts/status',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify({userId:uid,status:status})});
+      if(res.ok){ loadTeam(); }
+    }catch(e){}
+  }
+
+  async function boot(){
+    var me; try{ me = await jget('/api/priora/me'); }catch(e){ me = null; }
+    if(!me || !me.authenticated){ window.location.href='Login.dc.html'; return; }
+    if(!me.org || me.org.role !== 'admin'){
+      $('org-card').innerHTML = '<div style="color:#B91C1C;font-weight:600">Apenas o administrador da empresa acessa este painel. <a href="Priora.dc.html" style="color:#4327E6;font-weight:700">Voltar ao painel</a></div>';
+      if($('invite-card')) $('invite-card').style.display='none';
+      if($('team-card')) $('team-card').style.display='none';
+      return;
+    }
+    loadOrg(); loadTeam();
+    var add = $('a-add'); if(add) add.addEventListener('click', addAnalyst);
+    var tl = $('team-list'); if(tl) tl.addEventListener('click', function(e){
+      var b = e.target && e.target.closest ? e.target.closest('[data-toggle]') : null;
+      if(b){ toggleStatus(b.getAttribute('data-uid'), b.getAttribute('data-toggle')); }
+    });
+  }
+
+  if(document.readyState==='loading') window.addEventListener('DOMContentLoaded', function(){ setTimeout(boot, 300); });
+  else setTimeout(boot, 300);
+})();
+</script>
+</body>
+</html>

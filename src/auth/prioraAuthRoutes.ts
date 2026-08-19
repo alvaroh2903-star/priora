@@ -80,6 +80,52 @@ async function loadOrgContext(userId: string): Promise<OrgContext | null> {
 }
 
 /**
+ * Garante que o usuário tenha uma EMPRESA (cria + o torna ADMIN se ainda não
+ * tiver). O nome vem do que foi informado, senão dos metadados do cadastro,
+ * senão um padrão. Usado no cadastro e no login (repara contas sem empresa).
+ * Plano free por padrão (3 assentos) — a assinatura paga entra como upgrade.
+ */
+async function ensureOrgForUser(
+  userId: string,
+  empresaHint?: string,
+  tipoHint?: string,
+): Promise<OrgContext> {
+  const existing = await loadOrgContext(userId);
+  if (existing) return existing;
+
+  const sb = getSupabase();
+  let empresa = (empresaHint || '').trim();
+  let tipo = normTipo(tipoHint || '');
+  if (!empresa) {
+    const { data: u } = await sb.auth.admin.getUserById(userId);
+    const meta = (u?.user?.user_metadata || {}) as Record<string, unknown>;
+    empresa = String(meta.empresa || '').trim();
+    tipo = normTipo(String(meta.tipo || ''));
+  }
+  if (empresa.length < 2) empresa = 'Minha empresa';
+
+  const { data: org, error: orgErr } = await sb
+    .from('organizations')
+    .insert({ name: empresa, type: tipo, plan: 'free', seat_limit: 3, created_by: userId })
+    .select('id, name')
+    .single();
+  if (orgErr || !org) throw orgErr || new Error('Falha ao criar a empresa.');
+
+  const { error: memErr } = await sb.from('memberships').insert({
+    user_id: userId,
+    org_id: org.id,
+    role: 'admin',
+    status: 'active',
+  });
+  if (memErr) {
+    await sb.from('organizations').delete().eq('id', org.id);
+    throw memErr;
+  }
+  await sb.from('profiles').update({ org_id: org.id }).eq('id', userId);
+  return { orgId: org.id as string, role: 'admin', status: 'active', orgName: org.name as string };
+}
+
+/**
  * Cadastro: cria SÓ a conta (aberto a qualquer um). A EMPRESA ainda NÃO nasce
  * aqui — ela é criada quando o usuário ASSINA um plano (POST /assinar), que é o
  * ponto onde o pagamento entra. Guardamos o nome da empresa/tipo como intenção
@@ -125,13 +171,16 @@ prioraAuthRouter.post('/signup', async (req, res, next) => {
 
     req.session.prioraUserId = userId;
     req.session.prioraEmail = data.user.email || creds.email;
-    req.session.prioraEmpresaIntent = empresa || undefined;
-    req.session.prioraTipoIntent = tipo;
-    // org: null → a UI leva para a tela de planos (a empresa nasce ao assinar).
+
+    // Cria a EMPRESA e torna este usuário ADMIN dela (dono do workspace).
+    const ctx = await ensureOrgForUser(userId, empresa, tipo);
+    req.session.prioraOrgId = ctx.orgId;
+    req.session.prioraOrgName = ctx.orgName || undefined;
+    req.session.prioraRole = ctx.role;
     return res.json({
       ok: true,
       user: { id: userId, email: data.user.email },
-      org: null,
+      org: { id: ctx.orgId, name: ctx.orgName, role: ctx.role },
     });
   } catch (err) {
     next(err);
@@ -230,29 +279,26 @@ prioraAuthRouter.post('/login', async (req, res, next) => {
     }
 
     // Carrega a empresa/papel. Contas desativadas pelo admin não entram.
-    const ctx = await loadOrgContext(data.user.id);
+    let ctx = await loadOrgContext(data.user.id);
     if (ctx?.status === 'disabled') {
       return res.status(403).json({
         error: 'Seu acesso foi desativado pelo administrador da empresa.',
       });
     }
+    // Conta sem empresa (ex.: criada antes deste fluxo) → cria e vira admin.
+    if (!ctx) {
+      ctx = await ensureOrgForUser(data.user.id);
+    }
 
     req.session.prioraUserId = data.user.id;
     req.session.prioraEmail = data.user.email || creds.email;
-    if (ctx) {
-      req.session.prioraOrgId = ctx.orgId;
-      req.session.prioraOrgName = ctx.orgName || undefined;
-      req.session.prioraRole = ctx.role;
-    } else {
-      // Ainda sem empresa: recupera a intenção dos metadados p/ a tela de planos.
-      const meta = (data.user.user_metadata || {}) as Record<string, unknown>;
-      req.session.prioraEmpresaIntent = String(meta.empresa || '') || undefined;
-      req.session.prioraTipoIntent = normTipo(String(meta.tipo || ''));
-    }
+    req.session.prioraOrgId = ctx.orgId;
+    req.session.prioraOrgName = ctx.orgName || undefined;
+    req.session.prioraRole = ctx.role;
     res.json({
       ok: true,
       user: { id: data.user.id, email: data.user.email },
-      org: ctx ? { id: ctx.orgId, name: ctx.orgName, role: ctx.role } : null,
+      org: { id: ctx.orgId, name: ctx.orgName, role: ctx.role },
     });
   } catch (err) {
     next(err);
@@ -288,4 +334,180 @@ prioraAuthRouter.get('/me', (req, res) => {
           tipo: req.session.prioraTipoIntent || 'operador',
         },
   });
+});
+
+/* ============================ Portal do ADMIN ============================ *
+ * Gestão da empresa e da equipe (analistas). Só o admin da empresa acessa.
+ * Ver docs/ARQUITETURA_MULTIEMPRESA.md (Etapa 3: convidar/listar/desativar).
+ * ======================================================================== */
+
+/** Exige um ADMIN logado; devolve o contexto da empresa (ou responde e null). */
+async function requireAdmin(
+  req: import('express').Request,
+  res: import('express').Response,
+): Promise<OrgContext | null> {
+  const userId = req.session.prioraUserId;
+  if (!userId) {
+    res.status(401).json({ error: 'Faça login na Priora primeiro.' });
+    return null;
+  }
+  const ctx = await loadOrgContext(userId);
+  if (!ctx || ctx.role !== 'admin' || ctx.status !== 'active') {
+    res.status(403).json({ error: 'Apenas o administrador da empresa acessa isto.' });
+    return null;
+  }
+  return ctx;
+}
+
+/** Dados da empresa + uso de assentos (cabeçalho do portal). */
+prioraAuthRouter.get('/org', async (req, res, next) => {
+  try {
+    if (!ensureSupabase(res)) return;
+    const userId = req.session.prioraUserId;
+    if (!userId) return res.status(401).json({ error: 'Faça login primeiro.' });
+    const ctx = await loadOrgContext(userId);
+    if (!ctx) return res.json({ org: null });
+    const sb = getSupabase();
+    const { data: org } = await sb
+      .from('organizations')
+      .select('id, name, plan, seat_limit, type')
+      .eq('id', ctx.orgId)
+      .single();
+    const { count } = await sb
+      .from('memberships')
+      .select('user_id', { count: 'exact', head: true })
+      .eq('org_id', ctx.orgId);
+    res.json({ org: org ? { ...org, seatsUsed: count ?? 0, myRole: ctx.role } : null });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Lista a equipe (membros) da empresa. Admin. */
+prioraAuthRouter.get('/analysts', async (req, res, next) => {
+  try {
+    if (!ensureSupabase(res)) return;
+    const ctx = await requireAdmin(req, res);
+    if (!ctx) return;
+    const sb = getSupabase();
+    const { data: members } = await sb
+      .from('memberships')
+      .select('user_id, role, status, created_at')
+      .eq('org_id', ctx.orgId)
+      .order('created_at', { ascending: true });
+    const ids = (members || []).map((m) => m.user_id as string);
+    const { data: profs } = await sb
+      .from('profiles')
+      .select('id, email, full_name')
+      .in('id', ids.length ? ids : ['00000000-0000-0000-0000-000000000000']);
+    const byId = Object.fromEntries((profs || []).map((p) => [p.id as string, p]));
+    const list = (members || []).map((m) => {
+      const p = byId[m.user_id as string];
+      return {
+        userId: m.user_id,
+        role: m.role,
+        status: m.status,
+        email: p?.email || null,
+        fullName: p?.full_name || null,
+      };
+    });
+    res.json({ analysts: list });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Cria um analista na empresa (respeita o limite de assentos). Admin. */
+prioraAuthRouter.post('/analysts', async (req, res, next) => {
+  try {
+    if (!ensureSupabase(res)) return;
+    const ctx = await requireAdmin(req, res);
+    if (!ctx) return;
+    const b = (req.body || {}) as Record<string, unknown>;
+    const email = String(b.email || '').trim().toLowerCase();
+    const password = String(b.password || '');
+    const fullName = String(b.nome ?? b.full_name ?? '').trim();
+    if (!EMAIL_RE.test(email)) return res.status(400).json({ error: 'Informe um e-mail válido.' });
+    if (password.length < 8) {
+      return res.status(400).json({ error: 'A senha precisa de ao menos 8 caracteres.' });
+    }
+
+    const sb = getSupabase();
+    const { data: org } = await sb
+      .from('organizations')
+      .select('seat_limit')
+      .eq('id', ctx.orgId)
+      .single();
+    const { count } = await sb
+      .from('memberships')
+      .select('user_id', { count: 'exact', head: true })
+      .eq('org_id', ctx.orgId);
+    if (org && (count ?? 0) >= org.seat_limit) {
+      return res.status(409).json({
+        error: `Limite do plano atingido (${org.seat_limit} assentos). Faça upgrade para adicionar mais.`,
+      });
+    }
+
+    const { data, error } = await sb.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+      user_metadata: { full_name: fullName },
+    });
+    if (error || !data.user) {
+      const exists = /registered|already|exists|duplicate/i.test(error?.message || '');
+      return res.status(exists ? 409 : 400).json({
+        error: exists ? 'Já existe uma conta com esse e-mail.' : error?.message || 'Falha ao criar o analista.',
+      });
+    }
+    const analystId = data.user.id;
+    const { error: memErr } = await sb.from('memberships').insert({
+      user_id: analystId,
+      org_id: ctx.orgId,
+      role: 'analyst',
+      status: 'active',
+    });
+    if (memErr) {
+      await sb.auth.admin.deleteUser(analystId).catch(() => {});
+      throw memErr;
+    }
+    await sb.from('profiles').upsert({ id: analystId, email, full_name: fullName, org_id: ctx.orgId });
+    res.json({
+      ok: true,
+      analyst: { userId: analystId, email, fullName, role: 'analyst', status: 'active' },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Ativa/desativa um analista da empresa. Admin. */
+prioraAuthRouter.post('/analysts/status', async (req, res, next) => {
+  try {
+    if (!ensureSupabase(res)) return;
+    const ctx = await requireAdmin(req, res);
+    if (!ctx) return;
+    const b = (req.body || {}) as Record<string, unknown>;
+    const targetId = String(b.userId || '');
+    const status = String(b.status || '');
+    if (!['active', 'disabled'].includes(status)) {
+      return res.status(400).json({ error: 'status inválido (use active|disabled).' });
+    }
+    const sb = getSupabase();
+    const { data: m } = await sb
+      .from('memberships')
+      .select('role, org_id')
+      .eq('user_id', targetId)
+      .maybeSingle();
+    if (!m || m.org_id !== ctx.orgId) {
+      return res.status(404).json({ error: 'Analista não encontrado nesta empresa.' });
+    }
+    if (m.role === 'admin') {
+      return res.status(400).json({ error: 'Não é possível desativar um administrador.' });
+    }
+    await sb.from('memberships').update({ status }).eq('user_id', targetId);
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
 });

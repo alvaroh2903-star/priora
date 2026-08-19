@@ -197,6 +197,17 @@ class Component extends DCLogic {
     };
   }
 
+  // Botão flutuante "Painel Admin" — só para o admin da empresa.
+  function addAdminButton(){
+    if (document.getElementById('priora-admin-btn')) return;
+    var a = document.createElement('a');
+    a.id = 'priora-admin-btn';
+    a.href = 'AdminPanel.dc.html';
+    a.textContent = '⚙ Painel Admin';
+    a.style.cssText = 'position:fixed;right:20px;bottom:20px;z-index:9998;background:#0D1227;color:#fff;text-decoration:none;padding:12px 18px;border-radius:12px;font-family:sans-serif;font-weight:700;font-size:14px;box-shadow:0 12px 30px -8px rgba(13,18,39,.5)';
+    document.body.appendChild(a);
+  }
+
   function check(){
     // 1) Exige a CONTA PRIORA logada (o login por e-mail/senha da landing).
     //    Sem ela, o painel não é acessível → volta para a tela de login.
@@ -204,6 +215,8 @@ class Component extends DCLogic {
       .then(function(r){ return r.json(); })
       .then(function(d){
         if (!d || !d.authenticated) { window.location.href = 'Login.dc.html'; return; }
+        // Admin da empresa ganha o atalho para o Painel Admin.
+        if (d.org && d.org.role === 'admin') addAdminButton();
         // 2) Logado na Priora. A Microsoft é a fonte de dados: se não estiver
         //    conectada, sugere conectar (aviso dispensável, não um muro).
         return fetch('/api/me', { credentials:'same-origin' })
