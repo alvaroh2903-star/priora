@@ -267,7 +267,7 @@ class Component extends DCLogic {
         try{
           const res=await fetch('/api/priora/signup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:em,password:x.pw,nome:x.name.trim(),empresa:x.org.trim(),tipo:x.role})});
           const data=await res.json().catch(()=>({}));
-          if(res.ok && data.ok){ this.toast('Conta criada! Escolha seu plano…'); setTimeout(()=>{ window.location.href='Planos.dc.html'; },1000); }
+          if(res.ok && data.ok){ this.toast('Conta criada! Entrando…'); setTimeout(()=>{ window.location.href='Priora.dc.html'; },1000); }
           else { this.setState({carregando:false}); this.toast(data.error||'Não foi possível criar a conta.'); }
         }catch(e){ this.setState({carregando:false}); this.toast('Falha de conexão. Tente novamente.'); }
       },

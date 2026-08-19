@@ -221,8 +221,9 @@ class Component extends DCLogic {
             body: JSON.stringify({ email: em, password: pw }),
           });
           const data = await res.json().catch(() => ({}));
-          // Com empresa → painel; sem empresa (não assinou) → escolher plano.
-          if (res.ok && data.ok) { window.location.href = data.org ? 'Priora.dc.html' : 'Planos.dc.html'; }
+          // Entra direto no painel; conectar Microsoft (fonte de dados) é o passo
+          // seguinte, dentro do painel. (A tela de planos entra depois, opcional.)
+          if (res.ok && data.ok) { window.location.href = 'Priora.dc.html'; }
           else { this.setState({ carregando: false, erro: data.error || 'E-mail ou senha inválidos.' }); }
         } catch (err) { this.setState({ carregando: false, erro: 'Falha de conexão. Tente novamente.' }); }
       },
