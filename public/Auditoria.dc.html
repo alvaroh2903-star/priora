@@ -343,37 +343,42 @@ class Component extends DCLogic {
 
   toast(msg,persist){ clearTimeout(this._t); this.setState({toast:msg}); if(!persist){ var self=this; this._t=setTimeout(function(){self.setState({toast:''});},2800); } }
   relTime(iso){ try{ var d=new Date(iso).getTime(); if(isNaN(d))return '—'; var s=Math.max(0,(Date.now()-d)/1000); if(s<90)return 'há instantes'; if(s<5400)return 'há '+Math.round(s/60)+' min'; if(s<172800)return 'há '+Math.round(s/3600)+' h'; return 'há '+Math.round(s/86400)+' d'; }catch(e){ return '—'; } }
-  statusKey(r){ if(r==='Consistente')return 'ok'; if(r==='Divergência')return 'crit'; if(r==='Validação Humana')return 'manual'; if(r==='Informativo')return 'info'; return 'na'; }
+  statusKey(r){ if(r==='Consistente')return 'ok'; if(r==='Divergência'||r==='Divergencia')return 'crit'; if(r==='Validação Humana'||r==='ValidacaoHumana')return 'manual'; if(r==='Informativo')return 'info'; return 'na'; }
   anchorId(field){ return 'anchor-'+String(field).replace(/[^a-zA-Z0-9]/g,'_'); }
 
   onImport(){ if(this.state.procStatus==='loading')return; var self=this; this.toast('Importando do Outlook…',true); this.loadProcessos(function(ps){ self.toast('Importação concluída — '+ps.length+' processos encontrados.'); }); }
 
-  firstPlaybookKey(d){ var pbs=(d&&d.resultado&&d.resultado.playbooksExecutados)||[]; if(pbs.indexOf('Pré-Alerta')>=0)return 'prealerta'; if(pbs.indexOf('CE Mercante')>=0)return 'cemaster'; return 'prealerta'; }
-  docFiles(d){ var da=(d&&d.docsAuditados)||[]; return [da[0]||'MBL.pdf', da[1]||'HBL.pdf']; }
+  firstPlaybookKey(d){ return 'prealerta'; }
+  docFiles(d){ var m=(d&&d.master)||'MBL.pdf'; var h=(d&&d.houses&&d.houses[0])||'HBL.pdf'; return [m, h]; }
 
   startAudit(){
     var self=this, code=this.state.selected; if(!code)return;
     this.setState({ running:true }); this.toast('Construindo a auditoria… lendo os documentos.',true);
-    fetch('/api/auditoria/'+encodeURIComponent(code)+'/auditoria',{credentials:'same-origin'})
+    fetch('/api/auditoria/'+encodeURIComponent(code)+'/pre-alerta',{credentials:'same-origin'})
       .then(function(r){ return r.json().catch(function(){return null;}).then(function(j){ if(!r.ok) throw new Error((j&&j.error)||('HTTP '+r.status)); return j; }); })
       .then(function(d){ var files=self.docFiles(d);
         self.setState({ auditData:d, running:false, screen:'mesa', ran:true, playbook:self.firstPlaybookKey(d), openGroup:null, openEv:null, mbl:files[0], hbl:files[1], page:1 });
-        var n=(d.resultado&&d.resultado.resumo&&d.resultado.resumo.total)||0; self.toast('Mesa de auditoria pronta — '+n+' verificações.'); })
+        if(d.semDocumentos){ self.toast('Nenhum MBL/HBL legível encontrado neste processo.'); }
+        else { var n=(d.evidencias&&d.evidencias.length)||0; self.toast('Mesa de auditoria pronta — '+n+' verificações.'); } })
       .catch(function(e){ self.setState({ running:false }); self.toast('Falha na auditoria: '+String(e&&e.message||e)); });
   }
   reprocessar(){
     var self=this, code=this.state.selected; if(!code||this.state.running)return;
     this.setState({ running:true }); this.toast('Reprocessando…',true);
-    fetch('/api/auditoria/'+encodeURIComponent(code)+'/auditoria?refresh=1',{credentials:'same-origin'})
+    fetch('/api/auditoria/'+encodeURIComponent(code)+'/pre-alerta?refresh=1',{credentials:'same-origin'})
       .then(function(r){ return r.json().catch(function(){return null;}).then(function(j){ if(!r.ok) throw new Error((j&&j.error)||('HTTP '+r.status)); return j; }); })
-      .then(function(d){ self.setState({ auditData:d, running:false, ran:true }); var n=(d.resultado&&d.resultado.resumo&&d.resultado.resumo.total)||0; self.toast('Auditoria reprocessada — '+n+' verificações.'); })
+      .then(function(d){ self.setState({ auditData:d, running:false, ran:true }); var n=(d.evidencias&&d.evidencias.length)||0; self.toast('Auditoria reprocessada — '+n+' verificações.'); })
       .catch(function(e){ self.setState({ running:false }); self.toast('Falha: '+String(e&&e.message||e)); });
   }
 
   filteredEvs(){
-    var d=this.state.auditData; if(!d||!d.resultado)return [];
-    var tab=this.PLAYBOOKS.find(function(p){return p.key===this.state.playbook;}.bind(this))||{}; var pb=tab.pb;
-    return (d.resultado.evidencias||[]).filter(function(e){ return pb ? e.playbook===pb : false; });
+    var d=this.state.auditData; if(!d)return [];
+    // O motor novo (/pre-alerta) devolve as evidências já achatadas e ordenadas.
+    // Só o playbook Pré-Alerta tem motor determinístico nesta fase; as demais
+    // abas ficam vazias (placeholders). Removemos as linhas de consolidação de
+    // família (roll-up já refletido no veredito) para a Mesa mostrar só comparações.
+    if(this.state.playbook!=='prealerta')return [];
+    return (d.evidencias||[]).filter(function(e){ return String(e.motivo||'').indexOf('Consolidação')!==0; });
   }
   rowsFrom(evs){
     var self=this;
@@ -397,13 +402,22 @@ class Component extends DCLogic {
   zoomOut(){ this.setState(function(s){return {zoom:Math.max(70,s.zoom-10)};}); }
 
   buildVerdict(){
-    var d=this.state.auditData; var cl=(d&&d.clara)||null;
-    if(cl && cl.linhas && cl.linhas.length){ return cl.linhas.join(' ') + (cl.proximoPasso?(' Próximo passo: '+cl.proximoPasso):''); }
-    return 'Auditoria executada.';
+    var d=this.state.auditData, self=this; if(!d)return 'Auditoria executada.';
+    if(d.semDocumentos) return 'Nenhum par MBL × HBL legível foi encontrado para este processo — anexe os conhecimentos e reprocesse.';
+    // Veredito determinístico (sem chamada de IA): consolida o estado do motor +
+    // as contagens por status. Mantém a economia de IA (a Clara só entra depois
+    // para redigir e-mail sob demanda, não para resumir toda auditoria).
+    var evs=this.filteredEvs(); var crit=0,man=0,ok=0;
+    evs.forEach(function(e){ var k=self.statusKey(e.resultado); if(k==='crit')crit++; else if(k==='manual')man++; else if(k==='ok')ok++; });
+    var r=d.resultado;
+    if(r==='Divergencia'||r==='Divergência') return 'Pré-Alerta com '+crit+' divergência(s) que exigem correção antes da emissão do CE Mercante'+(man?(' e '+man+' ponto(s) para validação humana'):'')+'.';
+    if(r==='ValidacaoHumana'||r==='Validação Humana') return 'Sem divergências objetivas, porém '+man+' ponto(s) dependem de confirmação humana (leitura incerta ou sem correspondência canônica).';
+    if(r==='NaoAvaliada'||r==='Não avaliada') return 'Não foi possível avaliar o Pré-Alerta — documentos ausentes ou ilegíveis nas famílias avaliadas.';
+    return 'Pré-Alerta consistente: '+ok+' verificação(ões) conferem entre MBL e HBL, sem divergências.';
   }
   emailSugerido(){
-    var d=this.state.auditData; if(!d||!d.resultado)return '';
-    var divs=[]; (d.resultado.evidencias||[]).forEach(function(e){ if(e.resultado==='Divergência'){ divs.push('- '+e.campo+(e.container?(' (container '+e.container+')'):'')+': '+e.motivo); } });
+    var d=this.state.auditData; if(!d)return '';
+    var divs=[]; (d.evidencias||[]).forEach(function(e){ if((e.resultado==='Divergência'||e.resultado==='Divergencia') && String(e.motivo||'').indexOf('Consolidação')!==0){ divs.push('- '+e.campo+(e.container?(' (container '+e.container+')'):'')+': '+e.motivo); } });
     return 'Prezados,\n\nApós a conferência do processo '+(d.processo||'')+', identificamos:\n\n'+(divs.length?divs.join('\n'):'- (sem divergências objetivas)')+'\n\nPor gentileza confirmem/corrijam antes da emissão do CE Mercante.\n\nDesde já agradecemos.';
   }
 
