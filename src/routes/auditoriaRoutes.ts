@@ -4,6 +4,7 @@ import {
   searchLogisticsMessages,
   listRecentSummaries,
   getFullMessage,
+  getForwardedFileAttachments,
 } from '../graph/graphService';
 import { config } from '../config';
 import { isAiConfigured } from '../ai/geminiClient';
@@ -11,9 +12,10 @@ import { extrairDocumento } from '../auditoria/docExtractor';
 import { executarAuditoria, DocumentoExtraido, DocTipo } from '../auditoria/playbooks';
 import { resumirAuditoria } from '../auditoria/auditClara';
 import {
-  extrairDocPreAlerta,
   montarOperacao,
-  docIlegivelPreAlerta,
+  baseDoBL,
+  extrairDocPreAlertaMultiplo,
+  PaginaDoc,
 } from '../auditoria/preAlerta/extracaoPreAlerta';
 import { executarPreAlerta, DocPreAlerta, TipoDoc } from '../auditoria/preAlerta';
 
@@ -193,12 +195,20 @@ async function buildProcessos(accessToken: string): Promise<{ processos: Process
       withTimeout(getFullMessage(accessToken, m.id), 9000, 'getFull').catch(() => null),
     ),
   );
+  // Anexos-arquivo ANINHADOS em e-mails encaminhados como anexo (itemAttachment).
+  // Alinhado por índice com `comAnexo`/`fulls`. Defensivo: falha vira [].
+  const aninhadosPorMsg = await Promise.all(
+    comAnexo.map((m) =>
+      withTimeout(getForwardedFileAttachments(accessToken, m.id), 12000, 'nested').catch(() => []),
+    ),
+  );
 
   const porProcesso = new Map<string, ProcessoAuditoria>();
   const agenteDe = (m: { from?: { emailAddress: { name?: string; address: string } } }) =>
     m.from?.emailAddress.name || m.from?.emailAddress.address || '(desconhecido)';
 
-  for (const full of fulls) {
+  for (let i = 0; i < fulls.length; i++) {
+    const full = fulls[i];
     if (!full) continue;
     const texto = `${full.subject || ''}\n${full.body?.content || full.bodyPreview || ''}`;
     let procs = extractProcesses(texto);
@@ -207,10 +217,15 @@ async function buildProcessos(accessToken: string): Promise<{ processos: Process
       if (!resolvido) continue; // sem IM e sem referência que resolva → ignora
       procs = [resolvido];
     }
-    const atts = (full.attachments || []).filter((a) =>
-      isDocumentAttachment(a.name, a.contentType, a.isInline),
-    );
-    if (atts.length === 0) continue;
+    // Anexos-arquivo diretos + os aninhados em e-mails encaminhados como anexo.
+    const diretos = (full.attachments || [])
+      .filter((a) => isDocumentAttachment(a.name, a.contentType, a.isInline))
+      .map((a) => ({ name: a.name, id: a.id, contentType: a.contentType }));
+    const aninhados = (aninhadosPorMsg[i] || [])
+      .filter((a) => isDocumentAttachment(a.name, a.contentType, a.isInline))
+      .map((a) => ({ name: a.name, id: a.id, contentType: a.contentType }));
+    const anexos = [...diretos, ...aninhados];
+    if (anexos.length === 0) continue;
 
     const basesVistas = new Set<string>();
     for (const p of procs) {
@@ -233,7 +248,7 @@ async function buildProcessos(accessToken: string): Promise<{ processos: Process
         porProcesso.set(base, entry);
       }
       if (/-\d{2}$/.test(p) && !/-\d{2}$/.test(entry.processo)) entry.processo = p;
-      for (const a of atts) {
+      for (const a of anexos) {
         const tipo = classifyDoc(a.name);
         entry.docs.push({
           nome: a.name,
@@ -501,24 +516,70 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
       return res.json(cached.payload);
     }
 
-    // OCR + reclassificação (nome concreto MBL/HBL prevalece; senão, conteúdo).
+    // Agrupa PÁGINAS do mesmo conhecimento (ex.: "... MBL-1/2/3.jpg") pela base
+    // do nome do arquivo → UMA chamada de OCR por BL (economia de IA + leitura
+    // consolidada da folha inteira, em vez de uma página solta).
+    const grupos = new Map<string, DocRef[]>();
+    for (const d of candidatos) {
+      const k = baseDoBL(d.nome);
+      const g = grupos.get(k);
+      if (g) g.push(d);
+      else grupos.set(k, [d]);
+    }
+
+    // OCR por grupo (multi-página) + reclassificação (nome concreto prevalece;
+    // senão, o tipo detectado pelo conteúdo). Máx. 6 grupos por processo.
     const extraidos = await Promise.all(
-      candidatos.map(async (d) => {
-        const hint: TipoDoc = d.tipo === 'HBL' ? 'HBL' : 'MBL';
+      Array.from(grupos.values()).slice(0, 6).map(async (grupo) => {
+        const temHBL = grupo.some((d) => d.tipo === 'HBL');
+        const temMBL = grupo.some((d) => d.tipo === 'MBL');
+        const hint: TipoDoc = temHBL && !temMBL ? 'HBL' : 'MBL';
+        const paginas: PaginaDoc[] = grupo.map((d) => ({
+          messageId: d.emailId,
+          attachmentId: d.attachmentId,
+          nome: d.nome,
+        }));
         const { doc, tipoDetectado } = await withTimeout(
-          extrairDocPreAlerta(req.accessToken!, d.emailId, d.attachmentId, d.nome, hint),
-          40000,
+          extrairDocPreAlertaMultiplo(req.accessToken!, paginas, hint),
+          60000,
           'ocr',
-        ).catch(() => ({ doc: docIlegivelPreAlerta(d.nome, hint), tipoDetectado: null }));
+        ).catch(() => ({ doc: null as DocPreAlerta | null, tipoDetectado: null }));
+        if (!doc) return null;
         let tipoFinal: TipoDoc | null = null;
-        if (d.tipo === 'MBL' || d.tipo === 'HBL') tipoFinal = d.tipo;
+        if (temHBL && !temMBL) tipoFinal = 'HBL';
+        else if (temMBL && !temHBL) tipoFinal = 'MBL';
+        else if (temHBL || temMBL) tipoFinal = tipoDetectado === 'HBL' ? 'HBL' : 'MBL';
         else if (tipoDetectado === 'MBL' || tipoDetectado === 'HBL') tipoFinal = tipoDetectado;
-        return tipoFinal ? ({ ...doc, tipo: tipoFinal } as DocPreAlerta) : null;
+        return tipoFinal ? ({ ...doc, tipo: tipoFinal, nome: grupo[0].nome } as DocPreAlerta) : null;
       }),
     );
     const docs = extraidos.filter((d): d is DocPreAlerta => d !== null);
 
     const op = montarOperacao(proc.processo, docs);
+
+    // Guarda: o Pré-Alerta é MBL × HBL. Sem Master OU sem nenhum House não há par
+    // a conferir — não fabrica "consistente"/"0 kg"; sinaliza o que falta.
+    if (!op.master || op.houses.length === 0) {
+      const faltando: string[] = [];
+      if (!op.master) faltando.push('MBL (Master BL)');
+      if (op.houses.length === 0) faltando.push('HBL (House BL)');
+      const payloadFalta = {
+        processo: proc.processo,
+        cliente: proc.cliente,
+        master: op.master ? op.master.nome : null,
+        houses: op.houses.map((h) => h.nome),
+        ilegiveis: docs.filter((d) => !d.legivel).map((d) => d.nome),
+        faltando,
+        semParMBLHBL: true,
+        resultado: 'NaoAvaliada' as const,
+        familias: [],
+        evidencias: [],
+        data: proc.data,
+      };
+      preAlertaCache.set(alvoBase, { sig, payload: payloadFalta });
+      return res.json(payloadFalta);
+    }
+
     const resultado = executarPreAlerta(op);
 
     const payload = {

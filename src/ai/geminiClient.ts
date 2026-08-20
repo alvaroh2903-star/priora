@@ -76,8 +76,23 @@ export async function generateStructuredFromDocument<T extends z.ZodType>(
   doc: { data: string; mimeType: string },
   userText: string,
 ): Promise<z.infer<T>> {
+  return generateStructuredFromDocuments(schema, systemInstruction, [doc], userText);
+}
+
+/**
+ * OCR + extração por VISÃO de um documento com VÁRIAS PÁGINAS/IMAGENS numa
+ * ÚNICA chamada. Um Bill of Lading costuma chegar como 2–3 imagens (páginas)
+ * separadas; enviamos todas juntas para o Gemini ler como UM só conhecimento —
+ * uma chamada de IA em vez de uma por página (economia + leitura consolidada).
+ */
+export async function generateStructuredFromDocuments<T extends z.ZodType>(
+  schema: T,
+  systemInstruction: string,
+  docs: Array<{ data: string; mimeType: string }>,
+  userText: string,
+): Promise<z.infer<T>> {
   const contents = [
-    { inlineData: { data: doc.data, mimeType: doc.mimeType } },
+    ...docs.map((d) => ({ inlineData: { data: d.data, mimeType: d.mimeType } })),
     { text: userText },
   ];
   return generateStructuredFromContents(schema, systemInstruction, contents as unknown as string);

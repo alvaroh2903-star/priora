@@ -284,6 +284,11 @@ export async function getAttachmentContent(
   messageId: string,
   attachmentId: string,
 ): Promise<AttachmentContent | null> {
+  // Id composto "itemAttId::nestedId" → anexo aninhado dentro de um e-mail
+  // encaminhado como anexo (itemAttachment). Delega para o leitor aninhado.
+  if (attachmentId.includes('::')) {
+    return getNestedAttachmentContent(accessToken, messageId, attachmentId);
+  }
   const client = getGraphClient(accessToken);
   const att: any = await client
     .api(`/me/messages/${messageId}/attachments/${attachmentId}`)
@@ -294,6 +299,100 @@ export async function getAttachmentContent(
     contentType: att.contentType || 'application/octet-stream',
     contentBytes: att.contentBytes as string,
   };
+}
+
+/**
+ * Metadados de um anexo-arquivo ANINHADO dentro de um e-mail que foi
+ * encaminhado como anexo (itemAttachment). O `id` é COMPOSTO
+ * ("itemAttachmentId::nestedAttachmentId") para que `getAttachmentContent`
+ * saiba baixá-lo depois pelo caminho aninhado.
+ */
+export interface NestedAttachmentMeta {
+  id: string; // "itemAttId::nestedId"
+  name: string;
+  contentType: string;
+  size: number;
+  isInline: boolean;
+  /** Assunto do e-mail encaminhado (origem do anexo) — só p/ diagnóstico. */
+  origem: string;
+}
+
+/**
+ * Lê os anexos-arquivo que estão DENTRO de e-mails encaminhados como anexo
+ * (itemAttachment) de uma mensagem. O pipeline de auditoria só enxergava os
+ * anexos do e-mail de topo; couriers costumam encaminhar o e-mail do armador
+ * (com o BL) como anexo, deixando o PDF "escondido" um nível abaixo.
+ * Percorre 1 nível: lista os itemAttachments e expande o item de cada um para
+ * pegar seus anexos-arquivo. Defensivo: qualquer falha → [] (não quebra a
+ * listagem de processos).
+ */
+export async function getForwardedFileAttachments(
+  accessToken: string,
+  messageId: string,
+): Promise<NestedAttachmentMeta[]> {
+  try {
+    const client = getGraphClient(accessToken);
+    // Lista só metadados (sem contentBytes). O @odata.type vem junto por ser
+    // uma coleção polimórfica — é assim que identificamos os itemAttachment.
+    const lista: any = await client
+      .api(`/me/messages/${messageId}/attachments`)
+      .select('id,name,contentType,size,isInline')
+      .get();
+    const itemAtts = ((lista?.value as any[]) || []).filter(
+      (a) => a['@odata.type'] === '#microsoft.graph.itemAttachment',
+    );
+    const out: NestedAttachmentMeta[] = [];
+    for (const ia of itemAtts) {
+      const full: any = await client
+        .api(`/me/messages/${messageId}/attachments/${ia.id}`)
+        .expand('microsoft.graph.itemAttachment/item')
+        .get();
+      const item = full?.item;
+      const origem = item?.subject || ia?.name || '';
+      for (const nested of (item?.attachments as any[]) || []) {
+        if (nested.isInline) continue;
+        // Só anexos-arquivo (ignora e-mails aninhados em 2º nível por ora).
+        if (nested['@odata.type'] && nested['@odata.type'] !== '#microsoft.graph.fileAttachment') continue;
+        out.push({
+          id: `${ia.id}::${nested.id}`,
+          name: nested.name || 'documento',
+          contentType: nested.contentType || 'application/octet-stream',
+          size: nested.size || 0,
+          isInline: false,
+          origem,
+        });
+      }
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/** Baixa o conteúdo de um anexo aninhado (id composto "itemAttId::nestedId"). */
+async function getNestedAttachmentContent(
+  accessToken: string,
+  messageId: string,
+  compositeId: string,
+): Promise<AttachmentContent | null> {
+  try {
+    const [itemAttId, nestedId] = compositeId.split('::');
+    if (!itemAttId || !nestedId) return null;
+    const client = getGraphClient(accessToken);
+    const full: any = await client
+      .api(`/me/messages/${messageId}/attachments/${itemAttId}`)
+      .expand('microsoft.graph.itemAttachment/item')
+      .get();
+    const nested = ((full?.item?.attachments as any[]) || []).find((a) => a.id === nestedId);
+    if (!nested || !nested.contentBytes) return null;
+    return {
+      name: nested.name || 'documento',
+      contentType: nested.contentType || 'application/octet-stream',
+      contentBytes: nested.contentBytes as string,
+    };
+  } catch {
+    return null;
+  }
 }
 
 /** Busca todas as mensagens completas de uma conversa (thread), em ordem cronológica. */

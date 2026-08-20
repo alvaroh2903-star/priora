@@ -8,7 +8,7 @@
  * Defensivo: qualquer falha vira documento ilegível (6.3 / degradar com elegância).
  */
 import { z } from 'zod/v4';
-import { generateStructuredFromDocument } from '../../ai/geminiClient';
+import { generateStructuredFromDocument, generateStructuredFromDocuments } from '../../ai/geminiClient';
 import { getAttachmentContent } from '../../graph/graphService';
 import { ContainerDoc, DocPreAlerta, Operacao, TipoDoc } from './modelo';
 
@@ -115,6 +115,78 @@ export function mapExtracaoParaDoc(ai: Extracao, nome: string, tipo: TipoDoc): D
     placeOfDelivery: ai.placeOfDelivery,
     transbordos: ai.transbordos || [],
   };
+}
+
+/**
+ * Chave de agrupamento de PÁGINAS do mesmo conhecimento. Um BL costuma chegar
+ * como várias imagens ("... MBL-1.jpg", "... MBL-2.jpg", "... MBL-3.jpg"): todas
+ * compartilham a mesma base ("... mbl") e só diferem no marcador de página no
+ * fim. Removendo esse marcador, as páginas caem no mesmo grupo e são lidas numa
+ * única passada de OCR. PURO (testável). Não agrupa documentos distintos: nomes
+ * com identificadores longos (ex.: "SE26071000008") não têm marcador de página
+ * curto no fim e permanecem sozinhos.
+ */
+export function baseDoBL(nome: string): string {
+  let s = (nome || '').toLowerCase().trim();
+  s = s.replace(/\.[a-z0-9]{1,5}$/, ''); // remove extensão
+  let prev = '';
+  while (s !== prev) {
+    prev = s;
+    // "página 3", "pag. 3", "page3", "folha 3", "fl 3", "(3)" no fim. Exige
+    // separador/início antes da palavra (o "_" conta como separador aqui, ao
+    // contrário do \b do regex, que trata "_" como caractere de palavra).
+    s = s.replace(/(?:^|[\s._-])\(?(?:pg|pag|pagina|páginas?|paginas?|page|folha|fls?)\.?\s*\d{1,3}\)?$/i, '');
+    // "-3", "_3", " 3" (marcador curto de página) — só até 3 dígitos, com separador
+    s = s.replace(/[\s._-]+\d{1,3}$/, '');
+  }
+  return s.replace(/[\s._-]+$/, '').trim();
+}
+
+/** Página de um conhecimento a extrair (um anexo — direto ou aninhado). */
+export interface PaginaDoc {
+  messageId: string;
+  attachmentId: string;
+  nome: string;
+}
+
+/**
+ * Extrai um conhecimento que pode estar dividido em VÁRIAS páginas/imagens.
+ * Baixa os bytes de cada página e manda TODAS numa única chamada de OCR (visão),
+ * devolvendo um só `DocPreAlerta` consolidado + o tipo detectado pelo conteúdo.
+ * Defensivo: páginas que falham no download são ignoradas; se nenhuma vier,
+ * documento ilegível.
+ */
+export async function extrairDocPreAlertaMultiplo(
+  accessToken: string,
+  paginas: PaginaDoc[],
+  tipo: TipoDoc,
+): Promise<{ doc: DocPreAlerta; tipoDetectado: Extracao['tipoDetectado'] | null }> {
+  const nome = paginas[0]?.nome ?? 'documento';
+  try {
+    const partes: Array<{ data: string; mimeType: string }> = [];
+    for (const p of paginas) {
+      const content = await getAttachmentContent(accessToken, p.messageId, p.attachmentId);
+      if (!content) continue;
+      const mime = mimeSuportado(content.contentType, content.name);
+      if (!mime) continue;
+      partes.push({ data: content.contentBytes, mimeType: mime });
+    }
+    if (partes.length === 0) return { doc: docIlegivelPreAlerta(nome, tipo), tipoDetectado: null };
+
+    const dica =
+      partes.length > 1
+        ? `As ${partes.length} imagens/PDFs anexados são PÁGINAS do MESMO conhecimento — leia todas como um único documento e consolide os campos.`
+        : 'Extraia os campos do documento anexo.';
+    const ai = await generateStructuredFromDocuments(
+      ExtractionSchema,
+      SYSTEM_PROMPT,
+      partes,
+      `Tipo esperado deste documento (dica): ${tipo}. ${dica}`,
+    );
+    return { doc: mapExtracaoParaDoc(ai, nome, tipo), tipoDetectado: ai.tipoDetectado ?? null };
+  } catch {
+    return { doc: docIlegivelPreAlerta(nome, tipo), tipoDetectado: null };
+  }
 }
 
 /** Agrupa os documentos extraídos em 1 Master × N Houses. PURO (testável). */

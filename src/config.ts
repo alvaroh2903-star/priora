@@ -151,10 +151,13 @@ export const config = {
     apiKey: (process.env.ROCKET_API_KEY || '').trim(),
     workspaceId: (process.env.ROCKET_WORKSPACE_ID || '').trim(),
   },
-  /** Palavras-chave usadas para filtrar e-mails de logística/comércio exterior. */
+  /** Palavras-chave usadas para filtrar e-mails de logística/comércio exterior.
+   *  Inclui os assuntos que os couriers usam de fato (ex.: "Pré-Alerta") e os
+   *  tipos de conhecimento (MBL/HBL) para que os e-mails com os BLs em anexo
+   *  sejam encontrados pela busca do Graph. */
   logisticsKeywords: (
     process.env.LOGISTICS_KEYWORDS ||
-    'embarque,embarcação,contêiner,conteiner,container,courier,courrier,navio,porto,frete,carga,BL,bill of lading,conhecimento de embarque,despacho,desembaraço,importação,exportação,armador,booking,AWB'
+    'embarque,embarcação,contêiner,conteiner,container,courier,courrier,navio,porto,frete,carga,BL,bill of lading,conhecimento de embarque,despacho,desembaraço,importação,exportação,armador,booking,AWB,pré-alerta,pre-alerta,pré alerta,pre alerta,prealerta,HBL,MBL,house bill of lading,master bill of lading,demurrage,debit note,nota de débito'
   )
     .split(',')
     .map((k) => k.trim())

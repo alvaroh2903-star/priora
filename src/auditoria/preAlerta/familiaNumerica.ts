@@ -68,9 +68,12 @@ export function familiaNumericaPorContainer(
   // .2 — Total: soma dos Houses = total do Master
   const totalMaster = op.master ? cfg.valorTotal(op.master) : null;
   const totais = op.houses.map((h) => cfg.valorTotal(h));
-  const soma = totais.every((v) => v != null)
-    ? (totais as number[]).reduce((a, b) => a + b, 0)
-    : null;
+  // Sem Houses não há soma a comparar (evita "Σ Houses = 0" enganoso quando a
+  // operação vem sem HBL). Só soma quando há House(s) e todos têm o valor.
+  const soma =
+    op.houses.length > 0 && totais.every((v) => v != null)
+      ? (totais as number[]).reduce((a, b) => a + b, 0)
+      : null;
   const valTotal: Evidencia['valores'] = [
     { doc: 'MBL', valor: fmt(totalMaster, cfg.unidade) },
     { doc: 'Σ Houses', valor: fmt(soma, cfg.unidade) },

@@ -359,6 +359,7 @@ class Component extends DCLogic {
       .then(function(d){ var files=self.docFiles(d);
         self.setState({ auditData:d, running:false, screen:'mesa', ran:true, playbook:self.firstPlaybookKey(d), openGroup:null, openEv:null, mbl:files[0], hbl:files[1], page:1 });
         if(d.semDocumentos){ self.toast('Nenhum MBL/HBL legível encontrado neste processo.'); }
+        else if(d.semParMBLHBL){ self.toast('Faltando '+((d.faltando&&d.faltando.join(' e '))||'documento(s)')+' — o Pré-Alerta compara MBL × HBL.'); }
         else { var n=(d.evidencias&&d.evidencias.length)||0; self.toast('Mesa de auditoria pronta — '+n+' verificações.'); } })
       .catch(function(e){ self.setState({ running:false }); self.toast('Falha na auditoria: '+String(e&&e.message||e)); });
   }
@@ -404,6 +405,7 @@ class Component extends DCLogic {
   buildVerdict(){
     var d=this.state.auditData, self=this; if(!d)return 'Auditoria executada.';
     if(d.semDocumentos) return 'Nenhum par MBL × HBL legível foi encontrado para este processo — anexe os conhecimentos e reprocesse.';
+    if(d.semParMBLHBL){ var f=(d.faltando&&d.faltando.join(' e '))||'documento(s)'; return 'O Pré-Alerta compara Master (MBL) × House (HBL). Faltando '+f+' neste processo — anexe o(s) conhecimento(s) e reprocesse. (Anexos como Debit Note não substituem o HBL.)'; }
     // Veredito determinístico (sem chamada de IA): consolida o estado do motor +
     // as contagens por status. Mantém a economia de IA (a Clara só entra depois
     // para redigir e-mail sob demanda, não para resumir toda auditoria).
@@ -503,7 +505,7 @@ class Component extends DCLogic {
       notRun:!st.ran, hasRun:st.ran,
       emptyHint:'Selecione um processo e clique em Iniciar Auditoria.',
       sum:{ total:String(rows.length), ok:String(cOk), crit:String(cCrit), manual:String(cMan) },
-      groups:groups, pendencias:pendencias, hasPend:pendencias.length>0, noPend:(st.ran&&pendencias.length===0), pendCount:String(pendencias.length),
+      groups:groups, pendencias:pendencias, hasPend:pendencias.length>0, noPend:(st.ran&&pendencias.length===0&&rows.length>0&&!(st.auditData&&(st.auditData.semDocumentos||st.auditData.semParMBLHBL))), pendCount:String(pendencias.length),
       verdict:this.buildVerdict(),
       genEmail:function(){ try{ navigator.clipboard.writeText(self.emailSugerido()); }catch(e){} self.toast('E-mail sugerido gerado (rascunho copiado) com '+cCrit+' divergência(s).'); },
       alreadyAsked:function(){ self.toast('Registrado: solicitação ao agente já enviada.'); },

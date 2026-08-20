@@ -17,7 +17,7 @@ import { familiaV008 } from './v008Lacres';
 import { familiaV009 } from './v009Portos';
 import { familiaV012, ncmCompativeis } from './v012Ncm';
 import { equivalenciaPorto, resolveUnlocode } from './unlocode';
-import { Extracao, mapExtracaoParaDoc, montarOperacao } from './extracaoPreAlerta';
+import { Extracao, mapExtracaoParaDoc, montarOperacao, baseDoBL } from './extracaoPreAlerta';
 import { executarPreAlerta } from './index';
 
 const C1 = 'BMOU9784013';
@@ -356,4 +356,42 @@ test('PROCESSO REAL: lacre divergente no House → V-008 e consolidado em Diverg
   const r = executarPreAlerta(processoReal({ lacre: 'M7636998' })); // 1 caractere diferente
   assert.equal(famRes(r, 'V-008'), 'Divergencia');
   assert.equal(r.resultado, 'Divergencia');
+});
+
+// ---- agrupamento de PÁGINAS (multi-imagem do mesmo BL) ----
+test('baseDoBL: páginas do mesmo BL caem na mesma base; docs distintos não', () => {
+  // "... MBL-1/2/3.jpg" são páginas do MESMO Master → mesma base (1 OCR).
+  assert.equal(baseDoBL('140655114952 MBL-1.jpg'), baseDoBL('140655114952 MBL-3.jpg'));
+  assert.equal(baseDoBL('140655114952 MBL-1.jpg'), baseDoBL('140655114952 MBL-2.jpg'));
+  // Documento distinto (identificador longo, sem marcador de página curto no fim).
+  assert.notEqual(baseDoBL('140655114952 SE26071000008.jpg'), baseDoBL('140655114952 MBL-1.jpg'));
+  // Marcador de página explícito também agrupa.
+  assert.equal(baseDoBL('BL HOUSE pag 2.pdf'), baseDoBL('BL HOUSE pag 1.pdf'));
+  assert.equal(baseDoBL('MASTER_page1.pdf'), baseDoBL('MASTER_page2.pdf'));
+  // "(1)"/"(2)" são desambiguadores de nome duplicado do Outlook — podem ser
+  // documentos DIFERENTES; por segurança NÃO agrupamos (evita fundir dois BLs).
+  assert.notEqual(baseDoBL('conhecimento (1).png'), baseDoBL('conhecimento (2).png'));
+});
+
+// ---- operação sem par MBL×HBL (guarda anti-"0 kg") ----
+test('montarOperacao: só MBL(s) → master definido, houses vazio', () => {
+  const docs = [
+    mapExtracaoParaDoc(aiVazio(), 'MBL-1.jpg', 'MBL'),
+    mapExtracaoParaDoc(aiVazio(), 'MBL-2.jpg', 'MBL'),
+  ];
+  const op = montarOperacao('IM24', docs);
+  assert.ok(op.master);
+  assert.equal(op.houses.length, 0);
+});
+
+test('família numérica sem House: total NÃO vira 0 (Σ Houses = —, NaoAvaliada)', () => {
+  const op: Operacao = {
+    processo: 'IM25',
+    master: doc('MBL', 'MBL.pdf', [ct(C1, { pesoBrutoKg: 8000 })], { pesoBrutoTotalKg: 8000 }),
+    houses: [],
+  };
+  const fam = familiaV005(op, familiaV003(op).relacoes);
+  const total = sub(fam.evidencias, 'V-005.2');
+  assert.equal(total?.resultado, 'NaoAvaliada');
+  assert.equal(total?.valores[1].valor, '—'); // Σ Houses não pode ser "0 kg"
 });
