@@ -22,7 +22,7 @@ import { getAntiCaptchaBalance } from './browser/antiCaptcha';
 import { fetchViaUnblocker, isUnblockerConfigured } from './browser/webUnblocker';
 import { isAntiCaptchaConfigured } from './config';
 import { getActiveHomeAccountId } from './auth/microsoftAccount';
-import { prioraAuthRouter } from './auth/prioraAuthRoutes';
+import { prioraAuthRouter, ensureOrgForUser } from './auth/prioraAuthRoutes';
 import { rocketRouter } from './routes/rocketRoutes';
 import { getSupabase, isSupabaseConfigured } from './db/supabase';
 
@@ -106,6 +106,86 @@ app.get('/health', (_req, res) =>
     branch: process.env.RENDER_GIT_BRANCH || null,
   }),
 );
+
+/**
+ * Diagnóstico/reparo de CONTA (gated por DIAG_TOKEN): garante que exista uma
+ * conta com o e-mail dado e a senha informada — CRIA se não existir, ou RESETA
+ * a senha se já existir — e garante empresa+admin. Roda na Render (onde o
+ * Supabase é acessível). Serve para destravar login em ambiente de teste.
+ *   GET /health/fix-login?token=<DIAG_TOKEN>&email=...&password=...[&nome=...][&empresa=...]
+ */
+app.get('/health/fix-login', async (req, res, next) => {
+  try {
+    const token = (process.env.DIAG_TOKEN || '').trim();
+    if (!token) return res.status(404).json({ error: 'Desativado (defina DIAG_TOKEN).' });
+    if (String(req.query.token || '') !== token) return res.status(401).json({ error: 'token inválido.' });
+    if (!isSupabaseConfigured()) return res.status(503).json({ error: 'Supabase não configurado.' });
+
+    const email = String(req.query.email || '').trim().toLowerCase();
+    const password = String(req.query.password || '');
+    const nome = String(req.query.nome || '').trim();
+    const empresa = String(req.query.empresa || '').trim();
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Informe ?email= e ?password= (senha ≥ 6).' });
+    }
+
+    const sb = getSupabase();
+    // Procura o usuário pelo e-mail (lista páginas até achar).
+    let userId: string | null = null;
+    for (let page = 1; page <= 10 && !userId; page++) {
+      const { data: listed, error } = await sb.auth.admin.listUsers({ page, perPage: 200 });
+      if (error) break;
+      const users = listed?.users || [];
+      const found = users.find((u) => (u.email || '').toLowerCase() === email);
+      if (found) userId = found.id;
+      if (users.length < 200) break; // última página
+    }
+
+    let action: string;
+    if (userId) {
+      const { error: updErr } = await sb.auth.admin.updateUserById(userId, {
+        password,
+        email_confirm: true,
+      });
+      if (updErr) return res.status(400).json({ error: `Falha ao atualizar a senha: ${updErr.message}` });
+      action = 'senha_atualizada';
+    } else {
+      const { data: cre, error: creErr } = await sb.auth.admin.createUser({
+        email,
+        password,
+        email_confirm: true,
+        user_metadata: { full_name: nome, empresa },
+      });
+      if (creErr || !cre.user) {
+        return res.status(400).json({ error: `Falha ao criar: ${creErr?.message || 'desconhecido'}` });
+      }
+      userId = cre.user.id;
+      action = 'conta_criada';
+    }
+
+    // Completa o profile e garante empresa + admin.
+    const prof: Record<string, unknown> = { id: userId, email };
+    if (nome) prof.full_name = nome;
+    await sb.from('profiles').upsert(prof);
+    let org: unknown = null;
+    try {
+      org = await ensureOrgForUser(userId, empresa || undefined);
+    } catch (e) {
+      org = { error: (e as Error).message };
+    }
+
+    res.json({
+      ok: true,
+      action,
+      email,
+      userId,
+      org,
+      note: 'Pronto. Agora faça login com esse e-mail e senha.',
+    });
+  } catch (err) {
+    next(err);
+  }
+});
 
 /**
  * Diagnóstico do navegador (SEM login): sobe o Chromium e renderiza um HTML

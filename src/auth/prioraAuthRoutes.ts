@@ -85,7 +85,7 @@ async function loadOrgContext(userId: string): Promise<OrgContext | null> {
  * senão um padrão. Usado no cadastro e no login (repara contas sem empresa).
  * Plano free por padrão (3 assentos) — a assinatura paga entra como upgrade.
  */
-async function ensureOrgForUser(
+export async function ensureOrgForUser(
   userId: string,
   empresaHint?: string,
   tipoHint?: string,
