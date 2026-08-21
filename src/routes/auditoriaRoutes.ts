@@ -325,6 +325,101 @@ auditoriaRouter.get('/processos', async (req: AuthedRequest, res, next) => {
   }
 });
 
+/**
+ * GET /api/auditoria/diagnostico — RAIO-X da descoberta de processos.
+ * Mostra, e-mail por e-mail, o que o scanner enxerga e POR QUE inclui ou
+ * descarta cada um (ex.: "sem código IM"), além do commit/branch que o Render
+ * está rodando. Somente leitura; usa a sessão do próprio usuário. Serve para
+ * entender por que processos reais não aparecem na Mesa.
+ */
+auditoriaRouter.get('/diagnostico', async (req: AuthedRequest, res, next) => {
+  try {
+    const token = req.accessToken!;
+    let messages = await withTimeout(
+      searchLogisticsMessages(token, { keywords: config.logisticsKeywords, top: 60 }),
+      20000,
+      'searchLogistics',
+    ).catch(() => [] as Awaited<ReturnType<typeof searchLogisticsMessages>>);
+    let source = 'logistica';
+    if (messages.length === 0) {
+      messages = await withTimeout(listRecentSummaries(token, { top: 40 }), 20000, 'listInbox').catch(
+        () => [] as Awaited<ReturnType<typeof listRecentSummaries>>,
+      );
+      source = 'inbox';
+    }
+
+    const comAnexo = messages.filter((m) => m.hasAttachments).slice(0, 30);
+    const fulls = await Promise.all(
+      comAnexo.map((m) => withTimeout(getFullMessage(token, m.id), 9000, 'getFull').catch(() => null)),
+    );
+    const aninhadosPorMsg = await Promise.all(
+      comAnexo.map((m) =>
+        withTimeout(getForwardedFileAttachments(token, m.id), 12000, 'nested').catch(() => []),
+      ),
+    );
+
+    const mensagens = fulls.map((full, i) => {
+      if (!full) return { erro: 'falha ao carregar', assunto: comAnexo[i]?.subject || null };
+      const texto = `${full.subject || ''}\n${full.body?.content || full.bodyPreview || ''}`;
+      const im = extractProcesses(texto);
+      const refs = extractRefs(texto).slice(0, 8);
+      const diretos = (full.attachments || [])
+        .filter((a) => isDocumentAttachment(a.name, a.contentType, a.isInline))
+        .map((a) => ({ nome: a.name, tipo: classifyDoc(a.name) }));
+      const aninhados = (aninhadosPorMsg[i] || [])
+        .filter((a) => isDocumentAttachment(a.name, a.contentType, a.isInline))
+        .map((a) => ({ nome: a.name, tipo: classifyDoc(a.name), origem: a.origem }));
+      const totalDoc = diretos.length + aninhados.length;
+      const incluido = im.length > 0 && totalDoc > 0;
+      let motivo = 'ok';
+      if (im.length === 0) motivo = 'SEM código IM#### no texto (e sem cruzamento por referência) → descartado';
+      else if (totalDoc === 0) motivo = 'IM ok, mas nenhum anexo-documento reconhecido';
+      return {
+        assunto: full.subject || null,
+        de: full.from?.emailAddress?.address || null,
+        data: full.receivedDateTime || null,
+        imEncontrado: im,
+        referencias: refs,
+        anexosDiretos: diretos,
+        anexosAninhados: aninhados,
+        incluido,
+        motivo,
+      };
+    });
+
+    // Amostra de mensagens SEM anexo direto (o doc pode estar num e-mail aninhado).
+    const semAnexo = messages
+      .filter((m) => !m.hasAttachments)
+      .slice(0, 12)
+      .map((m) => ({
+        assunto: m.subject || null,
+        data: m.receivedDateTime || null,
+        imEncontrado: extractProcesses(`${m.subject || ''}\n${m.body?.content || m.bodyPreview || ''}`),
+      }));
+
+    const { processos } = await buildProcessos(token);
+
+    res.json({
+      commit: (process.env.RENDER_GIT_COMMIT || '').slice(0, 7) || null,
+      branch: process.env.RENDER_GIT_BRANCH || null,
+      source,
+      totalMensagensBuscadas: messages.length,
+      mensagensComAnexo: comAnexo.length,
+      processosEncontrados: processos.length,
+      processos: processos.map((p) => ({
+        processo: p.processo,
+        qtdDocs: p.qtdDocs,
+        tipos: p.tiposPresentes,
+        auditorias: p.auditorias,
+      })),
+      mensagens,
+      mensagensSemAnexo: semAnexo,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 /* ------------------------------------------------------------------ *
  * Execução da auditoria (OCR + Playbooks + Clara). Com cache por
  * processo+assinatura de documentos (10.11). "?refresh=1" força reprocessar.
