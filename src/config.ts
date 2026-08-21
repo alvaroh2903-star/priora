@@ -157,7 +157,7 @@ export const config = {
    *  sejam encontrados pela busca do Graph. */
   logisticsKeywords: (
     process.env.LOGISTICS_KEYWORDS ||
-    'embarque,embarcação,contêiner,conteiner,container,courier,courrier,navio,porto,frete,carga,BL,bill of lading,conhecimento de embarque,despacho,desembaraço,importação,exportação,armador,booking,AWB,pré-alerta,pre-alerta,pré alerta,pre alerta,prealerta,HBL,MBL,house bill of lading,master bill of lading,demurrage,debit note,nota de débito'
+    'embarque,embarcação,contêiner,conteiner,container,courier,courrier,navio,porto,frete,carga,BL,bill of lading,conhecimento de embarque,despacho,desembaraço,importação,exportação,armador,booking,AWB,pré-alerta,pre-alerta,pré alerta,pre alerta,prealerta,pre-alert,pre alert,prealert,pré-alert,HBL,MBL,house bill of lading,master bill of lading,demurrage,debit note,nota de débito'
   )
     .split(',')
     .map((k) => k.trim())
