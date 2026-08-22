@@ -218,6 +218,7 @@ interface ScrapeJob {
   ref: string;
   url: string;
   via: string;
+  render?: boolean;
   startedAt: number;
   finishedAt?: number;
   result?: unknown;
@@ -237,7 +238,7 @@ async function runScrapeJob(job: ScrapeJob): Promise<void> {
     const { status, html } =
       job.via === 'unblock'
         ? await fetchViaUnblocker(job.url, { render: true })
-        : await fetchViaBrightData(job.url);
+        : await fetchViaBrightData(job.url, { render: job.render !== false });
     const text = html
       .replace(/<script[\s\S]*?<\/script>/gi, ' ')
       .replace(/<style[\s\S]*?<\/style>/gi, ' ')
@@ -288,6 +289,8 @@ app.get('/health/scrape-async', (req, res) => {
   const rawUrl = String(req.query.url || '').trim();
   const ref = String(req.query.ref || '').trim();
   const via = String(req.query.via || 'bright').trim(); // bright | unblock
+  // render=1 (padrão) executa o JS na Bright Data (necessário p/ SPA); render=0 desliga.
+  const render = String(req.query.render ?? '1').trim() !== '0';
   let url: string | undefined;
   if (rawUrl) url = rawUrl;
   else if (ref) url = detect(ref).carrier?.trackingUrl || undefined;
@@ -297,10 +300,10 @@ app.get('/health/scrape-async', (req, res) => {
   }
 
   const id = crypto.randomBytes(6).toString('hex');
-  const job: ScrapeJob = { id, status: 'pending', ref: ref || rawUrl, url, via, startedAt: Date.now() };
+  const job: ScrapeJob = { id, status: 'pending', ref: ref || rawUrl, url, via, render, startedAt: Date.now() };
   scrapeJobs.set(id, job);
   void runScrapeJob(job); // background — NÃO aguardamos aqui (por isso não dá timeout)
-  res.json({ ok: true, jobId: id, via, url, poll: '/health/job?token=SEU_TOKEN&id=' + id });
+  res.json({ ok: true, jobId: id, via, url, render, poll: '/health/job?token=SEU_TOKEN&id=' + id });
 });
 
 /** Consulta o resultado de uma raspagem assíncrona. */
@@ -315,6 +318,8 @@ app.get('/health/job', (req, res) => {
     status: job.status,
     ref: job.ref,
     via: job.via,
+    url: job.url,
+    render: job.render !== false,
     ms: (job.finishedAt || Date.now()) - job.startedAt,
     result: job.result || null,
     error: job.error || null,
