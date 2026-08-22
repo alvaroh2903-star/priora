@@ -109,6 +109,18 @@ export const config = {
     password: (process.env.WEB_UNBLOCKER_PASSWORD || '').trim(),
   },
   /**
+   * Bright Data Web Unlocker — o unblocker "hard target" (fura Cloudflare
+   * interativo + renderiza JS). Usado nos portais mais protegidos (ex.: Hapag).
+   * Proxy: brd-customer-{customer}-zone-{zone}:{password}@{host}. Faz MITM no
+   * HTTPS (ignoramos o certificado). Credenciais só no Render (nunca no repo).
+   */
+  brightData: {
+    customer: (process.env.BRIGHTDATA_CUSTOMER || '').trim(),
+    zone: (process.env.BRIGHTDATA_ZONE || '').trim(),
+    password: (process.env.BRIGHTDATA_PASSWORD || '').trim(),
+    host: (process.env.BRIGHTDATA_HOST || 'brd.superproxy.io:33335').trim(),
+  },
+  /**
    * Serviço de resolução de CAPTCHA (ex.: anti-captcha.com / 2captcha), usado
    * pelos scrapers quando um portal exige. Sem a chave, o passo de captcha fica
    * indisponível e o scraper falha graciosamente. (Ligado nas próximas etapas.)
@@ -179,6 +191,13 @@ export function hasProxy(): boolean {
 /** Indica se o Web Unblocker (bypass de anti-bot) está configurado. */
 export function isUnblockerConfigured(): boolean {
   return Boolean(config.unblocker.server && config.unblocker.username);
+}
+
+/** Indica se o Bright Data Web Unlocker está configurado. */
+export function isBrightDataConfigured(): boolean {
+  return Boolean(
+    config.brightData.customer && config.brightData.zone && config.brightData.password,
+  );
 }
 
 /** Indica se o serviço de resolução de CAPTCHA está configurado. */

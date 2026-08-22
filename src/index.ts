@@ -1,5 +1,6 @@
 import path from 'path';
 import net from 'net';
+import crypto from 'crypto';
 import express, { NextFunction, Request, Response } from 'express';
 import session from 'express-session';
 import { config, hasProxy } from './config';
@@ -20,6 +21,8 @@ import { trackShipment, detect } from './browser/carriers';
 import { tryFillSearch } from './browser/carriers/pageUtils';
 import { getAntiCaptchaBalance } from './browser/antiCaptcha';
 import { fetchViaUnblocker, isUnblockerConfigured } from './browser/webUnblocker';
+import { fetchViaBrightData, isBrightDataConfigured } from './browser/brightData';
+import { extractEventsFromPage, deriveContainers } from './browser/carriers/scrapers/hapag';
 import { isAntiCaptchaConfigured } from './config';
 import { getActiveHomeAccountId } from './auth/microsoftAccount';
 import { prioraAuthRouter, ensureOrgForUser } from './auth/prioraAuthRoutes';
@@ -185,6 +188,121 @@ app.get('/health/fix-login', async (req, res, next) => {
   } catch (err) {
     next(err);
   }
+});
+
+/* ===================== Raspagem ASSÍNCRONA (anti-timeout) ===================== *
+ * Dispara a raspagem em background e devolve um jobId na hora; o resultado é
+ * consultado depois. Elimina o timeout de requisições longas (Cloudflare +
+ * render podem levar minutos). Usa o Bright Data Web Unlocker por padrão.
+ * Gated por DIAG_TOKEN. Fila in-process (um serviço) — some ao reiniciar.
+ * ============================================================================ */
+interface ScrapeJob {
+  id: string;
+  status: 'pending' | 'done' | 'error';
+  ref: string;
+  url: string;
+  via: string;
+  startedAt: number;
+  finishedAt?: number;
+  result?: unknown;
+  error?: string;
+}
+const scrapeJobs = new Map<string, ScrapeJob>();
+
+function pruneScrapeJobs(): void {
+  const cutoff = Date.now() - 30 * 60_000;
+  for (const [id, j] of scrapeJobs) {
+    if ((j.finishedAt || j.startedAt) < cutoff) scrapeJobs.delete(id);
+  }
+}
+
+async function runScrapeJob(job: ScrapeJob): Promise<void> {
+  try {
+    const { status, html } =
+      job.via === 'unblock'
+        ? await fetchViaUnblocker(job.url, { render: true })
+        : await fetchViaBrightData(job.url);
+    const text = html
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const isCloudflareChallenge =
+      /_cf_chl_opt|challenges\.cloudflare\.com|Just a moment|Um momento|Enable JavaScript and cookies/i.test(html);
+    // Extrai eventos do HTML liberado (reaproveita o parser já testado).
+    let events: unknown[] = [];
+    let containers: unknown[] = [];
+    try {
+      const parsed = await withPage(async (page) => {
+        await page.setContent(html, { waitUntil: 'domcontentloaded' });
+        return extractEventsFromPage(page);
+      });
+      events = parsed;
+      containers = deriveContainers(parsed, null);
+    } catch {
+      /* parse best-effort */
+    }
+    job.result = {
+      httpStatus: status,
+      htmlLen: html.length,
+      isCloudflareChallenge,
+      mentionsRef: job.ref ? html.toUpperCase().includes(job.ref.toUpperCase()) : null,
+      eventsCount: events.length,
+      events,
+      containers,
+      textSnippet: text.slice(0, 3000),
+    };
+    job.status = 'done';
+  } catch (e) {
+    job.status = 'error';
+    job.error = (e as Error).message;
+  } finally {
+    job.finishedAt = Date.now();
+  }
+}
+
+/** Dispara uma raspagem em background. Retorna jobId na hora (sem timeout). */
+app.get('/health/scrape-async', (req, res) => {
+  const token = (process.env.DIAG_TOKEN || '').trim();
+  if (!token) return res.status(404).json({ error: 'Desativado (defina DIAG_TOKEN).' });
+  if (String(req.query.token || '') !== token) return res.status(401).json({ error: 'token inválido.' });
+  pruneScrapeJobs();
+
+  const rawUrl = String(req.query.url || '').trim();
+  const ref = String(req.query.ref || '').trim();
+  const via = String(req.query.via || 'bright').trim(); // bright | unblock
+  let url: string | undefined;
+  if (rawUrl) url = rawUrl;
+  else if (ref) url = detect(ref).carrier?.trackingUrl || undefined;
+  if (!url) return res.status(400).json({ error: 'Informe ?url=<URL> ou ?ref=<BL|contêiner>.' });
+  if (via === 'bright' && !isBrightDataConfigured()) {
+    return res.status(503).json({ error: 'Bright Data não configurado (BRIGHTDATA_*).' });
+  }
+
+  const id = crypto.randomBytes(6).toString('hex');
+  const job: ScrapeJob = { id, status: 'pending', ref: ref || rawUrl, url, via, startedAt: Date.now() };
+  scrapeJobs.set(id, job);
+  void runScrapeJob(job); // background — NÃO aguardamos aqui (por isso não dá timeout)
+  res.json({ ok: true, jobId: id, via, url, poll: '/health/job?token=SEU_TOKEN&id=' + id });
+});
+
+/** Consulta o resultado de uma raspagem assíncrona. */
+app.get('/health/job', (req, res) => {
+  const token = (process.env.DIAG_TOKEN || '').trim();
+  if (!token) return res.status(404).json({ error: 'Desativado (defina DIAG_TOKEN).' });
+  if (String(req.query.token || '') !== token) return res.status(401).json({ error: 'token inválido.' });
+  const job = scrapeJobs.get(String(req.query.id || ''));
+  if (!job) return res.status(404).json({ error: 'job não encontrado (expirou ou o serviço reiniciou).' });
+  res.json({
+    id: job.id,
+    status: job.status,
+    ref: job.ref,
+    via: job.via,
+    ms: (job.finishedAt || Date.now()) - job.startedAt,
+    result: job.result || null,
+    error: job.error || null,
+  });
 });
 
 /**
