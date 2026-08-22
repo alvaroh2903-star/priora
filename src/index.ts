@@ -107,6 +107,17 @@ app.get('/health', (_req, res) =>
     status: 'ok',
     commit: (process.env.RENDER_GIT_COMMIT || '').slice(0, 7) || null,
     branch: process.env.RENDER_GIT_BRANCH || null,
+    // Só BOOLEANS (nunca valores/segredos): confirma o que está ligado no ambiente
+    // sem precisar do DIAG_TOKEN. Se diagToken=true e mesmo assim /health/scrape-*
+    // responder "token inválido", é porque o token= da URL difere do DIAG_TOKEN.
+    config: {
+      diagToken: Boolean((process.env.DIAG_TOKEN || '').trim()),
+      brightData: isBrightDataConfigured(),
+      proxy: hasProxy(),
+      unblocker: isUnblockerConfigured(),
+      antiCaptcha: isAntiCaptchaConfigured(),
+      supabase: isSupabaseConfigured(),
+    },
   }),
 );
 
