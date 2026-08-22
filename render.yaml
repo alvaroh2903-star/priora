@@ -56,14 +56,10 @@ services:
         sync: false                  # opcional
       - key: WEB_UNBLOCKER_PASSWORD
         sync: false                  # opcional
-      - key: BRIGHTDATA_CUSTOMER
-        sync: false                  # Bright Data Web Unlocker: customer id
+      - key: BRIGHTDATA_API_KEY
+        sync: false                  # Bright Data Web Unlocker (modo API): Bearer token
       - key: BRIGHTDATA_ZONE
-        sync: false                  # nome da zona Web Unlocker
-      - key: BRIGHTDATA_PASSWORD
-        sync: false                  # senha da zona
-      - key: BRIGHTDATA_HOST
-        value: brd.superproxy.io:33335
+        sync: false                  # nome da zona Web Unlocker (ex.: priora)
       - key: DIAG_TOKEN
         sync: false                  # opcional: liga /health/scrape p/ testar raspagem sem login
       - key: ANTICAPTCHA_PROVIDER
