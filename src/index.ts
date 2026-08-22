@@ -113,6 +113,11 @@ app.get('/health', (_req, res) =>
     config: {
       diagToken: Boolean((process.env.DIAG_TOKEN || '').trim()),
       brightData: isBrightDataConfigured(),
+      // Detalhe do Bright Data p/ saber QUAL var falta (sem vazar segredo):
+      // - brightDataKeyLen: só o TAMANHO da API key (0 = não setada);
+      // - brightDataZone: o rótulo da zona (não é segredo) — null se vazio.
+      brightDataKeyLen: (config.brightData.apiKey || '').length,
+      brightDataZone: config.brightData.zone || null,
       proxy: hasProxy(),
       unblocker: isUnblockerConfigured(),
       antiCaptcha: isAntiCaptchaConfigured(),
