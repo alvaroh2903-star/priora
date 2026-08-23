@@ -143,6 +143,75 @@ function dedupe(events: TrackingEvent[]): TrackingEvent[] {
   return out;
 }
 
+/* ---------------------------------------------------------------------------
+ * Extração SEM navegador (a partir de HTML cru já renderizado — ex.: Bright
+ * Data render:true). Evita subir um Chromium local só para parsear (OOM no
+ * Render free/512MB). Reaproveita a mesma lógica pura (rowToEvent/dedupe).
+ * ------------------------------------------------------------------------- */
+
+/** Remove tags e normaliza entidades/espaços de um trecho de HTML. */
+function stripTags(s: string): string {
+  return s
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&#\d+;/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Extrai as células (por regex) de um bloco de linha e limpa cada uma. */
+function cellsFrom(rowHtml: string, cellRe: RegExp): string[] {
+  const cells: string[] = [];
+  cellRe.lastIndex = 0;
+  let c: RegExpExecArray | null;
+  while ((c = cellRe.exec(rowHtml))) {
+    const t = stripTags(c[1]);
+    if (t) cells.push(t);
+  }
+  return cells;
+}
+
+/** Varre linhas (tabela real <tr> e grades ARIA role="row") do HTML cru. */
+export function extractRowsFromHtml(html: string): string[][] {
+  const rows: string[][] = [];
+  // 1) Tabelas HTML de verdade: <tr> com <td>/<th>.
+  const trRe = /<tr\b[^>]*>([\s\S]*?)<\/tr>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = trRe.exec(html))) {
+    const cells = cellsFrom(m[1], /<t[dh]\b[^>]*>([\s\S]*?)<\/t[dh]>/gi);
+    if (cells.length >= 2) rows.push(cells);
+  }
+  // 2) Grades por ARIA (divs com role="row"/"cell"/"gridcell") — best-effort.
+  // Divs aninhados não fecham por regex balanceada, então FATIAMOS o HTML nos
+  // inícios de role="row" e extraímos as células de cada fatia (tudo até a
+  // próxima linha). Robusto a aninhamento; ignora conteúdo fora das células.
+  if (/\brole=["']row["']/i.test(html)) {
+    const parts = html.split(/(?=<[a-z]+[^>]*\brole=["']row["'])/i);
+    for (const part of parts) {
+      if (!/\brole=["']row["']/i.test(part)) continue;
+      const cells = cellsFrom(
+        part,
+        /<[a-z]+[^>]*\brole=["'](?:cell|gridcell)["'][^>]*>([\s\S]*?)<\/[a-z]+>/gi,
+      );
+      if (cells.length >= 2) rows.push(cells);
+    }
+  }
+  return rows;
+}
+
+/** Extrai eventos de um HTML cru já renderizado (sem navegador). */
+export function extractEventsFromHtml(html: string): TrackingEvent[] {
+  const events: TrackingEvent[] = [];
+  for (const cells of extractRowsFromHtml(html)) {
+    const ev = rowToEvent(cells);
+    if (ev) events.push(ev);
+  }
+  return dedupe(events);
+}
+
 /** Extrai os eventos de movimentação de qualquer tabela de resultados. */
 export async function extractEventsFromPage(page: Page): Promise<TrackingEvent[]> {
   const rows: string[][] = await page

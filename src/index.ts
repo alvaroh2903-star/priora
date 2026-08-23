@@ -22,7 +22,7 @@ import { tryFillSearch } from './browser/carriers/pageUtils';
 import { getAntiCaptchaBalance } from './browser/antiCaptcha';
 import { fetchViaUnblocker, isUnblockerConfigured } from './browser/webUnblocker';
 import { fetchViaBrightData, isBrightDataConfigured } from './browser/brightData';
-import { extractEventsFromPage, deriveContainers } from './browser/carriers/scrapers/hapag';
+import { extractEventsFromHtml, deriveContainers } from './browser/carriers/scrapers/hapag';
 import { isAntiCaptchaConfigured } from './config';
 import { getActiveHomeAccountId } from './auth/microsoftAccount';
 import { prioraAuthRouter, ensureOrgForUser } from './auth/prioraAuthRoutes';
@@ -222,6 +222,7 @@ interface ScrapeJob {
   startedAt: number;
   finishedAt?: number;
   result?: unknown;
+  html?: string;
   error?: string;
 }
 const scrapeJobs = new Map<string, ScrapeJob>();
@@ -247,14 +248,15 @@ async function runScrapeJob(job: ScrapeJob): Promise<void> {
       .trim();
     const isCloudflareChallenge =
       /_cf_chl_opt|challenges\.cloudflare\.com|Just a moment|Um momento|Enable JavaScript and cookies/i.test(html);
-    // Extrai eventos do HTML liberado (reaproveita o parser já testado).
+    // Guarda o HTML renderizado para inspeção posterior (/health/job-html) sem
+    // estourar memória: só um trecho generoso (o suficiente para afinar o parser).
+    job.html = html.length > 2_000_000 ? html.slice(0, 2_000_000) : html;
+    // Extrai eventos SEM navegador (o HTML já veio renderizado pela Bright Data).
+    // Evita subir um Chromium local no Render free (512MB) → sem OOM/reinício.
     let events: unknown[] = [];
     let containers: unknown[] = [];
     try {
-      const parsed = await withPage(async (page) => {
-        await page.setContent(html, { waitUntil: 'domcontentloaded' });
-        return extractEventsFromPage(page);
-      });
+      const parsed = extractEventsFromHtml(html);
       events = parsed;
       containers = deriveContainers(parsed, null);
     } catch {
@@ -323,6 +325,40 @@ app.get('/health/job', (req, res) => {
     ms: (job.finishedAt || Date.now()) - job.startedAt,
     result: job.result || null,
     error: job.error || null,
+  });
+});
+
+/**
+ * Inspeção do HTML RENDERIZADO de um job (gated por DIAG_TOKEN): devolve um
+ * pedaço do DOM que a Bright Data retornou, para afinar o parser contra a
+ * estrutura real da página. ?offset= e ?len= paginam; ?find=<texto> pula para a
+ * primeira ocorrência (ex.: o BL ou "Container"). ?raw=1 devolve text/html.
+ */
+app.get('/health/job-html', (req, res) => {
+  const token = (process.env.DIAG_TOKEN || '').trim();
+  if (!token) return res.status(404).json({ error: 'Desativado (defina DIAG_TOKEN).' });
+  if (String(req.query.token || '') !== token) return res.status(401).json({ error: 'token inválido.' });
+  const job = scrapeJobs.get(String(req.query.id || ''));
+  if (!job) return res.status(404).json({ error: 'job não encontrado (expirou ou o serviço reiniciou).' });
+  const html = job.html || '';
+  const len = Math.min(Math.max(parseInt(String(req.query.len || '4000'), 10) || 4000, 100), 100_000);
+  let offset = Math.max(parseInt(String(req.query.offset || '0'), 10) || 0, 0);
+  const find = String(req.query.find || '').trim();
+  if (find) {
+    const at = html.toUpperCase().indexOf(find.toUpperCase());
+    if (at >= 0) offset = Math.max(at - 200, 0);
+  }
+  if (String(req.query.raw || '') === '1') {
+    res.type('text/plain; charset=utf-8');
+    return res.send(html.slice(offset, offset + len));
+  }
+  res.json({
+    id: job.id,
+    htmlLen: html.length,
+    offset,
+    len,
+    found: find ? html.toUpperCase().indexOf(find.toUpperCase()) : null,
+    slice: html.slice(offset, offset + len),
   });
 });
 
