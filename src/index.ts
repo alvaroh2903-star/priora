@@ -1,4 +1,5 @@
 import path from 'path';
+import fs from 'fs';
 import net from 'net';
 import crypto from 'crypto';
 import express, { NextFunction, Request, Response } from 'express';
@@ -227,57 +228,140 @@ interface ScrapeJob {
 }
 const scrapeJobs = new Map<string, ScrapeJob>();
 
+/**
+ * Persistência em disco dos jobs de raspagem. Sem isto, um reinício do processo
+ * (comum no Render free/512MB) apaga o Map em memória e o poll devolve "job não
+ * encontrado". Grava metadados (<id>.json) e o HTML renderizado (<id>.html)
+ * separados, para o poll sobreviver a reinícios dentro do mesmo deploy.
+ */
+const JOBS_DIR = path.join(config.dataDir, 'scrapejobs');
+
+function persistJob(job: ScrapeJob): void {
+  try {
+    fs.mkdirSync(JOBS_DIR, { recursive: true });
+    const { html, ...meta } = job;
+    fs.writeFileSync(path.join(JOBS_DIR, `${job.id}.json`), JSON.stringify(meta));
+    if (html) fs.writeFileSync(path.join(JOBS_DIR, `${job.id}.html`), html);
+  } catch {
+    /* best-effort: se o disco falhar, seguimos só com o Map em memória */
+  }
+}
+
+function loadJob(id: string): ScrapeJob | undefined {
+  if (!/^[a-f0-9]{6,32}$/i.test(id)) return undefined; // evita path traversal
+  try {
+    const raw = fs.readFileSync(path.join(JOBS_DIR, `${id}.json`), 'utf8');
+    return JSON.parse(raw) as ScrapeJob;
+  } catch {
+    return undefined;
+  }
+}
+
+function loadJobHtml(id: string): string {
+  if (!/^[a-f0-9]{6,32}$/i.test(id)) return '';
+  try {
+    return fs.readFileSync(path.join(JOBS_DIR, `${id}.html`), 'utf8');
+  } catch {
+    return '';
+  }
+}
+
+/** Busca o job no Map (rápido) e cai para o disco se o processo reiniciou. */
+function getJob(id: string): ScrapeJob | undefined {
+  const inMem = scrapeJobs.get(id);
+  if (inMem) return inMem;
+  const onDisk = loadJob(id);
+  if (onDisk && !onDisk.html) onDisk.html = loadJobHtml(id) || undefined;
+  return onDisk;
+}
+
 function pruneScrapeJobs(): void {
   const cutoff = Date.now() - 30 * 60_000;
   for (const [id, j] of scrapeJobs) {
     if ((j.finishedAt || j.startedAt) < cutoff) scrapeJobs.delete(id);
   }
+  // Limpa também os arquivos antigos em disco (best-effort).
+  try {
+    for (const f of fs.readdirSync(JOBS_DIR)) {
+      const p = path.join(JOBS_DIR, f);
+      if (fs.statSync(p).mtimeMs < cutoff) fs.unlinkSync(p);
+    }
+  } catch {
+    /* pasta pode não existir ainda */
+  }
+}
+
+interface ScrapeResult {
+  httpStatus: number;
+  htmlLen: number;
+  isCloudflareChallenge: boolean;
+  mentionsRef: boolean | null;
+  eventsCount: number;
+  events: unknown[];
+  containers: unknown[];
+  textSnippet: string;
+}
+
+/**
+ * Busca o HTML (Bright Data com render, ou Web Unblocker) e extrai os eventos
+ * SEM navegador (o HTML já vem renderizado). Retorna o resultado + o HTML cru
+ * (para inspeção/persistência). Compartilhado pelo modo assíncrono e o síncrono.
+ */
+async function scrapeAndParse(
+  url: string,
+  via: string,
+  ref: string,
+  render: boolean,
+): Promise<{ result: ScrapeResult; html: string }> {
+  const { status, html } =
+    via === 'unblock'
+      ? await fetchViaUnblocker(url, { render: true })
+      : await fetchViaBrightData(url, { render });
+  const text = html
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const isCloudflareChallenge =
+    /_cf_chl_opt|challenges\.cloudflare\.com|Just a moment|Um momento|Enable JavaScript and cookies/i.test(html);
+  // Extrai eventos SEM navegador (o HTML já veio renderizado pela Bright Data).
+  // Evita subir um Chromium local no Render free (512MB) → sem OOM/reinício.
+  let events: unknown[] = [];
+  let containers: unknown[] = [];
+  try {
+    const parsed = extractEventsFromHtml(html);
+    events = parsed;
+    containers = deriveContainers(parsed, null);
+  } catch {
+    /* parse best-effort */
+  }
+  const result: ScrapeResult = {
+    httpStatus: status,
+    htmlLen: html.length,
+    isCloudflareChallenge,
+    mentionsRef: ref ? html.toUpperCase().includes(ref.toUpperCase()) : null,
+    eventsCount: events.length,
+    events,
+    containers,
+    textSnippet: text.slice(0, 3000),
+  };
+  return { result, html };
 }
 
 async function runScrapeJob(job: ScrapeJob): Promise<void> {
   try {
-    const { status, html } =
-      job.via === 'unblock'
-        ? await fetchViaUnblocker(job.url, { render: true })
-        : await fetchViaBrightData(job.url, { render: job.render !== false });
-    const text = html
-      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-      .replace(/<[^>]+>/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-    const isCloudflareChallenge =
-      /_cf_chl_opt|challenges\.cloudflare\.com|Just a moment|Um momento|Enable JavaScript and cookies/i.test(html);
-    // Guarda o HTML renderizado para inspeção posterior (/health/job-html) sem
-    // estourar memória: só um trecho generoso (o suficiente para afinar o parser).
+    const { result, html } = await scrapeAndParse(job.url, job.via, job.ref, job.render !== false);
+    // Só um trecho generoso do HTML (o suficiente p/ afinar o parser via job-html).
     job.html = html.length > 2_000_000 ? html.slice(0, 2_000_000) : html;
-    // Extrai eventos SEM navegador (o HTML já veio renderizado pela Bright Data).
-    // Evita subir um Chromium local no Render free (512MB) → sem OOM/reinício.
-    let events: unknown[] = [];
-    let containers: unknown[] = [];
-    try {
-      const parsed = extractEventsFromHtml(html);
-      events = parsed;
-      containers = deriveContainers(parsed, null);
-    } catch {
-      /* parse best-effort */
-    }
-    job.result = {
-      httpStatus: status,
-      htmlLen: html.length,
-      isCloudflareChallenge,
-      mentionsRef: job.ref ? html.toUpperCase().includes(job.ref.toUpperCase()) : null,
-      eventsCount: events.length,
-      events,
-      containers,
-      textSnippet: text.slice(0, 3000),
-    };
+    job.result = result;
     job.status = 'done';
   } catch (e) {
     job.status = 'error';
     job.error = (e as Error).message;
   } finally {
     job.finishedAt = Date.now();
+    persistJob(job); // grava o resultado em disco (sobrevive a reinício)
   }
 }
 
@@ -304,8 +388,42 @@ app.get('/health/scrape-async', (req, res) => {
   const id = crypto.randomBytes(6).toString('hex');
   const job: ScrapeJob = { id, status: 'pending', ref: ref || rawUrl, url, via, render, startedAt: Date.now() };
   scrapeJobs.set(id, job);
+  persistJob(job); // grava "pending" já — poll sobrevive mesmo se reiniciar no meio
   void runScrapeJob(job); // background — NÃO aguardamos aqui (por isso não dá timeout)
   res.json({ ok: true, jobId: id, via, url, render, poll: '/health/job?token=SEU_TOKEN&id=' + id });
+});
+
+/**
+ * Raspagem SÍNCRONA (gated por DIAG_TOKEN): faz o fetch + parse DENTRO da
+ * requisição e devolve o resultado direto — sem jobId, sem fila em memória.
+ * Como o parse agora é sem navegador e o Bright Data (render) costuma responder
+ * em ~30–90 s, cabe numa requisição só e não sofre com reinício do processo.
+ * Uso: /health/scrape-now?token=<DIAG_TOKEN>&ref=<BL>[&via=bright|unblock][&render=0]
+ */
+app.get('/health/scrape-now', async (req, res) => {
+  const token = (process.env.DIAG_TOKEN || '').trim();
+  if (!token) return res.status(404).json({ error: 'Desativado (defina DIAG_TOKEN).' });
+  if (String(req.query.token || '') !== token) return res.status(401).json({ error: 'token inválido.' });
+
+  const rawUrl = String(req.query.url || '').trim();
+  const ref = String(req.query.ref || '').trim();
+  const via = String(req.query.via || 'bright').trim();
+  const render = String(req.query.render ?? '1').trim() !== '0';
+  let url: string | undefined;
+  if (rawUrl) url = rawUrl;
+  else if (ref) url = detect(ref).carrier?.trackingUrl || undefined;
+  if (!url) return res.status(400).json({ error: 'Informe ?url=<URL> ou ?ref=<BL|contêiner>.' });
+  if (via === 'bright' && !isBrightDataConfigured()) {
+    return res.status(503).json({ error: 'Bright Data não configurado (BRIGHTDATA_*).' });
+  }
+
+  const startedAt = Date.now();
+  try {
+    const { result } = await scrapeAndParse(url, via, ref || rawUrl, render);
+    res.json({ ok: true, via, url, render, ms: Date.now() - startedAt, result });
+  } catch (e) {
+    res.status(502).json({ ok: false, via, url, render, ms: Date.now() - startedAt, error: (e as Error).message });
+  }
 });
 
 /** Consulta o resultado de uma raspagem assíncrona. */
@@ -313,7 +431,7 @@ app.get('/health/job', (req, res) => {
   const token = (process.env.DIAG_TOKEN || '').trim();
   if (!token) return res.status(404).json({ error: 'Desativado (defina DIAG_TOKEN).' });
   if (String(req.query.token || '') !== token) return res.status(401).json({ error: 'token inválido.' });
-  const job = scrapeJobs.get(String(req.query.id || ''));
+  const job = getJob(String(req.query.id || ''));
   if (!job) return res.status(404).json({ error: 'job não encontrado (expirou ou o serviço reiniciou).' });
   res.json({
     id: job.id,
@@ -338,7 +456,7 @@ app.get('/health/job-html', (req, res) => {
   const token = (process.env.DIAG_TOKEN || '').trim();
   if (!token) return res.status(404).json({ error: 'Desativado (defina DIAG_TOKEN).' });
   if (String(req.query.token || '') !== token) return res.status(401).json({ error: 'token inválido.' });
-  const job = scrapeJobs.get(String(req.query.id || ''));
+  const job = getJob(String(req.query.id || ''));
   if (!job) return res.status(404).json({ error: 'job não encontrado (expirou ou o serviço reiniciou).' });
   const html = job.html || '';
   const len = Math.min(Math.max(parseInt(String(req.query.len || '4000'), 10) || 4000, 100), 100_000);
