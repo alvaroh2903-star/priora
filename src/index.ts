@@ -306,6 +306,9 @@ interface ScrapeResult {
  * Busca o HTML (Bright Data com render, ou Web Unblocker) e extrai os eventos
  * SEM navegador (o HTML já vem renderizado). Retorna o resultado + o HTML cru
  * (para inspeção/persistência). Compartilhado pelo modo assíncrono e o síncrono.
+ *
+ * O expectSelector diz ao Bright Data "espera até este CSS selector existir no
+ * DOM antes de capturar o HTML". Sem ele, SPAs como Hapag devolvem a casca vazia.
  */
 async function scrapeAndParse(
   url: string,
@@ -313,10 +316,19 @@ async function scrapeAndParse(
   ref: string,
   render: boolean,
 ): Promise<{ result: ScrapeResult; html: string }> {
+  // Selectors que indicam que a SPA renderizou: tabelas de resultado, grids ARIA,
+  // ou o app container com conteúdo real (não a mensagem "enable JavaScript").
+  // Ordem de prioridade: tabela de resultados > grid ARIA > app montado.
+  const spaSelector = 'table tr, [role="row"], [role="grid"], .trck-result, .tracking-result, #app .container';
+
   const { status, html } =
     via === 'unblock'
       ? await fetchViaUnblocker(url, { render: true })
-      : await fetchViaBrightData(url, { render });
+      : await fetchViaBrightData(url, {
+          render,
+          expectSelector: render ? spaSelector : undefined,
+          waitNetworkIdle: render,
+        });
   const text = html
     .replace(/<script[\s\S]*?<\/script>/gi, ' ')
     .replace(/<style[\s\S]*?<\/style>/gi, ' ')
