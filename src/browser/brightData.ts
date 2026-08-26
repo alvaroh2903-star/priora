@@ -72,8 +72,6 @@ export async function fetchViaBrightData(
   // render=true → executa o JS e devolve o DOM renderizado (essencial p/ SPA).
   if (opts.render) {
     body.render = true;
-    // Tempo extra pós-render (ms). Default 10s para SPAs pesadas (Hapag, MSC…).
-    body.wait = opts.waitMs ?? 10000;
   }
   if (opts.country) body.country = opts.country;
   if (opts.dataFormat) body.data_format = opts.dataFormat;
