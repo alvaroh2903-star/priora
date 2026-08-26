@@ -1,4 +1,5 @@
 import { chromium, Browser, Page } from 'playwright';
+import { acceptCookies, tryFillSearch } from './carriers/pageUtils';
 
 /**
  * Priora — Cliente do Bright Data Scraping Browser (CDP remoto).
@@ -87,19 +88,31 @@ export async function scrapeViaSB(opts: SBScrapeOptions): Promise<SBScrapeResult
       navError = (e as Error).message;
     }
 
-    // Aceita cookies (OneTrust banner comum nos armadores).
-    await page.locator('#onetrust-accept-btn-handler').click({ timeout: 3000 }).catch(() => {});
-    await page.locator('button:has-text("Accept")').first().click({ timeout: 2000 }).catch(() => {});
+    const RESULT_SELECTOR =
+      'table tr, [role="row"], [role="grid"], .trck-result, .tracking-result';
 
-    // Espera a SPA renderizar: tenta encontrar tabelas/grids de resultado.
-    await page.waitForSelector('table tr, [role="row"], [role="grid"], .trck-result', {
-      timeout: 15_000,
-    }).catch(() => {});
+    // Aceita cookies (OneTrust etc.) reutilizando o util dos scrapers.
+    await acceptCookies(page);
 
-    // Espera extra para XHRs da SPA terminarem.
+    // Espera a SPA renderizar (tabela/grid) + os XHRs terminarem.
+    await page.waitForSelector(RESULT_SELECTOR, { timeout: 15_000 }).catch(() => {});
     await page.waitForLoadState('networkidle', { timeout: postWait }).catch(() => {});
-    // Mais um tempinho pro Vue/React hidratar.
-    await page.waitForTimeout(3000);
+    await page.waitForTimeout(2000); // folga p/ Vue/React hidratar
+
+    // Se a referência ainda NÃO apareceu, o deep link não auto-buscou: preenche o
+    // formulário de busca e submete (muitos portais SPA exigem esse passo). Isso
+    // reaproveita a mesma lógica dos scrapers locais (tryFillSearch).
+    if (opts.reference) {
+      const body0 = (await page.textContent('body').catch(() => '')) || '';
+      if (!body0.toUpperCase().includes(opts.reference.toUpperCase())) {
+        if (await tryFillSearch(page, opts.reference)) {
+          await page.waitForLoadState('networkidle', { timeout: postWait }).catch(() => {});
+          await page.waitForSelector(RESULT_SELECTOR, { timeout: 15_000 }).catch(() => {});
+          await page.waitForTimeout(2000);
+          await acceptCookies(page);
+        }
+      }
+    }
 
     const title = await page.title().catch(() => '');
     const html = await page.content().catch(() => '');
