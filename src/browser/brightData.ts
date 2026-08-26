@@ -72,8 +72,6 @@ export async function fetchViaBrightData(
   // render=true → executa o JS e devolve o DOM renderizado (essencial p/ SPA).
   if (opts.render) {
     body.render = true;
-    // Espera a rede ficar idle (XHRs terminarem) — a SPA precisa dos dados.
-    if (opts.waitNetworkIdle !== false) body.wait_network_idle = true;
     // Tempo extra pós-render (ms). Default 10s para SPAs pesadas (Hapag, MSC…).
     body.wait = opts.waitMs ?? 10000;
   }
