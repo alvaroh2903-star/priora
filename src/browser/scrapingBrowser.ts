@@ -33,6 +33,11 @@ function getSBAuth(): string {
 
 function buildWSEndpoint(): string {
   const auth = getSBAuth();
+  // Aceita as duas formas (à prova de erro de montagem):
+  //  1) a URL COMPLETA que o botão "copy" do Bright Data dá:
+  //     wss://brd-customer-<id>-zone-<zona>:<senha>@brd.superproxy.io:9222
+  //  2) só o "usuário:senha" — aí montamos a URL com o host/porta padrão.
+  if (/^wss?:\/\//i.test(auth)) return auth;
   return `wss://${auth}@${CDP_HOST}:${CDP_PORT}`;
 }
 
