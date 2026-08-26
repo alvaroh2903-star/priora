@@ -23,6 +23,7 @@ import { tryFillSearch } from './browser/carriers/pageUtils';
 import { getAntiCaptchaBalance } from './browser/antiCaptcha';
 import { fetchViaUnblocker, isUnblockerConfigured } from './browser/webUnblocker';
 import { fetchViaBrightData, isBrightDataConfigured } from './browser/brightData';
+import { scrapeViaSB, isSBConfigured } from './browser/scrapingBrowser';
 import { extractEventsFromHtml, deriveContainers } from './browser/carriers/scrapers/hapag';
 import { isAntiCaptchaConfigured } from './config';
 import { getActiveHomeAccountId } from './auth/microsoftAccount';
@@ -321,14 +322,26 @@ async function scrapeAndParse(
   // Ordem de prioridade: tabela de resultados > grid ARIA > app montado.
   const spaSelector = 'table tr, [role="row"], [role="grid"], .trck-result, .tracking-result, #app .container';
 
-  const { status, html } =
-    via === 'unblock'
-      ? await fetchViaUnblocker(url, { render: true })
-      : await fetchViaBrightData(url, {
-          render,
-          expectSelector: render ? spaSelector : undefined,
-          waitNetworkIdle: render,
-        });
+  let status: number;
+  let html: string;
+  if (via === 'sb') {
+    // Scraping Browser: Playwright remoto via CDP (browser real do Bright Data).
+    // Renderiza JS, fura Cloudflare, aceita cookies — tudo automaticamente.
+    const sb = await scrapeViaSB({ url, reference: ref });
+    status = sb.ok ? 200 : 500;
+    html = sb.html;
+  } else if (via === 'unblock') {
+    const r = await fetchViaUnblocker(url, { render: true });
+    status = r.status;
+    html = r.html;
+  } else {
+    const r = await fetchViaBrightData(url, {
+      render,
+      expectSelector: render ? spaSelector : undefined,
+    });
+    status = r.status;
+    html = r.html;
+  }
   const text = html
     .replace(/<script[\s\S]*?<\/script>/gi, ' ')
     .replace(/<style[\s\S]*?<\/style>/gi, ' ')
@@ -435,6 +448,58 @@ app.get('/health/scrape-now', async (req, res) => {
     res.json({ ok: true, via, url, render, ms: Date.now() - startedAt, result });
   } catch (e) {
     res.status(502).json({ ok: false, via, url, render, ms: Date.now() - startedAt, error: (e as Error).message });
+  }
+});
+
+/**
+ * Raspagem via Scraping Browser (Bright Data CDP remoto): Playwright REAL
+ * conectado ao Chromium do Bright Data. Fura Cloudflare, renderiza JS de
+ * verdade, aceita cookies — funciona onde o Web Unlocker API falha (Hapag).
+ * Uso: /health/scrape-sb?token=<DIAG_TOKEN>&ref=<BL>[&url=<URL>]
+ */
+app.get('/health/scrape-sb', async (req, res) => {
+  const token = (process.env.DIAG_TOKEN || '').trim();
+  if (!token) return res.status(404).json({ error: 'Desativado (defina DIAG_TOKEN).' });
+  if (String(req.query.token || '') !== token) return res.status(401).json({ error: 'token inválido.' });
+  if (!isSBConfigured()) return res.status(503).json({ error: 'Scraping Browser não configurado (defina BRIGHTDATA_SB_AUTH).' });
+
+  const rawUrl = String(req.query.url || '').trim();
+  const ref = String(req.query.ref || '').trim();
+  let url: string | undefined;
+  if (rawUrl) url = rawUrl;
+  else if (ref) url = detect(ref).carrier?.trackingUrl || undefined;
+  if (!url) return res.status(400).json({ error: 'Informe ?url=<URL> ou ?ref=<BL|contêiner>.' });
+
+  const startedAt = Date.now();
+  try {
+    const sb = await scrapeViaSB({ url, reference: ref || rawUrl });
+    // Extrai eventos do HTML renderizado.
+    let events: unknown[] = [];
+    let containers: unknown[] = [];
+    try {
+      const parsed = extractEventsFromHtml(sb.html);
+      events = parsed;
+      containers = deriveContainers(parsed, null);
+    } catch { /* best-effort */ }
+    res.json({
+      ok: sb.ok,
+      via: 'sb',
+      url,
+      ms: sb.ms,
+      result: {
+        title: sb.title,
+        htmlLen: sb.html.length,
+        mentionsRef: sb.mentionsRef,
+        rowCount: sb.rowCount,
+        eventsCount: events.length,
+        events,
+        containers,
+        textSnippet: sb.textContent.slice(0, 3000),
+        error: sb.error || null,
+      },
+    });
+  } catch (e) {
+    res.status(502).json({ ok: false, via: 'sb', url, ms: Date.now() - startedAt, error: (e as Error).message });
   }
 });
 
