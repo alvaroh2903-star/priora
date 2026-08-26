@@ -120,6 +120,7 @@ app.get('/health', (_req, res) =>
       // - brightDataZone: o rótulo da zona (não é segredo) — null se vazio.
       brightDataKeyLen: (config.brightData.apiKey || '').length,
       brightDataZone: config.brightData.zone || null,
+      scrapingBrowser: isSBConfigured(),
       proxy: hasProxy(),
       unblocker: isUnblockerConfigured(),
       antiCaptcha: isAntiCaptchaConfigured(),

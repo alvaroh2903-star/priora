@@ -60,6 +60,8 @@ services:
         sync: false                  # Bright Data Web Unlocker (modo API): Bearer token
       - key: BRIGHTDATA_ZONE
         sync: false                  # nome da zona Web Unlocker (ex.: priora)
+      - key: BRIGHTDATA_SB_AUTH
+        sync: false                  # Bright Data Scraping Browser (CDP): "user:senha" (brd-customer-<id>-zone-<zona>:<senha>)
       - key: DIAG_TOKEN
         sync: false                  # opcional: liga /health/scrape p/ testar raspagem sem login
       - key: ANTICAPTCHA_PROVIDER
