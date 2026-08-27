@@ -24,7 +24,7 @@ import { getAntiCaptchaBalance } from './browser/antiCaptcha';
 import { fetchViaUnblocker, isUnblockerConfigured } from './browser/webUnblocker';
 import { fetchViaBrightData, isBrightDataConfigured } from './browser/brightData';
 import { scrapeViaSB, isSBConfigured } from './browser/scrapingBrowser';
-import { extractEventsFromHtml, deriveContainers } from './browser/carriers/scrapers/hapag';
+import { extractEventsFromHtml, deriveContainers, firstContainerNo } from './browser/carriers/scrapers/hapag';
 import { isAntiCaptchaConfigured } from './config';
 import { getActiveHomeAccountId } from './auth/microsoftAccount';
 import { prioraAuthRouter, ensureOrgForUser } from './auth/prioraAuthRoutes';
@@ -358,7 +358,7 @@ async function scrapeAndParse(
   try {
     const parsed = extractEventsFromHtml(html);
     events = parsed;
-    containers = deriveContainers(parsed, null);
+    containers = deriveContainers(parsed, firstContainerNo(html));
   } catch {
     /* parse best-effort */
   }
@@ -480,7 +480,7 @@ app.get('/health/scrape-sb', async (req, res) => {
     try {
       const parsed = extractEventsFromHtml(sb.html);
       events = parsed;
-      containers = deriveContainers(parsed, null);
+      containers = deriveContainers(parsed, firstContainerNo(sb.html));
     } catch { /* best-effort */ }
     // Inspeção SÍNCRONA do DOM (não depende de job/disco, que somem no Render free):
     // ?find=<texto> centra a janela; ?htmlwin=<n> define o tamanho (máx 20000).

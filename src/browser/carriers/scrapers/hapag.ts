@@ -202,8 +202,66 @@ export function extractRowsFromHtml(html: string): string[][] {
   return rows;
 }
 
+/**
+ * Extrai os eventos da tabela de rastreio NOVA da Hapag ("Tracking BETA").
+ * Cada evento é um bloco `.hal-event__inline` com 6 `span.hal-event__col`
+ * identificados por `aria-labelledby="event-header-<campo>-<id>"`, onde <campo>
+ * é event | locationName | date | time | transport | voyage. É uma estrutura de
+ * timeline (divs), não `<table><tr>`, por isso o extrator genérico não pega.
+ *
+ * Exemplo de um bloco:
+ *   <span ... aria-labelledby="event-header-event-2991">
+ *     <span class="typography-...">Discharged</span></span>
+ *   <span ... aria-labelledby="event-header-locationName-2991">SINGAPORE</span>
+ *   <span ... aria-labelledby="event-header-date-2991">2026-06-23</span>
+ *   ...
+ */
+export function extractHapagEvents(html: string): TrackingEvent[] {
+  const out: TrackingEvent[] = [];
+  if (!/hal-event__inline/i.test(html)) return out;
+  // Fatia por bloco de evento (cada um começa em "hal-event__inline").
+  const parts = html.split(/hal-event__inline/i).slice(1);
+  for (const part of parts) {
+    const fields: Record<string, string> = {};
+    const colRe =
+      /aria-labelledby="event-header-([a-zA-Z]+)-\d+"[^>]*>([\s\S]*?)<\/span>/gi;
+    let m: RegExpExecArray | null;
+    while ((m = colRe.exec(part))) {
+      const key = m[1];
+      // 1ª ocorrência de cada campo = a deste bloco (evita vazar do próximo).
+      if (!(key in fields)) fields[key] = stripTags(m[2]);
+    }
+    const date = parseDateToISO(fields.date || '');
+    const status = (fields.event || '').trim();
+    if (!date && !status) continue; // bloco sem conteúdo útil
+    const transport = (fields.transport || '').trim();
+    // "transport" traz o navio (ex.: ONE PARANA) ou o modal (Truck/Rail). Só é
+    // "vessel" quando não é rodoviário/ferroviário.
+    const isVessel = Boolean(transport) && !/truck|rail|barge|caminh|feeder/i.test(transport);
+    out.push({
+      date,
+      status,
+      location: fields.locationName || null,
+      vessel: isVessel ? transport : null,
+      voyage: fields.voyage || null,
+      type: classifyEvent(status),
+    });
+  }
+  return dedupe(out);
+}
+
+/** Acha o 1º número de contêiner (padrão ISO: AAAA + 7 dígitos) no HTML, ou null. */
+export function firstContainerNo(html: string): string | null {
+  const m = html.match(/\b[A-Z]{4}\d{7}\b/);
+  return m ? m[0] : null;
+}
+
 /** Extrai eventos de um HTML cru já renderizado (sem navegador). */
 export function extractEventsFromHtml(html: string): TrackingEvent[] {
+  // 1) Hapag "Tracking BETA" (timeline .hal-event) — tem prioridade quando existe.
+  const hal = extractHapagEvents(html);
+  if (hal.length > 0) return hal;
+  // 2) Genérico: tabelas <tr>/<td> e grades ARIA (outros armadores/layouts).
   const events: TrackingEvent[] = [];
   for (const cells of extractRowsFromHtml(html)) {
     const ev = rowToEvent(cells);

@@ -15,7 +15,7 @@ const RULES: Array<[NormalizedEventType, RegExp]> = [
   ],
   [
     'gate_out',
-    /gate\s?out|to consignee|delivered to|picked up|full.*out|out\s?gate|import.*deliver|entregue|sa[ií]da.*cheio/i,
+    /gated?\s*out|to consignee|delivered to|picked up|full.*out|out\s?gate|import.*deliver|entregue|sa[ií]da.*cheio/i,
   ],
   ['available', /available|disponib|released|liberad|ready for (delivery|pickup)/i],
   ['discharge', /discharg|desembarq|unload/i],
