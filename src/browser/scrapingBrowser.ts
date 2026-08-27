@@ -24,19 +24,37 @@ const CDP_HOST = 'brd.superproxy.io';
 const CDP_PORT = 9222;
 
 export function isSBConfigured(): boolean {
-  return Boolean(getSBAuth());
+  return Boolean(getGenericWss() || getSBAuth());
+}
+
+/**
+ * Endpoint CDP AGNÓSTICO de provedor. Qualquer "cloud browser" que fale CDP por
+ * WebSocket (Browserbase, Steel, Browserless, Oxylabs, self-hosted browserless…)
+ * entra aqui — é só colar o `wss://…` completo em SCRAPE_BROWSER_WSS. Tem
+ * prioridade sobre o Bright Data, então dá para A/B testar provedores trocando
+ * UMA variável, sem mexer no código. Vazio = usa o Bright Data (BRIGHTDATA_SB_AUTH).
+ */
+function getGenericWss(): string {
+  return (process.env.SCRAPE_BROWSER_WSS || '').trim();
 }
 
 function getSBAuth(): string {
   return (process.env.BRIGHTDATA_SB_AUTH || '').trim();
 }
 
+/** Nome do provedor CDP ativo (p/ diagnóstico). */
+export function scrapeBrowserProvider(): string {
+  if (getGenericWss()) return 'custom-wss';
+  if (getSBAuth()) return 'brightdata';
+  return 'none';
+}
+
 function buildWSEndpoint(): string {
+  // 1) Provedor genérico (URL wss:// completa) — tem prioridade.
+  const generic = getGenericWss();
+  if (generic) return generic;
+  // 2) Bright Data: URL completa OU "usuário:senha" (montamos o host/porta padrão).
   const auth = getSBAuth();
-  // Aceita as duas formas (à prova de erro de montagem):
-  //  1) a URL COMPLETA que o botão "copy" do Bright Data dá:
-  //     wss://brd-customer-<id>-zone-<zona>:<senha>@brd.superproxy.io:9222
-  //  2) só o "usuário:senha" — aí montamos a URL com o host/porta padrão.
   if (/^wss?:\/\//i.test(auth)) return auth;
   return `wss://${auth}@${CDP_HOST}:${CDP_PORT}`;
 }
@@ -49,7 +67,7 @@ function buildWSEndpoint(): string {
  */
 export async function connectSB(): Promise<Browser> {
   if (!isSBConfigured()) {
-    throw new Error('Scraping Browser não configurado (defina BRIGHTDATA_SB_AUTH).');
+    throw new Error('Cloud browser não configurado (defina SCRAPE_BROWSER_WSS ou BRIGHTDATA_SB_AUTH).');
   }
   return chromium.connectOverCDP(buildWSEndpoint(), { timeout: 30_000 });
 }

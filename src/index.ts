@@ -23,7 +23,7 @@ import { tryFillSearch } from './browser/carriers/pageUtils';
 import { getAntiCaptchaBalance } from './browser/antiCaptcha';
 import { fetchViaUnblocker, isUnblockerConfigured } from './browser/webUnblocker';
 import { fetchViaBrightData, isBrightDataConfigured } from './browser/brightData';
-import { scrapeViaSB, driveTrackingPage, isSBConfigured } from './browser/scrapingBrowser';
+import { scrapeViaSB, driveTrackingPage, isSBConfigured, scrapeBrowserProvider } from './browser/scrapingBrowser';
 import { extractEventsFromHtml, deriveContainers, firstContainerNo } from './browser/carriers/scrapers/hapag';
 import { isAntiCaptchaConfigured } from './config';
 import { getActiveHomeAccountId } from './auth/microsoftAccount';
@@ -121,6 +121,7 @@ app.get('/health', (_req, res) =>
       brightDataKeyLen: (config.brightData.apiKey || '').length,
       brightDataZone: config.brightData.zone || null,
       scrapingBrowser: isSBConfigured(),
+      scrapeProvider: scrapeBrowserProvider(),
       proxy: hasProxy(),
       unblocker: isUnblockerConfigured(),
       antiCaptcha: isAntiCaptchaConfigured(),
