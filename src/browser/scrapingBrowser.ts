@@ -121,7 +121,13 @@ export async function scrapeViaSB(opts: SBScrapeOptions): Promise<SBScrapeResult
 
     const title = await page.title().catch(() => '');
     const html = await page.content().catch(() => '');
-    const textContent = ((await page.textContent('body').catch(() => '')) || '')
+    // innerText devolve só o texto VISÍVEL (sem CSS de <style> nem <script>),
+    // diferente de textContent — deixa o textSnippet/mentionsRef mais úteis.
+    const textContent = (
+      (await page.innerText('body').catch(() => '')) ||
+      (await page.textContent('body').catch(() => '')) ||
+      ''
+    )
       .replace(/\s+/g, ' ')
       .trim();
     const rowCount = await page.locator('table tr, [role="row"]').count().catch(() => 0);

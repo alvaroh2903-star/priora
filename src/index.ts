@@ -482,6 +482,24 @@ app.get('/health/scrape-sb', async (req, res) => {
       events = parsed;
       containers = deriveContainers(parsed, null);
     } catch { /* best-effort */ }
+    // Inspeção SÍNCRONA do DOM (não depende de job/disco, que somem no Render free):
+    // ?find=<texto> centra a janela; ?htmlwin=<n> define o tamanho (máx 20000).
+    // Remove <style>/<script> para a fatia mostrar só a estrutura útil.
+    const find = String(req.query.find || '').trim();
+    const htmlwin = Math.min(Math.max(parseInt(String(req.query.htmlwin || '0'), 10) || 0, 0), 20000);
+    let htmlSlice: string | undefined;
+    if (find || htmlwin) {
+      const clean = sb.html
+        .replace(/<style[\s\S]*?<\/style>/gi, '')
+        .replace(/<script[\s\S]*?<\/script>/gi, '')
+        .replace(/\s+/g, ' ');
+      let off = 0;
+      if (find) {
+        const at = clean.toUpperCase().indexOf(find.toUpperCase());
+        off = at >= 0 ? Math.max(at - 800, 0) : 0;
+      }
+      htmlSlice = clean.slice(off, off + (htmlwin || 6000));
+    }
     res.json({
       ok: sb.ok,
       via: 'sb',
@@ -496,6 +514,7 @@ app.get('/health/scrape-sb', async (req, res) => {
         events,
         containers,
         textSnippet: sb.textContent.slice(0, 3000),
+        htmlSlice,
         error: sb.error || null,
       },
     });
