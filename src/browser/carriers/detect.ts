@@ -97,6 +97,8 @@ const BL_PREFIX_MAP: Array<{ prefixes: string[]; carrierId: string }> = [
 const NUMERIC_PATTERNS: Array<{ test: (ref: string) => boolean; carrierId: string }> = [
   // COSCO: 10 dígitos começando com 6 (ex.: 6505127410)
   { test: (ref) => /^\d{10}$/.test(ref) && ref[0] === '6', carrierId: 'cosco' },
+  // Evergreen: 12 dígitos começando com 14 (ex.: 149604025416, 140601459420)
+  { test: (ref) => /^\d{12}$/.test(ref) && ref.startsWith('14'), carrierId: 'evergreen' },
   // Maersk: 9 dígitos (ex.: 274319835) — booking references
   { test: (ref) => /^\d{9}$/.test(ref), carrierId: 'maersk' },
 ];
