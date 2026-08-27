@@ -18,6 +18,10 @@ leia-o para o desenho pretendido. Este arquivo resume o **estado atual** e as
 - **Registro de 12 armadores** + detecção BL/contêiner → armador
   (`src/browser/carriers/`), com **scraper da Hapag-Lloyd** (eventos → gate-out/
   devolução). Base plugável (`scraper.ts` despacha p/ scraper específico ou genérico).
+  Mapa vivo de cobertura por armador (DOM/comportamento/status): **[docs/ARMADORES_SCRAPING.md](docs/ARMADORES_SCRAPING.md)**.
+- **Scraping Browser (Bright Data, CDP)** — navegador remoto que fura Cloudflare
+  interativo + renderiza SPA (`src/browser/scrapingBrowser.ts`). Hoje ligado no
+  diagnóstico `/health/scrape-sb`; falta plugar no pipeline de produção (ver doc §6).
 - **Loop de enriquecimento** (`/api/demurrage/bot/enrich`, `/enrich-batch`):
   track → organiza por IA (texto cru) → **cache** (`demurrageBotStore`) →
   formato do módulo Demurrage (`trackingMapper`). Concorrência via `mapLimit`.
