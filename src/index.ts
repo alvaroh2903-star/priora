@@ -523,6 +523,29 @@ app.get('/health/scrape-sb', async (req, res) => {
   }
 });
 
+/**
+ * Diagnóstico do PIPELINE de produção (gated por DIAG_TOKEN): roda o
+ * `trackShipment` REAL — o mesmo que `/api/demurrage/bot/enrich` usa por baixo —
+ * que detecta o armador, escolhe o navegador (Scraping Browser p/ os difíceis) e
+ * roda o scraper do portal. Serve para provar o fluxo automático ponta a ponta
+ * SEM login. Uso: /health/track?token=<DIAG_TOKEN>&ref=<BL>[&carrier=hapag]
+ */
+app.get('/health/track', async (req, res) => {
+  const token = (process.env.DIAG_TOKEN || '').trim();
+  if (!token) return res.status(404).json({ error: 'Desativado (defina DIAG_TOKEN).' });
+  if (String(req.query.token || '') !== token) return res.status(401).json({ error: 'token inválido.' });
+  const ref = String(req.query.ref || '').trim();
+  if (!ref) return res.status(400).json({ error: 'Informe ?ref=<BL|contêiner|booking>.' });
+  const carrierId = req.query.carrier ? String(req.query.carrier).trim() : undefined;
+  const startedAt = Date.now();
+  try {
+    const result = await trackShipment(ref, { carrierId });
+    res.json({ ok: result.ok, ms: Date.now() - startedAt, result });
+  } catch (e) {
+    res.status(502).json({ ok: false, ms: Date.now() - startedAt, error: (e as Error).message });
+  }
+});
+
 /** Consulta o resultado de uma raspagem assíncrona. */
 app.get('/health/job', (req, res) => {
   const token = (process.env.DIAG_TOKEN || '').trim();
