@@ -26,11 +26,102 @@ import {
   logAtividade,
   procKey,
 } from '../demurrage/demurrageStore';
+import { getAllBotResults, refKey } from '../demurrage/demurrageBotStore';
+import { detect } from '../browser/carriers';
 import { config } from '../config';
 
 export const demurrageRouter = Router();
 
 demurrageRouter.use(requireAuth);
+
+interface PortalDates {
+  gateOut: string | null;
+  emptyReturn: string | null;
+  dischargeDate: string | null;
+}
+
+/** Datas do PORTAL (raspadas, cache do bot) por número de contêiner normalizado. */
+function portalDatesByContainer(): Map<string, PortalDates> {
+  const score = (x: PortalDates) =>
+    (x.gateOut ? 1 : 0) + (x.emptyReturn ? 1 : 0) + (x.dischargeDate ? 1 : 0);
+  const map = new Map<string, PortalDates>();
+  const all = getAllBotResults();
+  for (const key of Object.keys(all)) {
+    const r = all[key]?.result;
+    if (!r) continue;
+    for (const ct of r.containers || []) {
+      if (!ct.numero) continue;
+      const cur: PortalDates = {
+        gateOut: ct.gateOut || null,
+        emptyReturn: ct.emptyReturn || null,
+        dischargeDate: ct.dischargeDate || null,
+      };
+      const prev = map.get(refKey(ct.numero));
+      if (!prev || score(cur) > score(prev)) map.set(refKey(ct.numero), cur);
+    }
+  }
+  return map;
+}
+
+/** Completa as datas de um container com o portal (o e-mail tem prioridade). */
+function mergePortalDates(
+  ct: DemurrageContainer,
+  portal: Map<string, PortalDates>,
+): DemurrageContainer {
+  const pd = ct.numero ? portal.get(refKey(ct.numero)) : undefined;
+  if (!pd) return ct;
+  return {
+    ...ct,
+    dataRetirada: ct.dataRetirada || pd.gateOut,
+    dataDevolucao: ct.dataDevolucao || pd.emptyReturn,
+  };
+}
+
+/**
+ * GET /api/demurrage/sync-refs — coleta os BLs/contêineres de demurrage nos
+ * e-mails (para o botão "Sincronizar BLs"). Devolve só refs cujo armador a Priora
+ * reconhece (senão não dá para raspar). Rápido: NÃO raspa aqui — quem raspa é o
+ * loop do front, um /bot/enrich por ref (evita timeout).
+ */
+demurrageRouter.get('/sync-refs', async (req: AuthedRequest, res, next) => {
+  try {
+    const keywords = config.logisticsKeywords;
+    let messages = await withTimeout(
+      searchLogisticsMessages(req.accessToken!, { keywords, top: 60 }),
+      20000,
+      'syncRefsSearch',
+    ).catch(() => [] as LogisticsSummary[]);
+    if (messages.length === 0) {
+      messages = await withTimeout(
+        listRecentSummaries(req.accessToken!, { top: 40 }),
+        20000,
+        'syncRefsInbox',
+      ).catch(() => [] as LogisticsSummary[]);
+    }
+    const refs = new Set<string>();
+    for (const m of messages) {
+      const ev = evaluateDemurrageEmail({
+        id: m.id,
+        conversationId: m.conversationId || m.id,
+        subject: m.subject,
+        bodyPreview: m.bodyPreview,
+        bodyText: [m.bodyPreview || '', m.body?.content || ''].join('\n'),
+        senderAddress: m.from?.emailAddress.address,
+        receivedDateTime: m.receivedDateTime,
+      });
+      if (!ev.isCandidate) continue;
+      for (const bl of ev.extracted.blNumbers) refs.add(bl);
+      for (const ct of ev.extracted.containerNumbers) refs.add(ct);
+    }
+    // Só refs cujo armador é reconhecido (BL pelo prefixo, contêiner pelo owner).
+    const out = Array.from(refs)
+      .filter((r) => detect(r).carrier)
+      .slice(0, config.bot.maxBatch);
+    res.json({ refs: out, total: out.length });
+  } catch (err) {
+    next(err);
+  }
+});
 
 /* ------------------------------------------------------------------ *
  * Helpers
@@ -308,22 +399,28 @@ demurrageRouter.get('/', async (req: AuthedRequest, res, next) => {
       }),
     );
 
+    // Datas raspadas do PORTAL (bot), por número de contêiner — para completar o
+    // que o e-mail não traz (retirada real = gate-out, devolução = empty-return).
+    const portalDates = portalDatesByContainer();
+
     // Monta os cards agregando por processo (ou, sem processo, por container).
     const acc = new Map<string, CardAccumulator>();
     for (const c of candidates) {
       const ext = extractions.get(c.cid);
       // Containers vindos da Clara (ricos) ou, na falta, do filtro (só número).
-      const extContainers: DemurrageContainer[] = ext?.containers?.length
-        ? ext.containers
-        : c.containers.map((numero) => ({
-            numero,
-            dataRetirada: null,
-            freeTimeDias: null,
-            diaria: null,
-            moeda: null,
-            dataDevolucao: null,
-            minutaRecebida: null,
-          }));
+      const extContainers: DemurrageContainer[] = (
+        ext?.containers?.length
+          ? ext.containers
+          : c.containers.map((numero) => ({
+              numero,
+              dataRetirada: null,
+              freeTimeDias: null,
+              diaria: null,
+              moeda: null,
+              dataDevolucao: null,
+              minutaRecebida: null,
+            }))
+      ).map((ct) => mergePortalDates(ct, portalDates));
       if (extContainers.length === 0) continue;
 
       const primaryProc = c.processos[0] || null;

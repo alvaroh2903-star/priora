@@ -41,6 +41,8 @@ export interface DemurrageFilterResult {
   extracted: {
     processNumbers: string[];
     containerNumbers: string[];
+    /** Números de BL/booking detectados por prefixo de armador (ex.: HLCU…). */
+    blNumbers: string[];
     /** Candidatos a free time em dias (ex.: "free time 21" -> 21). */
     freeTimeDays: number[];
     /** Valores monetários citados (ex.: "R$ 920", "USD 120/day"). */
@@ -155,6 +157,13 @@ const THRESHOLD = {
 const RE_PROCESS = /\bIM\d{3,6}\b/gi;
 /** Container ISO 6346: 4 letras + 7 dígitos. */
 const RE_CONTAINER = /\b[A-Z]{4}\d{7}\b/g;
+/**
+ * BL/booking por prefixo de armador (SCAC). Diferente do contêiner (4 letras + 7
+ * dígitos), o BL costuma misturar letras (ex.: HLCUSHA2606GIPM7). Os que casam o
+ * padrão de contêiner são descartados na extração (são contêiner, não BL).
+ */
+const RE_BL =
+  /\b(?:HLCU|HLXU|UACU|MAEU|MRKU|MSKU|SUDU|MSCU|MEDU|ONEY|CMDU|CMAU|APLU|COSU|HDMU|HMMU|YMLU|YMJA|EGLV|EMCU|ZIMU|OOLU|PABV|NNPL|PILU)[A-Z0-9]{6,16}\b/gi;
 /** Free time em dias: "free time 21", "21 dias livres", "free time: 21 days". */
 const RE_FREETIME_A = /\bfree\s*time[^0-9]{0,12}(\d{1,3})\b/gi;
 const RE_FREETIME_B = /\b(\d{1,3})\s*(?:dias?\s*livres?|free\s*days?|days?\s*free)\b/gi;
@@ -235,6 +244,10 @@ export function evaluateDemurrageEmail(
     v.replace(/\s+/g, '').toUpperCase(),
   );
   const containerNumbers = extractAll(upper, RE_CONTAINER);
+  // BLs: casam prefixo de armador e NÃO são padrão de contêiner (4 letras+7 díg.).
+  const blNumbers = unique(
+    extractAll(upper, RE_BL).filter((v) => !/^[A-Z]{4}\d{7}$/.test(v)),
+  );
 
   const freeTimeDays = unique(
     [
@@ -286,6 +299,7 @@ export function evaluateDemurrageEmail(
     extracted: {
       processNumbers: unique(processNumbers),
       containerNumbers: unique(containerNumbers),
+      blNumbers,
       freeTimeDays,
       moneyAmounts,
       dateHints,

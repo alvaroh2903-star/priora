@@ -67,6 +67,21 @@
     <sc-if value="{{ showContent }}" hint-placeholder-val="{{ false }}">
     <div style="padding:22px 36px 40px 36px;animation:pageIn .35s ease both">
 
+      <!-- Sincronizar BLs (Clara busca no e-mail + raspa no armador) -->
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:18px">
+        <div style="display:flex;align-items:center;gap:11px;min-width:0">
+          <span style="width:34px;height:34px;border-radius:11px;background:#EEEBFE;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6M3 22v-6h6M21 8a9 9 0 0 0-15-3L3 8M3 16a9 9 0 0 0 15 3l3-3"/></svg></span>
+          <div style="min-width:0">
+            <div style="font-size:14.5px;font-weight:800;color:#161A2E">Demurrage no automático</div>
+            <div style="font-size:12px;color:#7A8099;margin-top:1px">A Clara acha os BLs nos seus e-mails, busca as datas no armador e calcula sozinha.</div>
+          </div>
+        </div>
+        <button onClick="{{ onSync }}" class="solid-btn" style="display:flex;align-items:center;gap:8px;background:#4327E6;color:#fff;border:none;border-radius:12px;padding:11px 18px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;box-shadow:0 12px 26px -12px rgba(67,39,230,.7);flex-shrink:0">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6M3 22v-6h6M21 8a9 9 0 0 0-15-3L3 8M3 16a9 9 0 0 0 15 3l3-3"/></svg>
+          Sincronizar BLs
+        </button>
+      </div>
+
       <!-- KPIs -->
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px">
         <sc-for list="{{ kpis }}" as="k" hint-placeholder-count="4">
@@ -202,6 +217,39 @@
     </div>
     </sc-if>
 
+    <!-- Overlay da Clarinha durante a sincronização (raspagem pode demorar) -->
+    <sc-if value="{{ syncOn }}" hint-placeholder-val="{{ false }}">
+      <div style="position:fixed;inset:0;z-index:80;background:rgba(20,16,50,.45);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:24px;animation:pageIn .25s ease both">
+        <div style="width:100%;max-width:430px;background:#fff;border-radius:26px;padding:34px 32px 28px;box-shadow:0 34px 80px -22px rgba(31,38,80,.6);text-align:center">
+          <!-- Clarinha, o robozinho -->
+          <div style="display:inline-block;animation:claraBob 3s ease-in-out infinite">
+            <svg width="86" height="86" viewBox="0 0 86 86" fill="none">
+              <ellipse cx="43" cy="78" rx="20" ry="4" fill="#4327E6" opacity=".12"/>
+              <line x1="43" y1="12" x2="43" y2="20" stroke="#4327E6" stroke-width="3" stroke-linecap="round"/>
+              <circle cx="43" cy="9" r="4.5" fill="#7C5CFF"><animate attributeName="r" values="4.5;5.4;4.5" dur="1.6s" repeatCount="indefinite"/></circle>
+              <rect x="17" y="20" width="52" height="40" rx="15" fill="#4327E6"/>
+              <rect x="17" y="20" width="52" height="20" rx="15" fill="#5B3EF2"/>
+              <rect x="24" y="28" width="38" height="25" rx="10" fill="#160C39"/>
+              <circle cx="35" cy="40" r="4" fill="#8BE3FF"><animate attributeName="cy" values="40;38;40" dur="2.4s" repeatCount="indefinite"/></circle>
+              <circle cx="51" cy="40" r="4" fill="#8BE3FF"><animate attributeName="cy" values="40;38;40" dur="2.4s" repeatCount="indefinite"/></circle>
+              <path d="M35 47c2.6 2.4 12.4 2.4 15 0" stroke="#8BE3FF" stroke-width="2.2" stroke-linecap="round" fill="none"/>
+              <rect x="12" y="33" width="5" height="14" rx="2.5" fill="#7C5CFF"/>
+              <rect x="69" y="33" width="5" height="14" rx="2.5" fill="#7C5CFF"/>
+              <rect x="27" y="62" width="32" height="14" rx="7" fill="#4327E6"/>
+              <circle cx="35" cy="69" r="2" fill="#8BE3FF" opacity=".8"/><circle cx="43" cy="69" r="2" fill="#8BE3FF" opacity=".8"/><circle cx="51" cy="69" r="2" fill="#8BE3FF" opacity=".8"/>
+            </svg>
+          </div>
+          <div style="font-size:19px;font-weight:800;color:#161A2E;margin-top:12px">{{ syncTitle }}</div>
+          <p style="font-size:13.5px;line-height:1.65;color:#6B7192;margin-top:9px">{{ syncMsg }}</p>
+          <div style="margin-top:22px;height:9px;border-radius:20px;background:#EEEBFE;overflow:hidden">
+            <div style="height:100%;border-radius:20px;background:linear-gradient(90deg,#7C5CFF,#4327E6);width:{{ syncPct }}%;transition:width .45s ease"></div>
+          </div>
+          <div style="font-size:12px;color:#9AA0B4;margin-top:9px;font-weight:700">{{ syncCount }}</div>
+          <p style="font-size:12.5px;color:#4327E6;margin-top:15px;font-weight:600;font-style:italic;min-height:18px">{{ syncSub }}</p>
+        </div>
+      </div>
+    </sc-if>
+
     <sc-if value="{{ toastOn }}" hint-placeholder-val="{{ false }}">
       <div style="position:fixed;right:24px;bottom:24px;z-index:60;display:flex;align-items:center;gap:12px;background:#fff;border:1px solid #EAEBF4;box-shadow:0 18px 44px -16px rgba(31,38,80,.4);border-radius:14px;padding:14px 18px;max-width:380px;animation:pageIn .3s ease both">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#1F9D6B" stroke-width="2.2" style="flex-shrink:0"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg>
@@ -212,7 +260,7 @@
 </x-dc>
 <script type="text/x-dc" data-dc-script>
 class Component extends DCLogic {
-  state = { resp:null, loading:true, error:null, open:{}, busy:{}, toastOn:false, toastMsg:'', highlight:null };
+  state = { resp:null, loading:true, error:null, open:{}, busy:{}, toastOn:false, toastMsg:'', highlight:null, sync:{on:false} };
 
   // Tema visual por bucket (cores/ícones do design).
   THEME = {
@@ -266,6 +314,49 @@ class Component extends DCLogic {
   trunc(s,n){ s=String(s||''); return s.length>n?s.slice(0,n-1)+'…':s; }
 
   toast(msg){ this.setState({toastOn:true,toastMsg:msg}); clearTimeout(this._t); this._t=setTimeout(()=>this.setState({toastOn:false}),2800); }
+
+  /* ---------- Sincronizar BLs: acha no e-mail + raspa 1 por vez (com a Clarinha) ---------- */
+  setSync(patch){ this.setState({ sync: Object.assign({}, this.state.sync, patch) }); }
+  onSync(){
+    if (this.state.sync && this.state.sync.on) return; // já rodando
+    var self=this;
+    var FALAS=[
+      'Vasculhando seus e-mails atrás dos BLs… 🔍',
+      'Achei! Batendo na porta do armador… 🚪',
+      'O portal deles é lento, mas eu tenho paciência de sobra 😌',
+      'Anotando as datas de descarga, retirada e devolução… 📅',
+      'Organizando tudo bonitinho pra você… 💜',
+    ];
+    this.setState({ sync:{ on:true, done:0, total:0,
+      title:'Deixa comigo! 💜',
+      msg:'Isso pode demorar um pouquinho — mas tô fazendo tudo isso pra você não precisar fazer nada. Pode deixar essa aba aberta e ir tomar um café ☕',
+      sub:FALAS[0], count:'Procurando seus BLs no e-mail…' } });
+
+    fetch('/api/demurrage/sync-refs', { credentials:'same-origin' })
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        var refs = (j && j.refs) || [];
+        if (refs.length===0){ self.setSync({on:false}); self.toast('Não achei BLs de armador reconhecido nos e-mails ainda.'); return; }
+        self.setSync({ total:refs.length, count:'0 de '+refs.length+' BLs' });
+        // Loop SEQUENCIAL: 1 requisição curta por BL (sem timeout), com progresso.
+        var i=0;
+        function next(){
+          if (i>=refs.length){
+            self.setSync({on:false});
+            self.toast('Pronto! Atualizei as datas dos seus containers. 💜');
+            self.load();
+            return;
+          }
+          var ref=refs[i];
+          self.setSync({ done:i, count:(i)+' de '+refs.length+' BLs', sub:'BL '+ref+' — '+FALAS[Math.min(i+1,FALAS.length-1)] });
+          fetch('/api/demurrage/bot/enrich?ref='+encodeURIComponent(ref), { credentials:'same-origin' })
+            .catch(function(){ /* ignora falha de 1 BL, segue os outros */ })
+            .then(function(){ i++; self.setSync({ done:i, count:i+' de '+refs.length+' BLs' }); next(); });
+        }
+        next();
+      })
+      .catch(function(err){ self.setSync({on:false}); self.toast('Deu um probleminha ao sincronizar: '+String(err&&err.message||err)); });
+  }
 
   focusProc(id){
     this.setState(s=>({ open:Object.assign({},s.open,{[id]:true}), highlight:id }));
@@ -397,8 +488,12 @@ class Component extends DCLogic {
   renderVals(){
     var st=this.state;
     var loading=st.loading, error=st.error, resp=st.resp;
+    var sy = st.sync||{on:false};
+    var syncPct = sy.total ? Math.max(6, Math.round((sy.done/sy.total)*100)) : 8;
     var base = { showLoading:loading, showError:!!error&&!loading, errorMsg:error||'', onReload:()=>this.load(),
       showEmpty:false, showContent:false, showAiHint:false, toastOn:st.toastOn, toastMsg:st.toastMsg,
+      onSync:()=>this.onSync(),
+      syncOn:!!sy.on, syncTitle:sy.title||'', syncMsg:sy.msg||'', syncSub:sy.sub||'', syncCount:sy.count||'', syncPct:syncPct,
       kpis:[], sections:[], resumo:[], atividades:[], impactoTotal:'', hasMaiorRisco:false, maiorRisco:{titulo:'',sub:''}, semAtividades:true, onVerPrioritario:()=>{} };
     if (loading || error || !resp) return base;
 
