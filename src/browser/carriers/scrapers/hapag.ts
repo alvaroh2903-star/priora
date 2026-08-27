@@ -345,15 +345,22 @@ export async function scrapeHapag(page: Page, ctx: ScrapeContext): Promise<Scrap
     }
   }
 
-  // A tabela de resultados costuma renderizar via XHR após o load (SPA).
+  // Os resultados renderizam via XHR após o load (SPA). Espera a timeline de
+  // eventos (.hal-event) OU a tabela-resumo aparecer, e dá folga para hidratar.
   await page
-    .waitForSelector('table tr, [role="row"]', { timeout: 15000 })
+    .waitForSelector('.hal-event, .hal-event__inline, table tr, [role="row"]', { timeout: 20000 })
     .catch(() => undefined);
+  await page.waitForLoadState('networkidle').catch(() => undefined);
+  await page.waitForTimeout(1500);
 
   const needsCaptcha = await detectCaptcha(page);
   const needsLogin = await detectLogin(page, body);
-  const events = await extractEventsFromPage(page);
-  const containerHint = ctx.referenceType === 'container' ? ctx.reference : null;
+  // Extrai do HTML renderizado (pega a timeline .hal-event nova da Hapag; o
+  // extractEventsFromPage/tabela não alcança essa estrutura de divs).
+  const html = await page.content();
+  const events = extractEventsFromHtml(html);
+  const containerHint =
+    firstContainerNo(html) || (ctx.referenceType === 'container' ? ctx.reference : null);
   const containers = deriveContainers(events, containerHint);
 
   return {

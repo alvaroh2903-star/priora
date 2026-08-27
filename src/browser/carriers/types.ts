@@ -102,6 +102,13 @@ export interface CarrierMeta {
    * comercial (a página pública mostra só os eventos de movimentação).
    */
   needsLoginForDemurrage: boolean;
+  /**
+   * Usar o Scraping Browser (navegador remoto do Bright Data) para este armador,
+   * quando configurado. Portais atrás de Cloudflare interativo / SPA pesada
+   * (ex.: Hapag) precisam dele. `false` força o navegador local (mais barato)
+   * para portais simples. `undefined` = usa o Scraping Browser quando disponível.
+   */
+  needsScrapingBrowser?: boolean;
   /** Observações de implementação (o que está confirmado x a verificar). */
   notes?: string;
 }

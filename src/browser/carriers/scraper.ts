@@ -2,7 +2,8 @@ import { Page } from 'playwright';
 import { CarrierMeta, ReferenceType, TrackingResult } from './types';
 import { PortalScraper, ScrapeContext } from './scraperTypes';
 import { resolveTrackingUrl } from './registry';
-import { withPage } from '../browser';
+import { withPage, withRemotePage } from '../browser';
+import { isSBConfigured } from '../scrapingBrowser';
 import {
   acceptCookies,
   detectCaptcha,
@@ -26,6 +27,16 @@ import { isAntiCaptchaConfigured } from '../../config';
 const SCRAPERS: Record<string, PortalScraper> = {
   hapag: scrapeHapag,
 };
+
+/**
+ * Decide se este armador roda no Scraping Browser (navegador remoto que fura
+ * Cloudflare/SPA). Usa o remoto quando configurado, a não ser que o armador
+ * esteja marcado `needsScrapingBrowser: false` (portal simples → navegador local,
+ * mais barato). Sem Scraping Browser configurado, cai sempre no local.
+ */
+function shouldUseScrapingBrowser(carrier: CarrierMeta): boolean {
+  return isSBConfigured() && carrier.needsScrapingBrowser !== false;
+}
 
 /** Scraper genérico: navega, detecta login/CAPTCHA, captura o texto renderizado. */
 async function genericScrape(
@@ -90,11 +101,17 @@ export async function scrapeCarrier(
     fetchedAt: new Date().toISOString(),
   };
 
+  // Portais difíceis (Cloudflare/SPA) rodam no navegador remoto do Bright Data;
+  // simples, no Chromium local. O corpo do scraper é o MESMO nos dois casos.
+  const useRemote = shouldUseScrapingBrowser(carrier);
+  const runner = useRemote ? withRemotePage : withPage;
+
   try {
-    return await withPage(async (page) => {
+    return await runner(async (page) => {
       await page.goto(sourceUrl, { waitUntil: 'domcontentloaded' });
 
       // Anti-captcha (se configurado): tenta resolver um captcha logo na entrada.
+      // No Scraping Browser o solver é do próprio Bright Data (redundante, inócuo).
       await solveCaptchaIfPresent(page, sourceUrl);
 
       const specific = SCRAPERS[carrier.id];

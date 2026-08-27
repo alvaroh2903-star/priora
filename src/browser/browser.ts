@@ -7,6 +7,7 @@ import {
 } from 'playwright';
 import { anonymizeProxy, closeAnonymizedProxy } from 'proxy-chain';
 import { config, hasProxy } from '../config';
+import { connectSB } from './scrapingBrowser';
 
 /**
  * Priora — Módulo Demurrage / Camada de automação de navegador (Playwright)
@@ -155,6 +156,37 @@ export async function withPage<T>(
   } finally {
     await ctx.close().catch(() => {
       /* fechamento best-effort */
+    });
+  }
+}
+
+/**
+ * Igual ao `withPage`, mas rodando num navegador REMOTO do Bright Data
+ * (Scraping Browser, via CDP). O Chromium remoto já fura Cloudflare interativo,
+ * renderiza a SPA e resolve captcha — então o MESMO scraper de cada armador roda
+ * sem alteração, só que num navegador que os portais difíceis não bloqueiam.
+ * A conexão é aberta e fechada por chamada (sessão remota curta).
+ */
+export async function withRemotePage<T>(
+  fn: (page: Page, ctx: BrowserContext) => Promise<T>,
+): Promise<T> {
+  const browser = await connectSB();
+  try {
+    // O Scraping Browser já vem com um contexto default; reusa (ou cria um).
+    const ctx = browser.contexts()[0] || (await browser.newContext());
+    const page = await ctx.newPage();
+    ctx.setDefaultNavigationTimeout(config.browser.navigationTimeoutMs);
+    ctx.setDefaultTimeout(config.browser.navigationTimeoutMs);
+    try {
+      return await fn(page, ctx);
+    } finally {
+      await page.close().catch(() => {
+        /* best-effort */
+      });
+    }
+  } finally {
+    await browser.close().catch(() => {
+      /* fecha a sessão remota (para de faturar) */
     });
   }
 }

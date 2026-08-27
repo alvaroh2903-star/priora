@@ -137,7 +137,8 @@ export const CARRIERS: CarrierMeta[] = [
             ref,
           )}`,
     needsLoginForDemurrage: true,
-    notes: 'páginas track-by-container / track-by-booking (aceita B/L). Scraper de eventos implementado; afinar seletores/param ao vivo.',
+    needsScrapingBrowser: true, // Cloudflare interativo + SPA → precisa do navegador remoto.
+    notes: 'páginas track-by-container / track-by-booking (aceita B/L). Scraper de eventos (.hal-event) implementado e validado ao vivo via Scraping Browser.',
   },
   {
     id: 'cosco',

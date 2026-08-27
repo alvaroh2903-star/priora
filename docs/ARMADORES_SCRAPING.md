@@ -131,12 +131,11 @@ O passo caro (acesso + normalização + derivação) **já está pronto**; cada 
 
 ## 6. Pendências conhecidas
 
-- **Wire do Scraping Browser no pipeline de produção:** hoje `scrapeCarrier`/
-  `withPage` sobem o **Chromium local** (com proxy IPRoyal); o Scraping Browser
-  só está no diagnóstico `/health/scrape-sb`. Para o fluxo automático
-  (`/api/demurrage/bot/enrich`) furar Cloudflare, o `withPage` precisa **conectar
-  ao Scraping Browser** (CDP) para os armadores "difíceis" (flag por armador, por
-  causa do custo $/GB) e cair no local para os fáceis.
+- ✅ **Wire do Scraping Browser no pipeline de produção — FEITO.** `scrapeCarrier`
+  escolhe o navegador por armador: `withRemotePage` (Scraping Browser via CDP)
+  quando `needsScrapingBrowser !== false` e há `BRIGHTDATA_SB_AUTH`; senão
+  `withPage` (Chromium local + IPRoyal). O corpo de cada scraper é o mesmo nos
+  dois. Assim `/api/demurrage/bot/enrich` já fura Cloudflare (Hapag ponta a ponta).
 - **Refino `emptyReturn` (Hapag):** "Gated in" no destino após o "Gated out" =
   devolução do vazio (preencher `emptyReturn`).
 - **Início da contagem por cliente:** qual evento inicia o demurrage (descarga ×

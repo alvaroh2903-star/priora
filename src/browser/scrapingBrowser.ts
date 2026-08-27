@@ -41,6 +41,19 @@ function buildWSEndpoint(): string {
   return `wss://${auth}@${CDP_HOST}:${CDP_PORT}`;
 }
 
+/**
+ * Conecta ao Scraping Browser (Chromium remoto do Bright Data) via CDP e devolve
+ * o Browser. Quem chama é responsável por fechar. Usado pelo `withRemotePage`
+ * (browser.ts) para rodar QUALQUER scraper de armador contra o navegador remoto
+ * — furando Cloudflare/SPA sem trocar a lógica de cada portal.
+ */
+export async function connectSB(): Promise<Browser> {
+  if (!isSBConfigured()) {
+    throw new Error('Scraping Browser não configurado (defina BRIGHTDATA_SB_AUTH).');
+  }
+  return chromium.connectOverCDP(buildWSEndpoint(), { timeout: 30_000 });
+}
+
 export interface SBScrapeOptions {
   /** URL para navegar. */
   url: string;
