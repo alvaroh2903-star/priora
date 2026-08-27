@@ -58,8 +58,48 @@ export interface DetectionResult {
   referenceType: ReferenceType;
   carrier: CarrierMeta | null;
   /** Como o armador foi identificado. */
-  matchedBy: 'container-prefix' | 'scac' | 'none';
+  matchedBy: 'container-prefix' | 'scac' | 'bl-prefix' | 'numeric-pattern' | 'none';
 }
+
+/**
+ * Prefixos de BL/booking que NÃO coincidem com o SCAC do armador.
+ * Muitos armadores emitem BLs com prefixos de porto/escritório, não com o SCAC.
+ * Ex.: HMM usa SHAM (Shanghai), NBOZ (Ningbo), etc. em vez de HDMU/HMMU.
+ * Mapeado a partir dos BLs reais fornecidos pelo operador.
+ */
+const BL_PREFIX_MAP: Array<{ prefixes: string[]; carrierId: string }> = [
+  // HMM: prefixos de porto/escritório (37 BLs reais analisados)
+  {
+    prefixes: ['SGNM', 'SZPM', 'TSNM', 'HKGM', 'SHAZ', 'KULM', 'SHAM', 'NBOZ', 'NKGZ', 'TAOM'],
+    carrierId: 'hmm',
+  },
+  // PIL: prefixos de escritório/porto
+  {
+    prefixes: ['SHAU', 'SHPL', 'NGPN', 'SZDC', 'NNPL'],
+    carrierId: 'pil',
+  },
+  // CMA CGM: prefixos de escritório/porto
+  {
+    prefixes: ['CHN3', 'DLN0', 'QGD3', 'QGD2', 'NGP3'],
+    carrierId: 'cmacgm',
+  },
+  // Evergreen: EVGL é variante de EGLV (às vezes invertido nos BLs)
+  {
+    prefixes: ['EVGL'],
+    carrierId: 'evergreen',
+  },
+];
+
+/**
+ * Padrões numéricos puros (sem letras) que identificam armadores.
+ * COSCO e Maersk usam BLs puramente numéricos — sem prefixo SCAC.
+ */
+const NUMERIC_PATTERNS: Array<{ test: (ref: string) => boolean; carrierId: string }> = [
+  // COSCO: 10 dígitos começando com 6 (ex.: 6505127410)
+  { test: (ref) => /^\d{10}$/.test(ref) && ref[0] === '6', carrierId: 'cosco' },
+  // Maersk: 9 dígitos (ex.: 274319835) — booking references
+  { test: (ref) => /^\d{9}$/.test(ref), carrierId: 'maersk' },
+];
 
 /** Detecta o armador (e o tipo) a partir de uma referência. */
 export function detectCarrier(input: string): DetectionResult {
@@ -77,13 +117,32 @@ export function detectCarrier(input: string): DetectionResult {
     }
   }
 
-  // 2) Por SCAC/prefixo de BL ou booking.
+  // 2) Por SCAC/prefixo de BL ou booking (4 letras padronizadas).
   const byScac = CARRIERS.find((c) => c.scac.includes(prefix4));
   if (byScac) {
     return { reference, referenceType, carrier: byScac, matchedBy: 'scac' };
   }
 
-  // 3) Último recurso: prefixo de contêiner mesmo sem passar no check digit
+  // 3) Prefixos de BL não-SCAC (porto/escritório) — mapeados por dados reais.
+  const byBlPrefix = BL_PREFIX_MAP.find((bp) => bp.prefixes.includes(prefix4));
+  if (byBlPrefix) {
+    const carrier = CARRIERS.find((c) => c.id === byBlPrefix.carrierId) || null;
+    if (carrier) {
+      return { reference, referenceType, carrier, matchedBy: 'bl-prefix' };
+    }
+  }
+
+  // 4) Padrões numéricos puros (COSCO 10 dígitos, Maersk 9 dígitos).
+  for (const np of NUMERIC_PATTERNS) {
+    if (np.test(reference)) {
+      const carrier = CARRIERS.find((c) => c.id === np.carrierId) || null;
+      if (carrier) {
+        return { reference, referenceType: 'booking', carrier, matchedBy: 'numeric-pattern' };
+      }
+    }
+  }
+
+  // 5) Último recurso: prefixo de contêiner mesmo sem passar no check digit
   //    (ex.: número digitado com erro), só para sugerir o armador.
   const byPrefixLoose = CARRIERS.find((c) => c.containerPrefixes.includes(prefix4));
   if (byPrefixLoose) {
@@ -92,3 +151,4 @@ export function detectCarrier(input: string): DetectionResult {
 
   return { reference, referenceType, carrier: null, matchedBy: 'none' };
 }
+
