@@ -23,7 +23,7 @@ import { tryFillSearch } from './browser/carriers/pageUtils';
 import { getAntiCaptchaBalance } from './browser/antiCaptcha';
 import { fetchViaUnblocker, isUnblockerConfigured } from './browser/webUnblocker';
 import { fetchViaBrightData, isBrightDataConfigured } from './browser/brightData';
-import { scrapeViaSB, isSBConfigured } from './browser/scrapingBrowser';
+import { scrapeViaSB, driveTrackingPage, isSBConfigured } from './browser/scrapingBrowser';
 import { extractEventsFromHtml, deriveContainers, firstContainerNo } from './browser/carriers/scrapers/hapag';
 import { isAntiCaptchaConfigured } from './config';
 import { getActiveHomeAccountId } from './auth/microsoftAccount';
@@ -462,7 +462,12 @@ app.get('/health/scrape-sb', async (req, res) => {
   const token = (process.env.DIAG_TOKEN || '').trim();
   if (!token) return res.status(404).json({ error: 'Desativado (defina DIAG_TOKEN).' });
   if (String(req.query.token || '') !== token) return res.status(401).json({ error: 'token inválido.' });
-  if (!isSBConfigured()) return res.status(503).json({ error: 'Scraping Browser não configurado (defina BRIGHTDATA_SB_AUTH).' });
+  // via=local usa o Chromium LOCAL + IPRoyal (IGNORA robots.txt) — pros portais que
+  // o Bright Data recusa por robots (HMM, Maersk…). via=sb (padrão) usa o remoto.
+  const engine = String(req.query.via || 'sb').trim() === 'local' ? 'local' : 'sb';
+  if (engine === 'sb' && !isSBConfigured()) {
+    return res.status(503).json({ error: 'Scraping Browser não configurado (defina BRIGHTDATA_SB_AUTH).' });
+  }
 
   const rawUrl = String(req.query.url || '').trim();
   const ref = String(req.query.ref || '').trim();
@@ -473,7 +478,10 @@ app.get('/health/scrape-sb', async (req, res) => {
 
   const startedAt = Date.now();
   try {
-    const sb = await scrapeViaSB({ url, reference: ref || rawUrl });
+    const sb =
+      engine === 'local'
+        ? { ...(await withPage((page) => driveTrackingPage(page, { url: url!, reference: ref || rawUrl }))), ms: Date.now() - startedAt }
+        : await scrapeViaSB({ url, reference: ref || rawUrl });
     // Extrai eventos do HTML renderizado.
     let events: unknown[] = [];
     let containers: unknown[] = [];
@@ -502,7 +510,7 @@ app.get('/health/scrape-sb', async (req, res) => {
     }
     res.json({
       ok: sb.ok,
-      via: 'sb',
+      via: engine,
       url,
       ms: sb.ms,
       result: {
@@ -519,7 +527,7 @@ app.get('/health/scrape-sb', async (req, res) => {
       },
     });
   } catch (e) {
-    res.status(502).json({ ok: false, via: 'sb', url, ms: Date.now() - startedAt, error: (e as Error).message });
+    res.status(502).json({ ok: false, via: engine, url, ms: Date.now() - startedAt, error: (e as Error).message });
   }
 });
 

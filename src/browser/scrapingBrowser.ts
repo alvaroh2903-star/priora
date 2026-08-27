@@ -76,100 +76,87 @@ export interface SBScrapeResult {
   error?: string;
 }
 
+const RESULT_SELECTOR =
+  'table tr, [role="row"], [role="grid"], .trck-result, .tracking-result, .hal-event, .hal-event__inline';
+
 /**
- * Conecta ao Scraping Browser, navega para a URL, espera a SPA renderizar,
- * aceita cookies, e retorna o HTML completo + texto.
+ * Pilota UMA página (local OU remota) até os resultados do rastreio: navega,
+ * aceita cookies, espera a SPA/tabela, e se a referência não aparecer preenche
+ * o formulário de busca. Retorna HTML + texto + contagem. É a lógica ÚNICA usada
+ * tanto pelo Scraping Browser (remoto) quanto pelo navegador local + IPRoyal —
+ * o local IGNORA robots.txt, então serve nos portais que o Bright Data recusa.
  */
-export async function scrapeViaSB(opts: SBScrapeOptions): Promise<SBScrapeResult> {
-  const startedAt = Date.now();
+export async function driveTrackingPage(
+  page: Page,
+  opts: SBScrapeOptions,
+): Promise<Omit<SBScrapeResult, 'ms'>> {
   const navTimeout = opts.navigationTimeout ?? 60_000;
   const postWait = opts.postLoadWait ?? 8000;
 
-  let browser: Browser | null = null;
+  let navError: string | null = null;
   try {
-    // Conecta ao Chromium remoto do Bright Data via CDP.
-    browser = await chromium.connectOverCDP(buildWSEndpoint(), {
-      timeout: 30_000,
-    });
+    await page.goto(opts.url, { waitUntil: 'domcontentloaded', timeout: navTimeout });
+  } catch (e) {
+    navError = (e as Error).message;
+  }
 
-    const context = browser.contexts()[0] || await browser.newContext();
-    const page: Page = await context.newPage();
+  await acceptCookies(page);
+  await page.waitForSelector(RESULT_SELECTOR, { timeout: 15_000 }).catch(() => {});
+  await page.waitForLoadState('networkidle', { timeout: postWait }).catch(() => {});
+  await page.waitForTimeout(2000); // folga p/ Vue/React hidratar
 
-    // Navega para a URL. O Scraping Browser fura Cloudflare automaticamente.
-    let navError: string | null = null;
-    try {
-      await page.goto(opts.url, {
-        waitUntil: 'domcontentloaded',
-        timeout: navTimeout,
-      });
-    } catch (e) {
-      navError = (e as Error).message;
-    }
-
-    const RESULT_SELECTOR =
-      'table tr, [role="row"], [role="grid"], .trck-result, .tracking-result';
-
-    // Aceita cookies (OneTrust etc.) reutilizando o util dos scrapers.
-    await acceptCookies(page);
-
-    // Espera a SPA renderizar (tabela/grid) + os XHRs terminarem.
-    await page.waitForSelector(RESULT_SELECTOR, { timeout: 15_000 }).catch(() => {});
-    await page.waitForLoadState('networkidle', { timeout: postWait }).catch(() => {});
-    await page.waitForTimeout(2000); // folga p/ Vue/React hidratar
-
-    // Se a referência ainda NÃO apareceu, o deep link não auto-buscou: preenche o
-    // formulário de busca e submete (muitos portais SPA exigem esse passo). Isso
-    // reaproveita a mesma lógica dos scrapers locais (tryFillSearch).
-    if (opts.reference) {
-      const body0 = (await page.textContent('body').catch(() => '')) || '';
-      if (!body0.toUpperCase().includes(opts.reference.toUpperCase())) {
-        if (await tryFillSearch(page, opts.reference)) {
-          await page.waitForLoadState('networkidle', { timeout: postWait }).catch(() => {});
-          await page.waitForSelector(RESULT_SELECTOR, { timeout: 15_000 }).catch(() => {});
-          await page.waitForTimeout(2000);
-          await acceptCookies(page);
-        }
+  // Se a referência ainda NÃO apareceu, o deep link não auto-buscou: preenche o
+  // formulário e submete (muitos portais exigem). Reusa o tryFillSearch.
+  if (opts.reference) {
+    const body0 = (await page.textContent('body').catch(() => '')) || '';
+    if (!body0.toUpperCase().includes(opts.reference.toUpperCase())) {
+      if (await tryFillSearch(page, opts.reference)) {
+        await page.waitForLoadState('networkidle', { timeout: postWait }).catch(() => {});
+        await page.waitForSelector(RESULT_SELECTOR, { timeout: 15_000 }).catch(() => {});
+        await page.waitForTimeout(2000);
+        await acceptCookies(page);
       }
     }
+  }
 
-    const title = await page.title().catch(() => '');
-    const html = await page.content().catch(() => '');
-    // innerText devolve só o texto VISÍVEL (sem CSS de <style> nem <script>),
-    // diferente de textContent — deixa o textSnippet/mentionsRef mais úteis.
-    const textContent = (
-      (await page.innerText('body').catch(() => '')) ||
-      (await page.textContent('body').catch(() => '')) ||
-      ''
-    )
-      .replace(/\s+/g, ' ')
-      .trim();
-    const rowCount = await page.locator('table tr, [role="row"]').count().catch(() => 0);
-    const mentionsRef = opts.reference
-      ? textContent.toUpperCase().includes(opts.reference.toUpperCase())
-      : false;
+  const title = await page.title().catch(() => '');
+  const html = await page.content().catch(() => '');
+  const textContent = (
+    (await page.innerText('body').catch(() => '')) ||
+    (await page.textContent('body').catch(() => '')) ||
+    ''
+  )
+    .replace(/\s+/g, ' ')
+    .trim();
+  const rowCount = await page.locator('table tr, [role="row"]').count().catch(() => 0);
+  const mentionsRef = opts.reference
+    ? textContent.toUpperCase().includes(opts.reference.toUpperCase())
+    : false;
 
-    await page.close().catch(() => {});
+  return { ok: !navError && html.length > 0, html, textContent, title, mentionsRef, rowCount, error: navError || undefined };
+}
 
-    return {
-      ok: !navError && html.length > 0,
-      html,
-      textContent,
-      title,
-      mentionsRef,
-      rowCount,
-      ms: Date.now() - startedAt,
-      error: navError || undefined,
-    };
+/**
+ * Conecta ao Scraping Browser (remoto, Bright Data) e pilota a página até os
+ * resultados. Usado nos portais atrás de Cloudflare interativo (ex.: Hapag).
+ */
+export async function scrapeViaSB(opts: SBScrapeOptions): Promise<SBScrapeResult> {
+  const startedAt = Date.now();
+  let browser: Browser | null = null;
+  try {
+    browser = await connectSB();
+    const context = browser.contexts()[0] || (await browser.newContext());
+    const page: Page = await context.newPage();
+    try {
+      const r = await driveTrackingPage(page, opts);
+      return { ...r, ms: Date.now() - startedAt };
+    } finally {
+      await page.close().catch(() => {});
+    }
   } catch (e) {
     return {
-      ok: false,
-      html: '',
-      textContent: '',
-      title: '',
-      mentionsRef: false,
-      rowCount: 0,
-      ms: Date.now() - startedAt,
-      error: (e as Error).message,
+      ok: false, html: '', textContent: '', title: '', mentionsRef: false, rowCount: 0,
+      ms: Date.now() - startedAt, error: (e as Error).message,
     };
   } finally {
     if (browser) await browser.close().catch(() => {});
