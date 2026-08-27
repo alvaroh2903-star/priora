@@ -68,6 +68,19 @@ services:
         value: anti-captcha          # anti-captcha | 2captcha (usado nas próximas etapas)
       - key: ANTICAPTCHA_KEY
         sync: false                  # chave do serviço de captcha (cole no painel)
+      # --- APIs oficiais dos armadores (fonte híbrida: fallback do scraping) ---
+      - key: MAERSK_API_KEY
+        sync: false                  # Maersk Track & Trace (Consumer-Key). apiFirst (scraping bloqueado)
+      - key: MAERSK_TRACK_URL
+        sync: false                  # ex.: https://api.maersk.com/track (confirmar no developer.maersk.com; use {ref} se path param)
+      - key: MAERSK_AUTH_HEADER
+        value: Consumer-Key          # nome do header de auth da Maersk
+      - key: HMM_API_KEY
+        sync: false                  # HMM (quando conseguir a chave)
+      - key: HMM_TRACK_URL
+        sync: false
+      - key: HMM_AUTH_HEADER
+        value: x-api-key
       # --- Supabase (multiusuário: contas Priora isoladas) ---
       - key: SUPABASE_URL
         sync: false                  # Project Settings → API → Project URL

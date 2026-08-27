@@ -109,6 +109,12 @@ export interface CarrierMeta {
    * para portais simples. `undefined` = usa o Scraping Browser quando disponível.
    */
   needsScrapingBrowser?: boolean;
+  /**
+   * Tenta a API OFICIAL ANTES do scraping. Ligar para armadores cujo portal
+   * bloqueia scraping mas que têm API (ex.: Maersk). Sem isto, a API é só
+   * fallback quando o scraping não traz resultado.
+   */
+  apiFirst?: boolean;
   /** Observações de implementação (o que está confirmado x a verificar). */
   notes?: string;
 }

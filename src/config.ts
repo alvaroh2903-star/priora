@@ -120,6 +120,30 @@ export const config = {
     zone: (process.env.BRIGHTDATA_ZONE || '').trim(),
   },
   /**
+   * APIs OFICIAIS de rastreio dos armadores (fonte de dados ao lado do scraping).
+   * Estratégia híbrida: scraping é o caminho primário (cobertura/tração); a API
+   * oficial entra como FALLBACK onde o scraping não vence — ou como fonte
+   * PRINCIPAL quando o portal bloqueia scraping (ex.: Maersk, robots.txt).
+   * A maioria segue o padrão DCSA (Track & Trace), então um mapper serve p/ vários.
+   */
+  carrierApis: {
+    // Maersk Track & Trace (Consumer-Key no header). Endpoint e nome do header
+    // configuráveis pois variam por produto/versão da conta. Credenciais só no Render.
+    maersk: {
+      apiKey: (process.env.MAERSK_API_KEY || '').trim(),
+      // Ex. (confirmar no developer.maersk.com): base da Track & Trace.
+      baseUrl: (process.env.MAERSK_TRACK_URL || 'https://api.maersk.com/track').trim().replace(/\/+$/, ''),
+      // Header de auth (padrão Maersk: "Consumer-Key"). Configurável p/ OAuth/variações.
+      authHeader: (process.env.MAERSK_AUTH_HEADER || 'Consumer-Key').trim(),
+    },
+    // HMM (o usuário vai conseguir a chave). Deixado pronto p/ preencher.
+    hmm: {
+      apiKey: (process.env.HMM_API_KEY || '').trim(),
+      baseUrl: (process.env.HMM_TRACK_URL || '').trim().replace(/\/+$/, ''),
+      authHeader: (process.env.HMM_AUTH_HEADER || 'x-api-key').trim(),
+    },
+  },
+  /**
    * Serviço de resolução de CAPTCHA (ex.: anti-captcha.com / 2captcha), usado
    * pelos scrapers quando um portal exige. Sem a chave, o passo de captcha fica
    * indisponível e o scraper falha graciosamente. (Ligado nas próximas etapas.)

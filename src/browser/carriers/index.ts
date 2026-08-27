@@ -1,6 +1,7 @@
 import { CARRIERS, getCarrier, resolveTrackingUrl } from './registry';
 import { detectCarrier, classifyReference, normalizeRef, isValidContainer } from './detect';
 import { scrapeCarrier } from './scraper';
+import { hasApiSource, fetchViaApi } from './apiSources';
 import { CarrierMeta, ReferenceType, TrackingResult } from './types';
 
 /**
@@ -61,7 +62,21 @@ export async function trackShipment(
     );
   }
 
-  return scrapeCarrier(carrier, reference, referenceType);
+  // Estratégia HÍBRIDA (scraping + API oficial):
+  // 1) apiFirst (portal bloqueia scraping, mas há API — ex.: Maersk) → tenta API antes.
+  if (carrier.apiFirst && hasApiSource(carrier.id)) {
+    const viaApi = await fetchViaApi(carrier, reference, referenceType).catch(() => null);
+    if (viaApi && viaApi.ok) return viaApi;
+  }
+  // 2) Caminho primário: scraping (cobertura/tração).
+  const scraped = await scrapeCarrier(carrier, reference, referenceType);
+  if (scraped.ok) return scraped;
+  // 3) Fallback: se o scraping não trouxe nada e há API, tenta a API oficial.
+  if (!carrier.apiFirst && hasApiSource(carrier.id)) {
+    const viaApi = await fetchViaApi(carrier, reference, referenceType).catch(() => null);
+    if (viaApi && viaApi.ok) return viaApi;
+  }
+  return scraped;
 }
 
 /** Só a detecção (sem browser) — útil para a UI sugerir o armador ao digitar. */
