@@ -147,9 +147,17 @@ export const CARRIERS: CarrierMeta[] = [
     name: 'COSCO Shipping',
     scac: ['COSU'],
     containerPrefixes: ['CBHU', 'CCLU', 'COSU', 'CSNU', 'CSLU', 'CBEU', 'CIPU'],
-    trackingUrl: 'https://elines.coscoshipping.com/ebusiness/cargotracking',
+    trackingUrl: 'https://elines.coscoshipping.com/info/tracking/',
+    // Deep link por ROTA HASH: /info/tracking/#{ref}?numberType=bl|bkg|cntr.
+    // (O /ebusiness/cargotracking caía na homepage — era a URL errada.)
+    buildTrackingUrl: (ref, type) => {
+      // COSCO numérico (10 díg) = BL; contêiner = cntr. (detect marca numérico como
+      // "booking" por padrão, mas na COSCO esses números são B/L → força 'bl'.)
+      const nt = type === 'container' ? 'cntr' : 'bl';
+      return `https://elines.coscoshipping.com/info/tracking/#${encodeURIComponent(ref)}?numberType=${nt}`;
+    },
     needsLoginForDemurrage: true,
-    notes: 'SPA; deep link a confirmar. Verificar seletores.',
+    notes: 'deep link por rota hash (#{ref}?numberType=). BLs numéricos (10 díg começando com 6). Parser a capturar.',
   },
   {
     id: 'oocl',
