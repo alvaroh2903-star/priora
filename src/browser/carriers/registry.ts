@@ -147,17 +147,11 @@ export const CARRIERS: CarrierMeta[] = [
     name: 'COSCO Shipping',
     scac: ['COSU'],
     containerPrefixes: ['CBHU', 'CCLU', 'COSU', 'CSNU', 'CSLU', 'CBEU', 'CIPU'],
-    trackingUrl: 'https://elines.coscoshipping.com/info/tracking/',
-    // Deep link por ROTA HASH: /info/tracking/#{ref}?numberType=bl|bkg|cntr.
-    // (O /ebusiness/cargotracking caía na homepage — era a URL errada.)
-    buildTrackingUrl: (ref, type) => {
-      // COSCO numérico (10 díg) = BL; contêiner = cntr. (detect marca numérico como
-      // "booking" por padrão, mas na COSCO esses números são B/L → força 'bl'.)
-      const nt = type === 'container' ? 'cntr' : 'bl';
-      return `https://elines.coscoshipping.com/info/tracking/#${encodeURIComponent(ref)}?numberType=${nt}`;
-    },
+    trackingUrl: 'https://elines.coscoshipping.com/ebusiness/cargotracking',
     needsLoginForDemurrage: true,
-    notes: 'deep link por rota hash (#{ref}?numberType=). BLs numéricos (10 díg começando com 6). Parser a capturar.',
+    // O deep-link /info/tracking/#... deu 404 (rota errada p/ este domínio).
+    // COSCO é SPA hash-router: precisa investigar o fluxo real (form no app).
+    notes: 'SPA hash-router; deep-link a investigar (o /info/tracking/ deu 404). Form no app. BLs numéricos 10 díg.',
   },
   {
     id: 'oocl',
