@@ -163,14 +163,12 @@ export async function scrapeViaSB(opts: SBScrapeOptions): Promise<SBScrapeResult
   let browser: Browser | null = null;
   try {
     browser = await connectSB();
+    // Reusa o contexto E a página que o provedor já entrega (Scrapfly gerencia o
+    // fingerprint na sessão) — criar contexto/página novos pode perdê-lo.
     const context = browser.contexts()[0] || (await browser.newContext());
-    const page: Page = await context.newPage();
-    try {
-      const r = await driveTrackingPage(page, opts);
-      return { ...r, ms: Date.now() - startedAt };
-    } finally {
-      await page.close().catch(() => {});
-    }
+    const page: Page = context.pages()[0] || (await context.newPage());
+    const r = await driveTrackingPage(page, opts);
+    return { ...r, ms: Date.now() - startedAt };
   } catch (e) {
     return {
       ok: false, html: '', textContent: '', title: '', mentionsRef: false, rowCount: 0,

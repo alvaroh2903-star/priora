@@ -172,18 +172,13 @@ export async function withRemotePage<T>(
 ): Promise<T> {
   const browser = await connectSB();
   try {
-    // O Scraping Browser já vem com um contexto default; reusa (ou cria um).
+    // Reusa o contexto E a página que o provedor já entrega (Scrapfly/Bright Data
+    // gerenciam o fingerprint na sessão) — criar novos pode perdê-lo.
     const ctx = browser.contexts()[0] || (await browser.newContext());
-    const page = await ctx.newPage();
+    const page = ctx.pages()[0] || (await ctx.newPage());
     ctx.setDefaultNavigationTimeout(config.browser.navigationTimeoutMs);
     ctx.setDefaultTimeout(config.browser.navigationTimeoutMs);
-    try {
-      return await fn(page, ctx);
-    } finally {
-      await page.close().catch(() => {
-        /* best-effort */
-      });
-    }
+    return await fn(page, ctx);
   } finally {
     await browser.close().catch(() => {
       /* fecha a sessão remota (para de faturar) */
