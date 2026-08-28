@@ -108,18 +108,21 @@ export async function driveTrackingPage(
   page: Page,
   opts: SBScrapeOptions,
 ): Promise<Omit<SBScrapeResult, 'ms'>> {
-  const navTimeout = opts.navigationTimeout ?? 60_000;
+  const navTimeout = opts.navigationTimeout ?? 90_000;
   const postWait = opts.postLoadWait ?? 8000;
 
   let navError: string | null = null;
   try {
-    await page.goto(opts.url, { waitUntil: 'domcontentloaded', timeout: navTimeout });
+    // 'commit' retorna assim que a navegação começa — não trava em SPAs pesadas
+    // (ex.: ONE) que demoram no 'domcontentloaded'. A espera pelos resultados
+    // (waitForSelector/networkidle abaixo) é quem garante o render.
+    await page.goto(opts.url, { waitUntil: 'commit', timeout: navTimeout });
   } catch (e) {
     navError = (e as Error).message;
   }
 
   await acceptCookies(page);
-  await page.waitForSelector(RESULT_SELECTOR, { timeout: 15_000 }).catch(() => {});
+  await page.waitForSelector(RESULT_SELECTOR, { timeout: 25_000 }).catch(() => {});
   await page.waitForLoadState('networkidle', { timeout: postWait }).catch(() => {});
   await page.waitForTimeout(2000); // folga p/ Vue/React hidratar
 
