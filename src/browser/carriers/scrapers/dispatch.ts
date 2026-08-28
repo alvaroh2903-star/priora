@@ -1,6 +1,7 @@
 import { TrackingEvent } from '../types';
 import { extractEventsFromHtml as extractHapagOrGeneric } from './hapag';
 import { extractMaerskEvents } from './maersk';
+import { extractOneEvents } from './one';
 
 /**
  * Priora — Dispatcher multi-armador de extração de eventos.
@@ -15,6 +16,11 @@ export function extractCarrierEvents(html: string): TrackingEvent[] {
   if (/transport-plan__list__item/i.test(html)) {
     const m = extractMaerskEvents(html);
     if (m.length) return m;
+  }
+  // ONE — tabela React (EventTable_table-row / EventTable_terminal-name).
+  if (/EventTable_table-row/i.test(html)) {
+    const o = extractOneEvents(html);
+    if (o.length) return o;
   }
   // Hapag (timeline .hal-event) → tabela genérica <tr>/<td> / grade ARIA.
   return extractHapagOrGeneric(html);
