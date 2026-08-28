@@ -83,11 +83,35 @@ export async function tryFillSearch(page: Page, ref: string): Promise<boolean> {
     'input[placeholder*="track" i]',
     'input[type="text"]',
   ];
+  // Botões de busca comuns (muitos forms/servlets NÃO submetem no Enter).
+  const searchButtons = [
+    'button:has-text("Search")',
+    'button:has-text("Track")',
+    'button:has-text("Trace")',
+    'a:has-text("Track")',
+    'a:has-text("Trace")',
+    'input[type="submit"]',
+    'button[type="submit"]',
+    'input[value*="Search" i]',
+    'input[value*="Track" i]',
+    '[onclick*="track" i]',
+    '[onclick*="search" i]',
+  ];
   for (const sel of candidates) {
     const field = page.locator(sel).first();
     if ((await field.count().catch(() => 0)) > 0) {
       await field.fill(ref).catch(() => undefined);
-      await field.press('Enter').catch(() => undefined);
+      // 1) tenta clicar um botão de busca; 2) senão, Enter.
+      let clicked = false;
+      for (const b of searchButtons) {
+        const btn = page.locator(b).first();
+        if ((await btn.count().catch(() => 0)) > 0) {
+          await btn.click({ timeout: 3000 }).catch(() => undefined);
+          clicked = true;
+          break;
+        }
+      }
+      if (!clicked) await field.press('Enter').catch(() => undefined);
       return true;
     }
   }
