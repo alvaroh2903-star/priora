@@ -24,7 +24,8 @@ import { getAntiCaptchaBalance } from './browser/antiCaptcha';
 import { fetchViaUnblocker, isUnblockerConfigured } from './browser/webUnblocker';
 import { fetchViaBrightData, isBrightDataConfigured } from './browser/brightData';
 import { scrapeViaSB, driveTrackingPage, isSBConfigured, scrapeBrowserProvider } from './browser/scrapingBrowser';
-import { extractEventsFromHtml, deriveContainers, firstContainerNo } from './browser/carriers/scrapers/hapag';
+import { deriveContainers, firstContainerNo } from './browser/carriers/scrapers/hapag';
+import { extractCarrierEvents } from './browser/carriers/scrapers/dispatch';
 import { isAntiCaptchaConfigured } from './config';
 import { getActiveHomeAccountId } from './auth/microsoftAccount';
 import { prioraAuthRouter, ensureOrgForUser } from './auth/prioraAuthRoutes';
@@ -357,7 +358,7 @@ async function scrapeAndParse(
   let events: unknown[] = [];
   let containers: unknown[] = [];
   try {
-    const parsed = extractEventsFromHtml(html);
+    const parsed = extractCarrierEvents(html);
     events = parsed;
     containers = deriveContainers(parsed, firstContainerNo(html));
   } catch {
@@ -487,7 +488,7 @@ app.get('/health/scrape-sb', async (req, res) => {
     let events: unknown[] = [];
     let containers: unknown[] = [];
     try {
-      const parsed = extractEventsFromHtml(sb.html);
+      const parsed = extractCarrierEvents(sb.html);
       events = parsed;
       containers = deriveContainers(parsed, firstContainerNo(sb.html));
     } catch { /* best-effort */ }

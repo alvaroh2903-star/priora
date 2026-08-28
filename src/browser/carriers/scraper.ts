@@ -11,7 +11,8 @@ import {
   getBodyText,
   tryFillSearch,
 } from './pageUtils';
-import { scrapeHapag } from './scrapers/hapag';
+import { scrapeHapag, deriveContainers, firstContainerNo } from './scrapers/hapag';
+import { extractCarrierEvents } from './scrapers/dispatch';
 import { solveCaptchaIfPresent } from '../antiCaptcha';
 import { isAntiCaptchaConfigured } from '../../config';
 
@@ -45,31 +46,60 @@ async function genericScrape(
   usedDeepLink: boolean,
 ): Promise<Partial<TrackingResult>> {
   await acceptCookies(page);
+  // Espera os resultados renderizarem (timeline Maersk, .hal-event, tabela…).
+  await page
+    .waitForSelector(
+      '.transport-plan__list__item, [data-test="milestone"], .hal-event, table tr, [role="row"]',
+      { timeout: 15000 },
+    )
+    .catch(() => undefined);
   await page.waitForLoadState('networkidle').catch(() => undefined);
+  await page.waitForTimeout(1500);
 
-  if (!usedDeepLink) {
-    await tryFillSearch(page, ctx.reference);
-    await page.waitForLoadState('networkidle').catch(() => undefined);
-    await acceptCookies(page);
+  let body = await getBodyText(page);
+  // Se a referência não apareceu (deep link não auto-buscou), preenche o form.
+  if (!usedDeepLink || !body.toUpperCase().includes(ctx.reference.toUpperCase())) {
+    if (await tryFillSearch(page, ctx.reference)) {
+      await page.waitForLoadState('networkidle').catch(() => undefined);
+      await acceptCookies(page);
+      await page.waitForTimeout(1500);
+      body = await getBodyText(page);
+    }
   }
 
-  const body = await getBodyText(page);
   const needsCaptcha = await detectCaptcha(page);
   const needsLogin = await detectLogin(page, body);
+
+  // Extração ESTRUTURADA multi-armador (dispatcher: Maersk, tabelas…) do DOM.
+  const html = await page.content();
+  const events = extractCarrierEvents(html);
+  if (events.length > 0) {
+    const containerHint =
+      firstContainerNo(html) || (ctx.referenceType === 'container' ? ctx.reference : null);
+    return {
+      events,
+      containers: deriveContainers(events, containerHint),
+      needsCaptcha,
+      needsLogin,
+      ok: true,
+      message: `${events.length} evento(s) extraído(s) do portal.`,
+    };
+  }
+
+  // Sem estrutura reconhecida ainda: texto cru p/ a Clara + diagnóstico honesto.
   const raw = body.slice(0, 4000);
   const mentionsRef = raw.toUpperCase().includes(ctx.reference.toUpperCase());
-
   return {
     needsCaptcha,
     needsLogin,
     raw,
-    ok: mentionsRef && !needsLogin && !needsCaptcha,
+    ok: false,
     message: needsCaptcha
       ? 'Portal exigiu CAPTCHA (resolução entra na próxima etapa).'
       : needsLogin
       ? 'Portal exigiu login (autenticação entra na próxima etapa).'
       : mentionsRef
-      ? 'Página carregada. Scraper específico deste portal a implementar.'
+      ? 'Página carregada. Parser específico deste portal a implementar.'
       : 'Página carregada, mas a referência não apareceu (verificar deep link/seletores).',
   };
 }

@@ -130,7 +130,7 @@ function rowToEvent(cells: string[]): TrackingEvent | null {
   return { date, status, location, vessel: null, voyage: null, type: classifyEvent(status) };
 }
 
-function dedupe(events: TrackingEvent[]): TrackingEvent[] {
+export function dedupe(events: TrackingEvent[]): TrackingEvent[] {
   const seen = new Set<string>();
   const out: TrackingEvent[] = [];
   for (const e of events) {
@@ -150,7 +150,7 @@ function dedupe(events: TrackingEvent[]): TrackingEvent[] {
  * ------------------------------------------------------------------------- */
 
 /** Remove tags e normaliza entidades/espaços de um trecho de HTML. */
-function stripTags(s: string): string {
+export function stripTags(s: string): string {
   return s
     .replace(/<[^>]+>/g, ' ')
     .replace(/&nbsp;/gi, ' ')

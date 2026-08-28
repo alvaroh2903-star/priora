@@ -19,7 +19,7 @@ const RULES: Array<[NormalizedEventType, RegExp]> = [
   ],
   ['available', /available|disponib|released|liberad|ready for (delivery|pickup)/i],
   ['discharge', /discharg|desembarq|unload/i],
-  ['berth', /berth|atrac|vessel arrived|arriv.*(port|terminal|vessel)/i],
+  ['berth', /berth|atrac|vessel\s+arriv|arriv.*(port|terminal|vessel)/i],
 ];
 
 /** Classifica a descrição de um evento no enum normalizado. */

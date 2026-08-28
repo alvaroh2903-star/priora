@@ -28,9 +28,9 @@ export const CARRIERS: CarrierMeta[] = [
     // Deep link amplamente usado: /tracking/{referência}.
     buildTrackingUrl: (ref) => `https://www.maersk.com/tracking/${encodeURIComponent(ref)}`,
     needsLoginForDemurrage: true,
-    // Bright Data recusa por robots.txt → usa a API oficial (Consumer-Key) primeiro.
-    apiFirst: true,
-    notes: 'scraping bloqueado (robots.txt no Bright Data) → API oficial DCSA (MAERSK_API_KEY). BLs numéricos de 9 dígitos.',
+    // Scrapfly raspa a Maersk (Bright Data recusava por robots.txt). Scraping é
+    // primário; a API oficial (MAERSK_API_KEY) fica como fallback. BLs 9 dígitos.
+    notes: 'parser da transport-plan (data-test) implementado; raspa via Scrapfly. API oficial DCSA como fallback.',
   },
   {
     id: 'one',
