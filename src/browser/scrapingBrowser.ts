@@ -140,6 +140,23 @@ export async function driveTrackingPage(
     }
   }
 
+  // Alguns portais escondem os eventos completos atrás de um link "detalhe" que
+  // carrega via XHR (ex.: PIL, link <a class="trackinfo">). Clica e espera popular.
+  const detailLinks = page.locator('a.trackinfo, a.trackinfo b');
+  const nDetail = await detailLinks.count().catch(() => 0);
+  if (nDetail > 0) {
+    for (let i = 0; i < Math.min(nDetail, 4); i++) {
+      await detailLinks.nth(i).click({ timeout: 3000 }).catch(() => undefined);
+      await page.waitForTimeout(800);
+    }
+    // Espera o corpo de detalhe (sub-info-table) deixar de estar vazio/hidden.
+    await page
+      .waitForSelector('.sub-info-table tr, .sub-info-table td', { timeout: 12000 })
+      .catch(() => undefined);
+    await page.waitForLoadState('networkidle', { timeout: postWait }).catch(() => undefined);
+    await page.waitForTimeout(1500);
+  }
+
   const title = await page.title().catch(() => '');
   const html = await page.content().catch(() => '');
   const textContent = (
