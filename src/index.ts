@@ -478,12 +478,15 @@ app.get('/health/scrape-sb', async (req, res) => {
   else if (ref) url = detect(ref).carrier?.trackingUrl || undefined;
   if (!url) return res.status(400).json({ error: 'Informe ?url=<URL> ou ?ref=<BL|contêiner>.' });
 
+  // ?probe=1 coleta o inventário de inputs/selects/botões da página (revela os
+  // seletores REAIS do form — COSCO/HMM — sem chutar num teste ao vivo só).
+  const probe = ['1', 'true', 'yes'].includes(String(req.query.probe || '').toLowerCase());
   const startedAt = Date.now();
   try {
     const sb =
       engine === 'local'
-        ? { ...(await withPage((page) => driveTrackingPage(page, { url: url!, reference: ref || rawUrl }))), ms: Date.now() - startedAt }
-        : await scrapeViaSB({ url, reference: ref || rawUrl });
+        ? { ...(await withPage((page) => driveTrackingPage(page, { url: url!, reference: ref || rawUrl, inventory: probe }))), ms: Date.now() - startedAt }
+        : await scrapeViaSB({ url, reference: ref || rawUrl, inventory: probe });
     // Extrai eventos do HTML renderizado.
     let events: unknown[] = [];
     let containers: unknown[] = [];
@@ -525,6 +528,7 @@ app.get('/health/scrape-sb', async (req, res) => {
         containers,
         textSnippet: sb.textContent.slice(0, 3000),
         htmlSlice,
+        inventory: sb.inventory || undefined,
         error: sb.error || null,
       },
     });

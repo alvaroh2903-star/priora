@@ -81,6 +81,37 @@ export interface SBScrapeOptions {
   navigationTimeout?: number;
   /** Tempo extra pós-load para esperar a SPA hidratar (ms, default: 8s). */
   postLoadWait?: number;
+  /**
+   * Coleta um inventário dos elementos interativos (inputs/selects/botões/
+   * iframes/forms) ANTES de fechar o browser. Diagnóstico: revela os seletores
+   * REAIS do formulário (COSCO, HMM…) sem chutar — um único teste ao vivo.
+   */
+  inventory?: boolean;
+}
+
+/** Descrição de um elemento interativo para diagnóstico de formulário. */
+export interface DomElementInfo {
+  tag: string;
+  type?: string | null;
+  name?: string | null;
+  id?: string | null;
+  placeholder?: string | null;
+  ariaLabel?: string | null;
+  className?: string | null;
+  text?: string | null;
+  value?: string | null;
+  options?: string[];
+  visible: boolean;
+}
+
+export interface DomInventory {
+  url: string;
+  frameCount: number;
+  inputs: DomElementInfo[];
+  selects: DomElementInfo[];
+  buttons: DomElementInfo[];
+  iframes: { src: string | null; title: string | null }[];
+  forms: { action: string | null; id: string | null; className: string | null }[];
 }
 
 export interface SBScrapeResult {
@@ -91,11 +122,103 @@ export interface SBScrapeResult {
   mentionsRef: boolean;
   rowCount: number;
   ms: number;
+  inventory?: DomInventory;
   error?: string;
 }
 
 const RESULT_SELECTOR =
   'table tr, [role="row"], [role="grid"], .trck-result, .tracking-result, .hal-event, .hal-event__inline';
+
+/**
+ * Inventário dos elementos interativos da página (e de seus iframes) para
+ * diagnóstico: revela os SELETORES REAIS de inputs/selects/botões que a SPA
+ * renderizou, sem precisar chutar. Roda no navegador (page.evaluate) e agrega
+ * cada frame separado — COSCO/HMM às vezes montam o form dentro de iframe.
+ */
+export async function collectInventory(page: Page): Promise<DomInventory> {
+  const perFrame = async (frame: import('playwright').Frame) => {
+    return frame
+      .evaluate(() => {
+        const vis = (el: Element): boolean => {
+          const r = (el as HTMLElement).getBoundingClientRect();
+          const s = getComputedStyle(el as HTMLElement);
+          return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none';
+        };
+        const clip = (s: string | null | undefined, n = 80): string | null =>
+          s ? s.replace(/\s+/g, ' ').trim().slice(0, n) || null : null;
+        const inputs = Array.from(document.querySelectorAll('input')).map((el) => ({
+          tag: 'input',
+          type: el.getAttribute('type'),
+          name: el.getAttribute('name'),
+          id: el.id || null,
+          placeholder: el.getAttribute('placeholder'),
+          ariaLabel: el.getAttribute('aria-label'),
+          className: clip(el.className, 120),
+          visible: vis(el),
+        }));
+        const selects = Array.from(document.querySelectorAll('select')).map((el) => ({
+          tag: 'select',
+          name: el.getAttribute('name'),
+          id: el.id || null,
+          ariaLabel: el.getAttribute('aria-label'),
+          className: clip(el.className, 120),
+          options: Array.from(el.querySelectorAll('option'))
+            .map((o) => clip(o.textContent, 40) || '')
+            .filter(Boolean)
+            .slice(0, 12),
+          visible: vis(el),
+        }));
+        // Botões "de verdade" + elementos com papel de botão (SPAs usam div/a/span).
+        const btnSel = 'button, a, [role="button"], input[type="submit"], input[type="button"], [onclick]';
+        const buttons = Array.from(document.querySelectorAll(btnSel))
+          .map((el) => ({
+            tag: el.tagName.toLowerCase(),
+            type: el.getAttribute('type'),
+            id: el.id || null,
+            className: clip(el.className, 120),
+            text: clip(el.textContent, 40),
+            value: el.getAttribute('value'),
+            ariaLabel: el.getAttribute('aria-label'),
+            visible: vis(el),
+          }))
+          // Só o que parece acionável (tem texto/ícone e está visível) p/ não poluir.
+          .filter((b) => b.visible && (b.text || b.ariaLabel || b.value || b.id))
+          .slice(0, 40);
+        const iframes = Array.from(document.querySelectorAll('iframe')).map((el) => ({
+          src: el.getAttribute('src'),
+          title: el.getAttribute('title'),
+        }));
+        const forms = Array.from(document.querySelectorAll('form')).map((el) => ({
+          action: el.getAttribute('action'),
+          id: el.id || null,
+          className: clip(el.className, 120),
+        }));
+        return { inputs, selects, buttons, iframes, forms };
+      })
+      .catch(() => null);
+  };
+
+  const frames = page.frames();
+  const results = await Promise.all(frames.map(perFrame));
+  const inv: DomInventory = {
+    url: page.url(),
+    frameCount: frames.length,
+    inputs: [],
+    selects: [],
+    buttons: [],
+    iframes: [],
+    forms: [],
+  };
+  for (const r of results) {
+    if (!r) continue;
+    inv.inputs.push(...(r.inputs as DomElementInfo[]));
+    inv.selects.push(...(r.selects as DomElementInfo[]));
+    inv.buttons.push(...(r.buttons as DomElementInfo[]));
+    inv.iframes.push(...r.iframes);
+    inv.forms.push(...r.forms);
+  }
+  return inv;
+}
 
 /**
  * Pilota UMA página (local OU remota) até os resultados do rastreio: navega,
@@ -157,6 +280,12 @@ export async function driveTrackingPage(
     await page.waitForTimeout(1500);
   }
 
+  // Inventário do formulário (diagnóstico), coletado ENQUANTO a página vive.
+  let inventory: DomInventory | undefined;
+  if (opts.inventory) {
+    inventory = await collectInventory(page).catch(() => undefined);
+  }
+
   const title = await page.title().catch(() => '');
   const html = await page.content().catch(() => '');
   const textContent = (
@@ -171,7 +300,7 @@ export async function driveTrackingPage(
     ? textContent.toUpperCase().includes(opts.reference.toUpperCase())
     : false;
 
-  return { ok: !navError && html.length > 0, html, textContent, title, mentionsRef, rowCount, error: navError || undefined };
+  return { ok: !navError && html.length > 0, html, textContent, title, mentionsRef, rowCount, inventory, error: navError || undefined };
 }
 
 /**
