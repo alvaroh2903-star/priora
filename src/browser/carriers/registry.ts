@@ -148,10 +148,20 @@ export const CARRIERS: CarrierMeta[] = [
     scac: ['COSU'],
     containerPrefixes: ['CBHU', 'CCLU', 'COSU', 'CSNU', 'CSLU', 'CBEU', 'CIPU'],
     trackingUrl: 'https://elines.coscoshipping.com/ebusiness/cargotracking',
+    // Deep-link CONFIRMADO ao vivo: o rastreio vive num iframe (scct/public/ct/base)
+    // que aceita ?trackingType=&number= direto na URL. trackingType=BILLOFLADING
+    // renderizou o BL 6502154060 (Fuzhou→Navegantes, "Discharged at Last POD").
+    // Os números da COSCO (10 díg.) são BL/booking com o MESMO valor → BILLOFLADING.
+    // CONTAINER só p/ referência de contêiner (enum a confirmar quando tivermos uma).
+    buildTrackingUrl: (ref, type) => {
+      const tt = type === 'container' ? 'CONTAINER' : 'BILLOFLADING';
+      return `https://elines.coscoshipping.com/scct/public/ct/base?lang=en&trackingType=${tt}&number=${encodeURIComponent(
+        ref,
+      )}`;
+    },
     needsLoginForDemurrage: true,
-    // O deep-link /info/tracking/#... deu 404 (rota errada p/ este domínio).
-    // COSCO é SPA hash-router: precisa investigar o fluxo real (form no app).
-    notes: 'SPA hash-router; deep-link a investigar (o /info/tracking/ deu 404). Form no app. BLs numéricos 10 díg.',
+    needsScrapingBrowser: true, // SPA Ant/Vue no iframe → precisa render real (Scrapfly).
+    notes: 'deep-link do iframe scct/public/ct/base (trackingType=BILLOFLADING&number=) CONFIRMADO ao vivo. Parser dos eventos a escrever a partir do DOM real.',
   },
   {
     id: 'oocl',
