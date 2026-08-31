@@ -31,6 +31,8 @@ import { getActiveHomeAccountId } from './auth/microsoftAccount';
 import { prioraAuthRouter, ensureOrgForUser } from './auth/prioraAuthRoutes';
 import { rocketRouter } from './routes/rocketRoutes';
 import { getSupabase, isSupabaseConfigured } from './db/supabase';
+import { generateStructured, isAiConfigured } from './ai/geminiClient';
+import { z } from 'zod/v4';
 
 const app = express();
 
@@ -130,6 +132,43 @@ app.get('/health', (_req, res) =>
     },
   }),
 );
+
+/**
+ * Auto-teste do OCR/IA (PÚBLICO — sem login, sem caixa de e-mail). Faz UMA
+ * chamada mínima ao Gemini com um schema que reproduz o `nullable` (o mesmo
+ * `anyOf: [tipo, null]` do schema de extração), para descobrir se a saída
+ * estruturada do Gemini está engasgando no schema (motivo provável de o OCR
+ * falhar silenciosamente em todos os documentos). Cache de 5 min p/ não gastar
+ * cota à toa. Uso: GET /health/ai-selftest
+ */
+let aiSelftestCache: { at: number; body: Record<string, unknown> } | null = null;
+app.get('/health/ai-selftest', async (_req, res) => {
+  const commit = (process.env.RENDER_GIT_COMMIT || '').slice(0, 7) || null;
+  if (!isAiConfigured()) return res.json({ ai: 'not_configured', commit });
+  if (aiSelftestCache && Date.now() - aiSelftestCache.at < 5 * 60 * 1000) {
+    return res.json({ ...aiSelftestCache.body, commit, cache: true });
+  }
+  const schema = z.object({
+    eco: z.string(),
+    numero: z.number().nullable(),
+    texto: z.string().nullable(),
+    lista: z.array(z.string()),
+  });
+  let body: Record<string, unknown>;
+  try {
+    const out = await generateStructured(
+      schema,
+      'Você devolve apenas JSON no formato pedido.',
+      'Devolva eco="ok", numero=null (nulo), texto=null, lista=["a","b"].',
+    );
+    body = { ai: 'ok', model: config.ai.model, amostra: out };
+  } catch (err) {
+    const e = err as { message?: string };
+    body = { ai: 'erro', model: config.ai.model, erro: String(e?.message || err).slice(0, 700) };
+  }
+  aiSelftestCache = { at: Date.now(), body };
+  res.json({ ...body, commit });
+});
 
 /**
  * Diagnóstico/reparo de CONTA (gated por DIAG_TOKEN): garante que exista uma
