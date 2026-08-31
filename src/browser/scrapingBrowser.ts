@@ -245,6 +245,47 @@ export async function collectFramesText(page: Page): Promise<string> {
 }
 
 /**
+ * A página é um interstitial de anti-bot (Cloudflare "Just a moment"/managed
+ * challenge, DataDome etc.)? Detecta pelo título e por marcadores conhecidos no
+ * HTML — usado p/ ESPERAR o desafio resolver e p/ decidir um retry com sessão nova.
+ */
+export function isChallengePage(title: string, html: string): boolean {
+  if (/just a moment|please wait|checking your browser|しばらく|verifying you are human|security check|un momento|attention required/i.test(title || '')) {
+    return true;
+  }
+  return /challenges\.cloudflare\.com|__cf_chl_|cf_chl_opt|id="challenge-error-text"|cf-browser-verification|_cf_chl_/i.test(
+    html || '',
+  );
+}
+
+/** A página ATUAL parece um desafio de anti-bot? (título + marcadores no DOM). */
+async function onChallenge(page: Page): Promise<boolean> {
+  const title = (await page.title().catch(() => '')) || '';
+  if (isChallengePage(title, '')) return true;
+  const n = await page
+    .locator('#challenge-error-text, #challenge-stage, #cf-challenge-running, script[src*="challenges.cloudflare.com"]')
+    .count()
+    .catch(() => 0);
+  return n > 0;
+}
+
+/**
+ * Espera um desafio de anti-bot (Cloudflare managed etc.) resolver: fica sondando
+ * até a página SAIR do interstitial (o Scraping Browser resolve o JS/cookies e
+ * navega pro conteúdo real) ou estourar o tempo. Barato e útil p/ QUALQUER portal
+ * atrás de Cloudflare — não só a OOCL.
+ */
+async function waitOutChallenge(page: Page, ms = 45_000): Promise<void> {
+  const deadline = Date.now() + ms;
+  // Se nem é desafio, sai na hora.
+  if (!(await onChallenge(page))) return;
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(3000);
+    if (!(await onChallenge(page))) return; // passou
+  }
+}
+
+/**
  * Pilota UMA página (local OU remota) até os resultados do rastreio: navega,
  * aceita cookies, espera a SPA/tabela, e se a referência não aparecer preenche
  * o formulário de busca. Retorna HTML + texto + contagem. É a lógica ÚNICA usada
@@ -270,6 +311,10 @@ export async function driveTrackingPage(
   } catch (e) {
     navError = (e as Error).message;
   }
+
+  // Portais atrás de Cloudflare (ex.: OOCL) mostram um interstitial antes do
+  // conteúdo: dá tempo do Scraping Browser resolver o desafio e navegar.
+  await waitOutChallenge(page).catch(() => undefined);
 
   await acceptCookies(page);
   await page.waitForSelector(RESULT_SELECTOR, { timeout: 25_000 }).catch(() => {});
@@ -332,11 +377,8 @@ export async function driveTrackingPage(
   return { ok: !navError && html.length > 0, html, textContent, title, mentionsRef, rowCount, inventory, error: navError || undefined };
 }
 
-/**
- * Conecta ao Scraping Browser (remoto, Bright Data) e pilota a página até os
- * resultados. Usado nos portais atrás de Cloudflare interativo (ex.: Hapag).
- */
-export async function scrapeViaSB(opts: SBScrapeOptions): Promise<SBScrapeResult> {
+/** Uma tentativa de scrape via Scraping Browser remoto (conecta, pilota, fecha). */
+async function scrapeViaSBOnce(opts: SBScrapeOptions): Promise<SBScrapeResult> {
   const startedAt = Date.now();
   let browser: Browser | null = null;
   try {
@@ -355,4 +397,20 @@ export async function scrapeViaSB(opts: SBScrapeOptions): Promise<SBScrapeResult
   } finally {
     if (browser) await browser.close().catch(() => {});
   }
+}
+
+/**
+ * Conecta ao Scraping Browser (remoto) e pilota a página até os resultados. Usado
+ * nos portais atrás de Cloudflare interativo (Hapag, OOCL…). Se a 1ª tentativa
+ * travar num desafio de anti-bot, tenta MAIS UMA vez com sessão nova (IP/
+ * fingerprint novo do Scrapfly) — "managed challenges" costumam passar no retry.
+ * Só 1 retry, p/ não gastar crédito à toa.
+ */
+export async function scrapeViaSB(opts: SBScrapeOptions): Promise<SBScrapeResult> {
+  const r1 = await scrapeViaSBOnce(opts);
+  if (!isChallengePage(r1.title, r1.html)) return r1;
+  const r2 = await scrapeViaSBOnce(opts);
+  // Fica com o resultado que NÃO é desafio; se ambos travaram, o de HTML maior.
+  if (!isChallengePage(r2.title, r2.html)) return r2;
+  return r2.html.length > r1.html.length ? r2 : r1;
 }
