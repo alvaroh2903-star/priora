@@ -27,6 +27,12 @@ export interface TrackingEvent {
   voyage: string | null;
   /** Classificação normalizada do evento (blueprint §7). */
   type?: NormalizedEventType;
+  /**
+   * Nº do contêiner a que este evento pertence, quando o portal expõe eventos
+   * POR contêiner (ex.: COSCO, que lista vários contêineres no mesmo BL). Quando
+   * presente, o `deriveContainers` agrupa por aqui em vez de um único contêiner.
+   */
+  container?: string | null;
 }
 
 /**

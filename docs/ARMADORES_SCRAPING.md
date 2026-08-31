@@ -63,7 +63,7 @@ Legenda **Anti-bot**: 🔴 Cloudflare interativo · 🟠 aceite/anti-bot leve ·
 | `one` | Ocean Network Express | ONEY | SPA | `?trakNoParam=&trakNoTpCdParam=` | ❔ | ⬜ |
 | `msc` | MSC | MSCU, MEDU | SPA + aceite | a confirmar | 🟠 | ⬜ |
 | `cmacgm` | CMA CGM | CMDU, CMAU, APLU | SPA | a confirmar | ❔ | ⬜ |
-| `cosco` | COSCO | COSU | SPA | a confirmar | ❔ | ⬜ |
+| `cosco` | COSCO | COSU | SPA SCCT (iframe Ant/Vue) | `scct/public/ct/base?trackingType=BILLOFLADING&number=` | 🟢 | ✅ |
 | `hmm` | HMM (Hyundai) | HDMU, HMMU | Formulário na página | a confirmar | ❔ | ⬜ |
 | `yangming` | Yang Ming | YMLU | Formulário na página | a confirmar | ❔ | ⬜ |
 | `evergreen` | Evergreen (ShipmentLink) | EGLV, EMCU | Servlet clássico (form POST) | a confirmar | ❔ | ⬜ |

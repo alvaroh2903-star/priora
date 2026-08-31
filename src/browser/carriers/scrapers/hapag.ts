@@ -309,25 +309,46 @@ function latestEvent(events: TrackingEvent[]): TrackingEvent | null {
   return withDate.length ? withDate[withDate.length - 1] : events[0] || null;
 }
 
-/** Monta a situação do contêiner a partir dos eventos (campos ausentes = null). */
+/** Monta UM ContainerInfo a partir dos eventos daquele contêiner. */
+function buildContainerInfo(numero: string | null, events: TrackingEvent[]): ContainerInfo {
+  const last = latestEvent(events);
+  return {
+    numero,
+    tipo: null,
+    status: last?.status || null,
+    dischargeDate: latestByType(events, 'discharge'),
+    availableDate: latestByType(events, 'available'),
+    gateOut: latestByType(events, 'gate_out'),
+    emptyReturn: latestByType(events, 'empty_return'),
+    lastFreeDay: null, // exige login no portal comercial (próxima etapa)
+  };
+}
+
+/**
+ * Monta a situação dos contêineres a partir dos eventos (campos ausentes = null).
+ *
+ * Dois modos:
+ *  - MULTI: se os eventos carregam `container` (ex.: COSCO lista vários contêineres
+ *    no mesmo BL), agrupa por contêiner e devolve UM ContainerInfo por número.
+ *  - ÚNICO: senão, comportamento clássico — um contêiner a partir do `containerHint`
+ *    (Hapag/Maersk/ONE, que expõem os eventos de um contêiner por vez).
+ */
 export function deriveContainers(
   events: TrackingEvent[],
   containerHint: string | null,
 ): ContainerInfo[] {
+  const withContainer = events.filter((e) => e.container);
+  if (withContainer.length > 0) {
+    const groups = new Map<string, TrackingEvent[]>();
+    for (const e of withContainer) {
+      const key = e.container as string;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(e);
+    }
+    return Array.from(groups.entries()).map(([numero, evs]) => buildContainerInfo(numero, evs));
+  }
   if (events.length === 0 && !containerHint) return [];
-  const last = latestEvent(events);
-  return [
-    {
-      numero: containerHint,
-      tipo: null,
-      status: last?.status || null,
-      dischargeDate: latestByType(events, 'discharge'),
-      availableDate: latestByType(events, 'available'),
-      gateOut: latestByType(events, 'gate_out'),
-      emptyReturn: latestByType(events, 'empty_return'),
-      lastFreeDay: null, // exige login no portal comercial (próxima etapa)
-    },
-  ];
+  return [buildContainerInfo(containerHint, events)];
 }
 
 /** Scraper da Hapag-Lloyd: recebe a página já navegada e extrai os eventos. */

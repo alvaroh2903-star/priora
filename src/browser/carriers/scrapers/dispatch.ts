@@ -2,6 +2,7 @@ import { TrackingEvent } from '../types';
 import { extractEventsFromHtml as extractHapagOrGeneric } from './hapag';
 import { extractMaerskEvents } from './maersk';
 import { extractOneEvents } from './one';
+import { extractCoscoEvents } from './cosco';
 
 /**
  * Priora — Dispatcher multi-armador de extração de eventos.
@@ -21,6 +22,11 @@ export function extractCarrierEvents(html: string): TrackingEvent[] {
   if (/EventTable_table-row/i.test(html)) {
     const o = extractOneEvents(html);
     if (o.length) return o;
+  }
+  // COSCO — app SCCT (id="scct"): tabela "Transport Detail" com 1 linha/contêiner.
+  if (/id=["']scct["']|scct\/assets|CargoTrackingTransportDetail/i.test(html)) {
+    const c = extractCoscoEvents(html);
+    if (c.length) return c;
   }
   // Hapag (timeline .hal-event) → tabela genérica <tr>/<td> / grade ARIA.
   return extractHapagOrGeneric(html);

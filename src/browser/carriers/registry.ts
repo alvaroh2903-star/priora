@@ -161,7 +161,7 @@ export const CARRIERS: CarrierMeta[] = [
     },
     needsLoginForDemurrage: true,
     needsScrapingBrowser: true, // SPA Ant/Vue no iframe → precisa render real (Scrapfly).
-    notes: 'deep-link do iframe scct/public/ct/base (trackingType=BILLOFLADING&number=) CONFIRMADO ao vivo. Parser dos eventos a escrever a partir do DOM real.',
+    notes: 'deep-link do iframe scct/public/ct/base (trackingType=BILLOFLADING&number=) CONFIRMADO ao vivo. Parser scrapers/cosco.ts (Transport Detail, 1 evento/contêiner) implementado e coberto por self-test offline (npm run cosco:selftest).',
   },
   {
     id: 'oocl',
