@@ -168,9 +168,21 @@ export const CARRIERS: CarrierMeta[] = [
     name: 'OOCL',
     scac: ['OOLU'],
     containerPrefixes: ['OOLU', 'OOCU'],
-    trackingUrl: 'https://www.oocl.com/eng/ourservices/eservices/cargotracking/pages/cargotracking.aspx',
+    trackingUrl: 'https://pbcontroltower.digital.oocl.com/scct/public/moc/cargoTracking?language=en',
+    // Deep-link do SCCT da OOCL (mesmo grupo COSCO, domínio pbcontroltower). A
+    // OOCL usa só a PARTE NUMÉRICA do BL (ex.: OOLU2038860350 → 2038860350).
+    // trackingType/number a confirmar ao vivo; layout tem captcha de slider na
+    // entrada (resolvido por CÓDIGO: Scrapfly solve_captcha / anti-captcha).
+    buildTrackingUrl: (ref, type) => {
+      const num = ref.replace(/^OOLU/i, '');
+      const tt = type === 'container' ? 'CONTAINER' : 'BILLOFLADING';
+      return `https://pbcontroltower.digital.oocl.com/scct/public/moc/cargoTracking?language=en&trackingType=${tt}&number=${encodeURIComponent(
+        num,
+      )}`;
+    },
     needsLoginForDemurrage: true,
-    notes: 'aspx com formulário; costuma ter anti-bot. Verificar seletores.',
+    needsScrapingBrowser: true, // SPA SCCT + captcha slider → navegador remoto (Scrapfly).
+    notes: 'SCCT em pbcontroltower.digital.oocl.com. Parser DEDICADO scrapers/oocl.ts (Event|Time|Location|Stage|Transport). Captcha de slider na entrada — resolver por código.',
   },
 ];
 

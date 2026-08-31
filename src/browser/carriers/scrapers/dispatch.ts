@@ -4,6 +4,7 @@ import { extractMaerskEvents } from './maersk';
 import { extractOneEvents } from './one';
 import { extractCoscoEvents } from './cosco';
 import { extractPilEvents } from './pil';
+import { extractOoclEvents } from './oocl';
 
 /**
  * Priora — Dispatcher multi-armador de extração de eventos.
@@ -23,6 +24,13 @@ export function extractCarrierEvents(html: string): TrackingEvent[] {
   if (/EventTable_table-row/i.test(html)) {
     const o = extractOneEvents(html);
     if (o.length) return o;
+  }
+  // OOCL — SCCT em pbcontroltower.digital.oocl.com (mesmo grupo da COSCO, mas
+  // LAYOUT DIFERENTE: Event|Time|Location|Stage|Transport). Checado ANTES da COSCO
+  // porque ambos podem ter id="scct" — a OOCL tem seu parser próprio.
+  if (/oocl|pbcontroltower/i.test(html)) {
+    const oo = extractOoclEvents(html);
+    if (oo.length) return oo;
   }
   // COSCO — app SCCT (id="scct"): tabela "Transport Detail" com 1 linha/contêiner.
   if (/id=["']scct["']|scct\/assets|CargoTrackingTransportDetail/i.test(html)) {
