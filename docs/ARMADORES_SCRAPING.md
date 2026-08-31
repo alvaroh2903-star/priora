@@ -59,8 +59,8 @@ Legenda **Anti-bot**: 🔴 Cloudflare interativo · 🟠 aceite/anti-bot leve ·
 | id | Armador | SCAC | Portal | Deep link | Anti-bot | Parser |
 |----|---------|------|--------|-----------|----------|--------|
 | `hapag` | Hapag-Lloyd | HLCU, HLXU, UACU | SPA "Tracking BETA" (Vue/Quasar) | `?booking=`/`?container=` | 🔴 | ✅ |
-| `maersk` | Maersk | MAEU, MSKU, MRKU | SPA | `/tracking/{ref}` | ❔ | ⬜ |
-| `one` | Ocean Network Express | ONEY | SPA | `?trakNoParam=&trakNoTpCdParam=` | ❔ | ⬜ |
+| `maersk` | Maersk | MAEU, MSKU, MRKU | SPA | `/tracking/{ref}` | 🟢 | ✅ (validado ao vivo, 274319835) |
+| `one` | Ocean Network Express | ONEY | SPA | `?trakNoParam=&trakNoTpCdParam=` | 🟢 | ✅ (validado ao vivo, ONEYTA6RA1675800) |
 | `msc` | MSC | MSCU, MEDU | SPA + aceite | a confirmar | 🟠 | ⬜ |
 | `cmacgm` | CMA CGM | CMDU, CMAU, APLU | SPA | a confirmar | ❔ | ⬜ |
 | `cosco` | COSCO | COSU | SPA SCCT (iframe Ant/Vue) | `scct/public/ct/base?trackingType=BILLOFLADING&number=` | 🟢 | ✅ |

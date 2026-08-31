@@ -6,8 +6,13 @@ import { NormalizedEventType } from './types';
  * padronizado, para o módulo de demurrage derivar as datas certas.
  */
 
-// Ordem IMPORTA: empty_return antes de gate_out (uma linha "empty returned"
-// não pode cair em gate_out). "other" cobre embarque/partida etc.
+// Ordem IMPORTA:
+//  - empty_return antes de gate_out (uma linha "empty returned" não pode cair em
+//    gate_out);
+//  - berth (chegada) ANTES de discharge, senão "Vessel Arrival at Port of
+//    Discharge" cairia em discharge por causa da palavra "Discharge" no NOME do
+//    porto — é uma chegada (berth), não a descarga.
+// "other" cobre embarque/partida etc.
 const RULES: Array<[NormalizedEventType, RegExp]> = [
   [
     'empty_return',
@@ -18,18 +23,20 @@ const RULES: Array<[NormalizedEventType, RegExp]> = [
     /gated?\s*out|to consignee|delivered to|picked up|full.*out|out\s?gate|import.*deliver|entregue|sa[ií]da.*cheio/i,
   ],
   ['available', /available|disponib|released|liberad|ready for (delivery|pickup)/i],
-  ['discharge', /discharg|desembarq|unload/i],
   ['berth', /berth|atrac|vessel\s+arriv|arriv.*(port|terminal|vessel)/i],
+  ['discharge', /discharg|desembarq|unload/i],
 ];
 
 /** Classifica a descrição de um evento no enum normalizado. */
 export function classifyEvent(status: string): NormalizedEventType {
   const s = (status || '').toLowerCase();
-  // Vazio LIBERADO na origem ("O/B Empty Container Released") é dispatch de
-  // equipamento p/ estufagem — NÃO é "disponível p/ retirada" no destino. Sem
-  // este guard, o "released" cairia em `available` e poluiria o início da
-  // contagem de demurrage com uma data de origem.
-  if (/empty\s+(?:container\s+)?released/.test(s)) return 'other';
+  // Movimentos de VAZIO na ORIGEM — não são retirada do cheio nem devolução no
+  // destino; sem estes guards seriam lidos como available/gate_out e poluiriam
+  // as datas de demurrage com eventos de origem:
+  //  - "Empty Container Release(d) to Shipper" (liberação p/ estufagem);
+  //  - "Gate out Empty" (o vazio saindo do depósito na origem).
+  if (/empty\s+(?:container\s+)?releas/.test(s)) return 'other';
+  if (/gate\s*out\s+empty/.test(s)) return 'other';
   for (const [type, re] of RULES) {
     if (re.test(s)) return type;
   }

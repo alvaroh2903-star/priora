@@ -17,6 +17,7 @@
     "carriers:selftest": "ts-node src/browser/carriers/scrapers/hapagSelftest.ts",
     "cosco:selftest": "ts-node src/browser/carriers/scrapers/coscoSelftest.ts",
     "pil:selftest": "ts-node src/browser/carriers/scrapers/pilSelftest.ts",
+    "events:selftest": "ts-node src/browser/carriers/scrapers/demurrageEventsSelftest.ts",
     "demurrage:calc": "ts-node src/demurrage/calculatorSelftest.ts",
     "auth:selftest": "ts-node src/auth/accountSwitchSelftest.ts",
     "rocket:selftest": "ts-node src/rocket/rocketSelftest.ts"

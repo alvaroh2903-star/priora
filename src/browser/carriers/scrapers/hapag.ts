@@ -304,6 +304,25 @@ function latestByType(events: TrackingEvent[], type: NormalizedEventType): strin
   return dates.length ? dates[dates.length - 1] : null;
 }
 
+/**
+ * Data mais recente de um tipo NO DESTINO — só conta a partir de `minDate` (a
+ * descarga). Quando `minDate` é null (dados de RESUMO, sem descarga na lista),
+ * não filtra: devolve a mais recente. Serve p/ a retirada (gate_out) e a
+ * devolução (empty_return) não pegarem movimentos de ORIGEM/transbordo, que são
+ * sempre anteriores à descarga no destino.
+ */
+function latestByTypeAfter(
+  events: TrackingEvent[],
+  type: NormalizedEventType,
+  minDate: string | null,
+): string | null {
+  const dates = events
+    .filter((e) => e.date && e.type === type && (!minDate || (e.date as string) >= minDate))
+    .map((e) => e.date as string)
+    .sort();
+  return dates.length ? dates[dates.length - 1] : null;
+}
+
 function latestEvent(events: TrackingEvent[]): TrackingEvent | null {
   const withDate = events.filter((e) => e.date).sort((a, b) => (a.date! < b.date! ? -1 : 1));
   return withDate.length ? withDate[withDate.length - 1] : events[0] || null;
@@ -312,14 +331,17 @@ function latestEvent(events: TrackingEvent[]): TrackingEvent | null {
 /** Monta UM ContainerInfo a partir dos eventos daquele contêiner. */
 function buildContainerInfo(numero: string | null, events: TrackingEvent[]): ContainerInfo {
   const last = latestEvent(events);
+  const dischargeDate = latestByType(events, 'discharge');
   return {
     numero,
     tipo: events.find((e) => e.tipo)?.tipo || null,
     status: last?.status || null,
-    dischargeDate: latestByType(events, 'discharge'),
+    dischargeDate,
     availableDate: latestByType(events, 'available'),
-    gateOut: latestByType(events, 'gate_out'),
-    emptyReturn: latestByType(events, 'empty_return'),
+    // Retirada e devolução só valem NO DESTINO (a partir da descarga) — evita que
+    // gate-out de vazio/posicionamento na ORIGEM vire "retirada".
+    gateOut: latestByTypeAfter(events, 'gate_out', dischargeDate),
+    emptyReturn: latestByTypeAfter(events, 'empty_return', dischargeDate),
     lastFreeDay: null, // exige login no portal comercial (próxima etapa)
   };
 }
