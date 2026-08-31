@@ -410,7 +410,7 @@ auditoriaRouter.get('/diagnostico', async (req: AuthedRequest, res, next) => {
     if (alvo) {
       const cands = alvo.docs
         .filter((d) => isDocumentAttachment(d.nome, d.contentType, false))
-        .slice(0, 3);
+        .slice(0, 1);
       const docsRes = [];
       for (const d of cands) {
         const hint: TipoDoc = d.tipo === 'HBL' ? 'HBL' : 'MBL';
@@ -659,32 +659,32 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
     }
 
     // OCR por grupo (multi-página) + reclassificação (nome concreto prevalece;
-    // senão, o tipo detectado pelo conteúdo). Máx. 6 grupos por processo.
-    const extraidos = await Promise.all(
-      Array.from(grupos.values()).slice(0, 6).map(async (grupo) => {
-        const temHBL = grupo.some((d) => d.tipo === 'HBL');
-        const temMBL = grupo.some((d) => d.tipo === 'MBL');
-        const hint: TipoDoc = temHBL && !temMBL ? 'HBL' : 'MBL';
-        const paginas: PaginaDoc[] = grupo.map((d) => ({
-          messageId: d.emailId,
-          attachmentId: d.attachmentId,
-          nome: d.nome,
-        }));
-        const { doc, tipoDetectado } = await withTimeout(
-          extrairDocPreAlertaMultiplo(req.accessToken!, paginas, hint),
-          60000,
-          'ocr',
-        ).catch(() => ({ doc: null as DocPreAlerta | null, tipoDetectado: null }));
-        if (!doc) return null;
-        let tipoFinal: TipoDoc | null = null;
-        if (temHBL && !temMBL) tipoFinal = 'HBL';
-        else if (temMBL && !temHBL) tipoFinal = 'MBL';
-        else if (temHBL || temMBL) tipoFinal = tipoDetectado === 'HBL' ? 'HBL' : 'MBL';
-        else if (tipoDetectado === 'MBL' || tipoDetectado === 'HBL') tipoFinal = tipoDetectado;
-        return tipoFinal ? ({ ...doc, tipo: tipoFinal, nome: grupo[0].nome } as DocPreAlerta) : null;
-      }),
-    );
-    const docs = extraidos.filter((d): d is DocPreAlerta => d !== null);
+    // senão, o tipo detectado pelo conteúdo). SEQUENCIAL (uma chamada de visão
+    // por vez): as chamadas de visão são pesadas e, em paralelo, estouram o
+    // limite por minuto do Gemini (429). Máx. 6 grupos por processo.
+    const docs: DocPreAlerta[] = [];
+    for (const grupo of Array.from(grupos.values()).slice(0, 6)) {
+      const temHBL = grupo.some((d) => d.tipo === 'HBL');
+      const temMBL = grupo.some((d) => d.tipo === 'MBL');
+      const hint: TipoDoc = temHBL && !temMBL ? 'HBL' : 'MBL';
+      const paginas: PaginaDoc[] = grupo.map((d) => ({
+        messageId: d.emailId,
+        attachmentId: d.attachmentId,
+        nome: d.nome,
+      }));
+      const { doc, tipoDetectado } = await withTimeout(
+        extrairDocPreAlertaMultiplo(req.accessToken!, paginas, hint),
+        60000,
+        'ocr',
+      ).catch(() => ({ doc: null as DocPreAlerta | null, tipoDetectado: null }));
+      if (!doc) continue;
+      let tipoFinal: TipoDoc | null = null;
+      if (temHBL && !temMBL) tipoFinal = 'HBL';
+      else if (temMBL && !temHBL) tipoFinal = 'MBL';
+      else if (temHBL || temMBL) tipoFinal = tipoDetectado === 'HBL' ? 'HBL' : 'MBL';
+      else if (tipoDetectado === 'MBL' || tipoDetectado === 'HBL') tipoFinal = tipoDetectado;
+      if (tipoFinal) docs.push({ ...doc, tipo: tipoFinal, nome: grupo[0].nome } as DocPreAlerta);
+    }
 
     const op = montarOperacao(proc.processo, docs);
 

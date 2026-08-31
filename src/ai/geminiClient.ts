@@ -133,8 +133,21 @@ async function generateStructuredFromContents<T extends z.ZodType>(
         continue;
       }
       if (isTransientAiError(err)) {
+        const anyErr = err as {
+          status?: unknown;
+          code?: unknown;
+          response?: { status?: unknown };
+          message?: string;
+        };
+        const status = anyErr?.status ?? anyErr?.code ?? anyErr?.response?.status ?? '?';
+        const raw = String(anyErr?.message ?? err ?? '')
+          .replace(/\s+/g, ' ')
+          .slice(0, 240);
+        // Surfacing do código real (429 = cota/limite; 503 = sobrecarga; 500 = erro)
+        // e do texto cru do Gemini (costuma nomear a cota estourada). Antes isto
+        // virava um genérico "sobrecarregada", escondendo a causa.
         throw new Error(
-          'A IA (Gemini) está sobrecarregada no momento. Tente de novo em alguns instantes.',
+          `IA (Gemini) recusou a chamada [status ${status}] após ${AI_MAX_RETRIES + 1} tentativas: ${raw}`,
         );
       }
       throw err;
