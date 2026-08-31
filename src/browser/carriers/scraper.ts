@@ -58,7 +58,10 @@ async function genericScrape(
 
   let body = await getBodyText(page);
   // Se a referência não apareceu (deep link não auto-buscou), preenche o form.
-  if (!usedDeepLink || !body.toUpperCase().includes(ctx.reference.toUpperCase())) {
+  // Mas alguns portais desenham a ref como SVG/imagem (ex.: COSCO) — se já há um
+  // número de contêiner no corpo, os resultados carregaram; não re-buscar à toa.
+  const containerSeen = /\b[A-Z]{4}\d{7}\b/.test(body);
+  if (!usedDeepLink || (!body.toUpperCase().includes(ctx.reference.toUpperCase()) && !containerSeen)) {
     if (await tryFillSearch(page, ctx.reference)) {
       await page.waitForLoadState('networkidle').catch(() => undefined);
       await acceptCookies(page);

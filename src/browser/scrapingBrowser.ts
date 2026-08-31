@@ -251,9 +251,14 @@ export async function driveTrackingPage(
 
   // Se a referência ainda NÃO apareceu, o deep link não auto-buscou: preenche o
   // formulário e submete (muitos portais exigem). Reusa o tryFillSearch.
+  // Alguns portais desenham a referência como SVG/imagem (ex.: COSCO desenha o BL),
+  // então "ref não achada no texto" NÃO significa "sem resultado": se já há um
+  // número de contêiner no corpo, os resultados carregaram — pula o retrabalho.
   if (opts.reference) {
     const body0 = (await page.textContent('body').catch(() => '')) || '';
-    if (!body0.toUpperCase().includes(opts.reference.toUpperCase())) {
+    const refSeen = body0.toUpperCase().includes(opts.reference.toUpperCase());
+    const containerSeen = /\b[A-Z]{4}\d{7}\b/.test(body0);
+    if (!refSeen && !containerSeen) {
       if (await tryFillSearch(page, opts.reference)) {
         await page.waitForLoadState('networkidle', { timeout: postWait }).catch(() => {});
         await page.waitForSelector(RESULT_SELECTOR, { timeout: 15_000 }).catch(() => {});
