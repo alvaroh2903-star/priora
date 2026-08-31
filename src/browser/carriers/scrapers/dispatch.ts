@@ -3,6 +3,7 @@ import { extractEventsFromHtml as extractHapagOrGeneric } from './hapag';
 import { extractMaerskEvents } from './maersk';
 import { extractOneEvents } from './one';
 import { extractCoscoEvents } from './cosco';
+import { extractPilEvents } from './pil';
 
 /**
  * Priora — Dispatcher multi-armador de extração de eventos.
@@ -27,6 +28,11 @@ export function extractCarrierEvents(html: string): TrackingEvent[] {
   if (/id=["']scct["']|scct\/assets|CargoTrackingTransportDetail/i.test(html)) {
     const c = extractCoscoEvents(html);
     if (c.length) return c;
+  }
+  // PIL — "Container T&T" (a.trackinfo / container_info_sub): 1 linha/contêiner.
+  if (/container_info_sub|trackinfo/i.test(html)) {
+    const p = extractPilEvents(html);
+    if (p.length) return p;
   }
   // Hapag (timeline .hal-event) → tabela genérica <tr>/<td> / grade ARIA.
   return extractHapagOrGeneric(html);

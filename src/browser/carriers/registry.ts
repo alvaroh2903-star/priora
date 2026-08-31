@@ -78,7 +78,7 @@ export const CARRIERS: CarrierMeta[] = [
         ref,
       )}`,
     needsLoginForDemurrage: true,
-    notes: 'deep link confirmado (refNo). Verificar seletores dos resultados.',
+    notes: 'deep link confirmado (refNo). Parser scrapers/pil.ts do RESUMO (tabela de contêiner: nº, tipo, Latest Event, data, local) implementado + self-test (npm run pil:selftest). Histórico completo (Trace → sub-info-table) fica na 2ª fase.',
   },
   {
     id: 'evergreen',

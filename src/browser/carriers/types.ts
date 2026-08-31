@@ -33,6 +33,8 @@ export interface TrackingEvent {
    * presente, o `deriveContainers` agrupa por aqui em vez de um único contêiner.
    */
   container?: string | null;
+  /** Tipo/tamanho do contêiner (ex.: 40HC), quando o portal expõe por linha (PIL). */
+  tipo?: string | null;
 }
 
 /**

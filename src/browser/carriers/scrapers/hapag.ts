@@ -314,7 +314,7 @@ function buildContainerInfo(numero: string | null, events: TrackingEvent[]): Con
   const last = latestEvent(events);
   return {
     numero,
-    tipo: null,
+    tipo: events.find((e) => e.tipo)?.tipo || null,
     status: last?.status || null,
     dischargeDate: latestByType(events, 'discharge'),
     availableDate: latestByType(events, 'available'),
