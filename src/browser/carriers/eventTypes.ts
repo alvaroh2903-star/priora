@@ -25,6 +25,11 @@ const RULES: Array<[NormalizedEventType, RegExp]> = [
 /** Classifica a descrição de um evento no enum normalizado. */
 export function classifyEvent(status: string): NormalizedEventType {
   const s = (status || '').toLowerCase();
+  // Vazio LIBERADO na origem ("O/B Empty Container Released") é dispatch de
+  // equipamento p/ estufagem — NÃO é "disponível p/ retirada" no destino. Sem
+  // este guard, o "released" cairia em `available` e poluiria o início da
+  // contagem de demurrage com uma data de origem.
+  if (/empty\s+(?:container\s+)?released/.test(s)) return 'other';
   for (const [type, re] of RULES) {
     if (re.test(s)) return type;
   }

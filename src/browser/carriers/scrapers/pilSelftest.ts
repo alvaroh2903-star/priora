@@ -2,32 +2,39 @@ import { extractPilEvents } from './pil';
 import { deriveContainers } from './hapag';
 
 /**
- * Priora — Self-test OFFLINE do parser da PIL (Container T&T). Puro (sem browser):
- * roda extractPilEvents + deriveContainers sobre um HTML representativo do DOM
- * REAL (deep-link ?refNo=). Prova:
- *  - só as linhas COM contêiner viram evento (tabela de viagem é ignorada);
- *  - data e status ("Latest Event") em células SEPARADAS são lidos certo;
- *  - captura o tipo (Size/Type = 40HC) e o local (Place);
- *  - classifica: Empty Container Returned→empty_return, Discharged→discharge.
+ * Priora — Self-test OFFLINE do parser da PIL (Container T&T). Puro (sem browser).
+ * Usa o DOM REAL capturado ao vivo (BL NNPL50072500, contêiner PCIU9028668):
+ *  - HISTÓRICO (Trace → tbody.sub-info-table#container_info_sub_<cont>): timeline
+ *    completa → descarga (Navegantes, não o transbordo de Singapura), gate-out,
+ *    devolução; "O/B Empty Container Released" (origem) NÃO polui `available`;
+ *  - RESUMO (fallback): só o último evento, quando o Trace não carregou.
  *
  *   npm run pil:selftest
  */
 
-// Fixture: reproduz a tela real do PIL (BL NNPL50072500) — tabela de VIAGEM
-// (sem contêiner) + tabela de CONTÊINER. O 2º contêiner é fictício (ainda na
-// descarga) para exercitar multi-contêiner e a classificação de discharge.
-const FIXTURE_HTML = `<div id="track-trace">
-  <table>
-    <tr><th>Arrival/Delivery</th><th>Location</th><th>Vessel/Voyage</th><th>Next Location</th></tr>
-    <tr><td>20-Dec-2025 21-Dec-2025</td><td>Load Port QINZHOU CNQZH</td><td>KOTA NAZAR KNZR0384S</td><td>SGSIN 26-Dec-2025</td></tr>
-    <tr><td>05-Jan-2026 06-Jan-2026</td><td>Discharge Port SINGAPORE SGSIN</td><td>EVER FIT VFIT0024W</td><td>BRNVT 03-Feb-2026</td></tr>
-  </table>
-  <table>
-    <tr><th>Container #</th><th>Size/Type</th><th>Movement Type</th><th>Date</th><th>Latest Event</th><th>Place</th></tr>
-    <tr><td>PCIU9028668 <a class="trackinfo float-right smallest-button" data="trackinfo::job::NNPL50072500::PCIU9028668">Trace</a></td><td>40HC</td><td>FCL/FCL</td><td>10-Feb-2026 14:29:00</td><td>I/B Empty Container Returned</td><td>NAVEGANTES</td></tr>
-    <tr><td>TGHU1234567 <a class="trackinfo" data="trackinfo::job::NNPL50072500::TGHU1234567">Trace</a></td><td>20GP</td><td>FCL/FCL</td><td>03-Feb-2026 08:10:00</td><td>I/B Discharged from Vessel</td><td>NAVEGANTES</td></tr>
-  </table>
-</div>`;
+// Fixture REAL: resumo (1 linha) + histórico completo (sub-info-table). Copiado
+// do HTML renderizado ao vivo (datas/eventos reais do contêiner PCIU9028668).
+const FIXTURE_REAL = `<div class="mypil-table"><table class="table">
+<thead><tr><td>Container #</td><td>Size/Type</td><td>Movement Type</td><td>Date</td><td>Latest Event</td><td>Place</td></tr></thead>
+<tbody><tr><td><b class="cont-numb">PCIU9028668</b> <a class="trackinfo float-right smallest-button" href="javascript:void(0);" name="trackinfo::job::NNPL50072500::PCIU9028668"><b>Trace</b></a></td><td>40HC</td><td>FCL/FCL</td><td>10-Feb-2026 14:29:00</td><td>I/B Empty Container Returned</td><td>NAVEGANTES</td></tr></tbody>
+<tbody class="sub-info-table" id="container_info_sub_PCIU9028668">
+<tr class="bg-lightblue text-fc-black text-fw-bold"><td class="d-none d-md-block"></td><td>Vessel</td><td>Voyage</td><td>Event Date</td><td>Event Name</td><td>Event Location</td></tr>
+<tr class="bg-lightblue text-fc-black"><td class="d-none d-md-block"></td><td></td><td></td><td>13-Dec-2025 17:03:00</td><td>O/B Empty Container Released</td><td>QINZHOU</td></tr>
+<tr class="bg-lightblue text-fc-black"><td class="d-none d-md-block"></td><td></td><td></td><td>15-Dec-2025 19:55:00</td><td>Truck Gate In to O/B Terminal</td><td>QINZHOU</td></tr>
+<tr class="bg-lightblue text-fc-black"><td class="d-none d-md-block"></td><td>KOTA NAZAR</td><td>KNZR0384S</td><td>21-Dec-2025 02:18:00</td><td>Vessel Loading</td><td>QINZHOU</td></tr>
+<tr class="bg-lightblue text-fc-black"><td class="d-none d-md-block"></td><td>KOTA NAZAR</td><td>KNZR0384S</td><td>27-Dec-2025 16:59:00</td><td>Vessel Discharge</td><td>SINGAPORE</td></tr>
+<tr class="bg-lightblue text-fc-black"><td class="d-none d-md-block"></td><td>EVER FIT</td><td>VFIT0024W</td><td>06-Jan-2026 15:33:00</td><td>Vessel Loading</td><td>SINGAPORE</td></tr>
+<tr class="bg-lightblue text-fc-black"><td class="d-none d-md-block"></td><td>EVER FIT</td><td>VFIT0024W</td><td>03-Feb-2026 22:47:00</td><td>Vessel Discharge</td><td>NAVEGANTES</td></tr>
+<tr class="bg-lightblue text-fc-black"><td class="d-none d-md-block"></td><td></td><td></td><td>10-Feb-2026 09:24:00</td><td>Truck Gate Out from I/B Terminal</td><td>NAVEGANTES</td></tr>
+<tr class="bg-lightblue text-fc-black"><td class="d-none d-md-block"></td><td></td><td></td><td>10-Feb-2026 14:29:00</td><td>I/B Empty Container Returned</td><td>NAVEGANTES</td></tr>
+<tr class="empty-tr"></tr>
+</tbody></table></div>`;
+
+// Fixture RESUMO (Trace não carregou): só a tabela de contêiner, sem sub-info-table.
+const FIXTURE_SUMMARY = `<div class="mypil-table"><table class="table">
+<thead><tr><td>Container #</td><td>Size/Type</td><td>Movement Type</td><td>Date</td><td>Latest Event</td><td>Place</td></tr></thead>
+<tbody><tr><td><b class="cont-numb">PCIU9028668</b> <a class="trackinfo" name="trackinfo::job::NNPL50072500::PCIU9028668">Trace</a></td><td>40HC</td><td>FCL/FCL</td><td>10-Feb-2026 14:29:00</td><td>I/B Empty Container Returned</td><td>NAVEGANTES</td></tr></tbody>
+</table></div>`;
 
 let failures = 0;
 function check(label: string, cond: boolean, got?: unknown) {
@@ -40,41 +47,39 @@ function check(label: string, cond: boolean, got?: unknown) {
 }
 
 function main(): void {
-  console.log('[selftest] extractPilEvents — tabela de contêiner (resumo)');
-  const events = extractPilEvents(FIXTURE_HTML);
-  console.log('    eventos:', JSON.stringify(events));
-  check('2 eventos (1 por contêiner)', events.length === 2, events.length);
-  check('ignora tabela de viagem (sem KOTA NAZAR/EVER FIT)', !events.some((e) => /KOTA NAZAR|EVER FIT/i.test(e.status)));
+  console.log('[selftest] extractPilEvents — HISTÓRICO completo (Trace, DOM real)');
+  const events = extractPilEvents(FIXTURE_REAL);
+  console.log('    eventos:', events.length, JSON.stringify(events.map((e) => `${e.date} ${e.type} ${e.status}`)));
+  check('8 eventos da timeline', events.length === 8, events.length);
+  check('todos amarrados ao contêiner', events.every((e) => e.container === 'PCIU9028668'));
+  check('Vessel Discharge → discharge', events.some((e) => e.status === 'Vessel Discharge' && e.type === 'discharge'));
+  check('Truck Gate Out → gate_out', events.some((e) => /Gate Out/i.test(e.status) && e.type === 'gate_out'));
+  check('I/B Empty Returned → empty_return', events.some((e) => e.type === 'empty_return'));
+  check('O/B Empty Released → other (não available)', events.find((e) => /O\/B Empty Container Released/i.test(e.status))?.type === 'other', events.find((e) => /Released/i.test(e.status))?.type);
+  check('captura vessel/voyage (KOTA NAZAR/KNZR0384S)', events.some((e) => e.vessel === 'KOTA NAZAR' && e.voyage === 'KNZR0384S'));
 
-  const pciu = events.find((e) => e.container === 'PCIU9028668');
-  check('PCIU9028668 presente', !!pciu);
-  check('PCIU data = 2026-02-10', pciu?.date === '2026-02-10', pciu?.date);
-  check('PCIU status = Latest Event (sem data)', pciu?.status === 'I/B Empty Container Returned', pciu?.status);
-  check('PCIU type = empty_return', pciu?.type === 'empty_return', pciu?.type);
-  check('PCIU tipo = 40HC', pciu?.tipo === '40HC', pciu?.tipo);
-  check('PCIU location = NAVEGANTES', pciu?.location === 'NAVEGANTES', pciu?.location);
+  console.log('[selftest] deriveContainers — datas de demurrage');
+  const [c] = deriveContainers(events, null);
+  console.log('    contêiner:', JSON.stringify(c));
+  check('numero = PCIU9028668', c?.numero === 'PCIU9028668', c?.numero);
+  check('tipo = 40HC (do resumo)', c?.tipo === '40HC', c?.tipo);
+  check('descarga = 2026-02-03 (Navegantes, não Singapura 27-Dez)', c?.dischargeDate === '2026-02-03', c?.dischargeDate);
+  check('gate-out (retirada) = 2026-02-10', c?.gateOut === '2026-02-10', c?.gateOut);
+  check('devolução do vazio = 2026-02-10', c?.emptyReturn === '2026-02-10', c?.emptyReturn);
+  check('availableDate = null (origem não polui)', c?.availableDate === null, c?.availableDate);
+  check('lastFreeDay null (exige login)', c?.lastFreeDay === null);
 
-  const tghu = events.find((e) => e.container === 'TGHU1234567');
-  check('TGHU discharge classificado', tghu?.type === 'discharge', tghu?.type);
-  check('TGHU data = 2026-02-03', tghu?.date === '2026-02-03', tghu?.date);
-  check('TGHU tipo = 20GP', tghu?.tipo === '20GP', tghu?.tipo);
-
-  console.log('[selftest] deriveContainers — multi-contêiner + tipo');
-  const containers = deriveContainers(events, null);
-  console.log('    contêineres:', JSON.stringify(containers));
-  check('2 contêineres', containers.length === 2, containers.length);
-  const c1 = containers.find((c) => c.numero === 'PCIU9028668');
-  const c2 = containers.find((c) => c.numero === 'TGHU1234567');
-  check('PCIU emptyReturn = 2026-02-10', c1?.emptyReturn === '2026-02-10', c1?.emptyReturn);
-  check('PCIU tipo propagado = 40HC', c1?.tipo === '40HC', c1?.tipo);
-  check('TGHU dischargeDate = 2026-02-03', c2?.dischargeDate === '2026-02-03', c2?.dischargeDate);
-  check('lastFreeDay null (exige login)', c1?.lastFreeDay === null);
+  console.log('[selftest] extractPilEvents — RESUMO (fallback, sem Trace)');
+  const sum = extractPilEvents(FIXTURE_SUMMARY);
+  console.log('    eventos:', JSON.stringify(sum));
+  check('1 evento (Latest Event)', sum.length === 1, sum.length);
+  check('resumo: empty_return + tipo 40HC', sum[0]?.type === 'empty_return' && sum[0]?.tipo === '40HC');
 
   console.log('[selftest] guarda de assinatura — HTML não-PIL retorna vazio');
   check('sem trackinfo/container_info_sub → 0 eventos', extractPilEvents('<table><tr><td>PCIU9028668</td><td>2026-02-10</td></tr></table>').length === 0);
 
   if (failures === 0) {
-    console.log('\n[selftest] ✅ parser PIL (Container T&T): lógica de extração OK');
+    console.log('\n[selftest] ✅ parser PIL (Container T&T): histórico + resumo OK');
   } else {
     console.log(`\n[selftest] ❌ ${failures} verificação(ões) falharam`);
     process.exit(1);

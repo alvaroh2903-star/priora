@@ -68,7 +68,7 @@ Legenda **Anti-bot**: 🔴 Cloudflare interativo · 🟠 aceite/anti-bot leve ·
 | `yangming` | Yang Ming | YMLU | Formulário na página | a confirmar | ❔ | ⬜ |
 | `evergreen` | Evergreen (ShipmentLink) | EGLV, EMCU | Servlet clássico (form POST) | a confirmar | ❔ | ⬜ |
 | `zim` | ZIM | ZIMU | SPA | `?consnumber=` (contêiner) | ❔ | ⬜ |
-| `pil` | Pacific Int. Lines | PABV, NNPL, PILU | Página + form | `?...&refNo=` | 🟢 | ✅ (resumo; Trace→histórico na 2ª fase) |
+| `pil` | Pacific Int. Lines | PABV, NNPL, PILU | Página + form | `?...&refNo=` | 🟢 | ✅ (histórico completo via Trace, validado ao vivo) |
 | `oocl` | OOCL | OOLU | ASPX com formulário | a confirmar | 🟠 | ⬜ |
 
 > Detecção (ref → armador) e a URL de rastreio **já funcionam para os 12**. O que
