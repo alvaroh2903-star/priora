@@ -160,18 +160,37 @@ export async function extrairDocPreAlertaMultiplo(
   accessToken: string,
   paginas: PaginaDoc[],
   tipo: TipoDoc,
-): Promise<{ doc: DocPreAlerta; tipoDetectado: Extracao['tipoDetectado'] | null }> {
+): Promise<{
+  doc: DocPreAlerta;
+  tipoDetectado: Extracao['tipoDetectado'] | null;
+  /** Diagnóstico (opcional): motivo da falha, quando o doc sai ilegível. */
+  erro?: string;
+  /** Diagnóstico: quantas páginas retornaram bytes do anexo. */
+  paginasComBytes?: number;
+}> {
   const nome = paginas[0]?.nome ?? 'documento';
+  let comBytes = 0;
+  let semMime = 0;
   try {
     const partes: Array<{ data: string; mimeType: string }> = [];
     for (const p of paginas) {
       const content = await getAttachmentContent(accessToken, p.messageId, p.attachmentId);
       if (!content) continue;
+      comBytes++;
       const mime = mimeSuportado(content.contentType, content.name);
-      if (!mime) continue;
+      if (!mime) {
+        semMime++;
+        continue;
+      }
       partes.push({ data: content.contentBytes, mimeType: mime });
     }
-    if (partes.length === 0) return { doc: docIlegivelPreAlerta(nome, tipo), tipoDetectado: null };
+    if (partes.length === 0) {
+      const erro =
+        comBytes === 0
+          ? 'download do anexo não retornou bytes (anexo direto vazio ou anexo aninhado inacessível)'
+          : `bytes vieram mas o tipo de arquivo não é suportado pela visão (${semMime} anexo(s))`;
+      return { doc: docIlegivelPreAlerta(nome, tipo), tipoDetectado: null, erro, paginasComBytes: comBytes };
+    }
 
     const dica =
       partes.length > 1
@@ -183,9 +202,15 @@ export async function extrairDocPreAlertaMultiplo(
       partes,
       `Tipo esperado deste documento (dica): ${tipo}. ${dica}`,
     );
-    return { doc: mapExtracaoParaDoc(ai, nome, tipo), tipoDetectado: ai.tipoDetectado ?? null };
-  } catch {
-    return { doc: docIlegivelPreAlerta(nome, tipo), tipoDetectado: null };
+    return { doc: mapExtracaoParaDoc(ai, nome, tipo), tipoDetectado: ai.tipoDetectado ?? null, paginasComBytes: comBytes };
+  } catch (err) {
+    const e = err as { message?: string };
+    return {
+      doc: docIlegivelPreAlerta(nome, tipo),
+      tipoDetectado: null,
+      erro: `OCR (visão) falhou: ${String(e?.message || err).slice(0, 400)}`,
+      paginasComBytes: comBytes,
+    };
   }
 }
 

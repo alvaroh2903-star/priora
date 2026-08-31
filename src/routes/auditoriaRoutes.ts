@@ -399,6 +399,41 @@ auditoriaRouter.get('/diagnostico', async (req: AuthedRequest, res, next) => {
 
     const { processos } = await buildProcessos(token);
 
+    // TESTE REAL DE OCR: pega os candidatos a documento do 1º processo e roda a
+    // extração DE VERDADE (download do anexo + Gemini visão), reportando se os
+    // bytes vieram, se o Gemini leu, o tipo detectado e — o mais importante — o
+    // ERRO real (que o fluxo normal engole e marca como "ilegível").
+    let ocrTeste: unknown = null;
+    const alvo = processos.find((p) =>
+      p.docs.some((d) => isDocumentAttachment(d.nome, d.contentType, false)),
+    );
+    if (alvo) {
+      const cands = alvo.docs
+        .filter((d) => isDocumentAttachment(d.nome, d.contentType, false))
+        .slice(0, 3);
+      const docsRes = [];
+      for (const d of cands) {
+        const hint: TipoDoc = d.tipo === 'HBL' ? 'HBL' : 'MBL';
+        const pagina: PaginaDoc = { messageId: d.emailId, attachmentId: d.attachmentId, nome: d.nome };
+        const { doc, tipoDetectado, erro, paginasComBytes } = await extrairDocPreAlertaMultiplo(
+          token,
+          [pagina],
+          hint,
+        );
+        docsRes.push({
+          nome: d.nome,
+          tipoPeloNome: d.tipo,
+          aninhado: String(d.attachmentId).includes('::'),
+          bytesBaixados: (paginasComBytes ?? 0) > 0,
+          legivel: doc.legivel,
+          tipoDetectado,
+          containersLidos: doc.containers.length,
+          erro: erro || null,
+        });
+      }
+      ocrTeste = { processo: alvo.processo, docs: docsRes };
+    }
+
     res.json({
       commit: (process.env.RENDER_GIT_COMMIT || '').slice(0, 7) || null,
       branch: process.env.RENDER_GIT_BRANCH || null,
@@ -412,6 +447,7 @@ auditoriaRouter.get('/diagnostico', async (req: AuthedRequest, res, next) => {
         tipos: p.tiposPresentes,
         auditorias: p.auditorias,
       })),
+      ocrTeste,
       mensagens,
       mensagensSemAnexo: semAnexo,
     });
