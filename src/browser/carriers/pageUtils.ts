@@ -1,4 +1,4 @@
-import { Page } from 'playwright';
+import { Page, Frame } from 'playwright';
 
 /**
  * Priora — Utilitários de página compartilhados pelos scrapers de armadores.
@@ -69,51 +69,73 @@ export async function getBodyText(page: Page): Promise<string> {
   return t.replace(/\s+/g, ' ').trim();
 }
 
-/** Tenta preencher o 1º campo de busca com a referência e submeter. */
-export async function tryFillSearch(page: Page, ref: string): Promise<boolean> {
-  const candidates = [
-    'input[type="search"]',
-    'input[name*="container" i]',
-    'input[name*="booking" i]',
-    'input[name*="track" i]',
-    'input[name*="number" i]',
-    'input[name*="ref" i]',
-    'input[id*="track" i]',
-    'input[placeholder*="container" i]',
-    'input[placeholder*="track" i]',
-    'input[type="text"]',
-  ];
-  // Botões de busca comuns (muitos forms/servlets NÃO submetem no Enter).
-  const searchButtons = [
-    'button:has-text("Search")',
-    'button:has-text("Track")',
-    'button:has-text("Trace")',
-    'a:has-text("Track")',
-    'a:has-text("Trace")',
-    'input[type="submit"]',
-    'button[type="submit"]',
-    'input[value*="Search" i]',
-    'input[value*="Track" i]',
-    '[onclick*="track" i]',
-    '[onclick*="search" i]',
-  ];
-  for (const sel of candidates) {
-    const field = page.locator(sel).first();
-    if ((await field.count().catch(() => 0)) > 0) {
-      await field.fill(ref).catch(() => undefined);
-      // 1) tenta clicar um botão de busca; 2) senão, Enter.
-      let clicked = false;
-      for (const b of searchButtons) {
-        const btn = page.locator(b).first();
-        if ((await btn.count().catch(() => 0)) > 0) {
-          await btn.click({ timeout: 3000 }).catch(() => undefined);
-          clicked = true;
-          break;
-        }
+// Campos de busca candidatos (ordem = prioridade). `input[type="search"]` fica
+// por último entre os "genéricos" porque alguns SPAs (Ant) usam um input search
+// READONLY como dropdown de tipo — o guard isEditable pula esses.
+const SEARCH_FIELD_CANDIDATES = [
+  'input[name*="container" i]',
+  'input[name*="booking" i]',
+  'input[name*="bl" i]',
+  'input[name*="track" i]',
+  'input[name*="number" i]',
+  'input[name*="ref" i]',
+  'input[id*="track" i]',
+  'input[placeholder*="container" i]',
+  'input[placeholder*="b/l" i]',
+  'input[placeholder*="bill of lading" i]',
+  'input[placeholder*="track" i]',
+  'input[type="search"]',
+  'input[type="text"]',
+];
+
+// Botões de busca comuns (muitos forms/servlets NÃO submetem no Enter).
+const SEARCH_BUTTONS = [
+  'button:has-text("Search")',
+  'button:has-text("Track")',
+  'button:has-text("Trace")',
+  'a:has-text("Track")',
+  'a:has-text("Trace")',
+  'input[type="submit"]',
+  'button[type="submit"]',
+  'input[value*="Search" i]',
+  'input[value*="Track" i]',
+  '[onclick*="track" i]',
+  '[onclick*="search" i]',
+];
+
+/** Preenche+submete a busca DENTRO de um frame específico (best-effort). */
+async function fillSearchInFrame(frame: Frame, ref: string): Promise<boolean> {
+  for (const sel of SEARCH_FIELD_CANDIDATES) {
+    const field = frame.locator(sel).first();
+    if ((await field.count().catch(() => 0)) === 0) continue;
+    // Pula campos readonly/desabilitados (ex.: o dropdown de tipo do Ant, que é
+    // um input[type=search] readonly) — digitar neles não faz a busca.
+    if (!(await field.isEditable().catch(() => false))) continue;
+    await field.fill(ref).catch(() => undefined);
+    // 1) tenta CLICAR um botão de busca; 2) senão, ENTER (o site pode exigir um).
+    let clicked = false;
+    for (const b of SEARCH_BUTTONS) {
+      const btn = frame.locator(b).first();
+      if ((await btn.count().catch(() => 0)) > 0) {
+        await btn.click({ timeout: 3000 }).catch(() => undefined);
+        clicked = true;
+        break;
       }
-      if (!clicked) await field.press('Enter').catch(() => undefined);
-      return true;
     }
+    if (!clicked) await field.press('Enter').catch(() => undefined);
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Tenta preencher o campo de busca com a referência e submeter, varrendo TODOS
+ * os frames (o formulário de rastreio às vezes vive num iframe — ex.: COSCO).
+ * Sempre buscamos pela referência recebida (a BL), nunca por outro número.
+ */
+export async function tryFillSearch(page: Page, ref: string): Promise<boolean> {
+  for (const frame of page.frames()) {
+    if (await fillSearchInFrame(frame, ref)) return true;
   }
   return false;
 }

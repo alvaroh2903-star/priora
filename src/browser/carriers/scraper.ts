@@ -3,14 +3,8 @@ import { CarrierMeta, ReferenceType, TrackingResult } from './types';
 import { PortalScraper, ScrapeContext } from './scraperTypes';
 import { resolveTrackingUrl } from './registry';
 import { withPage, withRemotePage } from '../browser';
-import { isSBConfigured } from '../scrapingBrowser';
-import {
-  acceptCookies,
-  detectCaptcha,
-  detectLogin,
-  getBodyText,
-  tryFillSearch,
-} from './pageUtils';
+import { isSBConfigured, collectFramesHtml, collectFramesText } from '../scrapingBrowser';
+import { acceptCookies, detectCaptcha, detectLogin, tryFillSearch } from './pageUtils';
 import { scrapeHapag, deriveContainers, firstContainerNo } from './scrapers/hapag';
 import { extractCarrierEvents } from './scrapers/dispatch';
 import { solveCaptchaIfPresent } from '../antiCaptcha';
@@ -56,7 +50,8 @@ async function genericScrape(
   await page.waitForLoadState('networkidle').catch(() => undefined);
   await page.waitForTimeout(1500);
 
-  let body = await getBodyText(page);
+  // Texto de TODOS os frames (o rastreio pode estar num iframe — ex.: COSCO).
+  let body = await collectFramesText(page);
   // Se a referência não apareceu (deep link não auto-buscou), preenche o form.
   // Mas alguns portais desenham a ref como SVG/imagem (ex.: COSCO) — se já há um
   // número de contêiner no corpo, os resultados carregaram; não re-buscar à toa.
@@ -66,15 +61,16 @@ async function genericScrape(
       await page.waitForLoadState('networkidle').catch(() => undefined);
       await acceptCookies(page);
       await page.waitForTimeout(1500);
-      body = await getBodyText(page);
+      body = await collectFramesText(page);
     }
   }
 
   const needsCaptcha = await detectCaptcha(page);
   const needsLogin = await detectLogin(page, body);
 
-  // Extração ESTRUTURADA multi-armador (dispatcher: Maersk, tabelas…) do DOM.
-  const html = await page.content();
+  // Extração ESTRUTURADA multi-armador (dispatcher: Maersk, tabelas…) do DOM de
+  // TODOS os frames (o resultado pode estar num iframe).
+  const html = await collectFramesHtml(page);
   const events = extractCarrierEvents(html);
   if (events.length > 0) {
     const containerHint =

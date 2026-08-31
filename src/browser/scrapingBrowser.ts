@@ -221,11 +221,38 @@ export async function collectInventory(page: Page): Promise<DomInventory> {
 }
 
 /**
+ * HTML de TODOS os frames (principal + iframes), concatenado. Vários portais
+ * montam o rastreio dentro de um iframe (ex.: COSCO) — `page.content()` só pega
+ * o frame principal, então a extração perderia os eventos. Aqui juntamos tudo
+ * para o parser achar sua assinatura esteja o resultado no frame que estiver.
+ * Frames cross-origin que recusam `.content()` são ignorados (best-effort).
+ */
+export async function collectFramesHtml(page: Page): Promise<string> {
+  const parts = await Promise.all(page.frames().map((f) => f.content().catch(() => '')));
+  return parts.filter(Boolean).join('\n<!--priora-frame-boundary-->\n');
+}
+
+/** Texto do body de TODOS os frames, concatenado (p/ detectar resultados/ref). */
+export async function collectFramesText(page: Page): Promise<string> {
+  const parts = await Promise.all(
+    page.frames().map((f) => f.textContent('body').catch(() => '')),
+  );
+  return parts
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
  * Pilota UMA página (local OU remota) até os resultados do rastreio: navega,
  * aceita cookies, espera a SPA/tabela, e se a referência não aparecer preenche
  * o formulário de busca. Retorna HTML + texto + contagem. É a lógica ÚNICA usada
  * tanto pelo Scraping Browser (remoto) quanto pelo navegador local + IPRoyal —
  * o local IGNORA robots.txt, então serve nos portais que o Bright Data recusa.
+ *
+ * TODO o conteúdo é lido de TODOS os frames (o rastreio pode estar num iframe),
+ * e a busca do formulário (tryFillSearch) também varre os frames.
  */
 export async function driveTrackingPage(
   page: Page,
@@ -255,7 +282,7 @@ export async function driveTrackingPage(
   // então "ref não achada no texto" NÃO significa "sem resultado": se já há um
   // número de contêiner no corpo, os resultados carregaram — pula o retrabalho.
   if (opts.reference) {
-    const body0 = (await page.textContent('body').catch(() => '')) || '';
+    const body0 = await collectFramesText(page); // varre todos os frames
     const refSeen = body0.toUpperCase().includes(opts.reference.toUpperCase());
     const containerSeen = /\b[A-Z]{4}\d{7}\b/.test(body0);
     if (!refSeen && !containerSeen) {
@@ -292,14 +319,11 @@ export async function driveTrackingPage(
   }
 
   const title = await page.title().catch(() => '');
-  const html = await page.content().catch(() => '');
-  const textContent = (
-    (await page.innerText('body').catch(() => '')) ||
-    (await page.textContent('body').catch(() => '')) ||
-    ''
-  )
-    .replace(/\s+/g, ' ')
-    .trim();
+  // HTML e texto de TODOS os frames (o resultado pode estar num iframe).
+  const html = await collectFramesHtml(page);
+  const textContent =
+    (await collectFramesText(page)) ||
+    ((await page.innerText('body').catch(() => '')) || '').replace(/\s+/g, ' ').trim();
   const rowCount = await page.locator('table tr, [role="row"]').count().catch(() => 0);
   const mentionsRef = opts.reference
     ? textContent.toUpperCase().includes(opts.reference.toUpperCase())
