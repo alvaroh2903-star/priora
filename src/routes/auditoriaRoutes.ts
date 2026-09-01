@@ -149,8 +149,17 @@ interface ProcessoAuditoria {
   data: string;
 }
 
-/** Constrói a central de processos a partir do Outlook (sem OCR). Reutilizada. */
-async function buildProcessos(accessToken: string): Promise<{ processos: ProcessoAuditoria[]; source: string }> {
+/**
+ * Constrói a central de processos a partir do Outlook (sem OCR). Reutilizada.
+ * `comAninhados`: quando true, também baixa os anexos-arquivo que estão DENTRO de
+ * e-mails encaminhados como anexo (itemAttachment) — caro (várias chamadas ao
+ * Graph). A LISTA de processos NÃO precisa disso (fica leve e rápida, evita
+ * throttling/instabilidade); só a AUDITORIA de um processo liga `comAninhados`.
+ */
+async function buildProcessos(
+  accessToken: string,
+  opts: { comAninhados?: boolean } = {},
+): Promise<{ processos: ProcessoAuditoria[]; source: string }> {
   let messages = await withTimeout(
     searchLogisticsMessages(accessToken, { keywords: config.logisticsKeywords, top: 60 }),
     20000,
@@ -205,19 +214,21 @@ async function buildProcessos(accessToken: string): Promise<{ processos: Process
   // 5 e-mails por vez e SÓ buscamos aninhados quando o e-mail tem algum anexo
   // SEM extensão de arquivo (provável e-mail encaminhado como anexo).
   const dados = await mapLimit(comAnexo, 5, async (m) => {
-    // Timeout folgado (20s): sob throttling o Graph pede para esperar (Retry-After)
-    // e o próprio cliente re-tenta; um timeout curto matava a re-tentativa e
-    // derrubava a mensagem.
-    const full = await withTimeout(getFullMessage(accessToken, m.id), 20000, 'getFull').catch(
+    const full = await withTimeout(getFullMessage(accessToken, m.id), 12000, 'getFull').catch(
       () => null,
     );
     let nested: Awaited<ReturnType<typeof getForwardedFileAttachments>> = [];
-    const anexos = full?.attachments || [];
-    const todosSaoArquivo = anexos.length > 0 && anexos.every((a) => EXT_ARQUIVO.test(a.name || ''));
-    if (full && !todosSaoArquivo) {
-      nested = await withTimeout(getForwardedFileAttachments(accessToken, m.id), 20000, 'nested').catch(
-        () => [],
-      );
+    // Só busca anexos aninhados na AUDITORIA (comAninhados) e só quando o e-mail
+    // tem algum anexo SEM extensão de arquivo (provável e-mail encaminhado como
+    // anexo). Na LISTA de processos isto é pulado → carregamento leve e estável.
+    if (opts.comAninhados && full) {
+      const anexos = full.attachments || [];
+      const todosSaoArquivo = anexos.length > 0 && anexos.every((a) => EXT_ARQUIVO.test(a.name || ''));
+      if (!todosSaoArquivo) {
+        nested = await withTimeout(getForwardedFileAttachments(accessToken, m.id), 20000, 'nested').catch(
+          () => [],
+        );
+      }
     }
     return { full, nested };
   });
@@ -419,7 +430,7 @@ auditoriaRouter.get('/diagnostico', async (req: AuthedRequest, res, next) => {
         imEncontrado: extractProcesses(`${m.subject || ''}\n${m.body?.content || m.bodyPreview || ''}`),
       }));
 
-    const { processos } = await buildProcessos(token);
+    const { processos } = await buildProcessos(token, { comAninhados: true });
 
     // TESTE REAL DE OCR: só roda com ?ocr=1 (custa 1 chamada ao Gemini). Por
     // padrão NÃO roda — assim abrir o diagnóstico não gasta cota à toa. Pega o
@@ -502,7 +513,7 @@ auditoriaRouter.get('/:processo/auditoria', async (req: AuthedRequest, res, next
       });
     }
     const alvoBase = processBase(String(req.params.processo || '').toUpperCase());
-    const { processos } = await buildProcessos(req.accessToken!);
+    const { processos } = await buildProcessos(req.accessToken!, { comAninhados: true });
     const proc = processos.find((p) => processBase(p.processo) === alvoBase);
     if (!proc) {
       return res.status(404).json({ error: 'Processo não encontrado na caixa do Courier.' });
@@ -643,7 +654,7 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
       });
     }
     const alvoBase = processBase(String(req.params.processo || '').toUpperCase());
-    const { processos } = await buildProcessos(req.accessToken!);
+    const { processos } = await buildProcessos(req.accessToken!, { comAninhados: true });
     const proc = processos.find((p) => processBase(p.processo) === alvoBase);
     if (!proc) {
       return res.status(404).json({ error: 'Processo não encontrado na caixa do Courier.' });
