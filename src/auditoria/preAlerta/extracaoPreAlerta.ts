@@ -255,18 +255,24 @@ export function montarOperacao(processo: string, docs: DocPreAlerta[]): Operacao
     return { processo, master, houses: hbls };
   }
 
+  // Fallback "comparar mesmo assim": SÓ promove a Master um documento de papel
+  // INCERTO (papelConfiavel !== true). Nunca promove um doc sabidamente House
+  // (rótulo OHBL/HBL) — senão a Mesa compararia House × House, que não é
+  // Pré-Alerta. Se todos têm papel confiável e não há Master, fica "Faltando MBL".
   const todos = [...mbls, ...hbls];
-  if (todos.length >= 2) {
+  const incertos = todos.filter((d) => d.papelConfiavel !== true);
+  if (todos.length >= 2 && incertos.length >= 1) {
     const master =
       todos.find((d) => d.tipo === 'MBL' && d.legivel) ??
       todos.find((d) => d.tipo === 'MBL') ??
-      todos.find((d) => d.legivel) ??
-      todos[0];
+      incertos.find((d) => d.legivel) ??
+      incertos[0];
     return { processo, master, houses: todos.filter((d) => d !== master) };
   }
 
-  // 0 ou 1 conhecimento → não há par a comparar (a rota sinaliza "faltando").
-  return { processo, master: mbls[0] ?? hbls[0] ?? null, houses: [] };
+  // Sem par e sem doc de papel incerto (ex.: 2 Houses confiáveis) OU só 1
+  // conhecimento → não há par a comparar; a rota sinaliza "Faltando MBL/HBL".
+  return { processo, master: mbls[0] ?? null, houses: hbls };
 }
 
 /**

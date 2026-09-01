@@ -48,6 +48,14 @@ export interface DocPreAlerta {
   transbordos: string[]; // portos de transbordo, quando informados
   /** Campos do conhecimento com leitura incerta (ex.: ['qtdVolumesTotal']). */
   leituraIncerta?: string[];
+  /**
+   * O papel MBL/HBL foi determinado com CONFIANÇA (rótulo explícito no nome —
+   * OMBL/OHBL/MBL/HBL — ou pelo conteúdo lido pela IA)? Quando false, o papel foi
+   * INFERIDO por heurística (ex.: prefixo de armador). Usado por `montarOperacao`
+   * para NÃO promover um documento sabidamente House a Master (evita comparar
+   * House × House). Ausente = tratado como incerto.
+   */
+  papelConfiavel?: boolean;
 }
 
 /** A operação a auditar: 1 Master + N Houses. */

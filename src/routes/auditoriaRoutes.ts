@@ -782,6 +782,11 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
       if (!doc) return null;
       const nome0 = grupo[0].nome;
       let tipoFinal: TipoDoc | null = null;
+      // papelConfiavel = o papel MBL/HBL veio de rótulo explícito (nome OMBL/OHBL/
+      // MBL/HBL) ou do conteúdo lido pela IA. Quando é só heurística (prefixo de
+      // armador), fica INCERTO — e montarOperacao não promove incerto→Master à toa,
+      // nem trata como "sabidamente House".
+      let papelConfiavel = true;
       if (temHBL && !temMBL) tipoFinal = 'HBL';
       else if (temMBL && !temHBL) tipoFinal = 'MBL';
       else if (temHBL || temMBL) tipoFinal = tipoDetectado === 'HBL' ? 'HBL' : 'MBL';
@@ -794,10 +799,13 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
         // OCR não rotulou MBL/HBL, mas é um conhecimento de verdade (nome de
         // armador OU tem contêiner lido) e não é Debit Note/Invoice/Packing:
         // NÃO descarta — infere o papel pelo nome (armador = Master; senão
-        // House) e compara mesmo assim.
+        // House) e compara mesmo assim. Papel INCERTO (heurística).
         tipoFinal = pareceArmadorPorNome(nome0) ? 'MBL' : 'HBL';
+        papelConfiavel = false;
       }
-      return tipoFinal ? ({ ...doc, tipo: tipoFinal, nome: nome0 } as DocPreAlerta) : null;
+      return tipoFinal
+        ? ({ ...doc, tipo: tipoFinal, nome: nome0, papelConfiavel } as DocPreAlerta)
+        : null;
     });
     const docs = extraidos.filter((d): d is DocPreAlerta => d !== null);
 

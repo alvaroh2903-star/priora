@@ -388,7 +388,8 @@ test('montarOperacao: 1 conhecimento só → houses vazio (rota sinaliza faltand
 });
 
 // ---- fallback "comparar mesmo assim" (decisão do usuário) ----
-test('montarOperacao: 2 conhecimentos do mesmo rótulo → compara mesmo assim', () => {
+test('montarOperacao: 2 conhecimentos de papel INCERTO → compara mesmo assim', () => {
+  // papelConfiavel ausente = incerto (papel inferido) → pode promover p/ comparar.
   const docs = [
     mapExtracaoParaDoc(aiVazio(), 'ONEYTSNG63801500.pdf', 'HBL'),
     mapExtracaoParaDoc(aiVazio(), 'SHYY26075038.PDF', 'HBL'),
@@ -396,6 +397,16 @@ test('montarOperacao: 2 conhecimentos do mesmo rótulo → compara mesmo assim',
   const op = montarOperacao('IM3098', docs);
   assert.ok(op.master); // um vira referência
   assert.equal(op.houses.length, 1); // o outro é comparado contra ele
+});
+
+test('montarOperacao: 2 Houses CONFIÁVEIS (OHBL) sem Master → NÃO compara House×House', () => {
+  const docs = [
+    doc('HBL', 'AAA-OHBL.pdf', [ct(C1)], { papelConfiavel: true }),
+    doc('HBL', 'BBB-OHBL.pdf', [ct(C2)], { papelConfiavel: true }),
+  ];
+  const op = montarOperacao('IM99', docs);
+  assert.equal(op.master, null); // não promove House sabidamente House a Master
+  // a rota, com master=null, sinaliza "Faltando MBL" em vez de fingir a comparação
 });
 
 test('nomeNaoConhecimento: exclui Debit Note/Invoice/Packing; mantém BL', () => {
