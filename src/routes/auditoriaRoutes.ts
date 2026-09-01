@@ -18,6 +18,7 @@ import {
   PaginaDoc,
 } from '../auditoria/preAlerta/extracaoPreAlerta';
 import { executarPreAlerta, DocPreAlerta, TipoDoc } from '../auditoria/preAlerta';
+import { mapLimit } from '../browser/carriers/concurrency';
 
 /**
  * Módulo Auditoria Documental (Blueprint completo).
@@ -659,11 +660,11 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
     }
 
     // OCR por grupo (multi-página) + reclassificação (nome concreto prevalece;
-    // senão, o tipo detectado pelo conteúdo). SEQUENCIAL (uma chamada de visão
-    // por vez): as chamadas de visão são pesadas e, em paralelo, estouram o
-    // limite por minuto do Gemini (429). Máx. 6 grupos por processo.
-    const docs: DocPreAlerta[] = [];
-    for (const grupo of Array.from(grupos.values()).slice(0, 6)) {
+    // senão, o tipo detectado pelo conteúdo). PARALELO com LIMITE de 3 leituras
+    // de visão simultâneas: rápido, sem estourar o limite/minuto do Gemini
+    // (Nível 1 aguenta). Máx. 6 grupos por processo.
+    const listaGrupos = Array.from(grupos.values()).slice(0, 6);
+    const extraidos = await mapLimit(listaGrupos, 3, async (grupo) => {
       const temHBL = grupo.some((d) => d.tipo === 'HBL');
       const temMBL = grupo.some((d) => d.tipo === 'MBL');
       const hint: TipoDoc = temHBL && !temMBL ? 'HBL' : 'MBL';
@@ -677,14 +678,15 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
         60000,
         'ocr',
       ).catch(() => ({ doc: null as DocPreAlerta | null, tipoDetectado: null }));
-      if (!doc) continue;
+      if (!doc) return null;
       let tipoFinal: TipoDoc | null = null;
       if (temHBL && !temMBL) tipoFinal = 'HBL';
       else if (temMBL && !temHBL) tipoFinal = 'MBL';
       else if (temHBL || temMBL) tipoFinal = tipoDetectado === 'HBL' ? 'HBL' : 'MBL';
       else if (tipoDetectado === 'MBL' || tipoDetectado === 'HBL') tipoFinal = tipoDetectado;
-      if (tipoFinal) docs.push({ ...doc, tipo: tipoFinal, nome: grupo[0].nome } as DocPreAlerta);
-    }
+      return tipoFinal ? ({ ...doc, tipo: tipoFinal, nome: grupo[0].nome } as DocPreAlerta) : null;
+    });
+    const docs = extraidos.filter((d): d is DocPreAlerta => d !== null);
 
     const op = montarOperacao(proc.processo, docs);
 
