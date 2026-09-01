@@ -258,6 +258,19 @@ async function buildProcessos(
       .filter((a) => isDocumentAttachment(a.name, a.contentType, a.isInline))
       .map((a) => ({ name: a.name, id: a.id, contentType: a.contentType }));
     const anexos = [...diretos, ...aninhados];
+    // Modo LEVE (lista): não baixamos os aninhados, mas se há e-mail(s)
+    // encaminhado(s) como anexo (attachment sem extensão de arquivo), contamos
+    // como PLACEHOLDER pra o processo aparecer na lista — os documentos reais são
+    // lidos só na auditoria. Sem isto, processos cujos docs estão TODOS dentro de
+    // e-mails encaminhados (a maioria dos PRE-ALERT) sumiriam da lista.
+    if (!opts.comAninhados) {
+      const itemAtts = (full.attachments || []).filter(
+        (a) => !a.isInline && !EXT_ARQUIVO.test(a.name || ''),
+      );
+      if (itemAtts.length > 0) {
+        anexos.push({ name: 'Documentos no e-mail encaminhado', id: itemAtts[0].id, contentType: '' });
+      }
+    }
     if (anexos.length === 0) continue;
 
     const basesVistas = new Set<string>();
