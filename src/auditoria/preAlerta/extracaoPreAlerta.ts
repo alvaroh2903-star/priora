@@ -220,7 +220,12 @@ export async function extrairDocPreAlertaMultiplo(
  */
 export function nomeNaoConhecimento(nome: string): boolean {
   const up = (nome || '').toUpperCase();
-  return /(^|[^A-Z])DN[-_ ]|DEBIT[\s_-]*NOTE|NOTA[\s_-]*DE[\s_-]*D[EÉ]BITO|INVOICE|FATURA|PACKING|ROMANEIO/.test(up);
+  // "DN" como TOKEN isolado (seguido de -, _, espaço, "." ou fim do nome), para
+  // pegar "... DN.PDF", "DN-...", "..._DN" etc. — sem casar "DN" no meio de um
+  // número de BL. Mais os rótulos por extenso de Debit Note/Invoice/Packing.
+  return /(^|[^A-Z])DN(?=[-_ .]|$)|DEBIT[\s_-]*NOTE|NOTA[\s_-]*DE[\s_-]*D[EÉ]BITO|INVOICE|FATURA|PACKING|ROMANEIO/.test(
+    up,
+  );
 }
 
 // Prefixos SCAC de ARMADORES (carriers) mais comuns — usados no nº de BL do

@@ -411,6 +411,7 @@ test('montarOperacao: 2 Houses CONFIÁVEIS (OHBL) sem Master → NÃO compara Ho
 
 test('nomeNaoConhecimento: exclui Debit Note/Invoice/Packing; mantém BL', () => {
   assert.equal(nomeNaoConhecimento('DN-ONEYTSNG63801500.PDF'), true);
+  assert.equal(nomeNaoConhecimento('SHYY26072263 DN.PDF'), true); // "DN.PDF" no fim
   assert.equal(nomeNaoConhecimento('140655114952DEBIT_NOTE2026-07-31.pdf'), true);
   assert.equal(nomeNaoConhecimento('commercial invoice.pdf'), true);
   assert.equal(nomeNaoConhecimento('PACKING LIST.pdf'), true);
