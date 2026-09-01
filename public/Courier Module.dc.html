@@ -159,7 +159,7 @@
                                     <!-- MBL -->
                                     <div>
                                       <sc-if value="{{ e.mbl.na }}" hint-placeholder-val="{{ false }}"><span style="font-size:11.5px;color:#B4B9C9">Não esperado</span></sc-if>
-                                      <sc-if value="{{ e.mbl.wait }}" hint-placeholder-val="{{ true }}"><span style="font-size:11.5px;color:#9AA0B4;font-style:italic">Aguardando courier</span></sc-if>
+                                      <sc-if value="{{ e.mbl.wait }}" hint-placeholder-val="{{ true }}"><span style="font-size:11.5px;color:#9AA0B4;font-style:italic">{{ e.mbl.waitText }}</span></sc-if>
                                       <sc-if value="{{ e.mbl.resolved }}" hint-placeholder-val="{{ false }}"><span style="font-size:12px;font-weight:700;color:#177D54">{{ e.mbl.text }}</span></sc-if>
                                       <sc-if value="{{ e.mbl.conf }}" hint-placeholder-val="{{ false }}">
                                         <div style="display:flex;flex-direction:column;gap:5px">
@@ -171,7 +171,7 @@
                                     <!-- HBL Original -->
                                     <div>
                                       <sc-if value="{{ e.hbl.na }}" hint-placeholder-val="{{ false }}"><span style="font-size:11.5px;color:#B4B9C9">Não esperado</span></sc-if>
-                                      <sc-if value="{{ e.hbl.wait }}" hint-placeholder-val="{{ true }}"><span style="font-size:11.5px;color:#9AA0B4;font-style:italic">Aguardando courier</span></sc-if>
+                                      <sc-if value="{{ e.hbl.wait }}" hint-placeholder-val="{{ true }}"><span style="font-size:11.5px;color:#9AA0B4;font-style:italic">{{ e.hbl.waitText }}</span></sc-if>
                                       <sc-if value="{{ e.hbl.resolved }}" hint-placeholder-val="{{ false }}"><span style="font-size:12px;font-weight:700;color:#177D54">{{ e.hbl.text }}</span></sc-if>
                                       <sc-if value="{{ e.hbl.conf }}" hint-placeholder-val="{{ false }}">
                                         <div style="display:flex;flex-direction:column;gap:5px">
@@ -238,7 +238,31 @@
                           </div>
                         </sc-if>
                         <sc-if value="{{ r.noEnvelope }}" hint-placeholder-val="{{ false }}">
-                          <div style="font-size:12.5px;color:#9AA0B4;padding:8px 0">Nenhum processo identificado neste courier ainda — necessita revisão humana.</div>
+                          <div style="padding:4px 0">
+                            <div style="font-size:12.5px;color:#5A6076;margin-bottom:10px">O e-mail não conclui qual processo está neste courier — mas os documentos que vêm no envelope estão listados abaixo (cada linha do e-mail é um documento).</div>
+                            <sc-if value="{{ r.hasDocumentos }}" hint-placeholder-val="{{ true }}">
+                              <div style="border:1px solid #F0F1F7;border-radius:12px;overflow:hidden;background:#fff">
+                                <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 14px;background:#FAFAFE;border-bottom:1px solid #EEEFF6">
+                                  <span style="font-size:12px;font-weight:800;color:#3C4258">{{ r.docsCountLabel }}</span>
+                                  <sc-if value="{{ r.hasWebLink }}" hint-placeholder-val="{{ true }}">
+                                    <span onClick="{{ r.onVerEmail }}" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:11.5px;font-weight:700;color:#4327E6"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 6L2 7"/></svg>Ver e-mail original</span>
+                                  </sc-if>
+                                </div>
+                                <sc-for list="{{ r.documentos }}" as="d" hint-placeholder-count="3">
+                                  <div style="display:flex;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid #F2F3F9">
+                                    <span style="width:6px;height:6px;border-radius:50%;background:#C9C2F7;flex-shrink:0"></span>
+                                    <span style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:#3C4258">{{ d.ref }}</span>
+                                    <span style="font-size:10px;font-weight:700;color:#7A8099;background:#EEF0F6;padding:2px 7px;border-radius:6px">{{ d.tipo }}</span>
+                                    <span style="flex:1"></span>
+                                    <sc-if value="{{ d.hasProc }}" hint-placeholder-val="{{ false }}"><span onClick="{{ d.onProc }}" style="font-family:'JetBrains Mono',monospace;font-size:11.5px;font-weight:700;color:#4327E6;background:#EEEBFE;padding:3px 9px;border-radius:7px;cursor:pointer">{{ d.processo }}</span></sc-if>
+                                  </div>
+                                </sc-for>
+                              </div>
+                            </sc-if>
+                            <sc-if value="{{ r.noDocumentos }}" hint-placeholder-val="{{ false }}">
+                              <div style="font-size:12.5px;color:#9AA0B4;padding:2px 0">Nenhum documento identificado no e-mail — necessita revisão humana.</div>
+                            </sc-if>
+                          </div>
                         </sc-if>
 
                         <!-- Possível processo — revisar: referências 1:N (MBL/Booking compartilhado) -->
@@ -924,20 +948,24 @@ class Component extends DCLogic {
       var flags=docMap[proc]||defFlags;
       if (!flags.mbl && !flags.hbl) flags=de.anySeen?defFlags:{ mbl:true, hbl:true };
       if (!flags.mbl && !flags.hbl) flags={ mbl:true, hbl:true };
-      var cell=function(docKey, expected, resolvedText){
+      var cell=function(docKey, expected, resolvedText, waitLabel){
         // Resolução conhecida (ex.: Telex Release) vem ANTES de "não esperado":
         // é mais informativo dizer o motivo do que só omitir o documento.
-        if (resolvedText) return { na:false, wait:false, resolved:true, conf:false, text:resolvedText };
-        if (!expected) return { na:true, wait:false, resolved:false, conf:false, text:'' };
-        if (!received) return { na:false, wait:true, resolved:false, conf:false, text:'' };
+        if (resolvedText) return { na:false, wait:false, resolved:true, conf:false, text:resolvedText, waitText:'' };
+        if (!expected) return { na:true, wait:false, resolved:false, conf:false, text:'', waitText:'' };
+        // Ainda não recebido: o rótulo do "aguardando" depende do documento — MBL
+        // é sempre couriered ("Aguardando courier"); para o OHBL, quando o e-mail
+        // NÃO diz como foi enviado, mostramos "Não informado" (nada é assumido —
+        // nem Telex Release).
+        if (!received) return { na:false, wait:true, resolved:false, conf:false, text:'', waitText:(waitLabel||'Aguardando courier') };
         var v=val[docKey], recSel=(v==='recebido'), naoSel=(v==='nao_recebido');
-        return { na:false, wait:false, resolved:false, conf:true, text:'',
+        return { na:false, wait:false, resolved:false, conf:true, text:'', waitText:'',
           recBorder: recSel?'#177D54':'#C7CBDA', recBg: recSel?'#177D54':'transparent',
           naoBorder: naoSel?'#C2333A':'#C7CBDA', naoBg: naoSel?'#C2333A':'transparent',
           onRecebido:function(){ self.doConf(courier, proc, docKey, 'recebido'); },
           onNao:function(){ self.doConf(courier, proc, docKey, 'nao_recebido'); } };
       };
-      var mbl=cell('mbl', flags.mbl, mblText), hbl=cell('hbl', flags.hbl, hblText);
+      var mbl=cell('mbl', flags.mbl, mblText, 'Aguardando courier'), hbl=cell('hbl', flags.hbl, hblText, 'Não informado');
       var st;
       if (estado==='Identificado'){ st={label:'Em trânsito', color:'#3D34C9', bg:'#EEEBFE'}; }
       else {
@@ -947,12 +975,13 @@ class Component extends DCLogic {
         else if (phys.length && phys.every(function(x){ return x==='recebido'; })){ st={label:'Conferido', color:'#177D54', bg:'#E7F6EF'}; }
         else { st={label:'Recebido', color:'#177D54', bg:'#E7F6EF'}; }
       }
-      var docLine=function(label, expected, docKey, resolvedText){
+      var docLine=function(label, expected, docKey, resolvedText, waitLabel){
         if (resolvedText) return { label:label, status:resolvedText, color:'#177D54' };
         if (!expected) return { label:label, status:'Não esperado', color:'#9AA0B4' };
         var v=val[docKey];
         if (v==='recebido') return { label:label, status:'Recebido', color:'#177D54' };
         if (v==='nao_recebido') return { label:label, status:'Não recebido', color:'#C2333A' };
+        if (!received) return { label:label, status:(waitLabel||'Não recebido'), color:'#9AA0B4' };
         return { label:label, status:'Não recebido', color:'#9AA0B4' };
       };
       var claraNote = (estado==='Identificado') ? 'depende da chegada do envelope para conferência documental.'
@@ -982,7 +1011,7 @@ class Component extends DCLogic {
         hasResolvido:!!rr, resolvidoVia: rr ? ('Resolvido via '+rr.metodo) : '',
         onProcesso:function(ev){ if(ev&&ev.stopPropagation)ev.stopPropagation(); if(window.PrioraBus) window.PrioraBus.focus('processos', proc); },
         stLabel:st.label, stColor:st.color, stBg:st.bg,
-        docsEsperados:[ docLine('MBL',flags.mbl,'mbl',mblText), docLine('HBL Original',flags.hbl,'hbl',hblText) ],
+        docsEsperados:[ docLine('MBL',flags.mbl,'mbl',mblText,'Aguardando courier'), docLine('HBL Original',flags.hbl,'hbl',hblText,'Não informado') ],
         claraNote:claraNote,
         pendencias:pendencias, hasPendencias:(pendencias.length>0),
         procExpanded:(self.state.expandedRow===rowKey),
@@ -990,6 +1019,20 @@ class Component extends DCLogic {
         onToggleProc:function(){ self.setState({ expandedRow:(self.state.expandedRow===rowKey)?null:rowKey }); } };
     });
     row.hasEnvelope=(procs.length>0); row.noEnvelope=(procs.length===0);
+
+    // ---- documentos do envelope (cada linha do e-mail = 1 documento) ----
+    // Usado quando o e-mail NÃO conclui o processo: mostra QUANTOS e QUAIS
+    // documentos vêm no envelope, com IMxxxx ao lado quando a referência resolve.
+    row.documentos=(courier.documentos||[]).map(function(d){
+      var pr=d.processo||'';
+      return { ref:d.ref, tipo:d.tipo, hasProc:!!pr, processo:pr,
+        onProc:function(ev){ if(ev&&ev.stopPropagation)ev.stopPropagation(); if(pr&&window.PrioraBus) window.PrioraBus.focus('processos', pr); } };
+    });
+    row.hasDocumentos=(row.documentos.length>0);
+    row.noDocumentos=(row.documentos.length===0);
+    row.docsCountLabel=row.documentos.length+' documento'+(row.documentos.length===1?'':'s')+' no envelope';
+    row.hasWebLink=!!courier.webLink;
+    row.onVerEmail=function(ev){ if(ev&&ev.stopPropagation)ev.stopPropagation(); if(courier.webLink) window.open(courier.webLink,'_blank'); };
 
     // ---- candidatos 1:N (MBL/Booking compartilhado): "Possível processo — revisar" ----
     var candByRef={};
