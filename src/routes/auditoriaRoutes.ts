@@ -402,14 +402,16 @@ auditoriaRouter.get('/diagnostico', async (req: AuthedRequest, res, next) => {
 
     const { processos } = await buildProcessos(token);
 
-    // TESTE REAL DE OCR: pega os candidatos a documento do 1º processo e roda a
-    // extração DE VERDADE (download do anexo + Gemini visão), reportando se os
-    // bytes vieram, se o Gemini leu, o tipo detectado e — o mais importante — o
-    // ERRO real (que o fluxo normal engole e marca como "ilegível").
-    let ocrTeste: unknown = null;
-    const alvo = processos.find((p) =>
-      p.docs.some((d) => isDocumentAttachment(d.nome, d.contentType, false)),
-    );
+    // TESTE REAL DE OCR: só roda com ?ocr=1 (custa 1 chamada ao Gemini). Por
+    // padrão NÃO roda — assim abrir o diagnóstico não gasta cota à toa. Pega o
+    // 1º documento do 1º processo e reporta bytes/leitura/erro real.
+    let ocrTeste: unknown = String(req.query.ocr || '') === '1'
+      ? null
+      : 'desligado (adicione ?ocr=1 para testar o OCR — custa 1 chamada ao Gemini)';
+    const alvo =
+      String(req.query.ocr || '') === '1'
+        ? processos.find((p) => p.docs.some((d) => isDocumentAttachment(d.nome, d.contentType, false)))
+        : undefined;
     if (alvo) {
       const cands = alvo.docs
         .filter((d) => isDocumentAttachment(d.nome, d.contentType, false))
