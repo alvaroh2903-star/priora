@@ -817,8 +817,15 @@ class Component extends DCLogic {
 
     // Lista EFETIVA de processos: a lista rápida só lê o bodyPreview (corta a
     // tabela); quando a Clara lê o corpo inteiro, pega todos. Fazemos a união.
+    var procBase=function(p){ return String(p).toUpperCase().replace(/-\d{2}$/,''); };
     var procs=(courier.processos||[]).map(function(p){ return String(p).toUpperCase(); });
-    if (a && a.processNumbers) a.processNumbers.forEach(function(p){ var u=String(p).toUpperCase(); if(procs.indexOf(u)<0) procs.push(u); });
+    // União com o que a Clara leu no corpo inteiro — deduplicando por BASE:
+    // "IM2404" e "IM2404-26" são o MESMO processo (o "-26" é o ano). Sem isto a
+    // Clara reintroduz a forma sem ano e o envelope passa a mostrar o dobro.
+    if (a && a.processNumbers) a.processNumbers.forEach(function(p){
+      var u=String(p).toUpperCase(), b=procBase(u);
+      if (!procs.some(function(x){ return procBase(x)===b; })) procs.push(u);
+    });
 
     // Resolução por REFERÊNCIA (backend): processos achados via HBL/MBL/Booking.
     // resolvMap: processo -> método ("HBL SH26040055"); candidatos 1:N à parte.

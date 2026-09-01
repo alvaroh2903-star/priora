@@ -486,8 +486,14 @@ async function buildCourierView(accessToken: string) {
         ...(textByTracking.get(c.tracking) || []),
         ...procTexts,
       ].join('\n');
+      // Texto SÓ dos e-mails DESTE courier (sem as outras threads dos mesmos
+      // processos). A resolução do OHBL (Telex/Wave/emissão no destino/enviado ao
+      // importador) precisa vir do PRÓPRIO e-mail do courier — senão um "telex"
+      // citado numa thread vizinha contamina todos os processos do envelope e
+      // gera um falso "Via Telex Release". Sem sinal aqui, nada é afirmado.
+      const ownText = (textByTracking.get(c.tracking) || []).join('\n');
       const docExpect = docExpectFromText(courierText);
-      const docResolution = docResolutionFromText(courierText);
+      const docResolution = docResolutionFromText(ownText);
       // Atracação/ETA do navio (fonte: e-mail; NÃO vem da API do courier).
       const eta = extractEta(courierText);
 
