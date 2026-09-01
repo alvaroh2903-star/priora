@@ -180,6 +180,66 @@ interface CourierItem {
   mensagens: number;
   score: number;
   nivel: string;
+  webLink: string;
+}
+
+/**
+ * Documento do envelope (uma LINHA do e-mail = um documento, mesmo sem processo
+ * identificado). Ex.: numa tabela "…SHYY26073818 OMBL SAM", cada linha é um BL.
+ */
+interface EnvelopeDoc {
+  ref: string; // código do BL exibido (raw)
+  tipo: 'OMBL' | 'OHBL';
+  processo: string | null; // IMxxxx quando a referência resolve 1:1; senão null
+}
+
+// Tipo documental citado na linha (o "O" de Original é opcional).
+const RE_LINE_MBL = /\bO?MBL\b/i;
+const RE_LINE_HBL = /\bO?HBL\b/i;
+
+/**
+ * Extrai os DOCUMENTOS listados no e-mail do courier: cada linha que cita um
+ * tipo documental (OMBL/OHBL) e traz um código de BL. Assim, mesmo quando o
+ * e-mail NÃO conclui o processo, sabemos QUANTOS documentos vêm no envelope e
+ * QUAIS são (com IMxxxx ao lado quando a referência resolve sem ambiguidade).
+ */
+function extractEnvelopeDocs(ownText: string, refIndex: RefIndex): EnvelopeDoc[] {
+  const lines = (ownText || '').split(/\r?\n/);
+  const docs: EnvelopeDoc[] = [];
+  const seen = new Set<string>();
+  for (const line of lines) {
+    const isMbl = RE_LINE_MBL.test(line);
+    const isHbl = RE_LINE_HBL.test(line);
+    if (!isMbl && !isHbl) continue; // linha sem tipo documental não é um documento
+    // Códigos da linha (reusa o tokenizer); container não é o BL a exibir.
+    const cand = tokenize('', line).refs.filter((r) => r.type !== 'CONTAINER');
+    if (cand.length === 0) continue;
+    // Escolhe o código do BL a exibir, nesta ordem:
+    //  (1) o que RESOLVE no índice (1+ processos) — sinal mais forte;
+    //  (2) o código imediatamente ANTES do rótulo do tipo (padrão "<BL> OMBL");
+    //  (3) o mais longo.
+    const tm = line.match(isMbl ? RE_LINE_MBL : RE_LINE_HBL);
+    const typePos = tm ? line.indexOf(tm[0]) : line.length;
+    let resolved: (typeof cand)[number] | null = null;
+    let before: (typeof cand)[number] | null = null;
+    let longest = cand[0];
+    for (const r of cand) {
+      const e = refIndex.get(r.normalized);
+      if (!resolved && e && e.processes.size >= 1) resolved = r;
+      const pos = line.indexOf(r.raw);
+      if (pos >= 0 && pos < typePos && (!before || pos > line.indexOf(before.raw)))
+        before = r;
+      if (r.normalized.length > longest.normalized.length) longest = r;
+    }
+    const chosen = resolved || before || longest;
+    if (seen.has(chosen.normalized)) continue;
+    seen.add(chosen.normalized);
+    const entry = refIndex.get(chosen.normalized);
+    const processo =
+      entry && entry.processes.size === 1 ? Array.from(entry.processes)[0] : null;
+    docs.push({ ref: chosen.raw, tipo: isMbl ? 'OMBL' : 'OHBL', processo });
+  }
+  return docs;
 }
 
 interface ProcessoSemCourier {
@@ -395,6 +455,7 @@ async function buildCourierView(accessToken: string) {
             existing.assunto = latest.subject || existing.assunto;
             existing.agente = agenteDe(latest);
             existing.conversationId = cid;
+            existing.webLink = latest.webLink || existing.webLink;
           }
           if (oldest.receivedDateTime < existing.primeiraData)
             existing.primeiraData = oldest.receivedDateTime;
@@ -416,6 +477,7 @@ async function buildCourierView(accessToken: string) {
             mensagens: msgs.length,
             score: maxScore,
             nivel,
+            webLink: latest.webLink || '',
           });
         }
       }
@@ -494,6 +556,10 @@ async function buildCourierView(accessToken: string) {
       const ownText = (textByTracking.get(c.tracking) || []).join('\n');
       const docExpect = docExpectFromText(courierText);
       const docResolution = docResolutionFromText(ownText);
+      // Documentos listados no e-mail do courier (cada linha = 1 documento).
+      // Usado principalmente quando NENHUM processo foi concluído: mostra quantos
+      // e quais documentos vêm no envelope, mesmo sem IMxxxx.
+      const documentos = extractEnvelopeDocs(ownText, refIndex);
       // Atracação/ETA do navio (fonte: e-mail; NÃO vem da API do courier).
       const eta = extractEta(courierText);
 
@@ -538,6 +604,9 @@ async function buildCourierView(accessToken: string) {
         ),
         score: c.score,
         nivel: c.nivel,
+        // Documentos do envelope (cada linha do e-mail) e link do e-mail original.
+        documentos,
+        webLink: c.webLink || null,
         // Revisão humana: nenhum processo (direto ou auto-resolvido). Um courier
         // com apenas candidatos 1:N também precisa de revisão.
         precisaRevisao: processosEfetivos.length === 0,
