@@ -274,11 +274,22 @@ function effectiveType(types: Set<RefType>, fallback: RefType): RefType {
 }
 
 /**
+ * Acima disto, uma referência aponta para processos demais para ser
+ * discriminante: é quase sempre um código genérico/boilerplate (marca de
+ * embarque, código de template) que se repete em dezenas de e-mails de
+ * processos distintos. Nesse caso ela é IGNORADA — senão a revisão de um
+ * courier vira uma lista de dezenas de "possíveis processos" que não pertencem
+ * ao envelope. Uma consolidação real compartilha MBL entre poucos processos.
+ */
+const MAX_SHARED_PROCESSES = 8;
+
+/**
  * Resolve os processos de um conjunto de referências, aplicando cardinalidade.
  * - HBL / MBL / UNKNOWN → automático se o índice tiver EXATAMENTE 1 processo.
  * - Booking → NUNCA automático (sempre candidato para revisão).
  * - Container → nunca é chave.
  * Vários candidatos (1:N) → vão para "candidatos" (revisar), não automático.
+ * Referência genérica demais (> MAX_SHARED_PROCESSES) → ignorada.
  */
 export function resolveRefs(
   refs: RefToken[],
@@ -295,6 +306,9 @@ export function resolveRefs(
     const tipo = effectiveType(entry.types, ref.type);
     if (tipo === 'CONTAINER') continue;
     const procs = Array.from(entry.processes);
+    // Referência genérica/boilerplate (aponta para processos demais): não é
+    // discriminante, ignora para não poluir a revisão com dezenas de falsos.
+    if (procs.length > MAX_SHARED_PROCESSES) continue;
     const metodo = `${tipo === 'UNKNOWN' ? 'ref.' : tipo} ${ref.raw}`;
 
     const podeAuto = tipo !== 'BOOKING' && procs.length === 1;
