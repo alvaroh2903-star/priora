@@ -667,16 +667,51 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
       });
     }
     const alvoBase = processBase(String(req.params.processo || '').toUpperCase());
-    const { processos } = await buildProcessos(req.accessToken!, { comAninhados: true });
+    // LISTA LEVE só para achar o processo e seus e-mails (não baixa anexos).
+    const { processos } = await buildProcessos(req.accessToken!);
     const proc = processos.find((p) => processBase(p.processo) === alvoBase);
     if (!proc) {
       return res.status(404).json({ error: 'Processo não encontrado na caixa do Courier.' });
     }
 
+    // Busca os documentos REAIS (diretos + aninhados em e-mails encaminhados) SÓ
+    // dos e-mails DESTE processo — poucas chamadas ao Graph, sem re-escanear os 30
+    // e-mails da caixa (o que estourava o throttling e voltava sem documentos).
+    const emailIds = Array.from(new Set(proc.docs.map((d) => d.emailId)));
+    const docsDoProcesso: DocRef[] = [];
+    await mapLimit(emailIds, 3, async (emailId) => {
+      const full = await withTimeout(getFullMessage(req.accessToken!, emailId), 15000, 'getFull').catch(
+        () => null,
+      );
+      if (!full) return;
+      const origem = full.from?.emailAddress?.name || full.from?.emailAddress?.address || '(desconhecido)';
+      const data = full.receivedDateTime || proc.data;
+      const push = (nome: string, attachmentId: string, contentType: string) => {
+        const tipo = classifyDoc(nome);
+        docsDoProcesso.push({ nome, tipo, tipoLabel: labelOf(tipo), emailId, attachmentId, contentType, origem, data });
+      };
+      for (const a of (full.attachments || []).filter((x) =>
+        isDocumentAttachment(x.name, x.contentType, x.isInline),
+      )) {
+        push(a.name, a.id, a.contentType);
+      }
+      const temItemAtt = (full.attachments || []).some((a) => !a.isInline && !EXT_ARQUIVO.test(a.name || ''));
+      if (temItemAtt) {
+        const nested = await withTimeout(
+          getForwardedFileAttachments(req.accessToken!, emailId),
+          20000,
+          'nested',
+        ).catch(() => []);
+        for (const a of nested.filter((x) => isDocumentAttachment(x.name, x.contentType, false))) {
+          push(a.name, a.id, a.contentType);
+        }
+      }
+    });
+
     // Candidatos: BLs por nome + genéricos (fallback p/ reclassificação por conteúdo).
-    const bls = proc.docs.filter((d) => d.tipo === 'MBL' || d.tipo === 'HBL');
+    const bls = docsDoProcesso.filter((d) => d.tipo === 'MBL' || d.tipo === 'HBL');
     const jaNomes = new Set(bls.map((d) => d.nome.toLowerCase()));
-    const genericos = proc.docs.filter(
+    const genericos = docsDoProcesso.filter(
       (d) =>
         !jaNomes.has(d.nome.toLowerCase()) &&
         (d.tipo === 'OUTRO' || d.tipo === 'INVOICE' || d.tipo === 'PACKING') &&
