@@ -21,6 +21,7 @@ import {
 } from '../auditoria/preAlerta/extracaoPreAlerta';
 import { executarPreAlerta, DocPreAlerta, TipoDoc } from '../auditoria/preAlerta';
 import { mapLimit } from '../browser/carriers/concurrency';
+import { chaveOcr, lerOcrCache, gravarOcrCache } from '../auditoria/preAlerta/ocrCache';
 
 /**
  * Módulo Auditoria Documental (Blueprint completo).
@@ -84,6 +85,11 @@ function isDocumentAttachment(name: string, contentType: string, isInline: boole
   if (/\.(pdf|jpe?g|png|tiff?|webp)$/.test(n)) return true;
   return /pdf|image/i.test(contentType || '');
 }
+
+// Anexo com EXTENSÃO de arquivo (fileAttachment). Se TODOS os anexos de um
+// e-mail têm extensão, não há e-mail encaminhado como anexo (itemAttachment) →
+// pulamos a busca aninhada (economiza chamadas ao Graph e evita throttling).
+const EXT_ARQUIVO = /\.(pdf|jpe?g|png|tiff?|webp|gif|bmp|heic|docx?|xlsx?|pptx?|txt|csv|zip|rar|eml|msg|p7m)$/i;
 
 const RE_PROCESS = /\bIM\s*[-:]?\s*(\d{3,6})(-\d{2})?\b/gi;
 function extractProcesses(text: string): string[] {
@@ -193,18 +199,31 @@ async function buildProcessos(accessToken: string): Promise<{ processos: Process
   };
 
   const comAnexo = messages.filter((m) => m.hasAttachments).slice(0, 30);
-  const fulls = await Promise.all(
-    comAnexo.map((m) =>
-      withTimeout(getFullMessage(accessToken, m.id), 9000, 'getFull').catch(() => null),
-    ),
-  );
-  // Anexos-arquivo ANINHADOS em e-mails encaminhados como anexo (itemAttachment).
-  // Alinhado por índice com `comAnexo`/`fulls`. Defensivo: falha vira [].
-  const aninhadosPorMsg = await Promise.all(
-    comAnexo.map((m) =>
-      withTimeout(getForwardedFileAttachments(accessToken, m.id), 12000, 'nested').catch(() => []),
-    ),
-  );
+  // THROTTLE do Graph: buscar getFull + anexos aninhados de 30 e-mails TODOS em
+  // paralelo (≈60 chamadas) estourava o limite do Graph (429) e derrubava a
+  // listagem — sobrava só 1 processo, variando a cada import. Aqui limitamos a
+  // 5 e-mails por vez e SÓ buscamos aninhados quando o e-mail tem algum anexo
+  // SEM extensão de arquivo (provável e-mail encaminhado como anexo).
+  const dados = await mapLimit(comAnexo, 5, async (m) => {
+    // Timeout folgado (20s): sob throttling o Graph pede para esperar (Retry-After)
+    // e o próprio cliente re-tenta; um timeout curto matava a re-tentativa e
+    // derrubava a mensagem.
+    const full = await withTimeout(getFullMessage(accessToken, m.id), 20000, 'getFull').catch(
+      () => null,
+    );
+    let nested: Awaited<ReturnType<typeof getForwardedFileAttachments>> = [];
+    const anexos = full?.attachments || [];
+    const todosSaoArquivo = anexos.length > 0 && anexos.every((a) => EXT_ARQUIVO.test(a.name || ''));
+    if (full && !todosSaoArquivo) {
+      nested = await withTimeout(getForwardedFileAttachments(accessToken, m.id), 20000, 'nested').catch(
+        () => [],
+      );
+    }
+    return { full, nested };
+  });
+  const fulls = dados.map((d) => d.full);
+  // Alinhado por índice com `comAnexo`/`fulls`.
+  const aninhadosPorMsg = dados.map((d) => d.nested);
 
   const porProcesso = new Map<string, ProcessoAuditoria>();
   const agenteDe = (m: { from?: { emailAddress: { name?: string; address: string } } }) =>
@@ -669,6 +688,9 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
     // senão, o tipo detectado pelo conteúdo). PARALELO com LIMITE de 3 leituras
     // de visão simultâneas: rápido, sem estourar o limite/minuto do Gemini
     // (Nível 1 aguenta). Máx. 6 grupos por processo.
+    // Escopo do cache = conta Microsoft (isola por caixa). O resultado do OCR é
+    // determinístico, então é cacheado por assinatura do documento (Supabase).
+    const escopoOcr = String(req.session.homeAccountId || 'mvp');
     const listaGrupos = Array.from(grupos.values()).slice(0, 6);
     const extraidos = await mapLimit(listaGrupos, 3, async (grupo) => {
       const temHBL = grupo.some((d) => d.tipo === 'HBL');
@@ -679,11 +701,25 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
         attachmentId: d.attachmentId,
         nome: d.nome,
       }));
-      const { doc, tipoDetectado } = await withTimeout(
-        extrairDocPreAlertaMultiplo(req.accessToken!, paginas, hint),
-        60000,
-        'ocr',
-      ).catch(() => ({ doc: null as DocPreAlerta | null, tipoDetectado: null }));
+      // Cache persistente: se já lemos este documento antes, não paga OCR de novo.
+      const chave = chaveOcr(escopoOcr, paginas);
+      let doc: DocPreAlerta | null;
+      let tipoDetectado: string | null;
+      const emCache = await lerOcrCache(chave);
+      if (emCache) {
+        doc = emCache.doc;
+        tipoDetectado = emCache.tipoDetectado;
+      } else {
+        const r = await withTimeout(
+          extrairDocPreAlertaMultiplo(req.accessToken!, paginas, hint),
+          60000,
+          'ocr',
+        ).catch(() => ({ doc: null as DocPreAlerta | null, tipoDetectado: null }));
+        doc = r.doc;
+        tipoDetectado = r.tipoDetectado ?? null;
+        // Só cacheia leituras BEM-sucedidas (legíveis) — falha/ilegível re-tenta.
+        if (doc && doc.legivel) await gravarOcrCache(chave, { doc, tipoDetectado }, grupo[0].nome);
+      }
       if (!doc) return null;
       const nome0 = grupo[0].nome;
       let tipoFinal: TipoDoc | null = null;
