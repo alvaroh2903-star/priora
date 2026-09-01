@@ -54,7 +54,7 @@ REGRAS CRÍTICAS:
 
 Campos (nível do conhecimento):
 - legivel: true se legível o suficiente para extração confiável.
-- tipoDetectado: pelo CONTEÚDO (ignore o nome do arquivo). MBL = Master (emitido pelo armador/carrier); HBL = House (emitido pelo agente/forwarder). Na dúvida, use quem emitiu.
+- tipoDetectado: pelo CONTEÚDO. MBL = Master, emitido pelo ARMADOR/carrier (traz o nº de BL do armador, ex.: ONEYxxxx, MAEUxxxx, MSCUxxxx, HLCUxxxx); também chamado OMBL. HBL = House, emitido pelo AGENTE/forwarder (house B/L); também chamado OHBL. Vale também para "Shipping Instructions" / rascunho de BL: classifique pelo EMISSOR (armador = MBL; agente/forwarder = HBL). Uma Debit Note / Nota de Débito / Invoice / Packing List NÃO é conhecimento → OUTRO.
 - pol / pod: Port of Loading / Port of Discharge.
 - placeOfReceipt / placeOfDelivery: quando existirem.
 - transbordos: portos de transbordo informados (lista; vazia se não houver).
@@ -214,12 +214,59 @@ export async function extrairDocPreAlertaMultiplo(
   }
 }
 
-/** Agrupa os documentos extraídos em 1 Master × N Houses. PURO (testável). */
+/**
+ * Nomes que claramente NÃO são conhecimentos (não entram na comparação MBL×HBL):
+ * Debit Note / Nota de Débito, Invoice/Fatura, Packing List/Romaneio. PURO.
+ */
+export function nomeNaoConhecimento(nome: string): boolean {
+  const up = (nome || '').toUpperCase();
+  return /(^|[^A-Z])DN[-_ ]|DEBIT[\s_-]*NOTE|NOTA[\s_-]*DE[\s_-]*D[EÉ]BITO|INVOICE|FATURA|PACKING|ROMANEIO/.test(up);
+}
+
+// Prefixos SCAC de ARMADORES (carriers) mais comuns — usados no nº de BL do
+// Master (OMBL). Se o nome do arquivo / nº de BL começa com um destes, o
+// documento é do armador → Master. Caso contrário, tende a ser do agente → House.
+const SCAC_ARMADORES = [
+  'MAEU', 'MRKU', 'MSKU', 'MSCU', 'MEDU', 'CMDU', 'APLU', 'CGMU', 'HLCU', 'HLXU',
+  'ONEY', 'COSU', 'CBHU', 'OOLU', 'OOCU', 'EGLV', 'EGHU', 'YMLU', 'HDMU', 'ZIMU',
+  'SUDU', 'PONL', 'SAFM', 'WHLC', 'KKLU', 'NYKU', 'NYKS', 'MOLU', 'SITC', 'TSLU',
+  'HMMU', 'CSNU', 'SEGU', 'PABV',
+];
+
+/** Heurística: o nome do arquivo / nº de BL parece ser do ARMADOR (Master)? */
+export function pareceArmadorPorNome(nome: string): boolean {
+  const up = (nome || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return SCAC_ARMADORES.some((s) => up.startsWith(s));
+}
+
+/**
+ * Agrupa os documentos extraídos em 1 Master × N Houses. PURO (testável).
+ * Caso normal: ao menos 1 MBL e 1 HBL. Fallback "comparar mesmo assim": quando
+ * não há par MBL×HBL claro mas existem ≥2 conhecimentos, elege um como
+ * referência (Master) e compara o resto contra ele — assim a Mesa confere os
+ * documentos mesmo sem um rótulo MBL/HBL confiável (decisão do usuário).
+ */
 export function montarOperacao(processo: string, docs: DocPreAlerta[]): Operacao {
-  const master =
-    docs.find((d) => d.tipo === 'MBL' && d.legivel) ?? docs.find((d) => d.tipo === 'MBL') ?? null;
-  const houses = docs.filter((d) => d.tipo === 'HBL');
-  return { processo, master, houses };
+  const mbls = docs.filter((d) => d.tipo === 'MBL');
+  const hbls = docs.filter((d) => d.tipo === 'HBL');
+
+  if (mbls.length > 0 && hbls.length > 0) {
+    const master = mbls.find((d) => d.legivel) ?? mbls[0];
+    return { processo, master, houses: hbls };
+  }
+
+  const todos = [...mbls, ...hbls];
+  if (todos.length >= 2) {
+    const master =
+      todos.find((d) => d.tipo === 'MBL' && d.legivel) ??
+      todos.find((d) => d.tipo === 'MBL') ??
+      todos.find((d) => d.legivel) ??
+      todos[0];
+    return { processo, master, houses: todos.filter((d) => d !== master) };
+  }
+
+  // 0 ou 1 conhecimento → não há par a comparar (a rota sinaliza "faltando").
+  return { processo, master: mbls[0] ?? hbls[0] ?? null, houses: [] };
 }
 
 /**

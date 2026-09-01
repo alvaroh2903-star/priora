@@ -16,6 +16,8 @@ import {
   baseDoBL,
   extrairDocPreAlertaMultiplo,
   PaginaDoc,
+  nomeNaoConhecimento,
+  pareceArmadorPorNome,
 } from '../auditoria/preAlerta/extracaoPreAlerta';
 import { executarPreAlerta, DocPreAlerta, TipoDoc } from '../auditoria/preAlerta';
 import { mapLimit } from '../browser/carriers/concurrency';
@@ -633,6 +635,8 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
       (d) =>
         !jaNomes.has(d.nome.toLowerCase()) &&
         (d.tipo === 'OUTRO' || d.tipo === 'INVOICE' || d.tipo === 'PACKING') &&
+        // Debit Note / Invoice / Packing não são conhecimentos → não gasta OCR com eles.
+        !nomeNaoConhecimento(d.nome) &&
         isDocumentAttachment(d.nome, d.contentType, false),
     );
     const candidatos = [...bls, ...genericos].slice(0, 8); // permite multi-House
@@ -679,12 +683,24 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
         'ocr',
       ).catch(() => ({ doc: null as DocPreAlerta | null, tipoDetectado: null }));
       if (!doc) return null;
+      const nome0 = grupo[0].nome;
       let tipoFinal: TipoDoc | null = null;
       if (temHBL && !temMBL) tipoFinal = 'HBL';
       else if (temMBL && !temHBL) tipoFinal = 'MBL';
       else if (temHBL || temMBL) tipoFinal = tipoDetectado === 'HBL' ? 'HBL' : 'MBL';
       else if (tipoDetectado === 'MBL' || tipoDetectado === 'HBL') tipoFinal = tipoDetectado;
-      return tipoFinal ? ({ ...doc, tipo: tipoFinal, nome: grupo[0].nome } as DocPreAlerta) : null;
+      else if (
+        doc.legivel &&
+        !nomeNaoConhecimento(nome0) &&
+        (pareceArmadorPorNome(nome0) || doc.containers.length > 0)
+      ) {
+        // OCR não rotulou MBL/HBL, mas é um conhecimento de verdade (nome de
+        // armador OU tem contêiner lido) e não é Debit Note/Invoice/Packing:
+        // NÃO descarta — infere o papel pelo nome (armador = Master; senão
+        // House) e compara mesmo assim.
+        tipoFinal = pareceArmadorPorNome(nome0) ? 'MBL' : 'HBL';
+      }
+      return tipoFinal ? ({ ...doc, tipo: tipoFinal, nome: nome0 } as DocPreAlerta) : null;
     });
     const docs = extraidos.filter((d): d is DocPreAlerta => d !== null);
 

@@ -17,7 +17,14 @@ import { familiaV008 } from './v008Lacres';
 import { familiaV009 } from './v009Portos';
 import { familiaV012, ncmCompativeis } from './v012Ncm';
 import { equivalenciaPorto, resolveUnlocode } from './unlocode';
-import { Extracao, mapExtracaoParaDoc, montarOperacao, baseDoBL } from './extracaoPreAlerta';
+import {
+  Extracao,
+  mapExtracaoParaDoc,
+  montarOperacao,
+  baseDoBL,
+  nomeNaoConhecimento,
+  pareceArmadorPorNome,
+} from './extracaoPreAlerta';
 import { executarPreAlerta } from './index';
 
 const C1 = 'BMOU9784013';
@@ -373,15 +380,39 @@ test('baseDoBL: páginas do mesmo BL caem na mesma base; docs distintos não', (
   assert.notEqual(baseDoBL('conhecimento (1).png'), baseDoBL('conhecimento (2).png'));
 });
 
-// ---- operação sem par MBL×HBL (guarda anti-"0 kg") ----
-test('montarOperacao: só MBL(s) → master definido, houses vazio', () => {
-  const docs = [
-    mapExtracaoParaDoc(aiVazio(), 'MBL-1.jpg', 'MBL'),
-    mapExtracaoParaDoc(aiVazio(), 'MBL-2.jpg', 'MBL'),
-  ];
-  const op = montarOperacao('IM24', docs);
+// ---- operação: 1 conhecimento só (guarda "faltando") ----
+test('montarOperacao: 1 conhecimento só → houses vazio (rota sinaliza faltando)', () => {
+  const op = montarOperacao('IM24', [mapExtracaoParaDoc(aiVazio(), 'MBL.jpg', 'MBL')]);
   assert.ok(op.master);
   assert.equal(op.houses.length, 0);
+});
+
+// ---- fallback "comparar mesmo assim" (decisão do usuário) ----
+test('montarOperacao: 2 conhecimentos do mesmo rótulo → compara mesmo assim', () => {
+  const docs = [
+    mapExtracaoParaDoc(aiVazio(), 'ONEYTSNG63801500.pdf', 'HBL'),
+    mapExtracaoParaDoc(aiVazio(), 'SHYY26075038.PDF', 'HBL'),
+  ];
+  const op = montarOperacao('IM3098', docs);
+  assert.ok(op.master); // um vira referência
+  assert.equal(op.houses.length, 1); // o outro é comparado contra ele
+});
+
+test('nomeNaoConhecimento: exclui Debit Note/Invoice/Packing; mantém BL', () => {
+  assert.equal(nomeNaoConhecimento('DN-ONEYTSNG63801500.PDF'), true);
+  assert.equal(nomeNaoConhecimento('140655114952DEBIT_NOTE2026-07-31.pdf'), true);
+  assert.equal(nomeNaoConhecimento('commercial invoice.pdf'), true);
+  assert.equal(nomeNaoConhecimento('PACKING LIST.pdf'), true);
+  assert.equal(nomeNaoConhecimento('ONEYTSNG63801500.pdf'), false);
+  assert.equal(nomeNaoConhecimento('SHYY26075038.PDF'), false);
+});
+
+test('pareceArmadorPorNome: prefixo SCAC de armador = Master; agente = House', () => {
+  assert.equal(pareceArmadorPorNome('ONEYTSNG63801500.pdf'), true); // ONE
+  assert.equal(pareceArmadorPorNome('MAEU123456.pdf'), true); // Maersk
+  assert.equal(pareceArmadorPorNome('HLCU7788990.pdf'), true); // Hapag
+  assert.equal(pareceArmadorPorNome('SHYY26075038.PDF'), false); // agente
+  assert.equal(pareceArmadorPorNome('HRY26K00038.pdf'), false); // agente
 });
 
 test('família numérica sem House: total NÃO vira 0 (Σ Houses = —, NaoAvaliada)', () => {
