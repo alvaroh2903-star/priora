@@ -83,10 +83,46 @@ export async function generateStructuredFromDocument<T extends z.ZodType>(
 }
 
 /**
+ * Teto prático de payload INLINE do Gemini (request inteiro ≤ ~20 MB, contando o
+ * base64 inflado). Acima disto o request é RECUSADO (400) e o OCR falha em
+ * silêncio — um scan de BL "bem legível" volta vazio. Por isso, acima deste
+ * limite de bytes BRUTOS (somados as páginas), subimos via File API em vez de
+ * inline. Conservador (~6 MB brutos ≈ ~8 MB em base64) para folgar do teto.
+ */
+const LIMITE_INLINE_BYTES = 6 * 1024 * 1024;
+
+/** Tamanho aproximado (bytes brutos) de um conteúdo base64. */
+function bytesAproxBase64(b64: string): number {
+  const n = (b64 || '').length;
+  const pad = b64.endsWith('==') ? 2 : b64.endsWith('=') ? 1 : 0;
+  return Math.floor((n * 3) / 4) - pad;
+}
+
+/** Aguarda o arquivo do File API ficar ATIVO (PDF/imagem costuma já vir ativo). */
+async function aguardarArquivoAtivo(
+  ai: GoogleGenAI,
+  f: { name?: string; uri?: string; mimeType?: string; state?: string },
+  tentativas = 15,
+): Promise<{ name?: string; uri?: string; mimeType?: string; state?: string }> {
+  let atual = f;
+  for (let i = 0; i < tentativas && atual.state === 'PROCESSING'; i++) {
+    await sleep(1000);
+    if (!atual.name) break;
+    atual = (await ai.files.get({ name: atual.name })) as typeof atual;
+  }
+  if (atual.state === 'FAILED') throw new Error('processamento do arquivo no Gemini falhou (File API)');
+  return atual;
+}
+
+/**
  * OCR + extração por VISÃO de um documento com VÁRIAS PÁGINAS/IMAGENS numa
  * ÚNICA chamada. Um Bill of Lading costuma chegar como 2–3 imagens (páginas)
  * separadas; enviamos todas juntas para o Gemini ler como UM só conhecimento —
  * uma chamada de IA em vez de uma por página (economia + leitura consolidada).
+ *
+ * Documentos GRANDES (scans pesados) não cabem inline no request → sobem via
+ * File API (limite bem maior) e são apagados ao fim. Documentos pequenos seguem
+ * inline (mais rápido, sem round-trip de upload).
  */
 export async function generateStructuredFromDocuments<T extends z.ZodType>(
   schema: T,
@@ -94,11 +130,41 @@ export async function generateStructuredFromDocuments<T extends z.ZodType>(
   docs: Array<{ data: string; mimeType: string }>,
   userText: string,
 ): Promise<z.infer<T>> {
-  const contents = [
-    ...docs.map((d) => ({ inlineData: { data: d.data, mimeType: d.mimeType } })),
-    { text: userText },
-  ];
-  return generateStructuredFromContents(schema, systemInstruction, contents as unknown as string);
+  const totalBytes = docs.reduce((s, d) => s + bytesAproxBase64(d.data), 0);
+
+  if (totalBytes <= LIMITE_INLINE_BYTES) {
+    const contents = [
+      ...docs.map((d) => ({ inlineData: { data: d.data, mimeType: d.mimeType } })),
+      { text: userText },
+    ];
+    return generateStructuredFromContents(schema, systemInstruction, contents as unknown as string);
+  }
+
+  // Grande demais para inline: sobe cada página via File API, referencia por URI.
+  const ai = getGeminiClient();
+  const nomesEnviados: string[] = [];
+  try {
+    const fileParts: Array<{ fileData: { fileUri: string; mimeType: string } }> = [];
+    for (const d of docs) {
+      const blob = new Blob([Buffer.from(d.data, 'base64')], { type: d.mimeType });
+      const enviado = await ai.files.upload({ file: blob, config: { mimeType: d.mimeType } });
+      const ativo = await aguardarArquivoAtivo(ai, enviado as { name?: string; uri?: string; mimeType?: string; state?: string });
+      if (ativo.name) nomesEnviados.push(ativo.name);
+      if (!ativo.uri) throw new Error('upload via File API não retornou URI do arquivo');
+      fileParts.push({ fileData: { fileUri: ativo.uri, mimeType: ativo.mimeType || d.mimeType } });
+    }
+    const contents = [...fileParts, { text: userText }];
+    return await generateStructuredFromContents(schema, systemInstruction, contents as unknown as string);
+  } finally {
+    // Best-effort: apaga os arquivos temporários (expiram em ~48h de qualquer forma).
+    for (const name of nomesEnviados) {
+      try {
+        await ai.files.delete({ name });
+      } catch {
+        /* ignora — o arquivo expira sozinho */
+      }
+    }
+  }
 }
 
 /** Núcleo compartilhado: aceita texto puro OU partes multimodais em `contents`. */
