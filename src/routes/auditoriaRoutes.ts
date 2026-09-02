@@ -762,8 +762,11 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
 
     const sig = candidatos.map((d) => `${d.tipo}:${d.nome}`).sort().join('|');
     const refresh = String(req.query.refresh || '') === '1';
+    // ?debug=1 → raio-x por documento (ver abaixo). NUNCA usa o cache do payload
+    // (senão devolveria uma auditoria antiga, sem o diagnóstico) e não o grava.
+    const debug = String(req.query.debug || '') === '1';
     const cached = preAlertaCache.get(alvoBase);
-    if (!refresh && cached && cached.sig === sig) {
+    if (!refresh && !debug && cached && cached.sig === sig) {
       return res.json(cached.payload);
     }
 
@@ -786,10 +789,9 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
     // determinístico, então é cacheado por assinatura do documento (Supabase).
     const escopoOcr = String(req.session.homeAccountId || 'mvp');
     const listaGrupos = Array.from(grupos.values()).slice(0, 6);
-    // ?debug=1 → devolve, doc por doc, o que o OCR leu e como foi classificado
-    // (sem custo extra de IA: só reporta o que já foi computado). Serve para
-    // entender por que um Master/House não foi reconhecido.
-    const debug = String(req.query.debug || '') === '1';
+    // Diagnóstico por documento (só materializado quando ?debug=1): o que o OCR
+    // leu e como foi classificado — para entender por que um Master/House não
+    // foi reconhecido.
     const diagnostico: Array<{
       nome: string;
       tipoPeloNome: DocTipo | 'INVOICE' | 'PACKING';
