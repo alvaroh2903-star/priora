@@ -793,6 +793,8 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
     const diagnostico: Array<{
       nome: string;
       tipoPeloNome: DocTipo | 'INVOICE' | 'PACKING';
+      aninhado: boolean;
+      bytesBaixados: number | null;
       tipoDetectado: string | null;
       legivel: boolean;
       containersLidos: number;
@@ -800,6 +802,7 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
       tipoFinal: TipoDoc | null;
       papelConfiavel: boolean | null;
       deCache: boolean;
+      erro: string | null;
     }> = [];
     const extraidos = await mapLimit(listaGrupos, 3, async (grupo) => {
       const temHBL = grupo.some((d) => d.tipo === 'HBL');
@@ -816,6 +819,8 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
       let doc: DocPreAlerta | null;
       let tipoDetectado: string | null;
       let deCache = false;
+      let erro: string | null = null;
+      let bytesBaixados: number | null = null;
       const emCache = await lerOcrCache(chave);
       if (emCache) {
         doc = emCache.doc;
@@ -826,9 +831,16 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
           extrairDocPreAlertaMultiplo(req.accessToken!, paginas, hint),
           60000,
           'ocr',
-        ).catch(() => ({ doc: null as DocPreAlerta | null, tipoDetectado: null }));
+        ).catch((e) => ({
+          doc: null as DocPreAlerta | null,
+          tipoDetectado: null as string | null,
+          erro: `OCR falhou (timeout/exceção): ${String((e as Error)?.message || e).slice(0, 200)}`,
+          paginasComBytes: 0,
+        }));
         doc = r.doc;
         tipoDetectado = r.tipoDetectado ?? null;
+        erro = ('erro' in r ? r.erro : undefined) ?? null;
+        bytesBaixados = ('paginasComBytes' in r ? r.paginasComBytes : undefined) ?? null;
         // Só cacheia leituras BEM-sucedidas (legíveis) — falha/ilegível re-tenta.
         if (doc && doc.legivel) await gravarOcrCache(chave, { doc, tipoDetectado }, nome0);
       }
@@ -849,6 +861,8 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
         diagnostico.push({
           nome: nome0,
           tipoPeloNome: grupo[0].tipo,
+          aninhado: paginas.some((p) => String(p.attachmentId).includes('::')),
+          bytesBaixados,
           tipoDetectado,
           legivel: doc?.legivel ?? false,
           containersLidos: doc?.containers.length ?? 0,
@@ -856,6 +870,7 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
           tipoFinal: cls?.tipo ?? null,
           papelConfiavel: cls ? cls.papelConfiavel : null,
           deCache,
+          erro,
         });
       }
       if (!cls) return null;
