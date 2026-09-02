@@ -116,6 +116,12 @@ async function generateStructuredFromContents<T extends z.ZodType>(
       systemInstruction,
       responseMimeType: 'application/json',
       responseJsonSchema: z.toJSONSchema(schema),
+      // ECONOMIA (maior alavanca de custo): desliga o "thinking" do Gemini 2.5,
+      // que vem LIGADO por padrão. Os tokens de raciocínio são cobrados na tarifa
+      // de SAÍDA (a mais cara) e não ajudam em extração/OCR — que é transcrever o
+      // que está no documento, não raciocinar. Corta a maior parte do custo e
+      // ainda reduz a latência (ajuda no timeout da auditoria).
+      thinkingConfig: { thinkingBudget: 0 },
     },
   };
 
