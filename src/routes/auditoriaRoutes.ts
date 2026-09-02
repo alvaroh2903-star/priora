@@ -17,8 +17,9 @@ import {
   extrairDocPreAlertaMultiplo,
   PaginaDoc,
   nomeNaoConhecimento,
-  pareceArmadorPorNome,
+  classificarPapel,
   consolidarPorConhecimento,
+  docIlegivelPreAlerta,
 } from '../auditoria/preAlerta/extracaoPreAlerta';
 import { executarPreAlerta, DocPreAlerta, TipoDoc } from '../auditoria/preAlerta';
 import { mapLimit } from '../browser/carriers/concurrency';
@@ -785,10 +786,26 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
     // determinístico, então é cacheado por assinatura do documento (Supabase).
     const escopoOcr = String(req.session.homeAccountId || 'mvp');
     const listaGrupos = Array.from(grupos.values()).slice(0, 6);
+    // ?debug=1 → devolve, doc por doc, o que o OCR leu e como foi classificado
+    // (sem custo extra de IA: só reporta o que já foi computado). Serve para
+    // entender por que um Master/House não foi reconhecido.
+    const debug = String(req.query.debug || '') === '1';
+    const diagnostico: Array<{
+      nome: string;
+      tipoPeloNome: DocTipo | 'INVOICE' | 'PACKING';
+      tipoDetectado: string | null;
+      legivel: boolean;
+      containersLidos: number;
+      conhecimentoNumero: string | null;
+      tipoFinal: TipoDoc | null;
+      papelConfiavel: boolean | null;
+      deCache: boolean;
+    }> = [];
     const extraidos = await mapLimit(listaGrupos, 3, async (grupo) => {
       const temHBL = grupo.some((d) => d.tipo === 'HBL');
       const temMBL = grupo.some((d) => d.tipo === 'MBL');
       const hint: TipoDoc = temHBL && !temMBL ? 'HBL' : 'MBL';
+      const nome0 = grupo[0].nome;
       const paginas: PaginaDoc[] = grupo.map((d) => ({
         messageId: d.emailId,
         attachmentId: d.attachmentId,
@@ -798,10 +815,12 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
       const chave = chaveOcr(escopoOcr, paginas);
       let doc: DocPreAlerta | null;
       let tipoDetectado: string | null;
+      let deCache = false;
       const emCache = await lerOcrCache(chave);
       if (emCache) {
         doc = emCache.doc;
         tipoDetectado = emCache.tipoDetectado;
+        deCache = true;
       } else {
         const r = await withTimeout(
           extrairDocPreAlertaMultiplo(req.accessToken!, paginas, hint),
@@ -811,35 +830,39 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
         doc = r.doc;
         tipoDetectado = r.tipoDetectado ?? null;
         // Só cacheia leituras BEM-sucedidas (legíveis) — falha/ilegível re-tenta.
-        if (doc && doc.legivel) await gravarOcrCache(chave, { doc, tipoDetectado }, grupo[0].nome);
+        if (doc && doc.legivel) await gravarOcrCache(chave, { doc, tipoDetectado }, nome0);
       }
-      if (!doc) return null;
-      const nome0 = grupo[0].nome;
-      let tipoFinal: TipoDoc | null = null;
-      // papelConfiavel = o papel MBL/HBL veio de rótulo explícito (nome OMBL/OHBL/
-      // MBL/HBL) ou do conteúdo lido pela IA. Quando é só heurística (prefixo de
-      // armador), fica INCERTO — e montarOperacao não promove incerto→Master à toa,
-      // nem trata como "sabidamente House".
-      let papelConfiavel = true;
-      if (temHBL && !temMBL) tipoFinal = 'HBL';
-      else if (temMBL && !temHBL) tipoFinal = 'MBL';
-      else if (temHBL || temMBL) tipoFinal = tipoDetectado === 'HBL' ? 'HBL' : 'MBL';
-      else if (tipoDetectado === 'MBL' || tipoDetectado === 'HBL') tipoFinal = tipoDetectado;
-      else if (
-        doc.legivel &&
-        !nomeNaoConhecimento(nome0) &&
-        (pareceArmadorPorNome(nome0) || doc.containers.length > 0)
-      ) {
-        // OCR não rotulou MBL/HBL, mas é um conhecimento de verdade (nome de
-        // armador OU tem contêiner lido) e não é Debit Note/Invoice/Packing:
-        // NÃO descarta — infere o papel pelo nome (armador = Master; senão
-        // House) e compara mesmo assim. Papel INCERTO (heurística).
-        tipoFinal = pareceArmadorPorNome(nome0) ? 'MBL' : 'HBL';
-        papelConfiavel = false;
+
+      // Decide o papel (MBL/HBL) — CONTEÚDO primeiro, NOME como rede de segurança.
+      // Um nome de armador (SCAC+dígitos) vira Master mesmo se o OCR falhou/veio
+      // ILEGÍVEL — senão um Master de scan ruim some e o Pré-Alerta acusa
+      // "Faltando MBL" tendo o Master em mãos (bug do IM3539-26 / EGLV...).
+      const cls = classificarPapel({
+        temMBL,
+        temHBL,
+        tipoDetectado,
+        nome: nome0,
+        legivel: doc?.legivel ?? false,
+        qtdContainers: doc?.containers.length ?? 0,
+      });
+      if (debug) {
+        diagnostico.push({
+          nome: nome0,
+          tipoPeloNome: grupo[0].tipo,
+          tipoDetectado,
+          legivel: doc?.legivel ?? false,
+          containersLidos: doc?.containers.length ?? 0,
+          conhecimentoNumero: doc?.conhecimentoNumero ?? null,
+          tipoFinal: cls?.tipo ?? null,
+          papelConfiavel: cls ? cls.papelConfiavel : null,
+          deCache,
+        });
       }
-      return tipoFinal
-        ? ({ ...doc, tipo: tipoFinal, nome: nome0, papelConfiavel } as DocPreAlerta)
-        : null;
+      if (!cls) return null;
+      // OCR não retornou nada (timeout/erro), mas o papel foi decidido pelo NOME:
+      // materializa um doc ILEGÍVEL para o par não sumir (a V-003 marca "ilegível").
+      const base = doc ?? docIlegivelPreAlerta(nome0, cls.tipo);
+      return { ...base, tipo: cls.tipo, nome: nome0, papelConfiavel: cls.papelConfiavel } as DocPreAlerta;
     });
     const lidos = extraidos.filter((d): d is DocPreAlerta => d !== null);
     // Consolida pelo CONTEÚDO: arquivos com o mesmo nº de BL são o mesmo
@@ -867,8 +890,10 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
         familias: [],
         evidencias: [],
         data: proc.data,
+        ...(debug ? { diagnostico } : {}),
       };
-      preAlertaCache.set(alvoBase, { sig, payload: payloadFalta });
+      // Não cacheia o payload de diagnóstico (é uma visão de depuração pontual).
+      if (!debug) preAlertaCache.set(alvoBase, { sig, payload: payloadFalta });
       return res.json(payloadFalta);
     }
 
@@ -884,8 +909,9 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
       familias: resultado.familias,
       evidencias: resultado.evidencias,
       data: proc.data,
+      ...(debug ? { diagnostico } : {}),
     };
-    preAlertaCache.set(alvoBase, { sig, payload });
+    if (!debug) preAlertaCache.set(alvoBase, { sig, payload });
     res.json(payload);
   } catch (err) {
     next(err);

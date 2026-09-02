@@ -25,6 +25,7 @@ import {
   nomeNaoConhecimento,
   pareceArmadorPorNome,
   consolidarPorConhecimento,
+  classificarPapel,
 } from './extracaoPreAlerta';
 import { executarPreAlerta } from './index';
 
@@ -452,6 +453,79 @@ test('pareceArmadorPorNome: prefixo SCAC de armador = Master; agente = House', (
   assert.equal(pareceArmadorPorNome('HLCU7788990.pdf'), true); // Hapag
   assert.equal(pareceArmadorPorNome('SHYY26075038.PDF'), false); // agente
   assert.equal(pareceArmadorPorNome('HRY26K00038.pdf'), false); // agente
+});
+
+// ---- classificarPapel (V-002 · decisão de papel MBL/HBL) ----
+test('classificarPapel: rótulo no nome (OMBL/OHBL) vence e é confiável', () => {
+  assert.deepEqual(
+    classificarPapel({ temMBL: true, temHBL: false, tipoDetectado: null, nome: 'x-OMBL.pdf', legivel: true, qtdContainers: 0 }),
+    { tipo: 'MBL', papelConfiavel: true },
+  );
+  assert.deepEqual(
+    classificarPapel({ temMBL: false, temHBL: true, tipoDetectado: null, nome: 'x-OHBL.pdf', legivel: true, qtdContainers: 0 }),
+    { tipo: 'HBL', papelConfiavel: true },
+  );
+});
+
+test('classificarPapel: conteúdo (OCR) rotula MBL/HBL quando o nome é genérico', () => {
+  assert.deepEqual(
+    classificarPapel({ temMBL: false, temHBL: false, tipoDetectado: 'HBL', nome: 'SKM_281.pdf', legivel: true, qtdContainers: 1 }),
+    { tipo: 'HBL', papelConfiavel: true },
+  );
+});
+
+test('classificarPapel: IM3539-26 — nome de armador (EGLV) é Master MESMO ILEGÍVEL', () => {
+  // O bug: scan de Master (título em CJK) volta ilegível e era DESCARTADO →
+  // "Faltando MBL". Agora o nome EGLV+dígitos o mantém como Master (incerto).
+  assert.deepEqual(
+    classificarPapel({ temMBL: false, temHBL: false, tipoDetectado: null, nome: 'EGLV143600434762 正扫.pdf', legivel: false, qtdContainers: 0 }),
+    { tipo: 'MBL', papelConfiavel: false },
+  );
+});
+
+test('classificarPapel: armador legível sem rótulo → Master incerto', () => {
+  assert.deepEqual(
+    classificarPapel({ temMBL: false, temHBL: false, tipoDetectado: 'OUTRO', nome: 'MAEU123456.pdf', legivel: true, qtdContainers: 2 }),
+    { tipo: 'MBL', papelConfiavel: false },
+  );
+});
+
+test('classificarPapel: legível com contêiner e nome de agente → House incerto', () => {
+  assert.deepEqual(
+    classificarPapel({ temMBL: false, temHBL: false, tipoDetectado: null, nome: 'HRY26K00729_178.pdf', legivel: true, qtdContainers: 1 }),
+    { tipo: 'HBL', papelConfiavel: false },
+  );
+});
+
+test('classificarPapel: Debit Note (nome) → null (não é conhecimento)', () => {
+  assert.equal(
+    classificarPapel({ temMBL: false, temHBL: false, tipoDetectado: null, nome: 'SHYY26072263 DN.PDF', legivel: true, qtdContainers: 1 }),
+    null,
+  );
+});
+
+test('classificarPapel: OCR diz OUTRO (debit note) com contêiner e nome genérico → null (sem poluir como House)', () => {
+  assert.equal(
+    classificarPapel({ temMBL: false, temHBL: false, tipoDetectado: 'OUTRO', nome: 'RYD2604488_178.pdf', legivel: true, qtdContainers: 1 }),
+    null,
+  );
+});
+
+test('classificarPapel: ilegível, sem nome de armador e sem contêiner → null (descarta)', () => {
+  assert.equal(
+    classificarPapel({ temMBL: false, temHBL: false, tipoDetectado: null, nome: 'scan.pdf', legivel: false, qtdContainers: 0 }),
+    null,
+  );
+});
+
+test('classificarPapel + montarOperacao: EGLV ilegível (Master) × HRY (House) → PAR existe (não "Faltando MBL")', () => {
+  const clsEglv = classificarPapel({ temMBL: false, temHBL: false, tipoDetectado: null, nome: 'EGLV143600434762 正扫.pdf', legivel: false, qtdContainers: 0 })!;
+  const clsHry = classificarPapel({ temMBL: false, temHBL: false, tipoDetectado: 'HBL', nome: 'HRY26K00729_178.pdf', legivel: true, qtdContainers: 1 })!;
+  const master = doc(clsEglv.tipo, 'EGLV143600434762 正扫.pdf', [], { legivel: false, papelConfiavel: clsEglv.papelConfiavel });
+  const house = doc(clsHry.tipo, 'HRY26K00729_178.pdf', [ct(C1)], { papelConfiavel: clsHry.papelConfiavel });
+  const op = montarOperacao('IM3539-26', consolidarPorConhecimento([master, house]));
+  assert.equal(op.master?.nome, 'EGLV143600434762 正扫.pdf'); // Master reconhecido
+  assert.equal(op.houses.length, 1);
 });
 
 test('família numérica sem House: total NÃO vira 0 (Σ Houses = —, NaoAvaliada)', () => {

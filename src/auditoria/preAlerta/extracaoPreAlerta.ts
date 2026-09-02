@@ -248,6 +248,49 @@ export function pareceArmadorPorNome(nome: string): boolean {
   return SCAC_ARMADORES.some((s) => up.startsWith(s));
 }
 
+/** Papel decidido para um documento + se a decisão é CONFIÁVEL. */
+export interface ClassificacaoPapel {
+  tipo: TipoDoc;
+  papelConfiavel: boolean;
+}
+
+/**
+ * Decide o PAPEL (MBL/HBL) de um documento e se a decisão é CONFIÁVEL. CONTEÚDO
+ * primeiro; o NOME é rede de segurança. Ordem de prioridade:
+ *  1. Rótulo explícito no NOME (OMBL/OHBL/MBL/HBL), vindo de fora (temMBL/temHBL).
+ *  2. tipoDetectado pelo CONTEÚDO (OCR) = MBL/HBL.
+ *  3. Nome é nº de BL de ARMADOR (SCAC+dígitos) → Master — vale MESMO ILEGÍVEL.
+ *     Sem isto, um Master de scan ruim (imagem, título em CJK) é descartado e o
+ *     Pré-Alerta acusa "Faltando MBL" com o Master em mãos. Papel INCERTO.
+ *  4. Legível, com contêiner e não é Debit Note/Invoice/Packing, e o OCR NÃO o
+ *     classificou como OUTRO (não-conhecimento) → House incerto.
+ * Sem nenhum sinal → null (não é conhecimento auditável). PURO (testável).
+ */
+export function classificarPapel(args: {
+  temMBL: boolean;
+  temHBL: boolean;
+  tipoDetectado: string | null;
+  nome: string;
+  legivel: boolean;
+  qtdContainers: number;
+}): ClassificacaoPapel | null {
+  const { temMBL, temHBL, tipoDetectado, nome, legivel, qtdContainers } = args;
+  // 1. Rótulo no nome do arquivo.
+  if (temHBL && !temMBL) return { tipo: 'HBL', papelConfiavel: true };
+  if (temMBL && !temHBL) return { tipo: 'MBL', papelConfiavel: true };
+  if (temHBL || temMBL) return { tipo: tipoDetectado === 'HBL' ? 'HBL' : 'MBL', papelConfiavel: true };
+  // 2. Conteúdo (OCR) rotulou MBL/HBL.
+  if (tipoDetectado === 'MBL' || tipoDetectado === 'HBL') return { tipo: tipoDetectado, papelConfiavel: true };
+  const naoConhecimento = nomeNaoConhecimento(nome);
+  // 3. Nome de armador = Master forte (mesmo ilegível). Papel incerto.
+  if (pareceArmadorPorNome(nome) && !naoConhecimento) return { tipo: 'MBL', papelConfiavel: false };
+  // 4. Legível, com contêiner, não é DN/Invoice/Packing e o OCR não disse OUTRO.
+  if (legivel && qtdContainers > 0 && !naoConhecimento && tipoDetectado !== 'OUTRO') {
+    return { tipo: 'HBL', papelConfiavel: false };
+  }
+  return null;
+}
+
 const normNum = (s: string | null | undefined): string =>
   (s || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
 
