@@ -97,6 +97,20 @@ create table if not exists public.courier_followups (
   primary key (user_id, tracking_key)
 );
 
+-- Cache de OCR da Auditoria (content-addressed) -------------------------------
+-- Guarda o resultado da leitura (Gemini visão) de cada documento, endereçado por
+-- uma ASSINATURA (hash de escopo-da-conta + identificadores do anexo). Evita
+-- re-ler o mesmo PDF no Gemini a cada auditoria — o OCR é a parte cara e lenta; o
+-- resultado é determinístico. Assim a RE-auditoria fica instantânea. Só a service
+-- role (backend) acessa; RLS ligado sem policy = nega o resto.
+create table if not exists public.auditoria_ocr_cache (
+  chave text primary key,
+  valor jsonb not null,
+  nome text,
+  atualizado_em timestamptz not null default now()
+);
+alter table public.auditoria_ocr_cache enable row level security;
+
 -- Índices úteis
 create index if not exists idx_atividades_user_created
   on public.demurrage_atividades (user_id, created_at desc);

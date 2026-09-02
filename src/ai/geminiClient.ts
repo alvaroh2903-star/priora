@@ -46,8 +46,11 @@ function isTransientAiError(err: unknown): boolean {
   );
 }
 
-/** Nº de novas tentativas em caso de erro transitório do Gemini. */
-const AI_MAX_RETRIES = 3;
+/** Nº de novas tentativas em caso de erro transitório do Gemini. Baixo de
+ *  propósito: na conta paga (Tier 1) erro transitório é raro, e cada tentativa
+ *  extra soma segundos à auditoria (que precisa responder rápido pra não estourar
+ *  o timeout do proxy). */
+const AI_MAX_RETRIES = 1;
 
 /**
  * Chama o Gemini exigindo saída JSON no formato do esquema Zod fornecido

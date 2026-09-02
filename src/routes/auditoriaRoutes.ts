@@ -666,18 +666,44 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
         error: 'A leitura de documentos (OCR) exige a IA. Defina GEMINI_API_KEY no servidor.',
       });
     }
-    const alvoBase = processBase(String(req.params.processo || '').toUpperCase());
-    // LISTA LEVE só para achar o processo e seus e-mails (não baixa anexos).
-    const { processos } = await buildProcessos(req.accessToken!);
-    const proc = processos.find((p) => processBase(p.processo) === alvoBase);
-    if (!proc) {
-      return res.status(404).json({ error: 'Processo não encontrado na caixa do Courier.' });
+    const alvoProcesso = String(req.params.processo || '').toUpperCase();
+    const alvoBase = processBase(alvoProcesso);
+
+    // Busca DIRETA dos e-mails DESTE processo pelo código IM (rápido) — em vez de
+    // re-escanear os 30 e-mails da caixa a cada auditoria, o que somava tempo e
+    // estourava o timeout do proxy (o front então caía pro login). Fallback: se a
+    // busca por código não achar (e-mail vinculado só por referência), varre a caixa.
+    let emailIds: string[] = [];
+    let proc: { processo: string; cliente: string | null; data: string } = {
+      processo: alvoProcesso,
+      cliente: null,
+      data: '',
+    };
+    const achados = await withTimeout(
+      searchLogisticsMessages(req.accessToken!, { keywords: [alvoProcesso, alvoBase], top: 25 }),
+      20000,
+      'search',
+    ).catch(() => [] as Awaited<ReturnType<typeof searchLogisticsMessages>>);
+    const relevantes = achados.filter((m) =>
+      extractProcesses(`${m.subject || ''}\n${m.body?.content || m.bodyPreview || ''}`).some(
+        (p) => processBase(p) === alvoBase,
+      ),
+    );
+    if (relevantes.length > 0) {
+      emailIds = Array.from(new Set(relevantes.map((m) => m.id)));
+      proc.data = relevantes.map((m) => m.receivedDateTime || '').sort().reverse()[0] || '';
+    } else {
+      const { processos } = await buildProcessos(req.accessToken!);
+      const achado = processos.find((p) => processBase(p.processo) === alvoBase);
+      if (!achado) {
+        return res.status(404).json({ error: 'Processo não encontrado na caixa do Courier.' });
+      }
+      emailIds = Array.from(new Set(achado.docs.map((d) => d.emailId)));
+      proc = { processo: achado.processo, cliente: achado.cliente, data: achado.data };
     }
 
     // Busca os documentos REAIS (diretos + aninhados em e-mails encaminhados) SÓ
-    // dos e-mails DESTE processo — poucas chamadas ao Graph, sem re-escanear os 30
-    // e-mails da caixa (o que estourava o throttling e voltava sem documentos).
-    const emailIds = Array.from(new Set(proc.docs.map((d) => d.emailId)));
+    // dos e-mails DESTE processo — poucas chamadas ao Graph, rápido.
     const docsDoProcesso: DocRef[] = [];
     await mapLimit(emailIds, 3, async (emailId) => {
       const full = await withTimeout(getFullMessage(req.accessToken!, emailId), 15000, 'getFull').catch(
