@@ -18,6 +18,7 @@ import {
   PaginaDoc,
   nomeNaoConhecimento,
   pareceArmadorPorNome,
+  consolidarPorConhecimento,
 } from '../auditoria/preAlerta/extracaoPreAlerta';
 import { executarPreAlerta, DocPreAlerta, TipoDoc } from '../auditoria/preAlerta';
 import { mapLimit } from '../browser/carriers/concurrency';
@@ -323,7 +324,14 @@ async function buildProcessos(
     const tipos = new Set(p.docs.map((d) => d.tipo));
     p.tiposPresentes = Array.from(tipos).map((t) => labelOf(t as DocTipo));
 
-    const temPreAlerta = tipos.has('MBL') && tipos.has('HBL');
+    // Pré-Alerta disponível quando há MBL+HBL pelo NOME, OU quando há ≥2
+    // documentos que PODEM ser conhecimentos (nome genérico como "SKM_...";
+    // exclui Debit Note/Invoice/Packing). O tipo real (Master/House) só se sabe
+    // abrindo — a auditoria abre e classifica pelo conteúdo.
+    const candidatosBL = p.docs.filter(
+      (d) => d.tipo !== 'INVOICE' && d.tipo !== 'PACKING' && !nomeNaoConhecimento(d.nome),
+    ).length;
+    const temPreAlerta = (tipos.has('MBL') && tipos.has('HBL')) || candidatosBL >= 2;
     const temCe = tipos.has('CE_MASTER') && tipos.has('CE_HOUSE');
     p.auditorias = [];
     if (temPreAlerta) p.auditorias.push('Pré-Alerta');
@@ -833,7 +841,11 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
         ? ({ ...doc, tipo: tipoFinal, nome: nome0, papelConfiavel } as DocPreAlerta)
         : null;
     });
-    const docs = extraidos.filter((d): d is DocPreAlerta => d !== null);
+    const lidos = extraidos.filter((d): d is DocPreAlerta => d !== null);
+    // Consolida pelo CONTEÚDO: arquivos com o mesmo nº de BL são o mesmo
+    // conhecimento (páginas separadas) → unidos; números diferentes ficam
+    // separados (Master vs House). Resolve "página por página" sem OCR extra.
+    const docs = consolidarPorConhecimento(lidos);
 
     const op = montarOperacao(proc.processo, docs);
 

@@ -24,6 +24,7 @@ import {
   baseDoBL,
   nomeNaoConhecimento,
   pareceArmadorPorNome,
+  consolidarPorConhecimento,
 } from './extracaoPreAlerta';
 import { executarPreAlerta } from './index';
 
@@ -292,7 +293,7 @@ test('executarPreAlerta: caminho feliz consolida Consistente (8 famílias)', () 
 // ---- extração → modelo (wiring, funções puras) ----
 function aiVazio(over: Partial<Extracao> = {}): Extracao {
   return {
-    legivel: true, tipoDetectado: 'MBL',
+    legivel: true, tipoDetectado: 'MBL', conhecimentoNumero: null,
     pol: null, pod: null, placeOfReceipt: null, placeOfDelivery: null, transbordos: [],
     pesoBrutoTotalKg: null, pesoLiquidoTotalKg: null, cubagemTotalM3: null,
     qtdVolumesTotal: null, tipoVolume: null, descricaoMercadoria: null, ncm: [], containers: [],
@@ -397,6 +398,32 @@ test('montarOperacao: 2 conhecimentos de papel INCERTO → compara mesmo assim',
   const op = montarOperacao('IM3098', docs);
   assert.ok(op.master); // um vira referência
   assert.equal(op.houses.length, 1); // o outro é comparado contra ele
+});
+
+// ---- consolidação por conteúdo (página por página × docs distintos) ----
+test('consolidarPorConhecimento: mesmo nº de BL → 1 doc (une páginas separadas)', () => {
+  const pg1 = doc('MBL', 'SKM_280.pdf', [], { conhecimentoNumero: 'ONEY123', pol: 'Qingdao', pod: 'Santos' });
+  const pg2 = doc('HBL', 'SKM_281.pdf', [ct(C1)], { conhecimentoNumero: 'ONEY-123', papelConfiavel: false });
+  const out = consolidarPorConhecimento([pg1, pg2]);
+  assert.equal(out.length, 1); // mesmo número (normalizado) → mesmo conhecimento
+  assert.equal(out[0].pol, 'Qingdao'); // campo da página 1
+  assert.equal(out[0].containers.length, 1); // contêiner da página 2
+});
+
+test('consolidarPorConhecimento: números diferentes → 2 docs (Master vs House)', () => {
+  const out = consolidarPorConhecimento([
+    doc('MBL', 'SKM_280.pdf', [], { conhecimentoNumero: 'OMBL999' }),
+    doc('HBL', 'SKM_281.pdf', [], { conhecimentoNumero: 'OHBL777' }),
+  ]);
+  assert.equal(out.length, 2);
+});
+
+test('consolidarPorConhecimento: sem número → mantém separados', () => {
+  const out = consolidarPorConhecimento([
+    doc('MBL', 'x.pdf', [], { conhecimentoNumero: null }),
+    doc('HBL', 'y.pdf', [], { conhecimentoNumero: null }),
+  ]);
+  assert.equal(out.length, 2);
 });
 
 test('montarOperacao: 2 Houses CONFIÁVEIS (OHBL) sem Master → NÃO compara House×House', () => {

@@ -24,6 +24,8 @@ const ContainerSchema = z.object({
 export const ExtractionSchema = z.object({
   legivel: z.boolean(),
   tipoDetectado: z.enum(['MBL', 'HBL', 'CE_MASTER', 'CE_HOUSE', 'ITEM', 'OUTRO']),
+  // Identidade do conhecimento — nº do BL (o MESMO em todas as páginas do doc).
+  conhecimentoNumero: z.string().nullable(),
   // Nível do conhecimento (Dados Gerais)
   pol: z.string().nullable(),
   pod: z.string().nullable(),
@@ -54,6 +56,7 @@ REGRAS CRÍTICAS:
 
 Campos (nível do conhecimento):
 - legivel: true se legível o suficiente para extração confiável.
+- conhecimentoNumero: o NÚMERO do BL/conhecimento deste documento (ex.: "ONEYTSNG63801500", "SHYY26075038"). É o MESMO número em todas as páginas do mesmo documento. Se a página for uma continuação sem o número visível, devolva null. LEIA TODAS AS PÁGINAS do arquivo.
 - tipoDetectado: pelo CONTEÚDO. MBL = Master, emitido pelo ARMADOR/carrier (traz o nº de BL do armador, ex.: ONEYxxxx, MAEUxxxx, MSCUxxxx, HLCUxxxx); também chamado OMBL. HBL = House, emitido pelo AGENTE/forwarder (house B/L); também chamado OHBL. Vale também para "Shipping Instructions" / rascunho de BL: classifique pelo EMISSOR (armador = MBL; agente/forwarder = HBL). Uma Debit Note / Nota de Débito / Invoice / Packing List NÃO é conhecimento → OUTRO.
 - pol / pod: Port of Loading / Port of Discharge.
 - placeOfReceipt / placeOfDelivery: quando existirem.
@@ -80,7 +83,7 @@ function mimeSuportado(ct: string, nome: string): string | null {
 
 export function docIlegivelPreAlerta(nome: string, tipo: TipoDoc): DocPreAlerta {
   return {
-    tipo, nome, legivel: false, containers: [],
+    tipo, nome, legivel: false, conhecimentoNumero: null, containers: [],
     pesoBrutoTotalKg: null, pesoLiquidoTotalKg: null, cubagemTotalM3: null,
     qtdVolumesTotal: null, tipoVolume: null, descricaoMercadoria: null, ncm: [],
     pol: null, pod: null, placeOfReceipt: null, placeOfDelivery: null, transbordos: [],
@@ -101,6 +104,7 @@ export function mapExtracaoParaDoc(ai: Extracao, nome: string, tipo: TipoDoc): D
     tipo,
     nome,
     legivel: ai.legivel !== false,
+    conhecimentoNumero: ai.conhecimentoNumero,
     containers,
     pesoBrutoTotalKg: ai.pesoBrutoTotalKg,
     pesoLiquidoTotalKg: ai.pesoLiquidoTotalKg,
@@ -242,6 +246,68 @@ const SCAC_ARMADORES = [
 export function pareceArmadorPorNome(nome: string): boolean {
   const up = (nome || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
   return SCAC_ARMADORES.some((s) => up.startsWith(s));
+}
+
+const normNum = (s: string | null | undefined): string =>
+  (s || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+
+/** Une dois documentos que são o MESMO conhecimento (mesmo nº de BL, ex.: páginas
+ *  em arquivos separados). Campos: primeiro não-nulo vence; listas = união. O
+ *  papel/tipo confiável prevalece (uma página de continuação pode ser mal
+ *  classificada). PURO. */
+function mesclarDoc(a: DocPreAlerta, b: DocPreAlerta): DocPreAlerta {
+  const pick = <T>(x: T | null | undefined, y: T | null | undefined): T | null =>
+    x != null && (x as unknown) !== '' ? (x as T) : (y ?? null);
+  const uniq = (arr: string[]) => Array.from(new Set(arr));
+  const containers = [...a.containers];
+  for (const c of b.containers) {
+    const n = normNum(c.numero);
+    if (!n || !containers.some((x) => normNum(x.numero) === n)) containers.push(c);
+  }
+  const tipo = a.papelConfiavel ? a.tipo : b.papelConfiavel ? b.tipo : a.tipo;
+  return {
+    ...a,
+    tipo,
+    papelConfiavel: a.papelConfiavel || b.papelConfiavel,
+    legivel: a.legivel || b.legivel,
+    conhecimentoNumero: pick(a.conhecimentoNumero, b.conhecimentoNumero),
+    containers,
+    pesoBrutoTotalKg: pick(a.pesoBrutoTotalKg, b.pesoBrutoTotalKg),
+    pesoLiquidoTotalKg: pick(a.pesoLiquidoTotalKg, b.pesoLiquidoTotalKg),
+    cubagemTotalM3: pick(a.cubagemTotalM3, b.cubagemTotalM3),
+    qtdVolumesTotal: pick(a.qtdVolumesTotal, b.qtdVolumesTotal),
+    tipoVolume: pick(a.tipoVolume, b.tipoVolume),
+    descricaoMercadoria: pick(a.descricaoMercadoria, b.descricaoMercadoria),
+    ncm: uniq([...a.ncm, ...b.ncm]),
+    pol: pick(a.pol, b.pol),
+    pod: pick(a.pod, b.pod),
+    placeOfReceipt: pick(a.placeOfReceipt, b.placeOfReceipt),
+    placeOfDelivery: pick(a.placeOfDelivery, b.placeOfDelivery),
+    transbordos: uniq([...a.transbordos, ...b.transbordos]),
+  };
+}
+
+/**
+ * Consolida documentos pelo CONTEÚDO (número do BL): arquivos com o MESMO nº de
+ * conhecimento são o MESMO documento (páginas escaneadas em arquivos separados)
+ * → unidos; números diferentes = documentos diferentes (Master vs House) →
+ * mantidos separados. Arquivos sem número (continuação sem cabeçalho) ficam como
+ * estão. Resolve "os dois casos" (página-por-página × docs distintos) sem
+ * chamada extra de IA. PURO (testável).
+ */
+export function consolidarPorConhecimento(docs: DocPreAlerta[]): DocPreAlerta[] {
+  const porNumero = new Map<string, DocPreAlerta>();
+  const semNumero: DocPreAlerta[] = [];
+  for (const d of docs) {
+    const num = normNum(d.conhecimentoNumero);
+    if (!num) {
+      semNumero.push(d);
+      continue;
+    }
+    const atual = porNumero.get(num);
+    porNumero.set(num, atual ? mesclarDoc(atual, d) : d);
+  }
+  return [...porNumero.values(), ...semNumero];
 }
 
 /**

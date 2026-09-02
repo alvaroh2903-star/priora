@@ -31,6 +31,13 @@ export interface DocPreAlerta {
   tipo: TipoDoc;
   nome: string; // nome do arquivo — evidência de origem
   legivel: boolean;
+  /**
+   * Número do BL/conhecimento (MBL# ou HBL#). Identidade do documento: dois
+   * arquivos com o MESMO número são o MESMO conhecimento (ex.: páginas
+   * escaneadas em arquivos separados) → consolidados; números diferentes =
+   * documentos diferentes (Master vs House). Preenchido pela extração (OCR).
+   */
+  conhecimentoNumero?: string | null;
   containers: ContainerDoc[];
   // Totais / campos no nível do conhecimento (Dados Gerais).
   pesoBrutoTotalKg: number | null;
