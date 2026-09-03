@@ -253,7 +253,9 @@ export function isChallengePage(title: string, html: string): boolean {
   if (/just a moment|please wait|checking your browser|しばらく|verifying you are human|security check|un momento|attention required/i.test(title || '')) {
     return true;
   }
-  return /challenges\.cloudflare\.com|__cf_chl_|cf_chl_opt|id="challenge-error-text"|cf-browser-verification|_cf_chl_/i.test(
+  // Cloudflare (managed/JS challenge) + DataDome (device check / "you have been
+  // blocked"). Ambos disparam o retry com sessão nova (IP/fingerprint novo).
+  return /challenges\.cloudflare\.com|__cf_chl_|cf_chl_opt|id="challenge-error-text"|cf-browser-verification|_cf_chl_|geo\.captcha-delivery\.com|captcha-delivery|datadome|you have been blocked/i.test(
     html || '',
   );
 }
