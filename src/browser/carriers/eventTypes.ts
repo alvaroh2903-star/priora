@@ -16,7 +16,9 @@ import { NormalizedEventType } from './types';
 const RULES: Array<[NormalizedEventType, RegExp]> = [
   [
     'empty_return',
-    /empty.*return|return.*empty|empty container returned|empty received|returned.*depot|empty in\b|devolu/i,
+    // "gate in empty" (CMA: "GATE IN EMPTY AT DEPOT") = vazio entrando no depósito
+    // = devolução. NÃO confundir com "gate out empty" (origem), tratado à parte.
+    /empty.*return|return.*empty|empty container returned|empty received|returned.*depot|empty in\b|gate\s*in\s+empty|devolu/i,
   ],
   [
     'gate_out',

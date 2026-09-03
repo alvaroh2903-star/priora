@@ -105,7 +105,11 @@ export const CARRIERS: CarrierMeta[] = [
     containerPrefixes: ['CMAU', 'CGMU', 'CXDU', 'ECMU', 'APLU', 'APHU', 'CXRU'],
     trackingUrl: 'https://www.cma-cgm.com/ebusiness/tracking/search',
     needsLoginForDemurrage: true,
-    notes: 'SPA; deep link a confirmar. Verificar seletores.',
+    needsScrapingBrowser: true, // SPA React → render real (sem captcha, confirmado ao vivo).
+    // Sem captcha. A busca é por formulário (a URL fica /tracking/search sem
+    // parâmetro); o motor preenche o BL, clica Search e expande "Display Previous
+    // Moves". Parser DEDICADO scrapers/cma.ts (Date|Moves|Location|Vessel).
+    notes: 'SPA sem captcha (confirmado ao vivo). Parser scrapers/cma.ts; motor expande "Display Previous Moves" p/ o histórico. Form-based (sem deep-link).',
   },
   {
     id: 'zim',

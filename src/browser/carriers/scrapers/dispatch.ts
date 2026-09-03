@@ -5,6 +5,7 @@ import { extractOneEvents } from './one';
 import { extractCoscoEvents } from './cosco';
 import { extractPilEvents } from './pil';
 import { extractOoclEvents } from './oocl';
+import { extractCmaEvents } from './cma';
 
 /**
  * Priora — Dispatcher multi-armador de extração de eventos.
@@ -41,6 +42,11 @@ export function extractCarrierEvents(html: string): TrackingEvent[] {
   if (/container_info_sub|trackinfo/i.test(html)) {
     const p = extractPilEvents(html);
     if (p.length) return p;
+  }
+  // CMA CGM — "Tracking details" (Date|Moves|Location|Vessel), sem captcha.
+  if (/cma[-\s]?cgm/i.test(html)) {
+    const cm = extractCmaEvents(html);
+    if (cm.length) return cm;
   }
   // Hapag (timeline .hal-event) → tabela genérica <tr>/<td> / grade ARIA.
   return extractHapagOrGeneric(html);

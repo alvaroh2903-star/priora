@@ -357,6 +357,29 @@ export async function driveTrackingPage(
     await page.waitForTimeout(1500);
   }
 
+  // Outros mostram só o ÚLTIMO movimento e escondem o histórico atrás de um
+  // "Display Previous Moves"/"Show all"/"Ver mais" (ex.: CMA CGM). Expande p/ o
+  // parser enxergar descarga/retirada/devolução — não só o último evento.
+  const expanders = [
+    'a:has-text("Display Previous Moves")',
+    'button:has-text("Display Previous Moves")',
+    'a:has-text("Previous Moves")',
+    ':has-text("Display Previous Moves")[class*="link" i]',
+    'a:has-text("Show all")',
+    'button:has-text("Show more")',
+    'a:has-text("Ver mais")',
+    'button:has-text("Ver mais")',
+  ];
+  for (const sel of expanders) {
+    const exp = page.locator(sel).first();
+    if ((await exp.count().catch(() => 0)) > 0) {
+      await exp.click({ timeout: 3000 }).catch(() => undefined);
+      await page.waitForTimeout(1200);
+      await page.waitForLoadState('networkidle', { timeout: postWait }).catch(() => undefined);
+      break;
+    }
+  }
+
   // Inventário do formulário (diagnóstico), coletado ENQUANTO a página vive.
   let inventory: DomInventory | undefined;
   if (opts.inventory) {
