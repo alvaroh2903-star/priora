@@ -93,6 +93,11 @@ const SEARCH_BUTTONS = [
   'button:has-text("Search")',
   'button:has-text("Track")',
   'button:has-text("Trace")',
+  'button:has-text("Retrieve")', // HMM
+  'input[value*="Retrieve" i]',
+  'button:has-text("Consultar")',
+  'button:has-text("Rastrear")',
+  'button:has-text("Buscar")',
   'a:has-text("Track")',
   'a:has-text("Trace")',
   'input[type="submit"]',
@@ -101,6 +106,7 @@ const SEARCH_BUTTONS = [
   'input[value*="Track" i]',
   '[onclick*="track" i]',
   '[onclick*="search" i]',
+  '[onclick*="retrieve" i]',
 ];
 
 /** Preenche+submete a busca DENTRO de um frame específico (best-effort). */
