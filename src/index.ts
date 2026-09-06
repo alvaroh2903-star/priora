@@ -20,7 +20,7 @@ import { chromium } from 'playwright';
 import { withPage } from './browser/browser';
 import { trackShipment, detect } from './browser/carriers';
 import { tryFillSearch } from './browser/carriers/pageUtils';
-import { getAntiCaptchaBalance } from './browser/antiCaptcha';
+import { getAntiCaptchaBalance, solveRecaptchaV2 } from './browser/antiCaptcha';
 import { fetchViaUnblocker, isUnblockerConfigured } from './browser/webUnblocker';
 import { fetchViaBrightData, isBrightDataConfigured } from './browser/brightData';
 import { scrapeViaSB, driveTrackingPage, isSBConfigured, scrapeBrowserProvider } from './browser/scrapingBrowser';
@@ -873,6 +873,42 @@ app.get('/health/anticaptcha', async (_req, res) => {
     res.json({ antiCaptcha: 'ok', provider: config.antiCaptcha.provider, balance });
   } catch (e) {
     res.json({ antiCaptcha: 'error', error: (e as Error).message });
+  }
+});
+
+/**
+ * Teste de SOLVE real do anti-captcha (gated por DIAG_TOKEN): resolve o reCAPTCHA
+ * v2 de DEMONSTRAÇÃO do Google — cria a tarefa, um trabalhador resolve, devolve o
+ * token e GASTA ~US$0,002. Prova que a conta resolve captcha DE VERDADE (não só
+ * que a chave é válida). O `spent` mostra quanto do saldo caiu.
+ * Uso: /health/anticaptcha-solve?token=<DIAG_TOKEN>
+ */
+app.get('/health/anticaptcha-solve', async (req, res) => {
+  const token = (process.env.DIAG_TOKEN || '').trim();
+  if (!token) return res.status(404).json({ error: 'Desativado (defina DIAG_TOKEN).' });
+  if (String(req.query.token || '') !== token) return res.status(401).json({ error: 'token inválido.' });
+  if (!isAntiCaptchaConfigured()) return res.json({ antiCaptcha: 'not_configured' });
+  const startedAt = Date.now();
+  try {
+    const before = await getAntiCaptchaBalance().catch(() => null);
+    // reCAPTCHA v2 de demonstração do Google (sitekey público de teste) — os
+    // workers resolvem o desafio de imagem e devolvem o token.
+    const solved = await solveRecaptchaV2(
+      'https://www.google.com/recaptcha/api2/demo',
+      '6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI',
+    );
+    const after = await getAntiCaptchaBalance().catch(() => null);
+    res.json({
+      antiCaptcha: 'solved',
+      ms: Date.now() - startedAt,
+      tokenLen: solved.length,
+      tokenPreview: solved.slice(0, 24) + '…',
+      balanceBefore: before,
+      balanceAfter: after,
+      spent: before != null && after != null ? Number((before - after).toFixed(4)) : null,
+    });
+  } catch (e) {
+    res.json({ antiCaptcha: 'error', ms: Date.now() - startedAt, error: (e as Error).message });
   }
 });
 
