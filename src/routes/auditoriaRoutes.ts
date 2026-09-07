@@ -22,6 +22,7 @@ import {
   docIlegivelPreAlerta,
 } from '../auditoria/preAlerta/extracaoPreAlerta';
 import { executarPreAlerta, DocPreAlerta, TipoDoc } from '../auditoria/preAlerta';
+import { executarCeMercante } from '../auditoria/ceMercante';
 import { mapLimit } from '../browser/carriers/concurrency';
 import { chaveOcr, lerOcrCache, gravarOcrCache } from '../auditoria/preAlerta/ocrCache';
 
@@ -661,6 +662,105 @@ auditoriaRouter.get('/:processo/auditoria', async (req: AuthedRequest, res, next
   }
 });
 
+/**
+ * Coleta os documentos REAIS de um processo (diretos + aninhados em e-mails
+ * encaminhados como anexo), buscando SÓ os e-mails DESTE processo pelo código IM
+ * (rápido). Fallback: varre a caixa (buildProcessos). Compartilhado por
+ * /pre-alerta (PB-001) e /ce-mercante (PB-002). null = processo não encontrado.
+ */
+async function coletarDocsDoProcesso(
+  req: AuthedRequest,
+  alvoProcesso: string,
+): Promise<{ proc: { processo: string; cliente: string | null; data: string }; docs: DocRef[] } | null> {
+  const alvoBase = processBase(alvoProcesso);
+  let emailIds: string[] = [];
+  let proc: { processo: string; cliente: string | null; data: string } = {
+    processo: alvoProcesso,
+    cliente: null,
+    data: '',
+  };
+  const achados = await withTimeout(
+    searchLogisticsMessages(req.accessToken!, { keywords: [alvoProcesso, alvoBase], top: 25 }),
+    20000,
+    'search',
+  ).catch(() => [] as Awaited<ReturnType<typeof searchLogisticsMessages>>);
+  const relevantes = achados.filter((m) =>
+    extractProcesses(`${m.subject || ''}\n${m.body?.content || m.bodyPreview || ''}`).some(
+      (p) => processBase(p) === alvoBase,
+    ),
+  );
+  if (relevantes.length > 0) {
+    emailIds = Array.from(new Set(relevantes.map((m) => m.id)));
+    proc.data = relevantes.map((m) => m.receivedDateTime || '').sort().reverse()[0] || '';
+  } else {
+    const { processos } = await buildProcessos(req.accessToken!);
+    const achado = processos.find((p) => processBase(p.processo) === alvoBase);
+    if (!achado) return null;
+    emailIds = Array.from(new Set(achado.docs.map((d) => d.emailId)));
+    proc = { processo: achado.processo, cliente: achado.cliente, data: achado.data };
+  }
+
+  const docs: DocRef[] = [];
+  await mapLimit(emailIds, 3, async (emailId) => {
+    const full = await withTimeout(getFullMessage(req.accessToken!, emailId), 15000, 'getFull').catch(
+      () => null,
+    );
+    if (!full) return;
+    const origem = full.from?.emailAddress?.name || full.from?.emailAddress?.address || '(desconhecido)';
+    const data = full.receivedDateTime || proc.data;
+    const push = (nome: string, attachmentId: string, contentType: string) => {
+      const tipo = classifyDoc(nome);
+      docs.push({ nome, tipo, tipoLabel: labelOf(tipo), emailId, attachmentId, contentType, origem, data });
+    };
+    for (const a of (full.attachments || []).filter((x) =>
+      isDocumentAttachment(x.name, x.contentType, x.isInline),
+    )) {
+      push(a.name, a.id, a.contentType);
+    }
+    const temItemAtt = (full.attachments || []).some((a) => !a.isInline && !EXT_ARQUIVO.test(a.name || ''));
+    if (temItemAtt) {
+      const nested = await withTimeout(
+        getForwardedFileAttachments(req.accessToken!, emailId),
+        20000,
+        'nested',
+      ).catch(() => []);
+      for (const a of nested.filter((x) => isDocumentAttachment(x.name, x.contentType, false))) {
+        push(a.name, a.id, a.contentType);
+      }
+    }
+  });
+  return { proc, docs };
+}
+
+/**
+ * OCR (com cache persistente) de UM conhecimento (grupo de páginas). Devolve o
+ * doc extraído + o tipo detectado pelo conteúdo. Compartilhado pelos playbooks.
+ */
+async function ocrConhecimento(
+  req: AuthedRequest,
+  grupo: DocRef[],
+  hint: TipoDoc,
+  escopoOcr: string,
+): Promise<{ doc: DocPreAlerta | null; tipoDetectado: string | null }> {
+  const paginas: PaginaDoc[] = grupo.map((d) => ({
+    messageId: d.emailId,
+    attachmentId: d.attachmentId,
+    nome: d.nome,
+  }));
+  const chave = chaveOcr(escopoOcr, paginas);
+  const emCache = await lerOcrCache(chave);
+  if (emCache) return { doc: emCache.doc, tipoDetectado: emCache.tipoDetectado };
+  const r = await withTimeout(
+    extrairDocPreAlertaMultiplo(req.accessToken!, paginas, hint),
+    60000,
+    'ocr',
+  ).catch(() => ({ doc: null as DocPreAlerta | null, tipoDetectado: null }));
+  const doc = r.doc;
+  const tipoDetectado = r.tipoDetectado ?? null;
+  if (doc && doc.legivel) await gravarOcrCache(chave, { doc, tipoDetectado }, grupo[0].nome);
+  return { doc, tipoDetectado };
+}
+
 /* ------------------------------------------------------------------ *
  * Motor NOVO — PB-001 Pré-Alerta determinístico (multi-House). Rota
  * PARALELA à /:processo/auditoria: não altera o caminho antigo, permite
@@ -678,70 +778,11 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
     const alvoProcesso = String(req.params.processo || '').toUpperCase();
     const alvoBase = processBase(alvoProcesso);
 
-    // Busca DIRETA dos e-mails DESTE processo pelo código IM (rápido) — em vez de
-    // re-escanear os 30 e-mails da caixa a cada auditoria, o que somava tempo e
-    // estourava o timeout do proxy (o front então caía pro login). Fallback: se a
-    // busca por código não achar (e-mail vinculado só por referência), varre a caixa.
-    let emailIds: string[] = [];
-    let proc: { processo: string; cliente: string | null; data: string } = {
-      processo: alvoProcesso,
-      cliente: null,
-      data: '',
-    };
-    const achados = await withTimeout(
-      searchLogisticsMessages(req.accessToken!, { keywords: [alvoProcesso, alvoBase], top: 25 }),
-      20000,
-      'search',
-    ).catch(() => [] as Awaited<ReturnType<typeof searchLogisticsMessages>>);
-    const relevantes = achados.filter((m) =>
-      extractProcesses(`${m.subject || ''}\n${m.body?.content || m.bodyPreview || ''}`).some(
-        (p) => processBase(p) === alvoBase,
-      ),
-    );
-    if (relevantes.length > 0) {
-      emailIds = Array.from(new Set(relevantes.map((m) => m.id)));
-      proc.data = relevantes.map((m) => m.receivedDateTime || '').sort().reverse()[0] || '';
-    } else {
-      const { processos } = await buildProcessos(req.accessToken!);
-      const achado = processos.find((p) => processBase(p.processo) === alvoBase);
-      if (!achado) {
-        return res.status(404).json({ error: 'Processo não encontrado na caixa do Courier.' });
-      }
-      emailIds = Array.from(new Set(achado.docs.map((d) => d.emailId)));
-      proc = { processo: achado.processo, cliente: achado.cliente, data: achado.data };
+    const coletado = await coletarDocsDoProcesso(req, alvoProcesso);
+    if (!coletado) {
+      return res.status(404).json({ error: 'Processo não encontrado na caixa do Courier.' });
     }
-
-    // Busca os documentos REAIS (diretos + aninhados em e-mails encaminhados) SÓ
-    // dos e-mails DESTE processo — poucas chamadas ao Graph, rápido.
-    const docsDoProcesso: DocRef[] = [];
-    await mapLimit(emailIds, 3, async (emailId) => {
-      const full = await withTimeout(getFullMessage(req.accessToken!, emailId), 15000, 'getFull').catch(
-        () => null,
-      );
-      if (!full) return;
-      const origem = full.from?.emailAddress?.name || full.from?.emailAddress?.address || '(desconhecido)';
-      const data = full.receivedDateTime || proc.data;
-      const push = (nome: string, attachmentId: string, contentType: string) => {
-        const tipo = classifyDoc(nome);
-        docsDoProcesso.push({ nome, tipo, tipoLabel: labelOf(tipo), emailId, attachmentId, contentType, origem, data });
-      };
-      for (const a of (full.attachments || []).filter((x) =>
-        isDocumentAttachment(x.name, x.contentType, x.isInline),
-      )) {
-        push(a.name, a.id, a.contentType);
-      }
-      const temItemAtt = (full.attachments || []).some((a) => !a.isInline && !EXT_ARQUIVO.test(a.name || ''));
-      if (temItemAtt) {
-        const nested = await withTimeout(
-          getForwardedFileAttachments(req.accessToken!, emailId),
-          20000,
-          'nested',
-        ).catch(() => []);
-        for (const a of nested.filter((x) => isDocumentAttachment(x.name, x.contentType, false))) {
-          push(a.name, a.id, a.contentType);
-        }
-      }
-    });
+    const { proc, docs: docsDoProcesso } = coletado;
 
     // Candidatos: BLs por nome + genéricos (fallback p/ reclassificação por conteúdo).
     const bls = docsDoProcesso.filter((d) => d.tipo === 'MBL' || d.tipo === 'HBL');
@@ -929,6 +970,113 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
       ...(debug ? { diagnostico } : {}),
     };
     if (!debug) preAlertaCache.set(alvoBase, { sig, payload });
+    res.json(payload);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/* ------------------------------------------------------------------ *
+ * PB-002 — CE Mercante determinístico. Reaproveita a coleta/OCR do PB-001 e
+ * compara CE Master↔MBL, CE House↔HBL e Σ CE Houses↔CE Master. Roda DEPOIS do
+ * Pré-Alerta (os BLs já validados servem de fonte da verdade para o CE).
+ * ------------------------------------------------------------------ */
+const ceMercanteCache = new Map<string, { sig: string; payload: unknown }>();
+
+auditoriaRouter.get('/:processo/ce-mercante', async (req: AuthedRequest, res, next) => {
+  try {
+    if (!isAiConfigured()) {
+      return res.status(503).json({
+        error: 'A leitura de documentos (OCR) exige a IA. Defina GEMINI_API_KEY no servidor.',
+      });
+    }
+    const alvoProcesso = String(req.params.processo || '').toUpperCase();
+    const alvoBase = processBase(alvoProcesso);
+
+    const coletado = await coletarDocsDoProcesso(req, alvoProcesso);
+    if (!coletado) {
+      return res.status(404).json({ error: 'Processo não encontrado na caixa do Courier.' });
+    }
+    const { proc, docs: docsDoProcesso } = coletado;
+
+    // Papéis pelo NOME: CE Master/House (auditados) e MBL/HBL (fonte da verdade).
+    const ceMasterDocs = docsDoProcesso.filter((d) => d.tipo === 'CE_MASTER');
+    const ceHouseDocs = docsDoProcesso.filter((d) => d.tipo === 'CE_HOUSE');
+    const mblDocs = docsDoProcesso.filter((d) => d.tipo === 'MBL');
+    const hblDocs = docsDoProcesso.filter((d) => d.tipo === 'HBL');
+
+    // Sem CE Mercante no processo não há o que auditar aqui (é o PB-001 que audita BL).
+    if (ceMasterDocs.length === 0 && ceHouseDocs.length === 0) {
+      return res.json({
+        processo: proc.processo,
+        cliente: proc.cliente,
+        semCE: true,
+        faltando: ['CE Mercante (Master e/ou House)'],
+        resultado: 'NaoAvaliada',
+        familias: [],
+        evidencias: [],
+        data: proc.data,
+      });
+    }
+
+    const selecionados = [...ceMasterDocs, ...ceHouseDocs, ...mblDocs, ...hblDocs].slice(0, 12);
+    const sig = selecionados.map((d) => `${d.tipo}:${d.nome}`).sort().join('|');
+    const refresh = String(req.query.refresh || '') === '1';
+    const cached = ceMercanteCache.get(alvoBase);
+    if (!refresh && cached && cached.sig === sig) {
+      return res.json(cached.payload);
+    }
+
+    // OCR por conhecimento, agrupando páginas do mesmo arquivo-base (1 leitura por
+    // BL/CE). Reusa o cache persistente — os BLs já lidos no PB-001 NÃO pagam OCR
+    // de novo. Sequencial por tipo (máx. 3 leituras simultâneas) p/ não estourar
+    // o limite/minuto do Gemini.
+    const escopoOcr = String(req.session.homeAccountId || 'mvp');
+    const ocrDe = async (docs: DocRef[], hint: TipoDoc): Promise<DocPreAlerta[]> => {
+      const grupos = new Map<string, DocRef[]>();
+      for (const d of docs) {
+        const k = baseDoBL(d.nome);
+        const g = grupos.get(k);
+        if (g) g.push(d);
+        else grupos.set(k, [d]);
+      }
+      const lidos = await mapLimit(Array.from(grupos.values()).slice(0, 8), 3, async (grupo) => {
+        const { doc } = await ocrConhecimento(req, grupo, hint, escopoOcr);
+        return doc ? ({ ...doc, nome: grupo[0].nome } as DocPreAlerta) : null;
+      });
+      return lidos.filter((d): d is DocPreAlerta => d !== null);
+    };
+
+    const ceMasters = await ocrDe(ceMasterDocs, 'MBL');
+    const ceHouses = await ocrDe(ceHouseDocs, 'HBL');
+    const mbls = await ocrDe(mblDocs, 'MBL');
+    const hbls = await ocrDe(hblDocs, 'HBL');
+
+    const op = {
+      processo: proc.processo,
+      mbl: mbls[0] ?? null,
+      hbls,
+      ceMaster: ceMasters[0] ?? null,
+      ceHouses,
+    };
+    const resultado = executarCeMercante(op);
+
+    const payload = {
+      processo: proc.processo,
+      cliente: proc.cliente,
+      ceMaster: op.ceMaster ? op.ceMaster.nome : null,
+      ceHouses: op.ceHouses.map((h) => h.nome),
+      mbl: op.mbl ? op.mbl.nome : null,
+      hbls: op.hbls.map((h) => h.nome),
+      ilegiveis: [op.ceMaster, ...op.ceHouses, op.mbl, ...op.hbls]
+        .filter((d): d is DocPreAlerta => !!d && !d.legivel)
+        .map((d) => d.nome),
+      resultado: resultado.resultado,
+      familias: resultado.familias,
+      evidencias: resultado.evidencias,
+      data: proc.data,
+    };
+    ceMercanteCache.set(alvoBase, { sig, payload });
     res.json(payload);
   } catch (err) {
     next(err);

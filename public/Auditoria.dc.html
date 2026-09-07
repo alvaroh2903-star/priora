@@ -349,7 +349,26 @@ class Component extends DCLogic {
   onImport(){ if(this.state.procStatus==='loading')return; var self=this; this.toast('Importando do Outlook…',true); this.loadProcessos(function(ps){ self.toast('Importação concluída — '+ps.length+' processos encontrados.'); }); }
 
   firstPlaybookKey(d){ return 'prealerta'; }
-  docFiles(d){ var m=(d&&d.master)||'MBL.pdf'; var h=(d&&d.houses&&d.houses[0])||'HBL.pdf'; return [m, h]; }
+  docFiles(d){ var m=(d&&(d.master||d.ceMaster))||'MBL.pdf'; var h=(d&&((d.houses&&d.houses[0])||(d.ceHouses&&d.ceHouses[0])))||'HBL.pdf'; return [m, h]; }
+
+  // Troca de playbook: carrega a auditoria correspondente (PB-001 /pre-alerta ou
+  // PB-002 /ce-mercante) para o auditData. O servidor cacheia → troca de aba é
+  // barata (sem re-OCR). DN/CN ainda sem motor.
+  selectPlaybook(key){
+    var self=this, code=this.state.selected;
+    this.setState({ playbook:key, openGroup:null, openEv:null });
+    var ep=(key==='cemaster'||key==='cehouse')?'ce-mercante':(key==='prealerta'?'pre-alerta':null);
+    if(!ep||!code)return;
+    var nome=(ep==='ce-mercante'?'CE Mercante':'Pré-Alerta');
+    this.setState({ running:true }); this.toast('Carregando '+nome+'…',true);
+    fetch('/api/auditoria/'+encodeURIComponent(code)+'/'+ep,{credentials:'same-origin'})
+      .then(function(r){ return r.json().catch(function(){return null;}).then(function(j){ if(!r.ok) throw new Error((j&&j.error)||('HTTP '+r.status)); return j; }); })
+      .then(function(d){ var files=self.docFiles(d); self.setState({ auditData:d, running:false, ran:true, mbl:files[0], hbl:files[1], page:1 });
+        if(d.semCE){ self.toast('Nenhum CE Mercante encontrado — anexe o CE e reprocesse.'); }
+        else if(d.semDocumentos){ self.toast('Nenhum documento legível encontrado.'); }
+        else { var n=(d.evidencias&&d.evidencias.length)||0; self.toast(nome+' — '+n+' verificações.'); } })
+      .catch(function(e){ self.setState({ running:false }); self.toast('Falha: '+String(e&&e.message||e)); });
+  }
 
   startAudit(){
     var self=this, code=this.state.selected; if(!code)return;
@@ -365,8 +384,9 @@ class Component extends DCLogic {
   }
   reprocessar(){
     var self=this, code=this.state.selected; if(!code||this.state.running)return;
+    var key=this.state.playbook, ep=(key==='cemaster'||key==='cehouse')?'ce-mercante':'pre-alerta';
     this.setState({ running:true }); this.toast('Reprocessando…',true);
-    fetch('/api/auditoria/'+encodeURIComponent(code)+'/pre-alerta?refresh=1',{credentials:'same-origin'})
+    fetch('/api/auditoria/'+encodeURIComponent(code)+'/'+ep+'?refresh=1',{credentials:'same-origin'})
       .then(function(r){ return r.json().catch(function(){return null;}).then(function(j){ if(!r.ok) throw new Error((j&&j.error)||('HTTP '+r.status)); return j; }); })
       .then(function(d){ self.setState({ auditData:d, running:false, ran:true }); var n=(d.evidencias&&d.evidencias.length)||0; self.toast('Auditoria reprocessada — '+n+' verificações.'); })
       .catch(function(e){ self.setState({ running:false }); self.toast('Falha: '+String(e&&e.message||e)); });
@@ -378,7 +398,9 @@ class Component extends DCLogic {
     // Só o playbook Pré-Alerta tem motor determinístico nesta fase; as demais
     // abas ficam vazias (placeholders). Removemos as linhas de consolidação de
     // família (roll-up já refletido no veredito) para a Mesa mostrar só comparações.
-    if(this.state.playbook!=='prealerta')return [];
+    // PB-001 (prealerta) e PB-002 (cemaster/cehouse) têm motor determinístico e
+    // devolvem evidências. DN/CN ainda sem motor → vazio.
+    if(['prealerta','cemaster','cehouse'].indexOf(this.state.playbook)<0)return [];
     return (d.evidencias||[]).filter(function(e){ return String(e.motivo||'').indexOf('Consolidação')!==0; });
   }
   rowsFrom(evs){
@@ -404,6 +426,7 @@ class Component extends DCLogic {
 
   buildVerdict(){
     var d=this.state.auditData, self=this; if(!d)return 'Auditoria executada.';
+    if(d.semCE) return 'Nenhum CE Mercante (Master/House) foi encontrado neste processo — anexe o CE e reprocesse. O PB-002 compara o CE contra o MBL/HBL.';
     if(d.semDocumentos) return 'Nenhum par MBL × HBL legível foi encontrado para este processo — anexe os conhecimentos e reprocesse.';
     if(d.semParMBLHBL){ var f=(d.faltando&&d.faltando.join(' e '))||'documento(s)'; return 'O Pré-Alerta compara Master (MBL) × House (HBL). Faltando '+f+' neste processo — anexe o(s) conhecimento(s) e reprocesse. (Anexos como Debit Note não substituem o HBL.)'; }
     // Veredito determinístico (sem chamada de IA): consolida o estado do motor +
@@ -484,7 +507,7 @@ class Component extends DCLogic {
     var pendencias=pend.map(function(r){ var S=self.STATUS[r.status]; return { field:r.field, where:(r.container?('Container '+r.container):'Conhecimento'), dot:S.dot, statusColor:S.color, statusBg:S.impBg, statusLabel:(r.status==='crit'?'Crítica':'Validação'), onGo:function(){ self.viewPdf(r); } }; });
 
     var pbLabel=(this.PLAYBOOKS.find(function(p){return p.key===st.playbook;})||{}).label||'';
-    var playbooks=this.PLAYBOOKS.map(function(p){ var on=(st.playbook===p.key); return { label:p.label, onSelect:function(){ self.setState({playbook:p.key, openGroup:null, openEv:null}); }, bg:on?'#fff':'transparent', color:on?'#161A2E':'#6B7188', weight:on?'700':'600', shadow:on?'0 1px 4px rgba(16,20,40,.16)':'none' }; });
+    var playbooks=this.PLAYBOOKS.map(function(p){ var on=(st.playbook===p.key); return { label:p.label, onSelect:function(){ self.selectPlaybook(p.key); }, bg:on?'#fff':'transparent', color:on?'#161A2E':'#6B7188', weight:on?'700':'600', shadow:on?'0 1px 4px rgba(16,20,40,.16)':'none' }; });
 
     var both=!!(st.mbl&&st.hbl);
     var viewers=(both&&st.ran)?[this.buildViewer('master',rows),this.buildViewer('house',rows)]:[];
