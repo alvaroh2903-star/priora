@@ -22,6 +22,30 @@ import { cmpCodigo, cmpNumeroExato } from '../preAlerta/comparadores';
 import { normalizarCodigo } from '../preAlerta/normalizacao';
 import { DocPreAlerta, Evidencia, ResultadoFamilia } from '../preAlerta/modelo';
 
+/**
+ * Um arquivo é COMPONENTE do CE Mercante? Na operação real o CE chega como
+ * "<nº do BL> dados básicos.pdf" e "<nº do BL> item N.pdf" (NUNCA com a palavra
+ * "CE"). Detectamos por esses descritores — não pela palavra CE (BI-001 §1.39).
+ */
+export function ehComponenteCE(nome: string): boolean {
+  return /dados?\s*b[aá]sicos?/i.test(nome) || /\bitens?\b\s*\d+|\bitem\b\s*\d+/i.test(nome);
+}
+
+/**
+ * Extrai o NÚMERO-BASE do BL contido no nome do arquivo, removendo descritores
+ * (dados básicos, item N) e sufixos (-OMBL/-OHBL/-MBL/-HBL) e normalizando. É a
+ * chave que liga um componente do CE ao seu BL (BI-001 §1.13: usar o número já
+ * conhecido do processo, sem IA). Ex.: "SHYY26010120 item 1.pdf" → SHYY26010120;
+ * "263463180-OMBL.pdf" → 263463180.
+ */
+export function numeroBaseDoNome(nome: string): string {
+  let s = (nome || '').replace(/\.[a-z0-9]+$/i, '');
+  s = s.replace(/dados?\s*b[aá]sicos?/gi, '');
+  s = s.replace(/\bitens?\b\s*\d+|\bitem\b\s*\d+/gi, '');
+  s = s.replace(/[-_ ]*(o?mbl|o?hbl|master|house)\b/gi, '');
+  return s.toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
 /** Operação do CE Mercante: BLs (referência) + CE Mercante (auditado). */
 export interface OperacaoCE {
   processo: string;

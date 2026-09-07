@@ -22,7 +22,7 @@ import {
   docIlegivelPreAlerta,
 } from '../auditoria/preAlerta/extracaoPreAlerta';
 import { executarPreAlerta, DocPreAlerta, TipoDoc } from '../auditoria/preAlerta';
-import { executarCeMercante } from '../auditoria/ceMercante';
+import { executarCeMercante, ehComponenteCE, numeroBaseDoNome } from '../auditoria/ceMercante';
 import { mapLimit } from '../browser/carriers/concurrency';
 import { chaveOcr, lerOcrCache, gravarOcrCache } from '../auditoria/preAlerta/ocrCache';
 
@@ -999,19 +999,33 @@ auditoriaRouter.get('/:processo/ce-mercante', async (req: AuthedRequest, res, ne
     }
     const { proc, docs: docsDoProcesso } = coletado;
 
-    // Papéis pelo NOME: CE Master/House (auditados) e MBL/HBL (fonte da verdade).
-    const ceMasterDocs = docsDoProcesso.filter((d) => d.tipo === 'CE_MASTER');
-    const ceHouseDocs = docsDoProcesso.filter((d) => d.tipo === 'CE_HOUSE');
-    const mblDocs = docsDoProcesso.filter((d) => d.tipo === 'MBL');
-    const hblDocs = docsDoProcesso.filter((d) => d.tipo === 'HBL');
+    // BLs (fonte da verdade) pelo nome; os componentes do CE ("dados básicos"/
+    // "item N") são vinculados pelo NÚMERO do BL no nome (não pela palavra "CE").
+    const mblDocs = docsDoProcesso.filter((d) => classifyDoc(d.nome) === 'MBL');
+    const hblDocs = docsDoProcesso.filter((d) => classifyDoc(d.nome) === 'HBL');
+    const mblNums = new Set(mblDocs.map((d) => numeroBaseDoNome(d.nome)).filter(Boolean));
+    const hblNums = new Set(hblDocs.map((d) => numeroBaseDoNome(d.nome)).filter(Boolean));
+
+    // Componentes do CE agrupados pelo número-base do BL → 1 conhecimento de CE
+    // por BL (dados básicos + itens juntos). Não conta os próprios BLs.
+    const ceComps = docsDoProcesso.filter(
+      (d) => ehComponenteCE(d.nome) && classifyDoc(d.nome) !== 'MBL' && classifyDoc(d.nome) !== 'HBL',
+    );
+    const gruposCE = new Map<string, DocRef[]>();
+    for (const d of ceComps) {
+      const k = numeroBaseDoNome(d.nome) || d.nome.toLowerCase();
+      const g = gruposCE.get(k);
+      if (g) g.push(d);
+      else gruposCE.set(k, [d]);
+    }
 
     // Sem CE Mercante no processo não há o que auditar aqui (é o PB-001 que audita BL).
-    if (ceMasterDocs.length === 0 && ceHouseDocs.length === 0) {
+    if (gruposCE.size === 0) {
       return res.json({
         processo: proc.processo,
         cliente: proc.cliente,
         semCE: true,
-        faltando: ['CE Mercante (Master e/ou House)'],
+        faltando: ['CE Mercante (dados básicos / itens)'],
         resultado: 'NaoAvaliada',
         familias: [],
         evidencias: [],
@@ -1019,7 +1033,7 @@ auditoriaRouter.get('/:processo/ce-mercante', async (req: AuthedRequest, res, ne
       });
     }
 
-    const selecionados = [...ceMasterDocs, ...ceHouseDocs, ...mblDocs, ...hblDocs].slice(0, 12);
+    const selecionados = [...ceComps, ...mblDocs, ...hblDocs].slice(0, 16);
     const sig = selecionados.map((d) => `${d.tipo}:${d.nome}`).sort().join('|');
     const refresh = String(req.query.refresh || '') === '1';
     const cached = ceMercanteCache.get(alvoBase);
@@ -1027,10 +1041,8 @@ auditoriaRouter.get('/:processo/ce-mercante', async (req: AuthedRequest, res, ne
       return res.json(cached.payload);
     }
 
-    // OCR por conhecimento, agrupando páginas do mesmo arquivo-base (1 leitura por
-    // BL/CE). Reusa o cache persistente — os BLs já lidos no PB-001 NÃO pagam OCR
-    // de novo. Sequencial por tipo (máx. 3 leituras simultâneas) p/ não estourar
-    // o limite/minuto do Gemini.
+    // OCR por conhecimento. Reusa o cache persistente — os BLs já lidos no PB-001
+    // NÃO pagam OCR de novo. Máx. 3 leituras simultâneas (limite/minuto do Gemini).
     const escopoOcr = String(req.session.homeAccountId || 'mvp');
     const ocrDe = async (docs: DocRef[], hint: TipoDoc): Promise<DocPreAlerta[]> => {
       const grupos = new Map<string, DocRef[]>();
@@ -1047,10 +1059,26 @@ auditoriaRouter.get('/:processo/ce-mercante', async (req: AuthedRequest, res, ne
       return lidos.filter((d): d is DocPreAlerta => d !== null);
     };
 
-    const ceMasters = await ocrDe(ceMasterDocs, 'MBL');
-    const ceHouses = await ocrDe(ceHouseDocs, 'HBL');
     const mbls = await ocrDe(mblDocs, 'MBL');
     const hbls = await ocrDe(hblDocs, 'HBL');
+
+    // CE: dados básicos + itens do MESMO BL vão numa ÚNICA leitura de visão (o
+    // Gemini lê as páginas como um só conhecimento). Papel pelo número-base:
+    // casa com o MBL → CE Master; senão → CE House.
+    const ceMasters: DocPreAlerta[] = [];
+    const ceHouses: DocPreAlerta[] = [];
+    for (const [token, grupo] of Array.from(gruposCE.entries()).slice(0, 8)) {
+      const ehMaster = mblNums.has(token) && !hblNums.has(token);
+      const { doc } = await ocrConhecimento(req, grupo, ehMaster ? 'MBL' : 'HBL', escopoOcr);
+      if (!doc) continue;
+      const ceDoc: DocPreAlerta = {
+        ...doc,
+        nome: `CE ${token || grupo[0].nome}`,
+        // Vincula o CE ao seu BL: usa o nº lido; senão, o número-base do nome.
+        conhecimentoNumero: doc.conhecimentoNumero || token || null,
+      };
+      (ehMaster ? ceMasters : ceHouses).push(ceDoc);
+    }
 
     const op = {
       processo: proc.processo,

@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ContainerDoc, DocPreAlerta, Evidencia } from '../preAlerta/modelo';
-import { executarCeMercante, OperacaoCE } from './index';
+import { executarCeMercante, OperacaoCE, ehComponenteCE, numeroBaseDoNome } from './index';
 
 const C1 = 'BMOU9784013';
 const C2 = 'TEMU1234565';
@@ -23,6 +23,24 @@ function doc(nome: string, containers: ContainerDoc[], over: Partial<DocPreAlert
   };
 }
 const sub = (evs: Evidencia[], s: string): Evidencia | undefined => evs.find((e) => e.subvalidacao === s);
+
+// ---- Ingestão: nomes REAIS do CE (nº do BL + "dados básicos"/"item N") ----
+test('ehComponenteCE: reconhece "dados básicos" e "item N"; ignora os BLs', () => {
+  assert.equal(ehComponenteCE('SHYY26010120 dados básicos.pdf'), true);
+  assert.equal(ehComponenteCE('SHYY26010120 item 1.pdf'), true);
+  assert.equal(ehComponenteCE('SHYY26010120 item 4.pdf'), true);
+  assert.equal(ehComponenteCE('263463180-OMBL.pdf'), false);
+  assert.equal(ehComponenteCE('SHYY26010120-OHBL.PDF'), false);
+});
+
+test('numeroBaseDoNome: extrai o nº do BL do nome (liga CE ao seu BL)', () => {
+  // Todos os componentes do CE deste House compartilham o mesmo número-base.
+  assert.equal(numeroBaseDoNome('SHYY26010120 dados básicos.pdf'), 'SHYY26010120');
+  assert.equal(numeroBaseDoNome('SHYY26010120 item 1.pdf'), 'SHYY26010120');
+  assert.equal(numeroBaseDoNome('SHYY26010120 item 4.pdf'), 'SHYY26010120');
+  assert.equal(numeroBaseDoNome('SHYY26010120-OHBL.PDF'), 'SHYY26010120'); // casa com o HBL
+  assert.equal(numeroBaseDoNome('263463180-OMBL.pdf'), '263463180'); // casa com o MBL
+});
 
 test('CE Mercante: Master↔MBL e House↔HBL batendo (todos os campos) → Consistente', () => {
   // Match COMPLETO: container + peso + cubagem + NCM (campo ausente vira
