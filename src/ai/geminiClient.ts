@@ -25,6 +25,12 @@ export function getGeminiClient(): GoogleGenAI {
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
+// Preços de LISTA (estimativa) p/ medir custo por leitura — ajuste ao seu plano.
+// Gemini 2.5 Flash: ~US$0.30 / 1M tokens de entrada, ~US$2.50 / 1M de saída.
+const PRECO_IN_USD_POR_MI = 0.3;
+const PRECO_OUT_USD_POR_MI = 2.5;
+const USD_BRL = 5.3; // câmbio aproximado só para a estimativa no log
+
 /**
  * Erro PERMANENTE de cota/faturamento (teto de gastos mensal, billing): repetir
  * NÃO resolve — só gasta tempo. Ex.: 429 "exceeded its monthly spending cap".
@@ -258,6 +264,24 @@ async function generateStructuredFromContents<T extends z.ZodType>(
     throw lastErr instanceof Error
       ? lastErr
       : new Error('Falha ao chamar a IA.');
+  }
+
+  // MEDIÇÃO DE CUSTO: o Gemini devolve a contagem exata de tokens. Logamos por
+  // chamada (aparece nos logs do Render) com uma estimativa em USD/BRL pelos
+  // preços de LISTA do modelo — assim dá pra ver o custo REAL por leitura em vez
+  // de adivinhar. Ajuste PRECO_* se o seu plano diferir.
+  try {
+    const usage = (response as { usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number } }).usageMetadata;
+    if (usage) {
+      const inTok = usage.promptTokenCount ?? 0;
+      const outTok = usage.candidatesTokenCount ?? 0;
+      const usd = (inTok / 1e6) * PRECO_IN_USD_POR_MI + (outTok / 1e6) * PRECO_OUT_USD_POR_MI;
+      console.log(
+        `[Gemini][custo] ${config.ai.model} in=${inTok} out=${outTok} total=${usage.totalTokenCount ?? inTok + outTok} ~US$${usd.toFixed(4)} ~R$${(usd * USD_BRL).toFixed(3)}`,
+      );
+    }
+  } catch {
+    /* medição é best-effort; nunca quebra a extração */
   }
 
   const text = response.text;
