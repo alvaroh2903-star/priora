@@ -69,3 +69,37 @@ export async function gravarOcrCache(chave: string, valor: OcrCacheValor, nome: 
     /* best-effort: se o cache falhar, a auditoria segue sem ele */
   }
 }
+
+/**
+ * Leitura/gravação GENÉRICA de um valor JSON na MESMA tabela (mesma infra). Usada
+ * para PERSISTIR o RESULTADO já comparado de um processo (por assinatura dos
+ * documentos): um processo já auditado, com os mesmos documentos, é devolvido do
+ * banco — sem reabrir os PDFs, sem OCR, sem chamar o Gemini de novo. Sobrevive a
+ * deploy/sleep. Distingue-se do cache de OCR pelo PREFIXO da chave.
+ */
+export async function lerCacheJson<T>(chave: string): Promise<T | null> {
+  if (!isSupabaseConfigured()) return null;
+  try {
+    const { data, error } = await getSupabase()
+      .from(TABELA)
+      .select('valor')
+      .eq('chave', chave)
+      .maybeSingle();
+    if (error || !data) return null;
+    return (data.valor as T) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Gravação genérica de um valor JSON no cache. Silenciosa em qualquer falha. */
+export async function gravarCacheJson(chave: string, valor: unknown, nome: string): Promise<void> {
+  if (!isSupabaseConfigured()) return;
+  try {
+    await getSupabase()
+      .from(TABELA)
+      .upsert({ chave, valor, nome, atualizado_em: new Date().toISOString() }, { onConflict: 'chave' });
+  } catch {
+    /* best-effort */
+  }
+}

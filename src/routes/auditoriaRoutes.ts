@@ -25,7 +25,13 @@ import {
 import { executarPreAlerta, DocPreAlerta, TipoDoc } from '../auditoria/preAlerta';
 import { executarCeMercante, ehComponenteCE, numeroBaseDoNome } from '../auditoria/ceMercante';
 import { mapLimit } from '../browser/carriers/concurrency';
-import { chaveOcr, lerOcrCache, gravarOcrCache } from '../auditoria/preAlerta/ocrCache';
+import {
+  chaveOcr,
+  lerOcrCache,
+  gravarOcrCache,
+  lerCacheJson,
+  gravarCacheJson,
+} from '../auditoria/preAlerta/ocrCache';
 
 /**
  * Módulo Auditoria Documental (Blueprint completo).
@@ -852,9 +858,22 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
     // ?debug=1 → raio-x por documento (ver abaixo). NUNCA usa o cache do payload
     // (senão devolveria uma auditoria antiga, sem o diagnóstico) e não o grava.
     const debug = String(req.query.debug || '') === '1';
+    const escopo = String(req.session.homeAccountId || 'mvp');
+    // Chave do RESULTADO já comparado (por conta + processo + assinatura dos docs).
+    // Mesmos documentos = mesma chave → devolve o resultado salvo, sem OCR/Gemini.
+    const chaveResultado = `resultado:v1:${escopo}:prealerta:${alvoBase}:${sig}`;
     const cached = preAlertaCache.get(alvoBase);
     if (!refresh && !debug && cached && cached.sig === sig) {
       return res.json(cached.payload);
+    }
+    // Cache PERSISTENTE do resultado (Supabase): sobrevive a deploy/sleep. Um
+    // processo já auditado com os mesmos documentos NÃO reabre os PDFs.
+    if (!refresh && !debug) {
+      const salvo = await lerCacheJson<Record<string, unknown>>(chaveResultado);
+      if (salvo) {
+        preAlertaCache.set(alvoBase, { sig, payload: salvo });
+        return res.json(salvo);
+      }
     }
 
     // Agrupa PÁGINAS do mesmo conhecimento (ex.: "... MBL-1/2/3.jpg") pela base
@@ -1000,8 +1019,11 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
         ...(avisoIA ? { avisoIA } : {}),
         ...(debug ? { diagnostico } : {}),
       };
-      // Não cacheia o payload de diagnóstico (é uma visão de depuração pontual).
-      if (!debug) preAlertaCache.set(alvoBase, { sig, payload: payloadFalta });
+      // Não cacheia o payload de diagnóstico nem quando a IA está bloqueada.
+      if (!debug && !avisoIA) {
+        preAlertaCache.set(alvoBase, { sig, payload: payloadFalta });
+        await gravarCacheJson(chaveResultado, payloadFalta, alvoBase);
+      }
       return res.json(payloadFalta);
     }
 
@@ -1021,7 +1043,10 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
       ...(debug ? { diagnostico } : {}),
     };
     // Não cacheia payload com bloqueio de IA (é transitório: some quando o limite subir).
-    if (!debug && !avisoIA) preAlertaCache.set(alvoBase, { sig, payload });
+    if (!debug && !avisoIA) {
+      preAlertaCache.set(alvoBase, { sig, payload });
+      await gravarCacheJson(chaveResultado, payload, alvoBase); // persiste o já-comparado
+    }
     res.json(payload);
   } catch (err) {
     next(err);
@@ -1092,9 +1117,20 @@ auditoriaRouter.get('/:processo/ce-mercante', async (req: AuthedRequest, res, ne
     const selecionados = [...ceComps, ...mblDocs, ...hblDocs].slice(0, 16);
     const sig = selecionados.map((d) => `${d.tipo}:${d.nome}`).sort().join('|');
     const refresh = String(req.query.refresh || '') === '1';
+    const escopo = String(req.session.homeAccountId || 'mvp');
+    const chaveResultado = `resultado:v1:${escopo}:cemercante:${alvoBase}:${sig}`;
     const cached = ceMercanteCache.get(alvoBase);
     if (!refresh && cached && cached.sig === sig) {
       return res.json(cached.payload);
+    }
+    // Resultado persistente (Supabase): CE já auditado com os mesmos documentos
+    // volta do banco — sem reabrir os PDFs, sem OCR/Gemini.
+    if (!refresh) {
+      const salvo = await lerCacheJson<Record<string, unknown>>(chaveResultado);
+      if (salvo) {
+        ceMercanteCache.set(alvoBase, { sig, payload: salvo });
+        return res.json(salvo);
+      }
     }
 
     // OCR por conhecimento. Reusa o cache persistente — os BLs já lidos no PB-001
@@ -1172,7 +1208,10 @@ auditoriaRouter.get('/:processo/ce-mercante', async (req: AuthedRequest, res, ne
       ...(avisoIA ? { avisoIA } : {}),
     };
     // Não cacheia quando a IA está bloqueada (some quando o limite subir).
-    if (!avisoIA) ceMercanteCache.set(alvoBase, { sig, payload });
+    if (!avisoIA) {
+      ceMercanteCache.set(alvoBase, { sig, payload });
+      await gravarCacheJson(chaveResultado, payload, alvoBase); // persiste o já-comparado
+    }
     res.json(payload);
   } catch (err) {
     next(err);
