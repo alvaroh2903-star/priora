@@ -669,6 +669,20 @@ auditoriaRouter.get('/:processo/auditoria', async (req: AuthedRequest, res, next
  * (rápido). Fallback: varre a caixa (buildProcessos). Compartilhado por
  * /pre-alerta (PB-001) e /ce-mercante (PB-002). null = processo não encontrado.
  */
+// Mensagem clara quando o OCR foi BLOQUEADO pelo teto de gastos/cota do Gemini
+// (não confundir com "documento ilegível"): é ação humana, não erro de doc.
+const AVISO_LIMITE_IA =
+  'Leitura de documentos BLOQUEADA: a conta Google do Gemini atingiu o limite de gastos (HTTP 429 — spending cap). Aumente/remova o limite em https://ai.studio/spend e reprocesse. Nenhum documento pôde ser lido.';
+function ehLimiteIA(erro: string | null | undefined): boolean {
+  const m = String(erro || '').toLowerCase();
+  return (
+    (m.includes('spend') && m.includes('cap')) ||
+    m.includes('exceeded its monthly') ||
+    m.includes('billing') ||
+    m.includes('bloqueada')
+  );
+}
+
 // Números de MBL/HBL DECLARADOS no assunto/corpo do e-mail (ex.: "... MBL:
 // ONEYHANG42654400 - HBL: HVNSE2605034"). Fonte confiável para vincular o CE ao
 // BL quando o ARQUIVO do BL tem nome genérico (OMBL.pdf, OHBL 2ND LEG.pdf).
@@ -769,7 +783,7 @@ async function ocrConhecimento(
   grupo: DocRef[],
   hint: TipoDoc,
   escopoOcr: string,
-): Promise<{ doc: DocPreAlerta | null; tipoDetectado: string | null }> {
+): Promise<{ doc: DocPreAlerta | null; tipoDetectado: string | null; erro: string | null }> {
   const paginas: PaginaDoc[] = grupo.map((d) => ({
     messageId: d.emailId,
     attachmentId: d.attachmentId,
@@ -777,16 +791,20 @@ async function ocrConhecimento(
   }));
   const chave = chaveOcr(escopoOcr, paginas);
   const emCache = await lerOcrCache(chave);
-  if (emCache) return { doc: emCache.doc, tipoDetectado: emCache.tipoDetectado };
+  if (emCache) return { doc: emCache.doc, tipoDetectado: emCache.tipoDetectado, erro: null };
   const r = await withTimeout(
     extrairDocPreAlertaMultiplo(req.accessToken!, paginas, hint),
     60000,
     'ocr',
-  ).catch(() => ({ doc: null as DocPreAlerta | null, tipoDetectado: null }));
+  ).catch((e) => ({
+    doc: null as DocPreAlerta | null,
+    tipoDetectado: null as string | null,
+    erro: String((e as Error)?.message || e).slice(0, 200),
+  }));
   const doc = r.doc;
   const tipoDetectado = r.tipoDetectado ?? null;
   if (doc && doc.legivel) await gravarOcrCache(chave, { doc, tipoDetectado }, grupo[0].nome);
-  return { doc, tipoDetectado };
+  return { doc, tipoDetectado, erro: ('erro' in r ? r.erro : undefined) ?? null };
 }
 
 /* ------------------------------------------------------------------ *
@@ -858,6 +876,8 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
     // determinístico, então é cacheado por assinatura do documento (Supabase).
     const escopoOcr = String(req.session.homeAccountId || 'mvp');
     const listaGrupos = Array.from(grupos.values()).slice(0, 6);
+    // Bloqueio de cota/teto de gastos do Gemini (não é "doc ilegível") → aviso claro.
+    let avisoIA: string | null = null;
     // Diagnóstico por documento (só materializado quando ?debug=1): o que o OCR
     // leu e como foi classificado — para entender por que um Master/House não
     // foi reconhecido.
@@ -912,6 +932,7 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
         tipoDetectado = r.tipoDetectado ?? null;
         erro = ('erro' in r ? r.erro : undefined) ?? null;
         bytesBaixados = ('paginasComBytes' in r ? r.paginasComBytes : undefined) ?? null;
+        if (ehLimiteIA(erro) && !avisoIA) avisoIA = AVISO_LIMITE_IA;
         // Só cacheia leituras BEM-sucedidas (legíveis) — falha/ilegível re-tenta.
         if (doc && doc.legivel) await gravarOcrCache(chave, { doc, tipoDetectado }, nome0);
       }
@@ -976,6 +997,7 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
         familias: [],
         evidencias: [],
         data: proc.data,
+        ...(avisoIA ? { avisoIA } : {}),
         ...(debug ? { diagnostico } : {}),
       };
       // Não cacheia o payload de diagnóstico (é uma visão de depuração pontual).
@@ -995,9 +1017,11 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
       familias: resultado.familias,
       evidencias: resultado.evidencias,
       data: proc.data,
+      ...(avisoIA ? { avisoIA } : {}),
       ...(debug ? { diagnostico } : {}),
     };
-    if (!debug) preAlertaCache.set(alvoBase, { sig, payload });
+    // Não cacheia payload com bloqueio de IA (é transitório: some quando o limite subir).
+    if (!debug && !avisoIA) preAlertaCache.set(alvoBase, { sig, payload });
     res.json(payload);
   } catch (err) {
     next(err);
@@ -1076,6 +1100,7 @@ auditoriaRouter.get('/:processo/ce-mercante', async (req: AuthedRequest, res, ne
     // OCR por conhecimento. Reusa o cache persistente — os BLs já lidos no PB-001
     // NÃO pagam OCR de novo. Máx. 3 leituras simultâneas (limite/minuto do Gemini).
     const escopoOcr = String(req.session.homeAccountId || 'mvp');
+    let avisoIA: string | null = null;
     const ocrDe = async (docs: DocRef[], hint: TipoDoc): Promise<DocPreAlerta[]> => {
       const grupos = new Map<string, DocRef[]>();
       for (const d of docs) {
@@ -1085,7 +1110,8 @@ auditoriaRouter.get('/:processo/ce-mercante', async (req: AuthedRequest, res, ne
         else grupos.set(k, [d]);
       }
       const lidos = await mapLimit(Array.from(grupos.values()).slice(0, 8), 3, async (grupo) => {
-        const { doc } = await ocrConhecimento(req, grupo, hint, escopoOcr);
+        const { doc, erro } = await ocrConhecimento(req, grupo, hint, escopoOcr);
+        if (ehLimiteIA(erro) && !avisoIA) avisoIA = AVISO_LIMITE_IA;
         return doc ? ({ ...doc, nome: grupo[0].nome } as DocPreAlerta) : null;
       });
       return lidos.filter((d): d is DocPreAlerta => d !== null);
@@ -1108,7 +1134,8 @@ auditoriaRouter.get('/:processo/ce-mercante', async (req: AuthedRequest, res, ne
     };
     for (const [token, grupo] of Array.from(gruposCE.entries()).slice(0, 8)) {
       const ehMaster = ehMasterCE(token);
-      const { doc } = await ocrConhecimento(req, grupo, ehMaster ? 'MBL' : 'HBL', escopoOcr);
+      const { doc, erro } = await ocrConhecimento(req, grupo, ehMaster ? 'MBL' : 'HBL', escopoOcr);
+      if (ehLimiteIA(erro) && !avisoIA) avisoIA = AVISO_LIMITE_IA;
       if (!doc) continue;
       const ceDoc: DocPreAlerta = {
         ...doc,
@@ -1142,8 +1169,10 @@ auditoriaRouter.get('/:processo/ce-mercante', async (req: AuthedRequest, res, ne
       familias: resultado.familias,
       evidencias: resultado.evidencias,
       data: proc.data,
+      ...(avisoIA ? { avisoIA } : {}),
     };
-    ceMercanteCache.set(alvoBase, { sig, payload });
+    // Não cacheia quando a IA está bloqueada (some quando o limite subir).
+    if (!avisoIA) ceMercanteCache.set(alvoBase, { sig, payload });
     res.json(payload);
   } catch (err) {
     next(err);

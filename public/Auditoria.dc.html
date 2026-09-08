@@ -364,7 +364,8 @@ class Component extends DCLogic {
     fetch('/api/auditoria/'+encodeURIComponent(code)+'/'+ep,{credentials:'same-origin'})
       .then(function(r){ return r.json().catch(function(){return null;}).then(function(j){ if(!r.ok) throw new Error((j&&j.error)||('HTTP '+r.status)); return j; }); })
       .then(function(d){ var files=self.docFiles(d); self.setState({ auditData:d, running:false, ran:true, mbl:files[0], hbl:files[1], page:1 });
-        if(d.semCE){ self.toast('Nenhum CE Mercante encontrado — anexe o CE e reprocesse.'); }
+        if(d.avisoIA){ self.toast('IA (Gemini) bloqueada pelo limite de gastos — veja o resumo.',true); }
+        else if(d.semCE){ self.toast('Nenhum CE Mercante encontrado — anexe o CE e reprocesse.'); }
         else if(d.semDocumentos){ self.toast('Nenhum documento legível encontrado.'); }
         else { var n=(d.evidencias&&d.evidencias.length)||0; self.toast(nome+' — '+n+' verificações.'); } })
       .catch(function(e){ self.setState({ running:false }); self.toast('Falha: '+String(e&&e.message||e)); });
@@ -377,7 +378,8 @@ class Component extends DCLogic {
       .then(function(r){ return r.json().catch(function(){return null;}).then(function(j){ if(!r.ok) throw new Error((j&&j.error)||('HTTP '+r.status)); return j; }); })
       .then(function(d){ var files=self.docFiles(d);
         self.setState({ auditData:d, running:false, screen:'mesa', ran:true, playbook:self.firstPlaybookKey(d), openGroup:null, openEv:null, mbl:files[0], hbl:files[1], page:1 });
-        if(d.semDocumentos){ self.toast('Nenhum MBL/HBL legível encontrado neste processo.'); }
+        if(d.avisoIA){ self.toast('IA (Gemini) bloqueada pelo limite de gastos — veja o resumo.',true); }
+        else if(d.semDocumentos){ self.toast('Nenhum MBL/HBL legível encontrado neste processo.'); }
         else if(d.semParMBLHBL){ self.toast('Faltando '+((d.faltando&&d.faltando.join(' e '))||'documento(s)')+' — o Pré-Alerta compara MBL × HBL.'); }
         else { var n=(d.evidencias&&d.evidencias.length)||0; self.toast('Mesa de auditoria pronta — '+n+' verificações.'); } })
       .catch(function(e){ self.setState({ running:false }); self.toast('Falha na auditoria: '+String(e&&e.message||e)); });
@@ -426,6 +428,7 @@ class Component extends DCLogic {
 
   buildVerdict(){
     var d=this.state.auditData, self=this; if(!d)return 'Auditoria executada.';
+    if(d.avisoIA) return d.avisoIA;
     if(d.semCE) return 'Nenhum CE Mercante (Master/House) foi encontrado neste processo — anexe o CE e reprocesse. O PB-002 compara o CE contra o MBL/HBL.';
     if(d.semDocumentos) return 'Nenhum par MBL × HBL legível foi encontrado para este processo — anexe os conhecimentos e reprocesse.';
     if(d.semParMBLHBL){ var f=(d.faltando&&d.faltando.join(' e '))||'documento(s)'; return 'O Pré-Alerta compara Master (MBL) × House (HBL). Faltando '+f+' neste processo — anexe o(s) conhecimento(s) e reprocesse. (Anexos como Debit Note não substituem o HBL.)'; }

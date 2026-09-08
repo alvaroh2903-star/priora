@@ -26,10 +26,28 @@ const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
+ * Erro PERMANENTE de cota/faturamento (teto de gastos mensal, billing): repetir
+ * NÃO resolve — só gasta tempo. Ex.: 429 "exceeded its monthly spending cap".
+ * Precisa de ação humana (aumentar o limite em ai.studio/spend).
+ */
+export function isPermanentQuotaError(err: unknown): boolean {
+  const msg = String((err as any)?.message ?? err ?? '').toLowerCase();
+  return (
+    (msg.includes('spend') && msg.includes('cap')) ||
+    msg.includes('exceeded its monthly') ||
+    msg.includes('billing') ||
+    msg.includes('spend_cap') ||
+    msg.includes('quota') && msg.includes('exceeded')
+  );
+}
+
+/**
  * Detecta erros TRANSITÓRIOS do Gemini que valem uma nova tentativa:
  * 503 (sobrecarga/UNAVAILABLE), 429 (rate limit/RESOURCE_EXHAUSTED) e 500.
+ * NÃO inclui o teto de gastos mensal (isso é permanente — ver acima).
  */
 function isTransientAiError(err: unknown): boolean {
+  if (isPermanentQuotaError(err)) return false;
   const anyErr = err as any;
   const status = anyErr?.status ?? anyErr?.code ?? anyErr?.response?.status;
   if (status === 503 || status === 429 || status === 500) return true;
@@ -199,6 +217,14 @@ async function generateStructuredFromContents<T extends z.ZodType>(
       break;
     } catch (err) {
       lastErr = err;
+      // Teto de gastos / billing: NÃO adianta repetir. Falha rápido com mensagem
+      // clara (ação humana: aumentar o limite em ai.studio/spend).
+      if (isPermanentQuotaError(err)) {
+        throw new Error(
+          'IA (Gemini) bloqueada: a conta Google atingiu o teto de gastos mensal (spending cap). ' +
+            'Aumente ou remova o limite em https://ai.studio/spend e tente novamente.',
+        );
+      }
       if (attempt < AI_MAX_RETRIES && isTransientAiError(err)) {
         const delay = 1000 * 2 ** attempt + Math.floor(Math.random() * 400);
         console.warn(
