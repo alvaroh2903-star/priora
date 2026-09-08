@@ -25,21 +25,22 @@ function doc(nome: string, containers: ContainerDoc[], over: Partial<DocPreAlert
 const sub = (evs: Evidencia[], s: string): Evidencia | undefined => evs.find((e) => e.subvalidacao === s);
 
 // ---- Ingestão: nomes REAIS do CE (nº do BL + "dados básicos"/"item N") ----
-test('ehComponenteCE: reconhece "dados básicos" e "item N"; ignora os BLs', () => {
+test('ehComponenteCE: reconhece "dados básicos", "item N" e "itemN" (sem espaço)', () => {
   assert.equal(ehComponenteCE('SHYY26010120 dados básicos.pdf'), true);
-  assert.equal(ehComponenteCE('SHYY26010120 item 1.pdf'), true);
-  assert.equal(ehComponenteCE('SHYY26010120 item 4.pdf'), true);
+  assert.equal(ehComponenteCE('SHYY26010120 item 1.pdf'), true); // com espaço
+  assert.equal(ehComponenteCE('HVNSE2605034 item1.pdf'), true); // SEM espaço (real)
+  assert.equal(ehComponenteCE('ONEYHANG42654400 dados basicos.pdf'), true); // sem acento
   assert.equal(ehComponenteCE('263463180-OMBL.pdf'), false);
-  assert.equal(ehComponenteCE('SHYY26010120-OHBL.PDF'), false);
+  assert.equal(ehComponenteCE('OHBL 2ND LEG.pdf'), false);
 });
 
-test('numeroBaseDoNome: extrai o nº do BL do nome (liga CE ao seu BL)', () => {
-  // Todos os componentes do CE deste House compartilham o mesmo número-base.
+test('numeroBaseDoNome: extrai o nº do BL do nome (com/sem espaço no item)', () => {
   assert.equal(numeroBaseDoNome('SHYY26010120 dados básicos.pdf'), 'SHYY26010120');
   assert.equal(numeroBaseDoNome('SHYY26010120 item 1.pdf'), 'SHYY26010120');
-  assert.equal(numeroBaseDoNome('SHYY26010120 item 4.pdf'), 'SHYY26010120');
-  assert.equal(numeroBaseDoNome('SHYY26010120-OHBL.PDF'), 'SHYY26010120'); // casa com o HBL
-  assert.equal(numeroBaseDoNome('263463180-OMBL.pdf'), '263463180'); // casa com o MBL
+  assert.equal(numeroBaseDoNome('HVNSE2605034 item1.pdf'), 'HVNSE2605034'); // House (sem espaço)
+  assert.equal(numeroBaseDoNome('HVNSE2605034 dados basicos.pdf'), 'HVNSE2605034');
+  assert.equal(numeroBaseDoNome('ONEYHANG42654400 item5.pdf'), 'ONEYHANG42654400'); // Master
+  assert.equal(numeroBaseDoNome('263463180-OMBL.pdf'), '263463180');
 });
 
 test('CE Mercante: Master↔MBL e House↔HBL batendo (todos os campos) → Consistente', () => {

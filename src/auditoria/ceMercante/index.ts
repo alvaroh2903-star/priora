@@ -28,7 +28,9 @@ import { DocPreAlerta, Evidencia, ResultadoFamilia } from '../preAlerta/modelo';
  * "CE"). Detectamos por esses descritores — não pela palavra CE (BI-001 §1.39).
  */
 export function ehComponenteCE(nome: string): boolean {
-  return /dados?\s*b[aá]sicos?/i.test(nome) || /\bitens?\b\s*\d+|\bitem\b\s*\d+/i.test(nome);
+  // "item N", "itemN" (sem espaço) e o plural "itens" — o nome varia na operação
+  // real. (item = ...m; itens = ...ns → precisa cobrir os dois radicais.)
+  return /dados?\s*b[aá]sicos?/i.test(nome) || /\bite(?:m|ns)\s*\d+/i.test(nome);
 }
 
 /**
@@ -41,7 +43,7 @@ export function ehComponenteCE(nome: string): boolean {
 export function numeroBaseDoNome(nome: string): string {
   let s = (nome || '').replace(/\.[a-z0-9]+$/i, '');
   s = s.replace(/dados?\s*b[aá]sicos?/gi, '');
-  s = s.replace(/\bitens?\b\s*\d+|\bitem\b\s*\d+/gi, '');
+  s = s.replace(/\bite(?:m|ns)\s*\d+/gi, '');
   s = s.replace(/[-_ ]*(o?mbl|o?hbl|master|house)\b/gi, '');
   return s.toUpperCase().replace(/[^A-Z0-9]/g, '');
 }

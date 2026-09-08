@@ -20,6 +20,7 @@ import {
   classificarPapel,
   consolidarPorConhecimento,
   docIlegivelPreAlerta,
+  pareceArmadorPorNome,
 } from '../auditoria/preAlerta/extracaoPreAlerta';
 import { executarPreAlerta, DocPreAlerta, TipoDoc } from '../auditoria/preAlerta';
 import { executarCeMercante, ehComponenteCE, numeroBaseDoNome } from '../auditoria/ceMercante';
@@ -668,10 +669,26 @@ auditoriaRouter.get('/:processo/auditoria', async (req: AuthedRequest, res, next
  * (rápido). Fallback: varre a caixa (buildProcessos). Compartilhado por
  * /pre-alerta (PB-001) e /ce-mercante (PB-002). null = processo não encontrado.
  */
+// Números de MBL/HBL DECLARADOS no assunto/corpo do e-mail (ex.: "... MBL:
+// ONEYHANG42654400 - HBL: HVNSE2605034"). Fonte confiável para vincular o CE ao
+// BL quando o ARQUIVO do BL tem nome genérico (OMBL.pdf, OHBL 2ND LEG.pdf).
+const RE_MBL_REF = /\bMBL\s*[:#-]?\s*([A-Z0-9]{6,20})/gi;
+const RE_HBL_REF = /\bHBL\s*[:#-]?\s*([A-Z0-9]{6,20})/gi;
+const normRefBL = (s: string): string => (s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+interface BLRefs {
+  mbl: string | null;
+  hbl: string[];
+}
+
 async function coletarDocsDoProcesso(
   req: AuthedRequest,
   alvoProcesso: string,
-): Promise<{ proc: { processo: string; cliente: string | null; data: string }; docs: DocRef[] } | null> {
+): Promise<{
+  proc: { processo: string; cliente: string | null; data: string };
+  docs: DocRef[];
+  blRefs: BLRefs;
+} | null> {
   const alvoBase = processBase(alvoProcesso);
   let emailIds: string[] = [];
   let proc: { processo: string; cliente: string | null; data: string } = {
@@ -701,11 +718,22 @@ async function coletarDocsDoProcesso(
   }
 
   const docs: DocRef[] = [];
+  let mblRef: string | null = null;
+  const hblRefs = new Set<string>();
+  // Já tenta pelos resultados da busca (assunto/preview) antes de abrir os e-mails.
+  for (const m of relevantes) {
+    const t = `${m.subject || ''}\n${m.body?.content || m.bodyPreview || ''}`;
+    for (const mm of t.matchAll(RE_MBL_REF)) if (!mblRef) mblRef = normRefBL(mm[1]);
+    for (const hm of t.matchAll(RE_HBL_REF)) hblRefs.add(normRefBL(hm[1]));
+  }
   await mapLimit(emailIds, 3, async (emailId) => {
     const full = await withTimeout(getFullMessage(req.accessToken!, emailId), 15000, 'getFull').catch(
       () => null,
     );
     if (!full) return;
+    const texto = `${full.subject || ''}\n${full.body?.content || full.bodyPreview || ''}`;
+    for (const mm of texto.matchAll(RE_MBL_REF)) if (!mblRef) mblRef = normRefBL(mm[1]);
+    for (const hm of texto.matchAll(RE_HBL_REF)) hblRefs.add(normRefBL(hm[1]));
     const origem = full.from?.emailAddress?.name || full.from?.emailAddress?.address || '(desconhecido)';
     const data = full.receivedDateTime || proc.data;
     const push = (nome: string, attachmentId: string, contentType: string) => {
@@ -729,7 +757,7 @@ async function coletarDocsDoProcesso(
       }
     }
   });
-  return { proc, docs };
+  return { proc, docs, blRefs: { mbl: mblRef, hbl: Array.from(hblRefs) } };
 }
 
 /**
@@ -997,14 +1025,18 @@ auditoriaRouter.get('/:processo/ce-mercante', async (req: AuthedRequest, res, ne
     if (!coletado) {
       return res.status(404).json({ error: 'Processo não encontrado na caixa do Courier.' });
     }
-    const { proc, docs: docsDoProcesso } = coletado;
+    const { proc, docs: docsDoProcesso, blRefs } = coletado;
 
     // BLs (fonte da verdade) pelo nome; os componentes do CE ("dados básicos"/
     // "item N") são vinculados pelo NÚMERO do BL no nome (não pela palavra "CE").
     const mblDocs = docsDoProcesso.filter((d) => classifyDoc(d.nome) === 'MBL');
     const hblDocs = docsDoProcesso.filter((d) => classifyDoc(d.nome) === 'HBL');
+    // Números de BL conhecidos: do NOME do arquivo (quando tem) + do ASSUNTO do
+    // e-mail (fonte confiável quando o BL vem com nome genérico, ex.: OMBL.pdf).
     const mblNums = new Set(mblDocs.map((d) => numeroBaseDoNome(d.nome)).filter(Boolean));
     const hblNums = new Set(hblDocs.map((d) => numeroBaseDoNome(d.nome)).filter(Boolean));
+    if (blRefs.mbl) mblNums.add(blRefs.mbl);
+    for (const h of blRefs.hbl) hblNums.add(h);
 
     // Componentes do CE agrupados pelo número-base do BL → 1 conhecimento de CE
     // por BL (dados básicos + itens juntos). Não conta os próprios BLs.
@@ -1067,8 +1099,15 @@ auditoriaRouter.get('/:processo/ce-mercante', async (req: AuthedRequest, res, ne
     // casa com o MBL → CE Master; senão → CE House.
     const ceMasters: DocPreAlerta[] = [];
     const ceHouses: DocPreAlerta[] = [];
+    // Papel do CE: número casa com o MBL conhecido → Master; com o HBL → House;
+    // sem casar, cai na heurística de armador (ex.: ONEY… = Master), senão House.
+    const ehMasterCE = (token: string): boolean => {
+      if (hblNums.has(token)) return false;
+      if (mblNums.has(token)) return true;
+      return pareceArmadorPorNome(token);
+    };
     for (const [token, grupo] of Array.from(gruposCE.entries()).slice(0, 8)) {
-      const ehMaster = mblNums.has(token) && !hblNums.has(token);
+      const ehMaster = ehMasterCE(token);
       const { doc } = await ocrConhecimento(req, grupo, ehMaster ? 'MBL' : 'HBL', escopoOcr);
       if (!doc) continue;
       const ceDoc: DocPreAlerta = {
