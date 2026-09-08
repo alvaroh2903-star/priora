@@ -254,17 +254,21 @@ export interface ClassificacaoPapel {
   papelConfiavel: boolean;
 }
 
+const soAlfaNum = (s: string | null | undefined): string =>
+  (s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+
 /**
- * Decide o PAPEL (MBL/HBL) de um documento e se a decisão é CONFIÁVEL. CONTEÚDO
- * primeiro; o NOME é rede de segurança. Ordem de prioridade:
- *  1. Rótulo explícito no NOME (OMBL/OHBL/MBL/HBL), vindo de fora (temMBL/temHBL).
+ * Decide o PAPEL (MBL/HBL) de um documento e se a decisão é CONFIÁVEL. NÃO
+ * depende do nome do arquivo — a hierarquia do BI-001 §1.31 (contexto/números já
+ * conhecidos > conteúdo > armador > nome). Ordem:
+ *  0. Nº do conhecimento (lido do documento OU do nome) BATE com o MBL/HBL
+ *     DECLARADO no assunto do e-mail ("MBL: X - HBL: Y") → papel definido com
+ *     CONFIANÇA, sem precisar de "-OMBL/-OHBL" no nome. É o sinal mais forte.
+ *  1. Rótulo explícito no NOME (OMBL/OHBL/MBL/HBL).
  *  2. tipoDetectado pelo CONTEÚDO (OCR) = MBL/HBL.
- *  3. Nome é nº de BL de ARMADOR (SCAC+dígitos) → Master — vale MESMO ILEGÍVEL.
- *     Sem isto, um Master de scan ruim (imagem, título em CJK) é descartado e o
- *     Pré-Alerta acusa "Faltando MBL" com o Master em mãos. Papel INCERTO.
- *  4. Legível, com contêiner e não é Debit Note/Invoice/Packing, e o OCR NÃO o
- *     classificou como OUTRO (não-conhecimento) → House incerto.
- * Sem nenhum sinal → null (não é conhecimento auditável). PURO (testável).
+ *  3. Nome é nº de BL de ARMADOR (SCAC+dígitos) → Master (vale mesmo ilegível). Incerto.
+ *  4. Legível, com contêiner e não é DN/Invoice/Packing, OCR não disse OUTRO → House incerto.
+ * Sem nenhum sinal → null. PURO (testável).
  */
 export function classificarPapel(args: {
   temMBL: boolean;
@@ -273,8 +277,17 @@ export function classificarPapel(args: {
   nome: string;
   legivel: boolean;
   qtdContainers: number;
+  numeroDoc?: string | null; // nº do conhecimento (conteúdo OCR) ou do nome
+  mblConhecido?: string | null; // nº do MBL declarado no assunto do e-mail
+  hblsConhecidos?: string[]; // nº dos HBLs declarados no assunto do e-mail
 }): ClassificacaoPapel | null {
   const { temMBL, temHBL, tipoDetectado, nome, legivel, qtdContainers } = args;
+  // 0. Match EXATO com número já conhecido do processo (contexto — maior confiança).
+  const nd = soAlfaNum(args.numeroDoc);
+  if (nd) {
+    if (args.mblConhecido && nd === soAlfaNum(args.mblConhecido)) return { tipo: 'MBL', papelConfiavel: true };
+    if ((args.hblsConhecidos || []).some((h) => soAlfaNum(h) === nd)) return { tipo: 'HBL', papelConfiavel: true };
+  }
   // 1. Rótulo no nome do arquivo.
   if (temHBL && !temMBL) return { tipo: 'HBL', papelConfiavel: true };
   if (temMBL && !temHBL) return { tipo: 'MBL', papelConfiavel: true };

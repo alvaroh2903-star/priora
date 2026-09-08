@@ -467,6 +467,25 @@ test('classificarPapel: rótulo no nome (OMBL/OHBL) vence e é confiável', () =
   );
 });
 
+test('classificarPapel: nome GENÉRICO — casa pelo nº do assunto (dispensa -OMBL/-OHBL)', () => {
+  // Sem rótulo no nome e sem tipoDetectado: o nº do conhecimento (OCR/nome) que
+  // bate com o "MBL: … - HBL: …" do assunto define o papel com confiança.
+  assert.deepEqual(
+    classificarPapel({
+      temMBL: false, temHBL: false, tipoDetectado: null, nome: 'documento.pdf', legivel: true, qtdContainers: 1,
+      numeroDoc: 'ONEYHANG42654400', mblConhecido: 'ONEYHANG42654400', hblsConhecidos: ['HVNSE2605034'],
+    }),
+    { tipo: 'MBL', papelConfiavel: true },
+  );
+  assert.deepEqual(
+    classificarPapel({
+      temMBL: false, temHBL: false, tipoDetectado: null, nome: 'scan002.pdf', legivel: true, qtdContainers: 1,
+      numeroDoc: 'HVNSE2605034', mblConhecido: 'ONEYHANG42654400', hblsConhecidos: ['HVNSE2605034'],
+    }),
+    { tipo: 'HBL', papelConfiavel: true },
+  );
+});
+
 test('classificarPapel: conteúdo (OCR) rotula MBL/HBL quando o nome é genérico', () => {
   assert.deepEqual(
     classificarPapel({ temMBL: false, temHBL: false, tipoDetectado: 'HBL', nome: 'SKM_281.pdf', legivel: true, qtdContainers: 1 }),

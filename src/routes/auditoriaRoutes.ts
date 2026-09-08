@@ -834,7 +834,7 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
     if (!coletado) {
       return res.status(404).json({ error: 'Processo não encontrado na caixa do Courier.' });
     }
-    const { proc, docs: docsDoProcesso } = coletado;
+    const { proc, docs: docsDoProcesso, blRefs } = coletado;
 
     // Candidatos: BLs por nome + genéricos (fallback p/ reclassificação por conteúdo).
     const bls = docsDoProcesso.filter((d) => d.tipo === 'MBL' || d.tipo === 'HBL');
@@ -967,6 +967,11 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
         nome: nome0,
         legivel: doc?.legivel ?? false,
         qtdContainers: doc?.containers.length ?? 0,
+        // Nº do conhecimento: lido do CONTEÚDO (OCR) e, se faltar, do nome. Usado
+        // para casar com o MBL/HBL declarado no assunto → dispensa "-OMBL/-OHBL".
+        numeroDoc: doc?.conhecimentoNumero || numeroBaseDoNome(nome0) || null,
+        mblConhecido: blRefs.mbl,
+        hblsConhecidos: blRefs.hbl,
       });
       if (debug) {
         diagnostico.push({
