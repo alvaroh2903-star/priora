@@ -356,8 +356,14 @@ async function buildProcessos(
     return p;
   });
 
-  processos.sort((a, b) => (a.data < b.data ? 1 : -1));
-  return { processos, source };
+  // Oculta processos configurados (limpeza/demo) — comparação por base (sem -NN).
+  const ocultos = new Set(config.auditoriaOcultar);
+  const visiveis = ocultos.size
+    ? processos.filter((p) => !ocultos.has(processBase(p.processo)))
+    : processos;
+
+  visiveis.sort((a, b) => (a.data < b.data ? 1 : -1));
+  return { processos: visiveis, source };
 }
 
 /** GET /api/auditoria/processos — central de processos (sem OCR). */
@@ -829,6 +835,9 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
     }
     const alvoProcesso = String(req.params.processo || '').toUpperCase();
     const alvoBase = processBase(alvoProcesso);
+    if (config.auditoriaOcultar.includes(alvoBase)) {
+      return res.status(404).json({ error: 'Processo não disponível.' });
+    }
 
     const coletado = await coletarDocsDoProcesso(req, alvoProcesso);
     if (!coletado) {
@@ -1074,6 +1083,9 @@ auditoriaRouter.get('/:processo/ce-mercante', async (req: AuthedRequest, res, ne
     }
     const alvoProcesso = String(req.params.processo || '').toUpperCase();
     const alvoBase = processBase(alvoProcesso);
+    if (config.auditoriaOcultar.includes(alvoBase)) {
+      return res.status(404).json({ error: 'Processo não disponível.' });
+    }
 
     const coletado = await coletarDocsDoProcesso(req, alvoProcesso);
     if (!coletado) {

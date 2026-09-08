@@ -197,6 +197,18 @@ export const config = {
     .split(',')
     .map((k) => k.trim())
     .filter(Boolean),
+  /**
+   * Processos a OCULTAR da Mesa de Auditoria (limpeza/demo — esconde casos que
+   * ainda não ficaram bons). Códigos IM separados por vírgula em AUDITORIA_OCULTAR;
+   * comparados por BASE (sem o sufixo -NN). Deixe AUDITORIA_OCULTAR vazio para
+   * mostrar todos.
+   */
+  auditoriaOcultar: (
+    process.env.AUDITORIA_OCULTAR === undefined ? 'IM3119,IM2673,IM3539' : process.env.AUDITORIA_OCULTAR
+  )
+    .split(',')
+    .map((s) => s.trim().toUpperCase().replace(/-\d{2}$/, ''))
+    .filter(Boolean),
 };
 
 export const authority = `https://login.microsoftonline.com/${config.azure.tenantId}`;
