@@ -38,6 +38,14 @@ export interface DocPreAlerta {
    * documentos diferentes (Master vs House). Preenchido pela extração (OCR).
    */
   conhecimentoNumero?: string | null;
+  /**
+   * Consignatário (Consignee) do conhecimento — nome da empresa. Regra de papel
+   * do operador: se o consignee é a Rocket (a agência), o documento é MASTER
+   * (o armador consigna o Master à agência); qualquer outro consignee = HOUSE
+   * (a agência consigna o House ao cliente final). Sinal de CONTEÚDO, independe
+   * do nome do arquivo.
+   */
+  consignee?: string | null;
   containers: ContainerDoc[];
   // Totais / campos no nível do conhecimento (Dados Gerais).
   pesoBrutoTotalKg: number | null;

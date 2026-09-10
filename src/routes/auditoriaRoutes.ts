@@ -976,6 +976,8 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
         nome: nome0,
         legivel: doc?.legivel ?? false,
         qtdContainers: doc?.containers.length ?? 0,
+        // Consignee (regra do operador): Rocket → Master; outro → House.
+        consignee: doc?.consignee ?? null,
         // Nº do conhecimento: lido do CONTEÚDO (OCR) e, se faltar, do nome. Usado
         // para casar com o MBL/HBL declarado no assunto → dispensa "-OMBL/-OHBL".
         numeroDoc: doc?.conhecimentoNumero || numeroBaseDoNome(nome0) || null,

@@ -26,6 +26,8 @@ export const ExtractionSchema = z.object({
   tipoDetectado: z.enum(['MBL', 'HBL', 'CE_MASTER', 'CE_HOUSE', 'ITEM', 'OUTRO']),
   // Identidade do conhecimento — nº do BL (o MESMO em todas as páginas do doc).
   conhecimentoNumero: z.string().nullable(),
+  // Consignatário (Consignee) — usado para decidir Master (Rocket) × House (outro).
+  consignee: z.string().nullable(),
   // Nível do conhecimento (Dados Gerais)
   pol: z.string().nullable(),
   pod: z.string().nullable(),
@@ -57,6 +59,7 @@ REGRAS CRÍTICAS:
 Campos (nível do conhecimento):
 - legivel: true se legível o suficiente para extração confiável.
 - conhecimentoNumero: o NÚMERO do BL/conhecimento deste documento (ex.: "ONEYTSNG63801500", "SHYY26075038"). É o MESMO número em todas as páginas do mesmo documento. Se a página for uma continuação sem o número visível, devolva null. LEIA TODAS AS PÁGINAS do arquivo.
+- consignee: o CONSIGNATÁRIO (campo "Consignee" / "Consignatário") DESTE conhecimento — transcreva o nome da empresa como está no documento (ex.: "ROCKET LOGISTICA E AGENCIAMENTO DE CARGAS S.A.", "BRA TRADE COMERCIAL LTDA"). Não confunda com Shipper/Notify. Se ausente/ilegível, null.
 - tipoDetectado: pelo CONTEÚDO. MBL = Master, emitido pelo ARMADOR/carrier (traz o nº de BL do armador, ex.: ONEYxxxx, MAEUxxxx, MSCUxxxx, HLCUxxxx); também chamado OMBL. HBL = House, emitido pelo AGENTE/forwarder (house B/L); também chamado OHBL. Vale também para "Shipping Instructions" / rascunho de BL: classifique pelo EMISSOR (armador = MBL; agente/forwarder = HBL). Uma Debit Note / Nota de Débito / Invoice / Packing List NÃO é conhecimento → OUTRO.
 - pol / pod: Port of Loading / Port of Discharge.
 - placeOfReceipt / placeOfDelivery: quando existirem.
@@ -83,7 +86,7 @@ function mimeSuportado(ct: string, nome: string): string | null {
 
 export function docIlegivelPreAlerta(nome: string, tipo: TipoDoc): DocPreAlerta {
   return {
-    tipo, nome, legivel: false, conhecimentoNumero: null, containers: [],
+    tipo, nome, legivel: false, conhecimentoNumero: null, consignee: null, containers: [],
     pesoBrutoTotalKg: null, pesoLiquidoTotalKg: null, cubagemTotalM3: null,
     qtdVolumesTotal: null, tipoVolume: null, descricaoMercadoria: null, ncm: [],
     pol: null, pod: null, placeOfReceipt: null, placeOfDelivery: null, transbordos: [],
@@ -105,6 +108,7 @@ export function mapExtracaoParaDoc(ai: Extracao, nome: string, tipo: TipoDoc): D
     nome,
     legivel: ai.legivel !== false,
     conhecimentoNumero: ai.conhecimentoNumero,
+    consignee: ai.consignee,
     containers,
     pesoBrutoTotalKg: ai.pesoBrutoTotalKg,
     pesoLiquidoTotalKg: ai.pesoLiquidoTotalKg,
@@ -258,16 +262,25 @@ const soAlfaNum = (s: string | null | undefined): string =>
   (s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 
 /**
- * Decide o PAPEL (MBL/HBL) de um documento e se a decisão é CONFIÁVEL. NÃO
- * depende do nome do arquivo — a hierarquia do BI-001 §1.31 (contexto/números já
- * conhecidos > conteúdo > armador > nome). Ordem:
- *  0. Nº do conhecimento (lido do documento OU do nome) BATE com o MBL/HBL
- *     DECLARADO no assunto do e-mail ("MBL: X - HBL: Y") → papel definido com
- *     CONFIANÇA, sem precisar de "-OMBL/-OHBL" no nome. É o sinal mais forte.
- *  1. Rótulo explícito no NOME (OMBL/OHBL/MBL/HBL).
- *  2. tipoDetectado pelo CONTEÚDO (OCR) = MBL/HBL.
- *  3. Nome é nº de BL de ARMADOR (SCAC+dígitos) → Master (vale mesmo ilegível). Incerto.
- *  4. Legível, com contêiner e não é DN/Invoice/Packing, OCR não disse OUTRO → House incerto.
+ * O consignatário é a ROCKET (a agência)? Regra do operador: no MASTER o armador
+ * consigna a carga à agência (Rocket); no HOUSE a agência consigna ao cliente
+ * final. Logo consignee = Rocket ⇒ Master; qualquer outro ⇒ House. PURO.
+ */
+export function ehConsigneeRocket(consignee: string | null | undefined): boolean {
+  return /ROCKET/.test((consignee || '').toUpperCase());
+}
+
+/**
+ * Decide o PAPEL (MBL/HBL) de um documento e se a decisão é CONFIÁVEL, pelo
+ * CONTEÚDO (independe do nome do arquivo — BI-001 §1.30/1.31). Ordem:
+ *  0. CONSIGNEE (regra do operador): Rocket → Master; qualquer outro → House.
+ *     É o sinal mais forte e funciona com QUALQUER nome de arquivo.
+ *  1. Nº do conhecimento (lido do doc OU do nome) BATE com o MBL/HBL DECLARADO
+ *     no assunto do e-mail ("MBL: X - HBL: Y").
+ *  2. Rótulo explícito no NOME (OMBL/OHBL/MBL/HBL).
+ *  3. tipoDetectado pelo CONTEÚDO (OCR) = MBL/HBL.
+ *  4. Nome é nº de BL de ARMADOR (SCAC) → Master (vale mesmo ilegível). Incerto.
+ *  5. Legível, com contêiner e não é DN/Invoice/Packing, OCR não disse OUTRO → House incerto.
  * Sem nenhum sinal → null. PURO (testável).
  */
 export function classificarPapel(args: {
@@ -277,24 +290,34 @@ export function classificarPapel(args: {
   nome: string;
   legivel: boolean;
   qtdContainers: number;
+  consignee?: string | null; // consignatário lido do documento (conteúdo)
   numeroDoc?: string | null; // nº do conhecimento (conteúdo OCR) ou do nome
   mblConhecido?: string | null; // nº do MBL declarado no assunto do e-mail
   hblsConhecidos?: string[]; // nº dos HBLs declarados no assunto do e-mail
 }): ClassificacaoPapel | null {
   const { temMBL, temHBL, tipoDetectado, nome, legivel, qtdContainers } = args;
-  // 0. Match EXATO com número já conhecido do processo (contexto — maior confiança).
+  const naoConhecimento = nomeNaoConhecimento(nome);
+  // 0. CONSIGNEE (regra do operador) — só quando é um conhecimento plausível (o
+  // OCR não marcou como OUTRO e o nome não é DN/Invoice/Packing), para uma
+  // Invoice com consignee não virar "House".
+  const cons = (args.consignee || '').trim();
+  if (cons && tipoDetectado !== 'OUTRO' && !naoConhecimento) {
+    return ehConsigneeRocket(cons)
+      ? { tipo: 'MBL', papelConfiavel: true }
+      : { tipo: 'HBL', papelConfiavel: true };
+  }
+  // 1. Match EXATO com número já conhecido do processo (assunto).
   const nd = soAlfaNum(args.numeroDoc);
   if (nd) {
     if (args.mblConhecido && nd === soAlfaNum(args.mblConhecido)) return { tipo: 'MBL', papelConfiavel: true };
     if ((args.hblsConhecidos || []).some((h) => soAlfaNum(h) === nd)) return { tipo: 'HBL', papelConfiavel: true };
   }
-  // 1. Rótulo no nome do arquivo.
+  // 2. Rótulo no nome do arquivo.
   if (temHBL && !temMBL) return { tipo: 'HBL', papelConfiavel: true };
   if (temMBL && !temHBL) return { tipo: 'MBL', papelConfiavel: true };
   if (temHBL || temMBL) return { tipo: tipoDetectado === 'HBL' ? 'HBL' : 'MBL', papelConfiavel: true };
-  // 2. Conteúdo (OCR) rotulou MBL/HBL.
+  // 3. Conteúdo (OCR) rotulou MBL/HBL.
   if (tipoDetectado === 'MBL' || tipoDetectado === 'HBL') return { tipo: tipoDetectado, papelConfiavel: true };
-  const naoConhecimento = nomeNaoConhecimento(nome);
   // 3. Nome de armador = Master forte (mesmo ilegível). Papel incerto.
   if (pareceArmadorPorNome(nome) && !naoConhecimento) return { tipo: 'MBL', papelConfiavel: false };
   // 4. Legível, com contêiner, não é DN/Invoice/Packing e o OCR não disse OUTRO.

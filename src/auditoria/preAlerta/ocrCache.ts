@@ -20,7 +20,7 @@ const TABELA = 'auditoria_ocr_cache';
  * Versão do OCR. BUMPAR quando o schema/prompt de extração mudar de forma que
  * invalide leituras antigas — assim o cache "expira" e re-lê com o novo OCR.
  */
-const OCR_VERSAO = 'v3';
+const OCR_VERSAO = 'v4';
 
 export interface OcrCacheValor {
   doc: DocPreAlerta;

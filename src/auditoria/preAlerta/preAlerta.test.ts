@@ -26,6 +26,7 @@ import {
   pareceArmadorPorNome,
   consolidarPorConhecimento,
   classificarPapel,
+  ehConsigneeRocket,
 } from './extracaoPreAlerta';
 import { executarPreAlerta } from './index';
 
@@ -294,7 +295,7 @@ test('executarPreAlerta: caminho feliz consolida Consistente (8 famílias)', () 
 // ---- extração → modelo (wiring, funções puras) ----
 function aiVazio(over: Partial<Extracao> = {}): Extracao {
   return {
-    legivel: true, tipoDetectado: 'MBL', conhecimentoNumero: null,
+    legivel: true, tipoDetectado: 'MBL', conhecimentoNumero: null, consignee: null,
     pol: null, pod: null, placeOfReceipt: null, placeOfDelivery: null, transbordos: [],
     pesoBrutoTotalKg: null, pesoLiquidoTotalKg: null, cubagemTotalM3: null,
     qtdVolumesTotal: null, tipoVolume: null, descricaoMercadoria: null, ncm: [], containers: [],
@@ -464,6 +465,41 @@ test('classificarPapel: rótulo no nome (OMBL/OHBL) vence e é confiável', () =
   assert.deepEqual(
     classificarPapel({ temMBL: false, temHBL: true, tipoDetectado: null, nome: 'x-OHBL.pdf', legivel: true, qtdContainers: 0 }),
     { tipo: 'HBL', papelConfiavel: true },
+  );
+});
+
+test('ehConsigneeRocket: Rocket (a agência) = Master; qualquer outro = House', () => {
+  assert.equal(ehConsigneeRocket('ROCKET LOGISTICA E AGENCIAMENTO DE CARGAS S.A.'), true);
+  assert.equal(ehConsigneeRocket('Rocket Logística e Agenciamento de Carga LTDA'), true);
+  assert.equal(ehConsigneeRocket('BRA TRADE COMERCIAL LTDA'), false);
+  assert.equal(ehConsigneeRocket(null), false);
+});
+
+test('classificarPapel: CONSIGNEE decide com nome ESTRANHO (Rocket→Master, outro→House)', () => {
+  // Nomes de arquivo aleatórios, sem rótulo, sem assunto: o consignee resolve.
+  assert.deepEqual(
+    classificarPapel({
+      temMBL: false, temHBL: false, tipoDetectado: null, nome: '274654151.pdf', legivel: true, qtdContainers: 2,
+      consignee: 'ROCKET LOGISTICA E AGENCIAMENTO DE CARGAS S.A.',
+    }),
+    { tipo: 'MBL', papelConfiavel: true },
+  );
+  assert.deepEqual(
+    classificarPapel({
+      temMBL: false, temHBL: false, tipoDetectado: null, nome: 'SHYY26080294.PDF', legivel: true, qtdContainers: 2,
+      consignee: 'BRA TRADE COMERCIAL LTDA',
+    }),
+    { tipo: 'HBL', papelConfiavel: true },
+  );
+});
+
+test('classificarPapel: consignee NÃO promove uma Invoice (tipoDetectado OUTRO) a House', () => {
+  assert.equal(
+    classificarPapel({
+      temMBL: false, temHBL: false, tipoDetectado: 'OUTRO', nome: 'fatura.pdf', legivel: true, qtdContainers: 0,
+      consignee: 'BRA TRADE COMERCIAL LTDA',
+    }),
+    null,
   );
 });
 
