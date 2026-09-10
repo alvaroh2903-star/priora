@@ -1,5 +1,5 @@
 import { chromium, Browser, Page } from 'playwright';
-import { acceptCookies, tryFillSearch, driveShipmentLinkForm } from './carriers/pageUtils';
+import { acceptCookies, tryFillSearch, driveShipmentLinkForm, driveMscForm } from './carriers/pageUtils';
 
 /**
  * Priora — Cliente do Bright Data Scraping Browser (CDP remoto).
@@ -343,7 +343,8 @@ export async function driveTrackingPage(
     // (EISU1234567), que engana o atalho containerSeen — nesse host ignoramos o
     // atalho e sempre pilotamos o form dedicado (radio B/L + input#NO + Submit).
     const isShipmentLink = /shipmentlink/i.test(page.url());
-    const shouldFill = isShipmentLink ? !refSeen : !refSeen && !containerSeen;
+    const isMsc = /msc\.com/i.test(page.url());
+    const shouldFill = isShipmentLink || isMsc ? !refSeen : !refSeen && !containerSeen;
     if (shouldFill) {
       let filled = false;
       if (isShipmentLink) {
@@ -360,6 +361,9 @@ export async function driveTrackingPage(
             urlAfter: activePage.url(),
           };
         }
+      } else if (isMsc) {
+        filled = await driveMscForm(page, opts.reference);
+        if (filled) diag = { driver: 'msc', urlAfter: page.url() };
       }
       if (!filled) filled = await tryFillSearch(page, opts.reference);
       if (filled) {
