@@ -16,7 +16,7 @@ const FIXTURE = `<div class="ec-header">ShipmentLink</div>
 <table>
   <thead><tr><th>Container No.</th><th>Size/Type</th><th>Seal No.</th><th>Service Type</th><th>Quantity</th><th>Method</th><th>VGM</th><th>Current Status</th><th>Date</th></tr></thead>
   <tbody>
-    <tr><td>TGBU6521228</td><td>40'(SH)</td><td>EMCDUP5565</td><td>FCL/FCL</td><td>2,186 CARTONS</td><td>2</td><td>15723 KGS</td><td>Loaded (FCL) on EVER LEADER 0044-080W at NINGBO,</td><td>JUL-16-2026</td></tr>
+    <tr><td>TGBU6521228</td><td>40'(SH)</td><td>EMCDUP5565</td><td>FCL/FCL</td><td>2,186 CARTONS</td><td>2</td><td>15723 KGS</td><td>Loaded (FCL) on EVER LEADER 0044-080W at NINGBO, CHINA (CN)</td><td>JUL-16-2026</td></tr>
     <tr><td>EISU9876543</td><td>40'(HQ)</td><td>SEAL999</td><td>FCL/FCL</td><td>1,000 CARTONS</td><td>1</td><td>20000 KGS</td><td>Discharged (FCL) at NAVEGANTES</td><td>SEP-15-2026</td></tr>
     <tr><td>EGHU1112223</td><td>20'(GP)</td><td>SEAL111</td><td>FCL/FCL</td><td>500 CARTONS</td><td>1</td><td>10000 KGS</td><td>Empty Returned to Depot at NAVEGANTES</td><td>SEP-20-2026</td></tr>
   </tbody>
@@ -44,7 +44,12 @@ function main(): void {
   const tg = events.find((e) => e.container === 'TGBU6521228');
   check('TGBU: Loaded → other, data 2026-07-16', tg?.type === 'other' && tg?.date === '2026-07-16', [tg?.type, tg?.date]);
   check('TGBU: tipo 40\'(SH)', tg?.tipo === "40'(SH)", tg?.tipo);
-  check('EISU: Discharged → discharge', events.find((e) => e.container === 'EISU9876543')?.type === 'discharge');
+  check('TGBU: vessel "EVER LEADER"', tg?.vessel === 'EVER LEADER', tg?.vessel);
+  check('TGBU: voyage "0044-080W"', tg?.voyage === '0044-080W', tg?.voyage);
+  check('TGBU: location "NINGBO, CHINA (CN)"', tg?.location === 'NINGBO, CHINA (CN)', tg?.location);
+  const eisu = events.find((e) => e.container === 'EISU9876543');
+  check('EISU: Discharged → discharge', eisu?.type === 'discharge');
+  check('EISU: location "NAVEGANTES" (sem navio)', eisu?.location === 'NAVEGANTES' && eisu?.vessel === null, [eisu?.location, eisu?.vessel]);
   check('EGHU: Empty Returned → empty_return', events.find((e) => e.container === 'EGHU1112223')?.type === 'empty_return');
 
   console.log('[selftest] deriveContainers — por contêiner');
