@@ -102,6 +102,8 @@ const SEARCH_BUTTONS = [
   'a:has-text("Trace")',
   'input[type="submit"]',
   'button[type="submit"]',
+  'button:has-text("Submit")', // Evergreen/ShipmentLink
+  'input[value*="Submit" i]',
   'input[value*="Search" i]',
   'input[value*="Track" i]',
   '[onclick*="track" i]',
