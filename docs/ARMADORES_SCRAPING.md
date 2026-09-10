@@ -66,13 +66,35 @@ Legenda **Anti-bot**: 🔴 Cloudflare interativo · 🟠 aceite/anti-bot leve ·
 | `cosco` | COSCO | COSU | SPA SCCT (iframe Ant/Vue) | `scct/public/ct/base?trackingType=BILLOFLADING&number=` | 🟢 | ✅ |
 | `hmm` | HMM (Hyundai) | HDMU, HMMU, SGNM… | Formulário (srchBlNo1 + Retrieve) | form-based | 🟢 | ✅ (validado ao vivo; transbordo T/S ignorado) |
 | `yangming` | Yang Ming | YMLU | Formulário na página | a confirmar | ❔ | ⬜ |
-| `evergreen` | Evergreen (ShipmentLink) | EGLV, EVGL, EMCU | Servlet (B/L sem prefixo + Submit) | 🟢 | ✅ (validado ao vivo; searchRef tira EGLV/EVGL) |
+| `evergreen` | Evergreen (ShipmentLink) | EGLV, EVGL, EMCU | Servlet (driver dedicado: radio B/L + input#NO + Submit) | 🟠 | ✅ (validado ao vivo, EGLV010600577145 → 6 contêineres) |
 | `zim` | ZIM | ZIMU | SPA | `?consnumber=` (contêiner) | ❔ | ⬜ |
 | `pil` | Pacific Int. Lines | PABV, NNPL, PILU | Página + form | `?...&refNo=` | 🟢 | ✅ (histórico completo via Trace, validado ao vivo) |
 | `oocl` | OOCL | OOLU | ASPX com formulário | a confirmar | 🟠 | ⬜ |
 
 > Detecção (ref → armador) e a URL de rastreio **já funcionam para os 12**. O que
 > falta nos ⬜ é só o tradutor do DOM — capturado quando tivermos um nº real.
+
+**Evergreen (ShipmentLink) — notas do driver dedicado (`driveShipmentLinkForm`):**
+- **Form "Quick Tracking":** radios `#s_bl/#s_cntr/#s_bk` (tipo) + `input#NO`
+  (`maxlength=12`) + `<input type=button value=Submit onclick=frmSubmit(13,2)>`.
+  O driver marca **B/L**, digita **só a parte numérica** (searchRef tira EGLV/EVGL)
+  e clica Submit. **Resultado na MESMA página** (`popupOpened:false` confirmado).
+- **Anti-bot 🟠:** camada de idioma (`#shipmentlink_lang_layer`, IP hispânico →
+  força "No, use English") **e** modal de cookies (`#btn_cookie_accept_all`) que
+  fica **por cima** e intercepta o clique no Submit — o driver dispensa os dois
+  antes de mexer no form (era o bloqueio real: `cookieVisibleBefore:true`).
+- **Parser (`extractEvergreenEvents`):** tabela "Container(s) information on B/L"
+  → 1 linha por contêiner com `Current Status` + `Date` (MON-DD-YYYY) + `Size/Type`.
+- **Exemplo validado:** `EGLV010600577145` → 6 contêineres `40'(SH)` (TGBU6521228,
+  EGSU6077773, TRHU5638208, EITU1518240, EITU8195983, EGSU9579348), status
+  "Loaded (FCL) on EVER LEADER 0044-080W at NINGBO" (2026-07-16). B/L **em trânsito**
+  (ETA destino SEP-13-2026) → `dischargeDate/emptyReturn = null` (correto, não inventa).
+- **Limitação a refinar:** a tabela mostra só o **Current Status** (último evento) por
+  contêiner. Para uma B/L **já entregue**, o status "Empty Returned" sobrescreve a
+  descarga → perde-se a `dischargeDate`. O histórico completo (descarga+retirada+
+  devolução) vive no popup **`frmCntrMove`** (`TYPE=CntrMove`, `target=CntrMoveWin`),
+  ainda **não plugado** — validar com uma B/L Evergreen entregue e, se preciso, abrir
+  esse popup por contêiner.
 
 ---
 
