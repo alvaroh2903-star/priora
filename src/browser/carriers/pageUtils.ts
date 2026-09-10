@@ -173,6 +173,20 @@ export async function tryFillSearch(page: Page, ref: string): Promise<boolean> {
   return false;
 }
 
+/** Resultado do driver dedicado do ShipmentLink (com diagnóstico). */
+export interface ShipmentLinkDriveResult {
+  /** Página onde LER o resultado — a mesma, ou o popup que o Submit abriu. */
+  resultPage: Page;
+  /** Achou o form e submeteu. */
+  submitted: boolean;
+  /** Valor que ficou no input#NO após o fill (revela clique/preench. bloqueado). */
+  valueAfterFill: string | null;
+  /** O Submit abriu uma janela nova (popup)? */
+  popupOpened: boolean;
+  /** O modal de cookies estava visível ao entrar no driver (podia bloquear)? */
+  cookieVisibleBefore: boolean;
+}
+
 /**
  * Driver DEDICADO do formulário da Evergreen (ShipmentLink, TDB1_CargoTracking).
  *
@@ -182,27 +196,50 @@ export async function tryFillSearch(page: Page, ref: string): Promise<boolean> {
  * O preenchedor genérico não serve aqui: há 6 inputs name="NO" (5 escondidos da aba
  * "Multiple" antes do visível) e é preciso marcar o radio de tipo. Este driver
  * sempre busca por B/L (só a parte numérica — o registro já tira EGLV/EVGL).
- * Retorna true se preencheu e submeteu.
+ *
+ * O resultado pode vir na MESMA página (POST) ou num POPUP (servlet legado): o
+ * driver escuta o popup e devolve a página certa em `resultPage`. Retorna null se
+ * nem achou o form. O modal de cookies fica por cima e intercepta cliques, então
+ * é dispensado (e esperado sumir) ANTES de mexer no form.
  */
-export async function driveShipmentLinkForm(page: Page, ref: string): Promise<boolean> {
+export async function driveShipmentLinkForm(
+  page: Page,
+  ref: string,
+): Promise<ShipmentLinkDriveResult | null> {
   const input = page.locator('input#NO');
-  if ((await input.count().catch(() => 0)) === 0) return false;
-  // 1) Seleciona busca por B/L (#s_bl) — sem isso o servlet busca por outro tipo
-  //    e devolve "não encontrado".
+  if ((await input.count().catch(() => 0)) === 0) return null;
+
+  // Cookies POR CIMA do form interceptam o clique no Submit — dispensa e espera sumir.
+  const cookieBtn = page.locator('#btn_cookie_accept_all');
+  const cookieVisibleBefore = (await cookieBtn.isVisible().catch(() => false)) === true;
+  if (cookieVisibleBefore) {
+    await cookieBtn.click({ timeout: 3000 }).catch(() => undefined);
+    await cookieBtn.waitFor({ state: 'hidden', timeout: 5000 }).catch(() => undefined);
+  }
+
+  // 1) Seleciona busca por B/L (#s_bl) — sem isso o servlet busca por outro tipo.
   const blRadio = page.locator('#s_bl');
   if ((await blRadio.count().catch(() => 0)) > 0) {
     await blRadio.check({ timeout: 3000 }).catch(() => undefined);
   }
-  // 2) Digita a B/L (parte numérica) no input visível.
+  // 2) Digita a B/L (parte numérica) e confere que o valor entrou (diagnóstico).
   await input.first().fill(ref).catch(() => undefined);
-  // 3) Clica o "Submit" visível (o da aba Multiple é escondido); senão, Enter.
+  const valueAfterFill = await input.first().inputValue().catch(() => null);
+
+  // 3) Clica o "Submit" visível (o da aba Multiple é escondido); senão, Enter. O
+  //    resultado pode abrir num popup — escuta ANTES do clique.
   const submit = page.locator('input[type="button"][value="Submit" i]:visible').first();
+  const popupPromise = page.waitForEvent('popup', { timeout: 8000 }).catch(() => null);
+  let submitted = false;
   if ((await submit.count().catch(() => 0)) > 0) {
     await submit.click({ timeout: 5000 }).catch(() => undefined);
+    submitted = true;
   } else {
     await input.first().press('Enter').catch(() => undefined);
+    submitted = true;
   }
-  // O form faz POST no mesmo servlet (sem target) → resultado na MESMA página.
-  await page.waitForLoadState('domcontentloaded', { timeout: 20_000 }).catch(() => undefined);
-  return true;
+  const popup = await popupPromise;
+  const resultPage = popup || page;
+  await resultPage.waitForLoadState('domcontentloaded', { timeout: 20_000 }).catch(() => undefined);
+  return { resultPage, submitted, valueAfterFill, popupOpened: Boolean(popup), cookieVisibleBefore };
 }

@@ -123,6 +123,8 @@ export interface SBScrapeResult {
   rowCount: number;
   ms: number;
   inventory?: DomInventory;
+  /** Diagnóstico do driver de formulário (ex.: ShipmentLink): popup? valor? etc. */
+  diag?: Record<string, unknown>;
   error?: string;
 }
 
@@ -323,6 +325,11 @@ export async function driveTrackingPage(
   await page.waitForLoadState('networkidle', { timeout: postWait }).catch(() => {});
   await page.waitForTimeout(2000); // folga p/ Vue/React hidratar
 
+  // A partir daqui os resultados podem estar em OUTRA página (popup) — ex.: o
+  // servlet legado da Evergreen. `activePage` aponta p/ onde ler o resultado.
+  let activePage: Page = page;
+  let diag: Record<string, unknown> | undefined;
+
   // Se a referência ainda NÃO apareceu, o deep link não auto-buscou: preenche o
   // formulário e submete (muitos portais exigem). Reusa o tryFillSearch.
   // Alguns portais desenham a referência como SVG/imagem (ex.: COSCO desenha o BL),
@@ -338,32 +345,47 @@ export async function driveTrackingPage(
     const isShipmentLink = /shipmentlink/i.test(page.url());
     const shouldFill = isShipmentLink ? !refSeen : !refSeen && !containerSeen;
     if (shouldFill) {
-      let filled = isShipmentLink ? await driveShipmentLinkForm(page, opts.reference) : false;
+      let filled = false;
+      if (isShipmentLink) {
+        const r = await driveShipmentLinkForm(page, opts.reference);
+        if (r) {
+          filled = true;
+          activePage = r.resultPage; // pode ser um popup
+          diag = {
+            driver: 'shipmentlink',
+            submitted: r.submitted,
+            valueAfterFill: r.valueAfterFill,
+            popupOpened: r.popupOpened,
+            cookieVisibleBefore: r.cookieVisibleBefore,
+            urlAfter: activePage.url(),
+          };
+        }
+      }
       if (!filled) filled = await tryFillSearch(page, opts.reference);
       if (filled) {
-        await page.waitForLoadState('networkidle', { timeout: postWait }).catch(() => {});
-        await page.waitForSelector(RESULT_SELECTOR, { timeout: 15_000 }).catch(() => {});
-        await page.waitForTimeout(2000);
-        await acceptCookies(page);
+        await activePage.waitForLoadState('networkidle', { timeout: postWait }).catch(() => {});
+        await activePage.waitForSelector(RESULT_SELECTOR, { timeout: 15_000 }).catch(() => {});
+        await activePage.waitForTimeout(2000);
+        await acceptCookies(activePage);
       }
     }
   }
 
   // Alguns portais escondem os eventos completos atrás de um link "detalhe" que
   // carrega via XHR (ex.: PIL, link <a class="trackinfo">). Clica e espera popular.
-  const detailLinks = page.locator('a.trackinfo, a.trackinfo b');
+  const detailLinks = activePage.locator('a.trackinfo, a.trackinfo b');
   const nDetail = await detailLinks.count().catch(() => 0);
   if (nDetail > 0) {
     for (let i = 0; i < Math.min(nDetail, 4); i++) {
       await detailLinks.nth(i).click({ timeout: 3000 }).catch(() => undefined);
-      await page.waitForTimeout(800);
+      await activePage.waitForTimeout(800);
     }
     // Espera o corpo de detalhe (sub-info-table) deixar de estar vazio/hidden.
-    await page
+    await activePage
       .waitForSelector('.sub-info-table tr, .sub-info-table td', { timeout: 12000 })
       .catch(() => undefined);
-    await page.waitForLoadState('networkidle', { timeout: postWait }).catch(() => undefined);
-    await page.waitForTimeout(1500);
+    await activePage.waitForLoadState('networkidle', { timeout: postWait }).catch(() => undefined);
+    await activePage.waitForTimeout(1500);
   }
 
   // Outros mostram só o ÚLTIMO movimento e escondem o histórico atrás de um
@@ -380,11 +402,11 @@ export async function driveTrackingPage(
     'button:has-text("Ver mais")',
   ];
   for (const sel of expanders) {
-    const exp = page.locator(sel).first();
+    const exp = activePage.locator(sel).first();
     if ((await exp.count().catch(() => 0)) > 0) {
       await exp.click({ timeout: 3000 }).catch(() => undefined);
-      await page.waitForTimeout(1200);
-      await page.waitForLoadState('networkidle', { timeout: postWait }).catch(() => undefined);
+      await activePage.waitForTimeout(1200);
+      await activePage.waitForLoadState('networkidle', { timeout: postWait }).catch(() => undefined);
       break;
     }
   }
@@ -392,21 +414,31 @@ export async function driveTrackingPage(
   // Inventário do formulário (diagnóstico), coletado ENQUANTO a página vive.
   let inventory: DomInventory | undefined;
   if (opts.inventory) {
-    inventory = await collectInventory(page).catch(() => undefined);
+    inventory = await collectInventory(activePage).catch(() => undefined);
   }
 
-  const title = await page.title().catch(() => '');
+  const title = await activePage.title().catch(() => '');
   // HTML e texto de TODOS os frames (o resultado pode estar num iframe).
-  const html = await collectFramesHtml(page);
+  const html = await collectFramesHtml(activePage);
   const textContent =
-    (await collectFramesText(page)) ||
-    ((await page.innerText('body').catch(() => '')) || '').replace(/\s+/g, ' ').trim();
-  const rowCount = await page.locator('table tr, [role="row"]').count().catch(() => 0);
+    (await collectFramesText(activePage)) ||
+    ((await activePage.innerText('body').catch(() => '')) || '').replace(/\s+/g, ' ').trim();
+  const rowCount = await activePage.locator('table tr, [role="row"]').count().catch(() => 0);
   const mentionsRef = opts.reference
     ? textContent.toUpperCase().includes(opts.reference.toUpperCase())
     : false;
 
-  return { ok: !navError && html.length > 0, html, textContent, title, mentionsRef, rowCount, inventory, error: navError || undefined };
+  return {
+    ok: !navError && html.length > 0,
+    html,
+    textContent,
+    title,
+    mentionsRef,
+    rowCount,
+    inventory,
+    diag,
+    error: navError || undefined,
+  };
 }
 
 /** Uma tentativa de scrape via Scraping Browser remoto (conecta, pilota, fecha). */
