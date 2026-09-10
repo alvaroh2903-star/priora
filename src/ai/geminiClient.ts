@@ -38,12 +38,13 @@ const USD_BRL = 5.3; // câmbio aproximado só para a estimativa no log
  */
 export function isPermanentQuotaError(err: unknown): boolean {
   const msg = String((err as any)?.message ?? err ?? '').toLowerCase();
+  // APENAS o teto de gastos mensal (permanente). NÃO casa "billing" (aparece na
+  // URL de ajuda de QUALQUER erro) nem "quota exceeded" genérico — rate limit por
+  // minuto/dia é TRANSITÓRIO (vale retry) e não é teto de gastos.
   return (
     (msg.includes('spend') && msg.includes('cap')) ||
     msg.includes('exceeded its monthly') ||
-    msg.includes('billing') ||
-    msg.includes('spend_cap') ||
-    msg.includes('quota') && msg.includes('exceeded')
+    msg.includes('spend_cap')
   );
 }
 

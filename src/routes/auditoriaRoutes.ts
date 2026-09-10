@@ -681,18 +681,35 @@ auditoriaRouter.get('/:processo/auditoria', async (req: AuthedRequest, res, next
  * (rápido). Fallback: varre a caixa (buildProcessos). Compartilhado por
  * /pre-alerta (PB-001) e /ce-mercante (PB-002). null = processo não encontrado.
  */
-// Mensagem clara quando o OCR foi BLOQUEADO pelo teto de gastos/cota do Gemini
-// (não confundir com "documento ilegível"): é ação humana, não erro de doc.
+// Mensagem clara quando o OCR foi BLOQUEADO pelo TETO DE GASTOS mensal do Gemini.
 const AVISO_LIMITE_IA =
-  'Leitura de documentos BLOQUEADA: a conta Google do Gemini atingiu o limite de gastos (HTTP 429 — spending cap). Aumente/remova o limite em https://ai.studio/spend e reprocesse. Nenhum documento pôde ser lido.';
+  'Leitura BLOQUEADA: a conta Google do Gemini atingiu o TETO DE GASTOS MENSAL (spending cap). Aumente/remova o limite em https://ai.studio/spend e reprocesse. (Ter créditos não basta — o teto é um limite separado.)';
+/** SÓ o teto de gastos mensal (permanente). Não casa rate limit por minuto/dia. */
 function ehLimiteIA(erro: string | null | undefined): boolean {
   const m = String(erro || '').toLowerCase();
+  return (m.includes('spend') && m.includes('cap')) || m.includes('exceeded its monthly') || m.includes('spend_cap');
+}
+/** Erro de RECUSA da IA (429/503/500, rate limit, sobrecarga) — pra mostrar o
+ *  motivo REAL em vez de silenciar como "documento ilegível". */
+function ehErroIA(erro: string | null | undefined): boolean {
+  const m = String(erro || '').toLowerCase();
   return (
-    (m.includes('spend') && m.includes('cap')) ||
-    m.includes('exceeded its monthly') ||
-    m.includes('billing') ||
-    m.includes('bloqueada')
+    m.includes('gemini') ||
+    m.includes('recusou') ||
+    m.includes('[status') ||
+    m.includes('resource_exhausted') ||
+    m.includes('rate limit') ||
+    m.includes('quota') ||
+    m.includes('overloaded') ||
+    m.includes('unavailable')
   );
+}
+/** Mensagem de aviso a partir do erro de OCR: teto de gastos vs. outro erro da IA
+ *  (mostra o texto cru do Gemini para não haver dúvida sobre a causa). */
+function avisoDeErroIA(erro: string): string {
+  return ehLimiteIA(erro)
+    ? AVISO_LIMITE_IA
+    : `A IA (Gemini) recusou a leitura (NÃO é teto de gastos): ${String(erro).replace(/\s+/g, ' ').slice(0, 280)}`;
 }
 
 // Números de MBL/HBL DECLARADOS no assunto/corpo do e-mail (ex.: "... MBL:
@@ -960,7 +977,7 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
         tipoDetectado = r.tipoDetectado ?? null;
         erro = ('erro' in r ? r.erro : undefined) ?? null;
         bytesBaixados = ('paginasComBytes' in r ? r.paginasComBytes : undefined) ?? null;
-        if (ehLimiteIA(erro) && !avisoIA) avisoIA = AVISO_LIMITE_IA;
+        if (erro && ehErroIA(erro) && !avisoIA) avisoIA = avisoDeErroIA(erro);
         // Só cacheia leituras BEM-sucedidas (legíveis) — falha/ilegível re-tenta.
         if (doc && doc.legivel) await gravarOcrCache(chave, { doc, tipoDetectado }, nome0);
       }
@@ -1166,7 +1183,7 @@ auditoriaRouter.get('/:processo/ce-mercante', async (req: AuthedRequest, res, ne
       }
       const lidos = await mapLimit(Array.from(grupos.values()).slice(0, 8), 3, async (grupo) => {
         const { doc, erro } = await ocrConhecimento(req, grupo, hint, escopoOcr);
-        if (ehLimiteIA(erro) && !avisoIA) avisoIA = AVISO_LIMITE_IA;
+        if (erro && ehErroIA(erro) && !avisoIA) avisoIA = avisoDeErroIA(erro);
         return doc ? ({ ...doc, nome: grupo[0].nome } as DocPreAlerta) : null;
       });
       return lidos.filter((d): d is DocPreAlerta => d !== null);
@@ -1190,7 +1207,7 @@ auditoriaRouter.get('/:processo/ce-mercante', async (req: AuthedRequest, res, ne
     for (const [token, grupo] of Array.from(gruposCE.entries()).slice(0, 8)) {
       const ehMaster = ehMasterCE(token);
       const { doc, erro } = await ocrConhecimento(req, grupo, ehMaster ? 'MBL' : 'HBL', escopoOcr);
-      if (ehLimiteIA(erro) && !avisoIA) avisoIA = AVISO_LIMITE_IA;
+      if (erro && ehErroIA(erro) && !avisoIA) avisoIA = avisoDeErroIA(erro);
       if (!doc) continue;
       const ceDoc: DocPreAlerta = {
         ...doc,
