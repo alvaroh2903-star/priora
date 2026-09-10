@@ -1,5 +1,5 @@
 import { chromium, Browser, Page } from 'playwright';
-import { acceptCookies, tryFillSearch } from './carriers/pageUtils';
+import { acceptCookies, tryFillSearch, driveShipmentLinkForm } from './carriers/pageUtils';
 
 /**
  * Priora — Cliente do Bright Data Scraping Browser (CDP remoto).
@@ -332,8 +332,15 @@ export async function driveTrackingPage(
     const body0 = await collectFramesText(page); // varre todos os frames
     const refSeen = body0.toUpperCase().includes(opts.reference.toUpperCase());
     const containerSeen = /\b[A-Z]{4}\d{7}\b/.test(body0);
-    if (!refSeen && !containerSeen) {
-      if (await tryFillSearch(page, opts.reference)) {
+    // ShipmentLink (Evergreen) mostra um contêiner de EXEMPLO no próprio form
+    // (EISU1234567), que engana o atalho containerSeen — nesse host ignoramos o
+    // atalho e sempre pilotamos o form dedicado (radio B/L + input#NO + Submit).
+    const isShipmentLink = /shipmentlink/i.test(page.url());
+    const shouldFill = isShipmentLink ? !refSeen : !refSeen && !containerSeen;
+    if (shouldFill) {
+      let filled = isShipmentLink ? await driveShipmentLinkForm(page, opts.reference) : false;
+      if (!filled) filled = await tryFillSearch(page, opts.reference);
+      if (filled) {
         await page.waitForLoadState('networkidle', { timeout: postWait }).catch(() => {});
         await page.waitForSelector(RESULT_SELECTOR, { timeout: 15_000 }).catch(() => {});
         await page.waitForTimeout(2000);

@@ -132,24 +132,31 @@ const SEARCH_BUTTONS = [
 /** Preenche+submete a busca DENTRO de um frame específico (best-effort). */
 async function fillSearchInFrame(frame: Frame, ref: string): Promise<boolean> {
   for (const sel of SEARCH_FIELD_CANDIDATES) {
-    const field = frame.locator(sel).first();
-    if ((await field.count().catch(() => 0)) === 0) continue;
-    // Pula campos readonly/desabilitados (ex.: o dropdown de tipo do Ant, que é
-    // um input[type=search] readonly) — digitar neles não faz a busca.
-    if (!(await field.isEditable().catch(() => false))) continue;
-    await field.fill(ref).catch(() => undefined);
-    // 1) tenta CLICAR um botão de busca; 2) senão, ENTER (o site pode exigir um).
-    let clicked = false;
-    for (const b of SEARCH_BUTTONS) {
-      const btn = frame.locator(b).first();
-      if ((await btn.count().catch(() => 0)) > 0) {
-        await btn.click({ timeout: 3000 }).catch(() => undefined);
-        clicked = true;
-        break;
+    const fields = frame.locator(sel);
+    const n = await fields.count().catch(() => 0);
+    // Tenta TODOS os elementos que casam com o seletor (não só o 1º): muitos forms
+    // têm campos duplicados/escondidos ANTES do visível (ex.: ShipmentLink tem 5
+    // inputs name="NO" escondidos da aba "Multiple" antes do input real). Parar no
+    // 1º não-editável faria pular o campo certo.
+    for (let i = 0; i < Math.min(n, 10); i++) {
+      const field = fields.nth(i);
+      // Pula campos readonly/escondidos/desabilitados (ex.: o dropdown de tipo do
+      // Ant, um input[type=search] readonly) — digitar neles não faz a busca.
+      if (!(await field.isEditable().catch(() => false))) continue;
+      await field.fill(ref).catch(() => undefined);
+      // 1) tenta CLICAR um botão de busca; 2) senão, ENTER (o site pode exigir um).
+      let clicked = false;
+      for (const b of SEARCH_BUTTONS) {
+        const btn = frame.locator(b).first();
+        if ((await btn.count().catch(() => 0)) > 0) {
+          await btn.click({ timeout: 3000 }).catch(() => undefined);
+          clicked = true;
+          break;
+        }
       }
+      if (!clicked) await field.press('Enter').catch(() => undefined);
+      return true;
     }
-    if (!clicked) await field.press('Enter').catch(() => undefined);
-    return true;
   }
   return false;
 }
@@ -164,4 +171,38 @@ export async function tryFillSearch(page: Page, ref: string): Promise<boolean> {
     if (await fillSearchInFrame(frame, ref)) return true;
   }
   return false;
+}
+
+/**
+ * Driver DEDICADO do formulário da Evergreen (ShipmentLink, TDB1_CargoTracking).
+ *
+ * A aba "Quick Tracking" (ativa por padrão) tem: radios name="SEL" (#s_bl / #s_cntr
+ * / #s_bk = tipo de busca), UM input#NO visível e um <input type="button"
+ * value="Submit"> cujo onclick seta os hidden (TYPE/BL/CNTR/bkno) e submete o form.
+ * O preenchedor genérico não serve aqui: há 6 inputs name="NO" (5 escondidos da aba
+ * "Multiple" antes do visível) e é preciso marcar o radio de tipo. Este driver
+ * sempre busca por B/L (só a parte numérica — o registro já tira EGLV/EVGL).
+ * Retorna true se preencheu e submeteu.
+ */
+export async function driveShipmentLinkForm(page: Page, ref: string): Promise<boolean> {
+  const input = page.locator('input#NO');
+  if ((await input.count().catch(() => 0)) === 0) return false;
+  // 1) Seleciona busca por B/L (#s_bl) — sem isso o servlet busca por outro tipo
+  //    e devolve "não encontrado".
+  const blRadio = page.locator('#s_bl');
+  if ((await blRadio.count().catch(() => 0)) > 0) {
+    await blRadio.check({ timeout: 3000 }).catch(() => undefined);
+  }
+  // 2) Digita a B/L (parte numérica) no input visível.
+  await input.first().fill(ref).catch(() => undefined);
+  // 3) Clica o "Submit" visível (o da aba Multiple é escondido); senão, Enter.
+  const submit = page.locator('input[type="button"][value="Submit" i]:visible').first();
+  if ((await submit.count().catch(() => 0)) > 0) {
+    await submit.click({ timeout: 5000 }).catch(() => undefined);
+  } else {
+    await input.first().press('Enter').catch(() => undefined);
+  }
+  // O form faz POST no mesmo servlet (sem target) → resultado na MESMA página.
+  await page.waitForLoadState('domcontentloaded', { timeout: 20_000 }).catch(() => undefined);
+  return true;
 }
