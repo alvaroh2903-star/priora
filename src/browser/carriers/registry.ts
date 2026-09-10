@@ -96,7 +96,11 @@ export const CARRIERS: CarrierMeta[] = [
     containerPrefixes: ['HDMU', 'HMMU'],
     trackingUrl: 'https://www.hmm21.com/e-service/general/trackNTrace/TrackNTrace.do',
     needsLoginForDemurrage: true,
-    notes: 'formulário na página; verificar seletores.',
+    needsScrapingBrowser: true, // SPA form; render real (sem captcha, confirmado ao vivo).
+    // Form-based, SEM captcha (confirmado ao vivo). O motor preenche srchBlNo1 +
+    // clica "Retrieve". Parser DEDICADO scrapers/hmm.ts lê a tabela Shipment
+    // History (#shipmentProgress). Descarga de TRANSBORDO (T/S) é ignorada.
+    notes: 'form-based sem captcha (validado ao vivo, SGNM68262800). Parser scrapers/hmm.ts (#shipmentProgress). Transbordo (T/S) não conta como descarga. 38 BLs — maior volume.',
   },
   {
     id: 'cmacgm',

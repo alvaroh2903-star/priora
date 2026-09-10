@@ -64,7 +64,7 @@ Legenda **Anti-bot**: 🔴 Cloudflare interativo · 🟠 aceite/anti-bot leve ·
 | `msc` | MSC | MSCU, MEDU | SPA + aceite | a confirmar | 🟠 | ⬜ |
 | `cmacgm` | CMA CGM | CMDU, CMAU, APLU | SPA | a confirmar | ❔ | ⬜ |
 | `cosco` | COSCO | COSU | SPA SCCT (iframe Ant/Vue) | `scct/public/ct/base?trackingType=BILLOFLADING&number=` | 🟢 | ✅ |
-| `hmm` | HMM (Hyundai) | HDMU, HMMU | Formulário na página | a confirmar | ❔ | ⬜ |
+| `hmm` | HMM (Hyundai) | HDMU, HMMU, SGNM… | Formulário (srchBlNo1 + Retrieve) | form-based | 🟢 | ✅ (validado ao vivo; transbordo T/S ignorado) |
 | `yangming` | Yang Ming | YMLU | Formulário na página | a confirmar | ❔ | ⬜ |
 | `evergreen` | Evergreen (ShipmentLink) | EGLV, EMCU | Servlet clássico (form POST) | a confirmar | ❔ | ⬜ |
 | `zim` | ZIM | ZIMU | SPA | `?consnumber=` (contêiner) | ❔ | ⬜ |

@@ -39,6 +39,12 @@ export function classifyEvent(status: string): NormalizedEventType {
   //  - "Gate out Empty" (o vazio saindo do depósito na origem).
   if (/empty\s+(?:container\s+)?releas/.test(s)) return 'other';
   if (/gate\s*out\s+empty/.test(s)) return 'other';
+  // Descarga/descida em porto de TRANSBORDO (T/S) — ex.: HMM "Feeder Discharged
+  // at T/S Port", ONE "Unloaded from Vessel at Transshipment Port". NÃO é a
+  // descarga no DESTINO, então não pode iniciar a contagem de demurrage.
+  if (/discharg|unload/.test(s) && /\bt\/s\b|transship|tranship|transbordo|feeder/.test(s)) {
+    return 'other';
+  }
   for (const [type, re] of RULES) {
     if (re.test(s)) return type;
   }
