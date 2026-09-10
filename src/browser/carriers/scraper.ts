@@ -1,7 +1,7 @@
 import { Page } from 'playwright';
 import { CarrierMeta, ReferenceType, TrackingResult } from './types';
 import { PortalScraper, ScrapeContext } from './scraperTypes';
-import { resolveTrackingUrl } from './registry';
+import { resolveTrackingUrl, resolveSearchRef } from './registry';
 import { withPage, withRemotePage } from '../browser';
 import { isSBConfigured, collectFramesHtml, collectFramesText } from '../scrapingBrowser';
 import { acceptCookies, detectCaptcha, detectLogin, tryFillSearch } from './pageUtils';
@@ -114,7 +114,8 @@ export async function scrapeCarrier(
 ): Promise<TrackingResult> {
   const sourceUrl = resolveTrackingUrl(carrier, ref, type);
   const usedDeepLink = sourceUrl !== carrier.trackingUrl;
-  const ctx: ScrapeContext = { reference: ref, referenceType: type, carrier };
+  // A ref DIGITADA no form pode diferir da original (ex.: Evergreen tira o EGLV).
+  const ctx: ScrapeContext = { reference: resolveSearchRef(carrier, ref, type), referenceType: type, carrier };
 
   const base: TrackingResult = {
     carrierId: carrier.id,

@@ -18,7 +18,7 @@ import { demurrageBotRouter } from './routes/demurrageBotRoutes';
 import { auditoriaRouter } from './routes/auditoriaRoutes';
 import { chromium } from 'playwright';
 import { withPage } from './browser/browser';
-import { trackShipment, detect } from './browser/carriers';
+import { trackShipment, detect, detectCarrier, resolveSearchRef } from './browser/carriers';
 import { tryFillSearch } from './browser/carriers/pageUtils';
 import { getAntiCaptchaBalance, solveRecaptchaV2 } from './browser/antiCaptcha';
 import { fetchViaUnblocker, isUnblockerConfigured } from './browser/webUnblocker';
@@ -517,6 +517,13 @@ app.get('/health/scrape-sb', async (req, res) => {
   else if (ref) url = detect(ref).carrier?.trackingUrl || undefined;
   if (!url) return res.status(400).json({ error: 'Informe ?url=<URL> ou ?ref=<BL|contêiner>.' });
 
+  // Ref a DIGITAR no form pode diferir da original (ex.: Evergreen tira o EGLV).
+  let searchReference = ref || rawUrl;
+  if (ref) {
+    const d = detectCarrier(ref);
+    if (d.carrier) searchReference = resolveSearchRef(d.carrier, ref, d.referenceType);
+  }
+
   // ?probe=1 coleta o inventário de inputs/selects/botões da página (revela os
   // seletores REAIS do form — COSCO/HMM — sem chutar num teste ao vivo só).
   const probe = ['1', 'true', 'yes'].includes(String(req.query.probe || '').toLowerCase());
@@ -524,8 +531,8 @@ app.get('/health/scrape-sb', async (req, res) => {
   try {
     const sb =
       engine === 'local'
-        ? { ...(await withPage((page) => driveTrackingPage(page, { url: url!, reference: ref || rawUrl, inventory: probe }))), ms: Date.now() - startedAt }
-        : await scrapeViaSB({ url, reference: ref || rawUrl, inventory: probe });
+        ? { ...(await withPage((page) => driveTrackingPage(page, { url: url!, reference: searchReference, inventory: probe }))), ms: Date.now() - startedAt }
+        : await scrapeViaSB({ url, reference: searchReference, inventory: probe });
     // Extrai eventos do HTML renderizado.
     let events: unknown[] = [];
     let containers: unknown[] = [];

@@ -106,6 +106,13 @@ export interface CarrierMeta {
    */
   buildTrackingUrl?: (ref: string, type: ReferenceType) => string | null;
   /**
+   * Transforma a referência ANTES de digitar no formulário de busca, quando o
+   * portal quer um formato diferente (ex.: Evergreen/ShipmentLink aceita o B/L
+   * SÓ com a parte numérica, sem o prefixo EGLV/EVGL). Devolve a ref original se
+   * não houver transformação.
+   */
+  searchRef?: (ref: string, type: ReferenceType) => string;
+  /**
    * A informação de demurrage/last free day costuma exigir login no portal
    * comercial (a página pública mostra só os eventos de movimentação).
    */

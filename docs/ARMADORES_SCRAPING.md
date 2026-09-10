@@ -66,7 +66,7 @@ Legenda **Anti-bot**: 🔴 Cloudflare interativo · 🟠 aceite/anti-bot leve ·
 | `cosco` | COSCO | COSU | SPA SCCT (iframe Ant/Vue) | `scct/public/ct/base?trackingType=BILLOFLADING&number=` | 🟢 | ✅ |
 | `hmm` | HMM (Hyundai) | HDMU, HMMU, SGNM… | Formulário (srchBlNo1 + Retrieve) | form-based | 🟢 | ✅ (validado ao vivo; transbordo T/S ignorado) |
 | `yangming` | Yang Ming | YMLU | Formulário na página | a confirmar | ❔ | ⬜ |
-| `evergreen` | Evergreen (ShipmentLink) | EGLV, EMCU | Servlet clássico (form POST) | a confirmar | ❔ | ⬜ |
+| `evergreen` | Evergreen (ShipmentLink) | EGLV, EVGL, EMCU | Servlet (B/L sem prefixo + Submit) | 🟢 | ✅ (validado ao vivo; searchRef tira EGLV/EVGL) |
 | `zim` | ZIM | ZIMU | SPA | `?consnumber=` (contêiner) | ❔ | ⬜ |
 | `pil` | Pacific Int. Lines | PABV, NNPL, PILU | Página + form | `?...&refNo=` | 🟢 | ✅ (histórico completo via Trace, validado ao vivo) |
 | `oocl` | OOCL | OOLU | ASPX com formulário | a confirmar | 🟠 | ⬜ |

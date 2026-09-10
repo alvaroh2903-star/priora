@@ -1,4 +1,4 @@
-import { CARRIERS, getCarrier, resolveTrackingUrl } from './registry';
+import { CARRIERS, getCarrier, resolveTrackingUrl, resolveSearchRef } from './registry';
 import { detectCarrier, classifyReference, normalizeRef, isValidContainer } from './detect';
 import { scrapeCarrier } from './scraper';
 import { hasApiSource, fetchViaApi } from './apiSources';
@@ -9,7 +9,7 @@ import { CarrierMeta, ReferenceType, TrackingResult } from './types';
  * Junta registro + detecção + scraping numa API simples.
  */
 
-export { CARRIERS, getCarrier, detectCarrier, classifyReference, normalizeRef, isValidContainer };
+export { CARRIERS, getCarrier, detectCarrier, classifyReference, normalizeRef, isValidContainer, resolveSearchRef };
 export type { CarrierMeta, ReferenceType, TrackingResult };
 
 /** Lista enxuta dos armadores suportados (para a UI). */

@@ -45,8 +45,9 @@ export function parseDateToISO(text: string): string | null {
     const mon = MESES[m[2].slice(0, 3).toLowerCase()];
     if (mon) return `${m[3]}-${pad(mon)}-${pad(+m[1])}`;
   }
-  // May 13, 2026 / May 13 2026
-  m = s.match(/\b([A-Za-zÀ-ÿ]{3,})\s+(\d{1,2}),?\s+(\d{4})\b/);
+  // May 13, 2026 / May 13 2026 / JUL-16-2026 (Mês-Dia-Ano, com espaço OU traço) —
+  // Evergreen/ShipmentLink usa "JUL-16-2026".
+  m = s.match(/\b([A-Za-zÀ-ÿ]{3,})[-.\s]+(\d{1,2}),?[-.\s]+(\d{4})\b/);
   if (m) {
     const mon = MESES[m[1].slice(0, 3).toLowerCase()];
     if (mon) return `${m[3]}-${pad(mon)}-${pad(+m[2])}`;

@@ -7,6 +7,7 @@ import { extractPilEvents } from './pil';
 import { extractOoclEvents } from './oocl';
 import { extractCmaEvents } from './cma';
 import { extractHmmEvents } from './hmm';
+import { extractEvergreenEvents } from './evergreen';
 
 /**
  * Priora — Dispatcher multi-armador de extração de eventos.
@@ -53,6 +54,11 @@ export function extractCarrierEvents(html: string): TrackingEvent[] {
   if (/hmm21|id="shipmentProgress"|id="thisCntr"/i.test(html)) {
     const h = extractHmmEvents(html);
     if (h.length) return h;
+  }
+  // Evergreen (ShipmentLink) — tabela de contêineres (Current Status + Date).
+  if (/shipmentlink|TDB1_CargoTracking/i.test(html)) {
+    const eg = extractEvergreenEvents(html);
+    if (eg.length) return eg;
   }
   // Hapag (timeline .hal-event) → tabela genérica <tr>/<td> / grade ARIA.
   return extractHapagOrGeneric(html);

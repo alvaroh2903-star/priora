@@ -83,11 +83,16 @@ export const CARRIERS: CarrierMeta[] = [
   {
     id: 'evergreen',
     name: 'Evergreen (ShipmentLink)',
-    scac: ['EGLV', 'EMCU'],
+    scac: ['EGLV', 'EMCU', 'EVGL'],
     containerPrefixes: ['EGHU', 'EGSU', 'EISU', 'EMCU', 'HMCU', 'EITU', 'UGMU'],
     trackingUrl: 'https://ct.shipmentlink.com/servlet/TDB1_CargoTracking.do',
+    // O Quick Tracking da ShipmentLink aceita o B/L SÓ com a parte numérica
+    // (o exemplo do site é "012345678900"). "EGLV010600577145" dá "B/L not valid";
+    // "010600577145" funciona. Tiramos o prefixo EGLV/EVGL antes de buscar.
+    searchRef: (ref) => ref.replace(/^(EGLV|EVGL)/i, ''),
     needsLoginForDemurrage: true,
-    notes: 'servlet clássico (form POST). Verificar campos do form e página de resultado.',
+    needsScrapingBrowser: true, // servlet + JS; render real (sem captcha, validado ao vivo).
+    notes: 'servlet clássico, SEM captcha (validado ao vivo). Busca por B/L SEM prefixo (searchRef). Resultado na MESMA página. Parser scrapers/evergreen.ts (tabela de contêineres).',
   },
   {
     id: 'hmm',
@@ -209,4 +214,16 @@ export function resolveTrackingUrl(
 ): string {
   const deep = carrier.buildTrackingUrl?.(ref, type) || null;
   return deep || carrier.trackingUrl;
+}
+
+/**
+ * Referência a DIGITAR no formulário de busca — aplica o transform do armador
+ * (ex.: Evergreen tira o prefixo EGLV/EVGL). Sem transform, devolve a original.
+ */
+export function resolveSearchRef(
+  carrier: CarrierMeta,
+  ref: string,
+  type: ReferenceType,
+): string {
+  return carrier.searchRef?.(ref, type) ?? ref;
 }
