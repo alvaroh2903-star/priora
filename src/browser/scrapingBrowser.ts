@@ -1,5 +1,6 @@
 import { chromium, Browser, Page } from 'playwright';
 import { acceptCookies, tryFillSearch, driveShipmentLinkForm, driveMscForm } from './carriers/pageUtils';
+import { solveCaptchaIfPresent } from './antiCaptcha';
 
 /**
  * Priora — Cliente do Bright Data Scraping Browser (CDP remoto).
@@ -323,6 +324,10 @@ export async function driveTrackingPage(
   await waitOutChallenge(page).catch(() => undefined);
 
   await acceptCookies(page);
+  // Captcha INTERATIVO (reCAPTCHA/hCaptcha/Turnstile) na entrada: resolve via
+  // anti-captcha se configurado (no-op rápido quando não há widget). Beneficia
+  // tanto o diagnóstico quanto a produção, que compartilham este motor.
+  await solveCaptchaIfPresent(page, opts.url).catch(() => undefined);
   await page.waitForSelector(RESULT_SELECTOR, { timeout: 25_000 }).catch(() => {});
   await page.waitForLoadState('networkidle', { timeout: postWait }).catch(() => {});
   await page.waitForTimeout(2000); // folga p/ Vue/React hidratar

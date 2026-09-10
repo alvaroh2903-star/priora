@@ -3,8 +3,8 @@ import { CarrierMeta, ReferenceType, TrackingResult } from './types';
 import { PortalScraper, ScrapeContext } from './scraperTypes';
 import { resolveTrackingUrl, resolveSearchRef } from './registry';
 import { withPage, withRemotePage } from '../browser';
-import { isSBConfigured, collectFramesHtml, collectFramesText } from '../scrapingBrowser';
-import { acceptCookies, detectCaptcha, detectLogin, tryFillSearch } from './pageUtils';
+import { isSBConfigured, driveTrackingPage } from '../scrapingBrowser';
+import { detectCaptcha, detectLogin } from './pageUtils';
 import { scrapeHapag, deriveContainers, firstContainerNo } from './scrapers/hapag';
 import { extractCarrierEvents } from './scrapers/dispatch';
 import { solveCaptchaIfPresent } from '../antiCaptcha';
@@ -33,48 +33,29 @@ function shouldUseScrapingBrowser(carrier: CarrierMeta): boolean {
   return isSBConfigured() && carrier.needsScrapingBrowser !== false;
 }
 
-/** Scraper genérico: navega, detecta login/CAPTCHA, captura o texto renderizado. */
+/**
+ * Scraper genérico UNIFICADO: navega + pilota com o MESMO motor do diagnóstico
+ * (`driveTrackingPage`) — drivers dedicados (ShipmentLink/MSC), captura do JSON da
+ * API interna, popup, expansores PIL/CMA e waitOutChallenge. Depois detecta login/
+ * CAPTCHA e faz a extração ESTRUTURADA (dispatcher + `apiJson`). É o que garante
+ * que o "botão" de produção use exatamente o que validamos no /health/scrape-sb.
+ */
 async function genericScrape(
   page: Page,
   ctx: ScrapeContext,
-  usedDeepLink: boolean,
+  sourceUrl: string,
 ): Promise<Partial<TrackingResult>> {
-  await acceptCookies(page);
-  // Espera os resultados renderizarem (timeline Maersk, .hal-event, tabela…).
-  await page
-    .waitForSelector(
-      '.transport-plan__list__item, [data-test="milestone"], .hal-event, table tr, [role="row"]',
-      { timeout: 15000 },
-    )
-    .catch(() => undefined);
-  await page.waitForLoadState('networkidle').catch(() => undefined);
-  await page.waitForTimeout(1500);
-
-  // Texto de TODOS os frames (o rastreio pode estar num iframe — ex.: COSCO).
-  let body = await collectFramesText(page);
-  // Se a referência não apareceu (deep link não auto-buscou), preenche o form.
-  // Mas alguns portais desenham a ref como SVG/imagem (ex.: COSCO) — se já há um
-  // número de contêiner no corpo, os resultados carregaram; não re-buscar à toa.
-  const containerSeen = /\b[A-Z]{4}\d{7}\b/.test(body);
-  if (!usedDeepLink || (!body.toUpperCase().includes(ctx.reference.toUpperCase()) && !containerSeen)) {
-    if (await tryFillSearch(page, ctx.reference)) {
-      await page.waitForLoadState('networkidle').catch(() => undefined);
-      await acceptCookies(page);
-      await page.waitForTimeout(1500);
-      body = await collectFramesText(page);
-    }
-  }
+  const driven = await driveTrackingPage(page, { url: sourceUrl, reference: ctx.reference });
 
   const needsCaptcha = await detectCaptcha(page);
-  const needsLogin = await detectLogin(page, body);
+  const needsLogin = await detectLogin(page, driven.textContent);
 
-  // Extração ESTRUTURADA multi-armador (dispatcher: Maersk, tabelas…) do DOM de
-  // TODOS os frames (o resultado pode estar num iframe).
-  const html = await collectFramesHtml(page);
-  const events = extractCarrierEvents(html);
+  // Extração ESTRUTURADA multi-armador. `apiJson` (ex.: MSC) tem prioridade; senão,
+  // o HTML de todos os frames (o resultado pode estar num iframe/popup).
+  const events = extractCarrierEvents(driven.html, driven.apiJson);
   if (events.length > 0) {
     const containerHint =
-      firstContainerNo(html) || (ctx.referenceType === 'container' ? ctx.reference : null);
+      firstContainerNo(driven.html) || (ctx.referenceType === 'container' ? ctx.reference : null);
     return {
       events,
       containers: deriveContainers(events, containerHint),
@@ -86,7 +67,7 @@ async function genericScrape(
   }
 
   // Sem estrutura reconhecida ainda: texto cru p/ a Clara + diagnóstico honesto.
-  const raw = body.slice(0, 4000);
+  const raw = driven.textContent.slice(0, 4000);
   const mentionsRef = raw.toUpperCase().includes(ctx.reference.toUpperCase());
   return {
     needsCaptcha,
@@ -113,7 +94,6 @@ export async function scrapeCarrier(
   type: ReferenceType,
 ): Promise<TrackingResult> {
   const sourceUrl = resolveTrackingUrl(carrier, ref, type);
-  const usedDeepLink = sourceUrl !== carrier.trackingUrl;
   // A ref DIGITADA no form pode diferir da original (ex.: Evergreen tira o EGLV).
   const ctx: ScrapeContext = { reference: resolveSearchRef(carrier, ref, type), referenceType: type, carrier };
 
@@ -138,37 +118,35 @@ export async function scrapeCarrier(
 
   try {
     return await runner(async (page) => {
-      await page.goto(sourceUrl, { waitUntil: 'domcontentloaded' });
-
-      // Anti-captcha (se configurado): tenta resolver um captcha logo na entrada.
-      // No Scraping Browser o solver é do próprio Bright Data (redundante, inócuo).
-      await solveCaptchaIfPresent(page, sourceUrl);
-
       const specific = SCRAPERS[carrier.id];
-      const run = () =>
-        specific ? specific(page, ctx) : genericScrape(page, ctx, usedDeepLink);
 
-      let partial = await run();
-
-      // Se o portal AINDA exige captcha, tenta resolver e roda o scraper 1x mais.
-      if (partial.needsCaptcha) {
-        const solved = await solveCaptchaIfPresent(page, sourceUrl);
-        if (solved) {
-          await page.waitForLoadState('networkidle').catch(() => undefined);
-          partial = await run();
+      // Caminho do scraper ESPECÍFICO (ex.: Hapag): navega, tenta captcha e roda,
+      // com 1 retry se o captcha persistir.
+      if (specific) {
+        await page.goto(sourceUrl, { waitUntil: 'domcontentloaded' });
+        await solveCaptchaIfPresent(page, sourceUrl);
+        let partial = await specific(page, ctx);
+        if (partial.needsCaptcha) {
+          const solved = await solveCaptchaIfPresent(page, sourceUrl);
+          if (solved) {
+            await page.waitForLoadState('networkidle').catch(() => undefined);
+            partial = await specific(page, ctx);
+          }
         }
+        if (partial.needsCaptcha) {
+          partial = {
+            ...partial,
+            message: isAntiCaptchaConfigured()
+              ? 'Portal exigiu CAPTCHA e a resolução automática não teve sucesso (ver logs do anti-captcha).'
+              : 'Portal exigiu CAPTCHA e não há serviço de resolução configurado (defina ANTICAPTCHA_KEY).',
+          };
+        }
+        return { ...base, ...partial };
       }
 
-      // Mensagem final honesta quando o captcha persiste.
-      if (partial.needsCaptcha) {
-        partial = {
-          ...partial,
-          message: isAntiCaptchaConfigured()
-            ? 'Portal exigiu CAPTCHA e a resolução automática não teve sucesso (ver logs do anti-captcha).'
-            : 'Portal exigiu CAPTCHA e não há serviço de resolução configurado (defina ANTICAPTCHA_KEY).',
-        };
-      }
-
+      // Caminho GENÉRICO unificado: o driveTrackingPage cuida do goto + cookies +
+      // anti-captcha + drivers dedicados (ShipmentLink/MSC) + captura de JSON.
+      const partial = await genericScrape(page, ctx, sourceUrl);
       return { ...base, ...partial };
     });
   } catch (err) {

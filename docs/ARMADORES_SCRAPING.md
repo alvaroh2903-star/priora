@@ -115,9 +115,11 @@ Legenda **Anti-bot**: 🔴 Cloudflare interativo · 🟠 aceite/anti-bot leve ·
 - **Exemplo validado:** `MEDUY8275040` (Qingdao → Manaus, T/S Pecem) → contêiner
   MSMU7811290 `40' HIGH CUBE`, 5 eventos, **em trânsito** (`Delivered:false`,
   POD ETA 12/09/2026) → descarga/retirada/devolução `null` (correto, não inventa).
+- **Produção:** ligada — o `scrapeCarrier` (o que o "botão" chama) agora roda o
+  MESMO motor do diagnóstico (`driveTrackingPage`), então driver + captura de JSON
+  valem no produto. Validar via `/health/track?ref=<BL>`.
 - **Pendente:** validar com uma B/L MSC **entregue** para confirmar os termos exatos
-  de descarga/retirada/devolução no destino, e **plugar na produção** (hoje o driver
-  + captura de JSON só rodam no `driveTrackingPage`/diagnóstico — ver §6).
+  de descarga/retirada/devolução no destino.
 
 ---
 
