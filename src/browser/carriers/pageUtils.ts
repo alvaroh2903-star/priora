@@ -35,15 +35,33 @@ const LOGIN_TEXT_HINTS = [
   'unauthorized',
 ];
 
-/** Aceita o banner de cookies, se houver (best-effort, não falha). */
+/** Aceita o banner de cookies e fecha camadas de idioma/região (best-effort). */
 export async function acceptCookies(page: Page): Promise<void> {
   for (const sel of COOKIE_ACCEPT_SELECTORS) {
     const btn = page.locator(sel).first();
     if ((await btn.count().catch(() => 0)) > 0) {
       await btn.click({ timeout: 3000 }).catch(() => undefined);
-      return;
+      break;
     }
   }
+  // Camada de idioma/região (ex.: ShipmentLink "Would you use language: Español?"
+  // sobre um IP hispânico) — força inglês; a página recarrega em inglês, sem a
+  // camada bloqueando o formulário. Também esconde a camada por JS como reforço.
+  const langBtn = page
+    .locator(
+      'button:has-text("No, use English"), button:has-text("Continue in English"), button:has-text("Use English")',
+    )
+    .first();
+  if ((await langBtn.count().catch(() => 0)) > 0) {
+    await langBtn.click({ timeout: 3000 }).catch(() => undefined);
+    await page.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(() => undefined);
+  }
+  await page
+    .evaluate(() => {
+      const el = document.getElementById('shipmentlink_lang_layer');
+      if (el) (el as HTMLElement).style.display = 'none';
+    })
+    .catch(() => undefined);
 }
 
 /** Detecta a presença de um CAPTCHA na página. */
