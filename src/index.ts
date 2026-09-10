@@ -576,6 +576,8 @@ app.get('/health/scrape-sb', async (req, res) => {
         htmlSlice,
         inventory: sb.inventory || undefined,
         diag: sb.diag || undefined,
+        apiJson: sb.apiJson ? sb.apiJson.slice(0, 16000) : undefined,
+        apiJsonLen: sb.apiJson ? sb.apiJson.length : undefined,
         error: sb.error || null,
       },
     });

@@ -258,21 +258,48 @@ export async function driveShipmentLinkForm(
  * Enter como reforço) e espera o loader (`isLoading`) resolver. O modo padrão
  * (Container/B/L) já cobre nossas BLs. Resultado na MESMA página (SPA).
  */
-export async function driveMscForm(page: Page, ref: string): Promise<boolean> {
+export async function driveMscForm(
+  page: Page,
+  ref: string,
+): Promise<{ filled: boolean; apiJson: string | null }> {
   const input = page.locator('#trackingNumber');
-  if ((await input.count().catch(() => 0)) === 0) return false;
-  await input.scrollIntoViewIfNeeded().catch(() => undefined);
-  await input.click().catch(() => undefined); // foca → habilita o botão (focusInput)
-  await input.fill(ref).catch(() => undefined);
-  await input.dispatchEvent('input').catch(() => undefined); // garante o x-model
-  // Botão de busca é ícone sem texto; espera habilitar e clica. Enter como reforço.
-  const searchBtn = page.locator('button.msc-search-autocomplete__search');
-  if ((await searchBtn.count().catch(() => 0)) > 0) {
-    await searchBtn.click({ timeout: 5000 }).catch(() => undefined);
+  if ((await input.count().catch(() => 0)) === 0) return { filled: false, apiJson: null };
+
+  // A SPA da MSC busca um JSON estruturado por baixo (result.ContainersInfo[],
+  // event.Date/Location/Description…) e só preenche os templates Alpine. Em vez de
+  // raspar o DOM frágil, CAPTURAMOS essa resposta JSON direto da rede — dados
+  // limpos (nossa "própria API"). Filtra por content-type JSON + chaves da MSC.
+  let apiJson: string | null = null;
+  const onResp = async (resp: import('playwright').Response) => {
+    try {
+      const ct = resp.headers()['content-type'] || '';
+      if (!/json/i.test(ct)) return;
+      const text = await resp.text();
+      if (/"ContainersInfo"|"BillOfLadingNumber"|"GeneralTrackingInfo"/i.test(text)) {
+        apiJson = text;
+      }
+    } catch {
+      /* best-effort */
+    }
+  };
+  page.on('response', onResp);
+
+  try {
+    await input.scrollIntoViewIfNeeded().catch(() => undefined);
+    await input.click().catch(() => undefined); // foca → habilita o botão (focusInput)
+    await input.fill(ref).catch(() => undefined);
+    await input.dispatchEvent('input').catch(() => undefined); // garante o x-model
+    // Botão de busca é ícone sem texto; espera habilitar e clica. Enter como reforço.
+    const searchBtn = page.locator('button.msc-search-autocomplete__search');
+    if ((await searchBtn.count().catch(() => 0)) > 0) {
+      await searchBtn.click({ timeout: 5000 }).catch(() => undefined);
+    }
+    await input.press('Enter').catch(() => undefined);
+    // Espera a XHR de tracking chegar (poll até ~12s) e a SPA assentar.
+    for (let i = 0; i < 24 && !apiJson; i++) await page.waitForTimeout(500);
+    await page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => undefined);
+  } finally {
+    page.off('response', onResp);
   }
-  await input.press('Enter').catch(() => undefined);
-  // Loader Alpine (isLoading) aparece e some quando os resultados populam.
-  await page.waitForTimeout(1500);
-  await page.waitForLoadState('networkidle', { timeout: 20_000 }).catch(() => undefined);
-  return true;
+  return { filled: true, apiJson };
 }

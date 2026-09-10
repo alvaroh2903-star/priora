@@ -125,6 +125,8 @@ export interface SBScrapeResult {
   inventory?: DomInventory;
   /** Diagnóstico do driver de formulário (ex.: ShipmentLink): popup? valor? etc. */
   diag?: Record<string, unknown>;
+  /** JSON bruto capturado da API interna do portal (ex.: MSC), quando aplicável. */
+  apiJson?: string;
   error?: string;
 }
 
@@ -329,6 +331,7 @@ export async function driveTrackingPage(
   // servlet legado da Evergreen. `activePage` aponta p/ onde ler o resultado.
   let activePage: Page = page;
   let diag: Record<string, unknown> | undefined;
+  let apiJson: string | undefined; // JSON da API interna (ex.: MSC)
 
   // Se a referência ainda NÃO apareceu, o deep link não auto-buscou: preenche o
   // formulário e submete (muitos portais exigem). Reusa o tryFillSearch.
@@ -362,8 +365,17 @@ export async function driveTrackingPage(
           };
         }
       } else if (isMsc) {
-        filled = await driveMscForm(page, opts.reference);
-        if (filled) diag = { driver: 'msc', urlAfter: page.url() };
+        const r = await driveMscForm(page, opts.reference);
+        filled = r.filled;
+        if (r.apiJson) apiJson = r.apiJson;
+        if (filled) {
+          diag = {
+            driver: 'msc',
+            apiJsonCaptured: Boolean(r.apiJson),
+            apiJsonLen: r.apiJson?.length || 0,
+            urlAfter: page.url(),
+          };
+        }
       }
       if (!filled) filled = await tryFillSearch(page, opts.reference);
       if (filled) {
@@ -441,6 +453,7 @@ export async function driveTrackingPage(
     rowCount,
     inventory,
     diag,
+    apiJson,
     error: navError || undefined,
   };
 }
