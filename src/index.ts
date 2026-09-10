@@ -537,7 +537,7 @@ app.get('/health/scrape-sb', async (req, res) => {
     let events: unknown[] = [];
     let containers: unknown[] = [];
     try {
-      const parsed = extractCarrierEvents(sb.html);
+      const parsed = extractCarrierEvents(sb.html, sb.apiJson);
       events = parsed;
       containers = deriveContainers(parsed, firstContainerNo(sb.html));
     } catch { /* best-effort */ }

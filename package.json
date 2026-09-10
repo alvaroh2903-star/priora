@@ -21,6 +21,7 @@
     "cma:selftest": "ts-node src/browser/carriers/scrapers/cmaSelftest.ts",
     "hmm:selftest": "ts-node src/browser/carriers/scrapers/hmmSelftest.ts",
     "evergreen:selftest": "ts-node src/browser/carriers/scrapers/evergreenSelftest.ts",
+    "msc:selftest": "ts-node src/browser/carriers/scrapers/mscSelftest.ts",
     "events:selftest": "ts-node src/browser/carriers/scrapers/demurrageEventsSelftest.ts",
     "demurrage:calc": "ts-node src/demurrage/calculatorSelftest.ts",
     "auth:selftest": "ts-node src/auth/accountSwitchSelftest.ts",

@@ -61,7 +61,7 @@ Legenda **Anti-bot**: 🔴 Cloudflare interativo · 🟠 aceite/anti-bot leve ·
 | `hapag` | Hapag-Lloyd | HLCU, HLXU, UACU | SPA "Tracking BETA" (Vue/Quasar) | `?booking=`/`?container=` | 🔴 | ✅ |
 | `maersk` | Maersk | MAEU, MSKU, MRKU | SPA | `/tracking/{ref}` | 🟢 | ✅ (validado ao vivo, 274319835) |
 | `one` | Ocean Network Express | ONEY | SPA | `?trakNoParam=&trakNoTpCdParam=` | 🟢 | ✅ (validado ao vivo, ONEYTA6RA1675800) |
-| `msc` | MSC | MSCU, MEDU | SPA + aceite | a confirmar | 🟠 | ⬜ |
+| `msc` | MSC | MSCU, MEDU | SPA Alpine.js (driver) + **JSON da API interna** | 🟢 | ✅ (validado ao vivo, MEDUY8275040) |
 | `cmacgm` | CMA CGM | CMDU, CMAU, APLU | SPA | a confirmar | ❔ | ⬜ |
 | `cosco` | COSCO | COSU | SPA SCCT (iframe Ant/Vue) | `scct/public/ct/base?trackingType=BILLOFLADING&number=` | 🟢 | ✅ |
 | `hmm` | HMM (Hyundai) | HDMU, HMMU, SGNM… | Formulário (srchBlNo1 + Retrieve) | form-based | 🟢 | ✅ (validado ao vivo; transbordo T/S ignorado) |
@@ -95,6 +95,29 @@ Legenda **Anti-bot**: 🔴 Cloudflare interativo · 🟠 aceite/anti-bot leve ·
   devolução) vive no popup **`frmCntrMove`** (`TYPE=CntrMove`, `target=CntrMoveWin`),
   ainda **não plugado** — validar com uma B/L Evergreen entregue e, se preciso, abrir
   esse popup por contêiner.
+
+**MSC — notas do driver + parser JSON (`driveMscForm` / `extractMscEvents`):**
+- **Form (Alpine.js):** `input#trackingNumber` (x-model) + radios `trackingMode`
+  (0=Container/B/L já `checked`) + botão de busca ÍCONE sem texto
+  (`button.msc-search-autocomplete__search`, desabilitado até focar/ter texto). O
+  driver foca, preenche, dispara `input` e clica o ícone (+ Enter de reforço).
+- **Fonte dos dados = JSON, não DOM:** a página renderiza templates Alpine `x-for`
+  vazios; a SPA busca um JSON estruturado por baixo. O driver **captura essa
+  resposta da rede** (`page.on('response')`, filtro por chaves
+  `ContainersInfo/BillOfLadingNumber/GeneralTrackingInfo`) e o parser lê o JSON —
+  robusto, sem seletores. Anti-bot 🟢 (o portal carregou sem Cloudflare/DataDome).
+- **Forma do JSON:** `Data.BillOfLadings[].ContainersInfo[]` → `ContainerNumber`,
+  `ContainerType`, `PodEtaDate`, `Delivered`, `Events[]` (`Date` DD/MM/YYYY,
+  `Location`, `Description`, `Detail:[navio,viagem]`, `Vessel`, `EquipmentHandling`).
+- **Transbordo:** "Full Transshipment Discharged/Loaded" (ex.: Pecem) → `other` pela
+  guarda T/S do `classifyEvent` → NÃO vira `dischargeDate`. A descarga no DESTINO
+  ("Import Discharged from Vessel" em Manaus) é que conta.
+- **Exemplo validado:** `MEDUY8275040` (Qingdao → Manaus, T/S Pecem) → contêiner
+  MSMU7811290 `40' HIGH CUBE`, 5 eventos, **em trânsito** (`Delivered:false`,
+  POD ETA 12/09/2026) → descarga/retirada/devolução `null` (correto, não inventa).
+- **Pendente:** validar com uma B/L MSC **entregue** para confirmar os termos exatos
+  de descarga/retirada/devolução no destino, e **plugar na produção** (hoje o driver
+  + captura de JSON só rodam no `driveTrackingPage`/diagnóstico — ver §6).
 
 ---
 

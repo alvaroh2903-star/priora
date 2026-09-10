@@ -8,6 +8,7 @@ import { extractOoclEvents } from './oocl';
 import { extractCmaEvents } from './cma';
 import { extractHmmEvents } from './hmm';
 import { extractEvergreenEvents } from './evergreen';
+import { extractMscEvents } from './msc';
 
 /**
  * Priora — Dispatcher multi-armador de extração de eventos.
@@ -16,8 +17,18 @@ import { extractEvergreenEvents } from './evergreen';
  * desenha do seu jeito). É aqui que se PLUGA um armador novo: 1) escreve o
  * `extractXxxEvents` no seu arquivo; 2) adiciona um `if` de assinatura aqui.
  * O fluxo (scrape-sb, pipeline de produção) chama SÓ esta função.
+ *
+ * `apiJson` (opcional): JSON estruturado capturado da API interna do portal
+ * (ex.: MSC). Quando presente e reconhecido, tem PRIORIDADE sobre o HTML — é a
+ * fonte mais limpa/robusta ("nossa própria API").
  */
-export function extractCarrierEvents(html: string): TrackingEvent[] {
+export function extractCarrierEvents(html: string, apiJson?: string): TrackingEvent[] {
+  // MSC — JSON da API interna (Data.BillOfLadings[].ContainersInfo[].Events[]).
+  // Preferido ao DOM Alpine, que é só template.
+  if (apiJson) {
+    const m = extractMscEvents(apiJson);
+    if (m.length) return m;
+  }
   // Maersk — transport plan (<li class="transport-plan__list__item">).
   if (/transport-plan__list__item/i.test(html)) {
     const m = extractMaerskEvents(html);
