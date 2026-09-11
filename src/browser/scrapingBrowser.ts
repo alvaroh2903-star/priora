@@ -1,5 +1,11 @@
 import { chromium, Browser, Page } from 'playwright';
-import { acceptCookies, tryFillSearch, driveShipmentLinkForm, driveMscForm } from './carriers/pageUtils';
+import {
+  acceptCookies,
+  tryFillSearch,
+  driveShipmentLinkForm,
+  driveMscForm,
+  driveZimForm,
+} from './carriers/pageUtils';
 import { solveCaptchaIfPresent } from './antiCaptcha';
 
 /**
@@ -377,7 +383,8 @@ export async function driveTrackingPage(
     // atalho e sempre pilotamos o form dedicado (radio B/L + input#NO + Submit).
     const isShipmentLink = /shipmentlink/i.test(page.url());
     const isMsc = /msc\.com/i.test(page.url());
-    const shouldFill = isShipmentLink || isMsc ? !refSeen : !refSeen && !containerSeen;
+    const isZim = /zim\.com/i.test(page.url());
+    const shouldFill = isShipmentLink || isMsc || isZim ? !refSeen : !refSeen && !containerSeen;
     if (shouldFill) {
       let filled = false;
       if (isShipmentLink) {
@@ -405,6 +412,21 @@ export async function driveTrackingPage(
             apiJsonLen: r.apiJson?.length || 0,
             urlAfter: page.url(),
           };
+        }
+      } else if (isZim) {
+        // ZIM: preenche + submete; a busca é gated por hCaptcha. Resolve o captcha
+        // (anti-captcha) e dispara o "Verify"/re-submit. Best-effort — se o
+        // hCaptcha não ceder, os resultados não vêm (reportado honestamente).
+        filled = await driveZimForm(page, opts.reference);
+        if (filled) {
+          const solved = await solveCaptchaIfPresent(page, opts.url).catch(() => false);
+          // Após injetar o token, dispara o Verify e re-submete a busca.
+          await page
+            .locator('[aria-label="Verify Answers"], .button-submit, .chips-search-button')
+            .first()
+            .click({ timeout: 5000 })
+            .catch(() => undefined);
+          diag = { driver: 'zim', hcaptchaSolved: solved };
         }
       }
       if (!filled) filled = await tryFillSearch(page, opts.reference);

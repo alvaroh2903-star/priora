@@ -197,14 +197,32 @@ async function injectRecaptchaToken(page: Page, token: string): Promise<void> {
   }, token);
 }
 
-/** Injeta o token do hCaptcha nos campos de resposta. */
+/** Injeta o token do hCaptcha nos campos de resposta E dispara o callback do site. */
 async function injectHCaptchaToken(page: Page, token: string): Promise<void> {
   await page.evaluate((t: string) => {
+    // 1) Preenche os textareas de resposta (hCaptcha e o compat do reCAPTCHA).
     document
       .querySelectorAll('textarea[name="h-captcha-response"], textarea[name="g-recaptcha-response"]')
       .forEach((el) => {
         (el as HTMLTextAreaElement).value = t;
+        (el as HTMLElement).style.display = '';
       });
+    // 2) Dispara o data-callback do widget, se o site declarou um (muitos sites só
+    //    reagem ao token quando o callback é chamado, não ao textarea sozinho).
+    const boxes = document.querySelectorAll('.h-captcha[data-callback], [data-hcaptcha-widget-id][data-callback]');
+    boxes.forEach((box) => {
+      const cbName = box.getAttribute('data-callback');
+      if (cbName) {
+        const cb = (window as unknown as Record<string, unknown>)[cbName];
+        if (typeof cb === 'function') {
+          try {
+            (cb as (arg: string) => void)(t);
+          } catch {
+            /* callback pode lançar; ignora */
+          }
+        }
+      }
+    });
   }, token);
 }
 

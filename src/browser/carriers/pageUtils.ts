@@ -245,6 +245,28 @@ export async function driveShipmentLinkForm(
 }
 
 /**
+ * Preenche e submete o formulário de busca da ZIM (zim.com/tools/track-a-shipment).
+ * Form simples: `input#shipment-main-search-2` (.chips-input) + submit
+ * `.chips-search-button`. A busca é gated por hCaptcha — a RESOLUÇÃO do captcha e o
+ * "Verify" acontecem no driveTrackingPage (que tem o anti-captcha); aqui só
+ * preenche e dispara a busca. Retorna true se achou o campo.
+ */
+export async function driveZimForm(page: Page, ref: string): Promise<boolean> {
+  const input = page.locator('#shipment-main-search-2, input.chips-input').first();
+  if ((await input.count().catch(() => 0)) === 0) return false;
+  await input.scrollIntoViewIfNeeded().catch(() => undefined);
+  await input.click().catch(() => undefined);
+  await input.fill(ref).catch(() => undefined);
+  const submit = page.locator('.chips-search-button').first();
+  if ((await submit.count().catch(() => 0)) > 0) {
+    await submit.click({ timeout: 5000 }).catch(() => undefined);
+  } else {
+    await input.press('Enter').catch(() => undefined);
+  }
+  return true;
+}
+
+/**
  * Driver DEDICADO da MSC (msc.com/track-a-shipment, SPA em Alpine.js).
  *
  * O form tem `input#trackingNumber` (x-model) + radios `trackingMode` (0=Container/
