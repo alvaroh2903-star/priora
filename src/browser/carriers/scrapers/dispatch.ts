@@ -9,6 +9,7 @@ import { extractCmaEvents } from './cma';
 import { extractHmmEvents } from './hmm';
 import { extractEvergreenEvents } from './evergreen';
 import { extractMscEvents } from './msc';
+import { extractYangMingEvents } from './yangming';
 
 /**
  * Priora — Dispatcher multi-armador de extração de eventos.
@@ -70,6 +71,12 @@ export function extractCarrierEvents(html: string, apiJson?: string): TrackingEv
   if (/shipmentlink|TDB1_CargoTracking/i.test(html)) {
     const eg = extractEvergreenEvents(html);
     if (eg.length) return eg;
+  }
+  // Yang Ming (Next.js) — tabela "Container Status" (grade react-aria): 1 linha/
+  // contêiner com o ÚLTIMO evento. Assinatura: yangming / cargo_tracking_detail.
+  if (/yangming|cargo_tracking_detail/i.test(html)) {
+    const ym = extractYangMingEvents(html);
+    if (ym.length) return ym;
   }
   // Hapag (timeline .hal-event) → tabela genérica <tr>/<td> / grade ARIA.
   return extractHapagOrGeneric(html);

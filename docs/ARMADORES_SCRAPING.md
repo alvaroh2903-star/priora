@@ -65,7 +65,7 @@ Legenda **Anti-bot**: 🔴 Cloudflare interativo · 🟠 aceite/anti-bot leve ·
 | `cmacgm` | CMA CGM | CMDU, CMAU, APLU | SPA | a confirmar | ❔ | ⬜ |
 | `cosco` | COSCO | COSU | SPA SCCT (iframe Ant/Vue) | `scct/public/ct/base?trackingType=BILLOFLADING&number=` | 🟢 | ✅ |
 | `hmm` | HMM (Hyundai) | HDMU, HMMU, SGNM… | Formulário (srchBlNo1 + Retrieve) | form-based | 🟢 | ✅ (validado ao vivo; transbordo T/S ignorado) |
-| `yangming` | Yang Ming | YMLU | Formulário na página | a confirmar | ❔ | ⬜ |
+| `yangming` | Yang Ming | YMLU, YMJA | Next.js (form genérico já busca) | 🟢 | ✅ (validado ao vivo, YMJAB237020139) |
 | `evergreen` | Evergreen (ShipmentLink) | EGLV, EVGL, EMCU | Servlet (driver dedicado: radio B/L + input#NO + Submit) | 🟠 | ✅ (validado ao vivo, EGLV010600577145 → 6 contêineres) |
 | `zim` | ZIM | ZIMU | SPA | `?consnumber=` (contêiner) | ❔ | ⬜ |
 | `pil` | Pacific Int. Lines | PABV, NNPL, PILU | Página + form | `?...&refNo=` | 🟢 | ✅ (histórico completo via Trace, validado ao vivo) |
@@ -120,6 +120,22 @@ Legenda **Anti-bot**: 🔴 Cloudflare interativo · 🟠 aceite/anti-bot leve ·
   valem no produto. Validar via `/health/track?ref=<BL>`.
 - **Pendente:** validar com uma B/L MSC **entregue** para confirmar os termos exatos
   de descarga/retirada/devolução no destino.
+
+**Yang Ming — notas (`extractYangMingEvents`):**
+- **Sem driver dedicado:** app Next.js, o preenchedor genérico já submete a busca.
+  Anti-bot 🟢 (carregou sem Cloudflare/DataDome).
+- **Parser da tabela "Container Status"** (grade react-aria, `<td>`): 1 linha por
+  contêiner, colunas `Container No. | Size | Type | Seal | MoveType | Date/Time |
+  Latest Event | Place | VGM`. Data `YYYY/MM/DD [HH:MM]` → ISO. Tipo = Size+Type
+  (ex.: "40HQ"). SCAC detecta **YMJA** além de YMLU.
+- **Exemplo validado:** `YMJAB237020139` (Shanghai → Rio de Janeiro) → contêiner
+  BMOU6332262 `40HQ`, Latest Event "Empty Returned" 2026/08/25 em Rio Brasil
+  Terminal (embarque já **entregue**).
+- **Limitação a refinar (como Evergreen):** a tabela mostra só o **Latest Event** por
+  contêiner. O histórico DCSA completo (descarga+retirada+devolução) fica na página
+  de detalhe — link do nº do contêiner:
+  `/en/esolution/tracking/cargo_tracking_detail?trackNo=<CNTR>&position=BL_CT&refNo=<BL sem prefixo YMJA>`
+  — URL limpa/determinística, **a plugar** (navegar por contêiner e ler os eventos).
 
 ---
 
