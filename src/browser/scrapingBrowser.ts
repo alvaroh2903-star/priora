@@ -293,6 +293,31 @@ async function waitOutChallenge(page: Page, ms = 45_000): Promise<void> {
 }
 
 /**
+ * Espera DETERMINÍSTICA pelos resultados: em vez de confiar num tempo fixo (que
+ * varia conforme o provedor de navegador — Scrapfly, Browserbase, Browserless,
+ * self-hosted…), sonda o conteúdo de TODOS os frames até a referência OU um nº de
+ * contêiner (ISO 6346) aparecer, ou estourar o prazo. É o que garante que o
+ * comportamento seja o MESMO ao trocar de ferramenta: nada de "torcer p/ 2s bastar".
+ * Retorna true se detectou conteúdo de resultado; false se estourou o prazo.
+ */
+async function waitForResults(
+  page: Page,
+  reference: string | undefined,
+  deadlineMs = 20_000,
+): Promise<boolean> {
+  const deadline = Date.now() + deadlineMs;
+  const refUpper = reference ? reference.toUpperCase() : null;
+  for (;;) {
+    const txt = await collectFramesText(page).catch(() => '');
+    const refSeen = refUpper ? txt.toUpperCase().includes(refUpper) : false;
+    const containerSeen = /\b[A-Z]{4}\d{7}\b/.test(txt);
+    if (refSeen || containerSeen) return true;
+    if (Date.now() >= deadline) return false;
+    await page.waitForTimeout(1000);
+  }
+}
+
+/**
  * Pilota UMA página (local OU remota) até os resultados do rastreio: navega,
  * aceita cookies, espera a SPA/tabela, e se a referência não aparecer preenche
  * o formulário de busca. Retorna HTML + texto + contagem. É a lógica ÚNICA usada
@@ -386,10 +411,13 @@ export async function driveTrackingPage(
       if (filled) {
         await activePage.waitForLoadState('networkidle', { timeout: postWait }).catch(() => {});
         await activePage.waitForSelector(RESULT_SELECTOR, { timeout: 15_000 }).catch(() => {});
-        await activePage.waitForTimeout(2000);
         await acceptCookies(activePage);
       }
     }
+    // Espera DETERMINÍSTICA pelos resultados (agnóstico de provedor): só segue
+    // quando o conteúdo real apareceu (ref/contêiner) — não por tempo fixo. Vale
+    // tanto p/ deep link que auto-carrega quanto p/ form submetido.
+    await waitForResults(activePage, opts.reference).catch(() => undefined);
   }
 
   // Alguns portais escondem os eventos completos atrás de um link "detalhe" que
