@@ -67,7 +67,7 @@ Legenda **Anti-bot**: 🔴 Cloudflare interativo · 🟠 aceite/anti-bot leve ·
 | `hmm` | HMM (Hyundai) | HDMU, HMMU, SGNM… | Formulário (srchBlNo1 + Retrieve) | form-based | 🟢 | ✅ (validado ao vivo; transbordo T/S ignorado) |
 | `yangming` | Yang Ming | YMLU, YMJA | Next.js (form genérico já busca) | 🟢 | ✅ (validado ao vivo, YMJAB237020139) |
 | `evergreen` | Evergreen (ShipmentLink) | EGLV, EVGL, EMCU | Servlet (driver dedicado: radio B/L + input#NO + Submit) | 🟠 | ✅ (validado ao vivo, EGLV010600577145 → 6 contêineres) |
-| `zim` | ZIM | ZIMU | SPA | `?consnumber=` (contêiner) | ❔ | ⬜ |
+| `zim` | ZIM | ZIMU | SPA (form simples) + **hCaptcha** | 🔴 | ⬜ (gated por hCaptcha; solúvel via anti-captcha) |
 | `pil` | Pacific Int. Lines | PABV, NNPL, PILU | Página + form | `?...&refNo=` | 🟢 | ✅ (histórico completo via Trace, validado ao vivo) |
 | `oocl` | OOCL | OOLU | ASPX com formulário | a confirmar | 🟠 | ⬜ |
 
@@ -136,6 +136,21 @@ Legenda **Anti-bot**: 🔴 Cloudflare interativo · 🟠 aceite/anti-bot leve ·
   de detalhe — link do nº do contêiner:
   `/en/esolution/tracking/cargo_tracking_detail?trackNo=<CNTR>&position=BL_CT&refNo=<BL sem prefixo YMJA>`
   — URL limpa/determinística, **a plugar** (navegar por contêiner e ler os eventos).
+
+**ZIM — recon (`ZIMUTRT938698`):**
+- **Anti-bot 🔴 = hCaptcha.** A página `zim.com/tools/track-a-shipment` carrega, mas a
+  busca é gated por um **hCaptcha** (iframe `newassets.hcaptcha.com`, sitekey
+  `40cd15d0-11fd-4fff-a866-17708fb25e7d`, botão "Verify Answers"). Sem resolver o
+  captcha → nenhum resultado (`mentionsRef:false`).
+- **Form (simples):** `input#shipment-main-search-2` (`.chips-input`) +
+  `input[type=submit].chips-search-button`.
+- **Tratabilidade:** hCaptcha é captcha de **TOKEN** → o anti-captcha.com **resolve**
+  (`solveHCaptcha` + saldo). É a MAIS tratável das fortificadas (CMA=DataDome e
+  OOCL=CargoSmart são comportamentais, fora do alcance do anti-captcha). Falta um
+  driver dedicado que: preencha a busca, submeta, resolva o hCaptcha no momento
+  certo, injete o token + dispare o "Verify", e leia os resultados.
+- **Prioridade:** BAIXA — **volume ZERO** de ZIM na operação. Parser dos resultados
+  só valida com um embarque real que passe pelo captcha. Deixado documentado.
 
 ---
 
