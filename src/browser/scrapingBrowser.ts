@@ -358,7 +358,11 @@ export async function driveTrackingPage(
   // Captcha INTERATIVO (reCAPTCHA/hCaptcha/Turnstile) na entrada: resolve via
   // anti-captcha se configurado (no-op rápido quando não há widget). Beneficia
   // tanto o diagnóstico quanto a produção, que compartilham este motor.
-  await solveCaptchaIfPresent(page, opts.url).catch(() => undefined);
+  // EXCEÇÃO: na ZIM o hCaptcha gateia a BUSCA (não o load) — resolver aqui gastaria
+  // um solve à toa (o token expira antes do submit); é tratado no ramo isZim.
+  if (!/zim\.com/i.test(page.url())) {
+    await solveCaptchaIfPresent(page, opts.url).catch(() => undefined);
+  }
   await page.waitForSelector(RESULT_SELECTOR, { timeout: 25_000 }).catch(() => {});
   await page.waitForLoadState('networkidle', { timeout: postWait }).catch(() => {});
   await page.waitForTimeout(2000); // folga p/ Vue/React hidratar
