@@ -144,13 +144,19 @@ Legenda **Anti-bot**: 🔴 Cloudflare interativo · 🟠 aceite/anti-bot leve ·
   captcha → nenhum resultado (`mentionsRef:false`).
 - **Form (simples):** `input#shipment-main-search-2` (`.chips-input`) +
   `input[type=submit].chips-search-button`.
-- **Tratabilidade:** hCaptcha é captcha de **TOKEN** → o anti-captcha.com **resolve**
-  (`solveHCaptcha` + saldo). É a MAIS tratável das fortificadas (CMA=DataDome e
-  OOCL=CargoSmart são comportamentais, fora do alcance do anti-captcha). Falta um
-  driver dedicado que: preencha a busca, submeta, resolva o hCaptcha no momento
-  certo, injete o token + dispare o "Verify", e leia os resultados.
-- **Prioridade:** BAIXA — **volume ZERO** de ZIM na operação. Parser dos resultados
-  só valida com um embarque real que passe pelo captcha. Deixado documentado.
+- **Tratabilidade (validado ao vivo):** o anti-captcha **resolve o hCaptcha** — teste
+  com `ZIMUTRT938698` retornou `diag.hcaptchaSolved:true` (token obtido). PORÉM a
+  busca não completa (`mentionsRef:false`): a ZIM é **React** com um componente
+  **próprio** de captcha (`ZimCaptcha`), dois sitekeys (`site-key` +`less-site-key`)
+  e XHR de tracing (`tracingHelper`/`crud`). Injetar o token no `textarea` do DOM
+  **não registra** — o React só reage ao `onVerify` do widget, que o anti-captcha
+  (proxyless) resolve POR FORA, sem disparar o callback na página.
+- **O que faltaria (alto esforço):** engenharia reversa do `ZimCaptcha` (achar o
+  callback React interno e chamá-lo com o token) OU capturar/replayar o XHR de
+  tracing da ZIM com o token. Site-específico, incerto.
+- **Prioridade:** BAIXA/PARADA — **volume ZERO** de ZIM na operação. A CAPACIDADE de
+  hCaptcha (solver + injeção via callback) fica pronta e **reutilizável** p/ o próximo
+  portal com hCaptcha/reCAPTCHA "padrão" (fora de React). ZIM específico: parado.
 
 ---
 
