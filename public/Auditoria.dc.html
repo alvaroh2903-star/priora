@@ -204,7 +204,7 @@
             <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:9px;margin-top:16px">
               <div style="background:#E7F6EF;border-radius:12px;padding:12px 10px;text-align:center"><div style="font-size:20px;font-weight:800;color:#177D54">{{ sum.ok }}</div><div style="font-size:10.5px;color:#177D54;font-weight:600;margin-top:2px">Consistentes</div></div>
               <div style="background:#FDECEC;border-radius:12px;padding:12px 10px;text-align:center"><div style="font-size:20px;font-weight:800;color:#C2333A">{{ sum.crit }}</div><div style="font-size:10.5px;color:#C2333A;font-weight:600;margin-top:2px">Críticas</div></div>
-              <div style="background:#FDF3E0;border-radius:12px;padding:12px 10px;text-align:center"><div style="font-size:20px;font-weight:800;color:#B9760A">{{ sum.manual }}</div><div style="font-size:10.5px;color:#B9760A;font-weight:600;margin-top:2px">Validação</div></div>
+              <div style="background:#FDF3E0;border-radius:12px;padding:12px 10px;text-align:center"><div style="font-size:20px;font-weight:800;color:#B9760A">{{ sum.manual }}</div><div style="font-size:10.5px;color:#B9760A;font-weight:600;margin-top:2px">Atenções</div></div>
             </div>
           </div>
 
@@ -245,7 +245,7 @@
                     <div style="display:flex;align-items:center;gap:8px"><span style="font-size:14px;font-weight:800;color:#161A2E;font-family:{{ g.titleFont }}">{{ g.title }}</span><span style="width:8px;height:8px;border-radius:50%;background:{{ g.dot }};flex-shrink:0"></span></div>
                     <div style="display:flex;align-items:center;gap:10px;margin-top:3px">
                       <sc-if value="{{ g.hasCrit }}" hint-placeholder-val="{{ false }}"><span style="font-size:11.5px;font-weight:700;color:#C2333A">🔴 {{ g.critN }} {{ g.critWord }}</span></sc-if>
-                      <sc-if value="{{ g.hasManual }}" hint-placeholder-val="{{ false }}"><span style="font-size:11.5px;font-weight:700;color:#B9760A">🟡 {{ g.manualN }} validação</span></sc-if>
+                      <sc-if value="{{ g.hasManual }}" hint-placeholder-val="{{ false }}"><span style="font-size:11.5px;font-weight:700;color:#B9760A">🟡 {{ g.manualN }} atenção</span></sc-if>
                       <sc-if value="{{ g.hasOk }}" hint-placeholder-val="{{ false }}"><span style="font-size:11.5px;font-weight:600;color:#177D54">🟢 {{ g.okN }} {{ g.okWord }}</span></sc-if>
                     </div>
                   </div>
@@ -318,7 +318,7 @@ class Component extends DCLogic {
   STATUS = {
     ok:{ dot:'#1F9D6B', color:'#177D54', label:'Consistente', impBg:'#E7F6EF', impIcon:'m5 12 5 5 9-10' },
     crit:{ dot:'#E5484D', color:'#C2333A', label:'Crítica', impBg:'#FDECEC', impIcon:'M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z' },
-    manual:{ dot:'#E8990C', color:'#B9760A', label:'Validação manual', impBg:'#FDF3E0', impIcon:'M12 8v5M12 16h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0' },
+    manual:{ dot:'#E8990C', color:'#B9760A', label:'Atenção', impBg:'#FDF3E0', impIcon:'M12 8v5M12 16h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0' },
     na:{ dot:'#9AA0B4', color:'#7A8099', label:'Não avaliado', impBg:'#F1F2F8', impIcon:'M12 8v5M12 16h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0' },
     info:{ dot:'#2563EB', color:'#1D4ED8', label:'Informativo', impBg:'#E7F0FE', impIcon:'M12 16v-4M12 8h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0' },
   };
@@ -412,6 +412,51 @@ class Component extends DCLogic {
         gkey:(e.container?('ct::'+e.container):'conhecimento'), key:(e.container?('ct::'+e.container):'conhecimento')+'::'+e.campo }; });
   }
 
+  pesoStatus(s){ return s==='crit'?4:s==='manual'?3:s==='na'?2:s==='ok'?1:0; }
+  // ADAPTER DE APRESENTAÇÃO (PB-001): consolida as SUBVALIDAÇÕES técnicas do motor
+  // em CONCEITOS operacionais. "Existência/Correspondência/Relacionamento/Unicidade/
+  // Consistência" ficam no motor; aqui viram 1 card por conceito (NCMs, Lacre, Peso,
+  // etc.). Campo opcional ausente (peso líquido) não polui; ausência de um lado vira
+  // ATENÇÃO ("campo não localizado"), nunca vermelho. Só para o Pré-Alerta.
+  consolidarRows(evs){
+    var self=this;
+    var MAP={
+      'V-003.2':{label:'Número do contêiner',nivel:'ct'},
+      'V-004.1':{label:'Quantidade de Volumes',nivel:'con'},
+      'V-004.2':{label:'Tipo de Pacote',nivel:'con'},
+      'V-005.1':{label:'Peso Bruto',nivel:'ct'},
+      'V-005.2':{label:'Peso Bruto Total',nivel:'con'},
+      'V-006.1':{label:'Peso Líquido',nivel:'ct',opcional:true},
+      'V-006.2':{label:'Peso Líquido Total',nivel:'con',opcional:true},
+      'V-007.1':{label:'Cubagem',nivel:'ct'},
+      'V-007.2':{label:'Cubagem Total',nivel:'con'},
+      'V-008.1':{label:'Lacre',nivel:'ct'},
+      'V-008.2':{label:'Lacre',nivel:'ct'},
+      'V-012.2':{label:'NCMs',nivel:'con'}
+    };
+    var PORTO={ 'POL':'Porto de Origem (POL)','POD':'Porto de Destino (POD)','Place of Receipt':'Local de Recebimento','Place of Delivery':'Local de Entrega' };
+    var byKey={}, order=[];
+    function val(e,i){ return (e.valores&&e.valores[i])?e.valores[i].valor:'—'; }
+    function push(label,nivel,e,opcional){
+      var container=(nivel==='ct')?(e.container||null):null;
+      if(opcional && val(e,0)==='—' && val(e,1)==='—') return; // opcional ausente → não renderiza
+      var key=(container?('ct::'+container):'con')+'::'+label;
+      var st=self.statusKey(e.resultado), cur=byKey[key];
+      if(!cur){ byKey[key]={ field:label,status:st,master:val(e,0),house:val(e,1),impact:e.motivo,container:container,gkey:(container?('ct::'+container):'conhecimento'),key:key }; order.push(key); }
+      else { if(self.pesoStatus(st)>self.pesoStatus(cur.status)){ cur.status=st; cur.impact=e.motivo; } if(cur.master==='—'&&val(e,0)!=='—')cur.master=val(e,0); if(cur.house==='—'&&val(e,1)!=='—')cur.house=val(e,1); }
+    }
+    (evs||[]).forEach(function(e){
+      var sub=e.subvalidacao||'';
+      if(sub.indexOf('V-009.2')===0){ var lab=PORTO[e.campo]; if(lab)push(lab,'con',e); return; }
+      if(sub==='V-008.3'){ if(self.statusKey(e.resultado)!=='ok')push('Unicidade do lacre','con',e); return; } // só mostra se HÁ problema
+      var m=MAP[sub]; if(m)push(m.label,m.nivel,e,m.opcional);
+    });
+    var rows=order.map(function(k){ return byKey[k]; });
+    // Campo que deveria existir mas está só de um lado → ATENÇÃO, não cinza/vermelho (§32).
+    rows.forEach(function(r){ if(r.status==='na'){ var mHas=r.master&&r.master!=='—', hHas=r.house&&r.house!=='—'; if(mHas!==hHas){ r.status='manual'; r.impact='Campo não localizado no '+(mHas?'HBL':'MBL')+' — confirmar.'; } } });
+    return rows;
+  }
+
   toggleGroup(g){ this.setState(function(s){return {openGroup:s.openGroup===g?null:g};}); }
   toggleEv(k){ this.setState(function(s){return {openEv:s.openEv===k?null:k};}); }
   viewPdf(row){
@@ -497,17 +542,19 @@ class Component extends DCLogic {
       audits:((sel&&sel.auditorias)||[]).map(function(a){ var ad=AUD_DESC[a]||{icon:'M9 11l3 3L22 4',desc:''}; return {icon:ad.icon, name:a, desc:ad.desc}; }) };
 
     var evs=this.filteredEvs();
-    var rows=this.rowsFrom(evs);
+    // PB-001 usa o adapter que consolida subvalidações em conceitos operacionais;
+    // os outros playbooks (CE) mantêm o mapeamento cru por ora.
+    var rows=(st.playbook==='prealerta')?this.consolidarRows(evs):this.rowsFrom(evs);
     var conhecimento=rows.filter(function(r){return !r.container;});
     var ctIds=[], byCt={}; rows.forEach(function(r){ if(r.container){ if(!byCt[r.container]){byCt[r.container]=[];ctIds.push(r.container);} byCt[r.container].push(r); } });
-    var groups=[]; if(conhecimento.length) groups.push(this.buildGroup('conhecimento','Conhecimento','M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z','#EEEBFE','#4327E6',conhecimento,false));
+    var groups=[]; if(conhecimento.length) groups.push(this.buildGroup('conhecimento','Comparações','M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z','#EEEBFE','#4327E6',conhecimento,false));
     ctIds.forEach(function(id){ groups.push(self.buildGroup('ct::'+id, id, 'M12 3 4 7v10l8 4 8-4V7Z M4 7l8 4 8-4M12 11v10','#E7F0FE','#2563EB', byCt[id], true)); });
 
     var cOk=rows.filter(function(r){return r.status==='ok';}).length;
     var cCrit=rows.filter(function(r){return r.status==='crit';}).length;
     var cMan=rows.filter(function(r){return r.status==='manual';}).length;
     var pend=rows.filter(function(r){return r.status==='crit'||r.status==='manual';});
-    var pendencias=pend.map(function(r){ var S=self.STATUS[r.status]; return { field:r.field, where:(r.container?('Container '+r.container):'Conhecimento'), dot:S.dot, statusColor:S.color, statusBg:S.impBg, statusLabel:(r.status==='crit'?'Crítica':'Validação'), onGo:function(){ self.viewPdf(r); } }; });
+    var pendencias=pend.map(function(r){ var S=self.STATUS[r.status]; return { field:r.field, where:(r.container?('Contêiner '+r.container):'Comparações'), dot:S.dot, statusColor:S.color, statusBg:S.impBg, statusLabel:(r.status==='crit'?'Crítica':'Atenção'), onGo:function(){ self.viewPdf(r); } }; });
 
     var pbLabel=(this.PLAYBOOKS.find(function(p){return p.key===st.playbook;})||{}).label||'';
     var playbooks=this.PLAYBOOKS.map(function(p){ var on=(st.playbook===p.key); return { label:p.label, onSelect:function(){ self.selectPlaybook(p.key); }, bg:on?'#fff':'transparent', color:on?'#161A2E':'#6B7188', weight:on?'700':'600', shadow:on?'0 1px 4px rgba(16,20,40,.16)':'none' }; });
