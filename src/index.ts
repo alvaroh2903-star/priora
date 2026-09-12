@@ -19,6 +19,8 @@ import { auditoriaRouter } from './routes/auditoriaRoutes';
 import { chromium } from 'playwright';
 import { withPage } from './browser/browser';
 import { trackShipment, detect, detectCarrier, resolveSearchRef } from './browser/carriers';
+import { mapLimit } from './browser/carriers/concurrency';
+import type { TrackingResult } from './browser/carriers';
 import { tryFillSearch } from './browser/carriers/pageUtils';
 import { getAntiCaptchaBalance, solveRecaptchaV2 } from './browser/antiCaptcha';
 import { fetchViaUnblocker, isUnblockerConfigured } from './browser/webUnblocker';
@@ -591,15 +593,61 @@ app.get('/health/scrape-sb', async (req, res) => {
  * `trackShipment` REAL — o mesmo que `/api/demurrage/bot/enrich` usa por baixo —
  * que detecta o armador, escolhe o navegador (Scraping Browser p/ os difíceis) e
  * roda o scraper do portal. Serve para provar o fluxo automático ponta a ponta
- * SEM login. Uso: /health/track?token=<DIAG_TOKEN>&ref=<BL>[&carrier=hapag]
+ * SEM login.
+ * Uso (1 ref, resultado completo): /health/track?token=<DIAG_TOKEN>&ref=<BL>[&carrier=hapag]
+ * Uso (LOTE, resumo enxuto):       /health/track?token=<DIAG_TOKEN>&refs=<BL1,BL2,...>[&c=2]
+ *   — carimba vários armadores num link só (concorrência `c`, padrão 2, teto 12 refs).
  */
+function trackSummary(ref: string, result: TrackingResult, ms: number) {
+  return {
+    ref,
+    carrier: result.carrierName,
+    ok: result.ok,
+    ms,
+    eventsCount: result.events?.length || 0,
+    needsCaptcha: result.needsCaptcha,
+    containers: (result.containers || []).map((c) => ({
+      numero: c.numero,
+      tipo: c.tipo,
+      dischargeDate: c.dischargeDate,
+      gateOut: c.gateOut,
+      emptyReturn: c.emptyReturn,
+      lastFreeDay: c.lastFreeDay,
+    })),
+    message: result.message,
+  };
+}
+
 app.get('/health/track', async (req, res) => {
   const token = (process.env.DIAG_TOKEN || '').trim();
   if (!token) return res.status(404).json({ error: 'Desativado (defina DIAG_TOKEN).' });
   if (String(req.query.token || '') !== token) return res.status(401).json({ error: 'token inválido.' });
-  const ref = String(req.query.ref || '').trim();
-  if (!ref) return res.status(400).json({ error: 'Informe ?ref=<BL|contêiner|booking>.' });
   const carrierId = req.query.carrier ? String(req.query.carrier).trim() : undefined;
+
+  // Modo LOTE: ?refs=a,b,c — roda o trackShipment REAL em vários e resume. Cada
+  // raspagem leva ~30-90s; com concorrência 2, 4 refs ≈ 2-3 min (pode ajustar &c=).
+  const refsRaw = String(req.query.refs || '').trim();
+  if (refsRaw) {
+    const refs = Array.from(
+      new Set(refsRaw.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean)),
+    ).slice(0, 12);
+    if (refs.length === 0) return res.status(400).json({ error: 'refs vazio.' });
+    const c = Math.min(Math.max(parseInt(String(req.query.c || '2'), 10) || 2, 1), 4);
+    const startedAt = Date.now();
+    const results = await mapLimit(refs, c, async (r) => {
+      const t0 = Date.now();
+      try {
+        return trackSummary(r, await trackShipment(r, { carrierId }), Date.now() - t0);
+      } catch (e) {
+        return { ref: r, ok: false, ms: Date.now() - t0, error: (e as Error).message };
+      }
+    });
+    const okCount = results.filter((r) => r.ok).length;
+    return res.json({ mode: 'batch', count: results.length, ok: okCount, ms: Date.now() - startedAt, results });
+  }
+
+  const ref = String(req.query.ref || '').trim();
+  if (!ref) return res.status(400).json({ error: 'Informe ?ref=<BL|contêiner|booking> ou ?refs=a,b,c.' });
   const startedAt = Date.now();
   try {
     const result = await trackShipment(ref, { carrierId });
