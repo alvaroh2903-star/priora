@@ -74,6 +74,47 @@ Legenda **Anti-bot**: 🔴 Cloudflare interativo · 🟠 aceite/anti-bot leve ·
 > Detecção (ref → armador) e a URL de rastreio **já funcionam para os 12**. O que
 > falta nos ⬜ é só o tradutor do DOM — capturado quando tivermos um nº real.
 
+## 3.1 Validados + modo de operação (resumo executivo)
+
+**✅ Raspando ponta a ponta na PRODUÇÃO (validado ao vivo) — 9:**
+Hapag · Maersk · ONE · COSCO · PIL · HMM · Evergreen · MSC · Yang Ming
+
+**🔒 `scrapeBlocked` (anti-bot comportamental → produção NÃO abre sessão Scrapfly; via API oficial) — 2:**
+CMA (DataDome) · OOCL (Cloudflare + slider CargoSmart)
+
+**⏸️ Parado por escolha (volume zero + hCaptcha em React) — 1:** ZIM
+
+### Como operar cada um (o caminho mais barato/estável)
+| Armador | Acesso | Driver | Fonte dos dados |
+|---|---|---|---|
+| Hapag | deep link (booking/container) | scraper próprio (`scrapeHapag`) | HTML `.hal-event` |
+| Maersk | deep link `/tracking/{ref}` | genérico | HTML `transport-plan` |
+| ONE | deep link `trakNoParam` | genérico | HTML `EventTable` |
+| COSCO | deep link `scct/public/ct/base` (iframe) | genérico | HTML (iframe) |
+| PIL | deep link `refNo` | genérico + clique "Trace" | HTML (histórico completo) |
+| HMM | form (`srchBlNo1` + Retrieve) | genérico | HTML `#shipmentProgress` |
+| Evergreen | form dedicado (radio B/L + `#NO` + Submit) | `drivers.ts:shipmentlink` | HTML (tabela contêineres) |
+| MSC | form Alpine (ícone busca) | `drivers.ts:msc` | **JSON da API interna** (capturado da rede) |
+| Yang Ming | form (genérico já submete) | genérico | HTML `Container Status` |
+| CMA / OOCL | — | — | **API oficial** (scraping bloqueado) |
+| ZIM | — | `drivers.ts:zim` (parado) | — |
+
+> **Regra geral de custo:** deep link (1 navegação, resultado auto-carregado) é mais
+> barato que form (navegação + interação). Onde há deep link confirmado, ele é usado.
+
+### Eficiência de crédito Scrapfly (o que já está no código)
+1. **Cache com TTL** (`BOT_RESULT_TTL_HOURS`, 12h): `enrichOne` não re-raspa uma
+   referência fresca — reusa o resultado em disco. É a maior economia.
+2. **`scrapeBlocked`** (CMA/OOCL/ZIM): a produção **nem abre sessão** no navegador
+   remoto — devolve "use API" na hora. Zero crédito em falha garantida.
+3. **`waitForResults`** (espera por conteúdo): a sessão encerra assim que o dado
+   aparece, em vez de segurar tempo fixo — sessões mais curtas.
+4. **Acúmulo no store** (`saveBotResult` faz merge de eventos): reconstrói o
+   histórico ao longo das raspagens periódicas — não precisa re-raspar páginas de
+   detalhe (que ainda gastariam sessão e batem em anti-bot).
+5. **Concorrência limitada** (`BOT_CONCURRENCY`, 2) + **teto de lote**
+   (`BOT_MAX_BATCH`, 10): controla o paralelismo do `enrich-batch`.
+
 **Evergreen (ShipmentLink) — notas do driver dedicado (`driveShipmentLinkForm`):**
 - **Form "Quick Tracking":** radios `#s_bl/#s_cntr/#s_bk` (tipo) + `input#NO`
   (`maxlength=12`) + `<input type=button value=Submit onclick=frmSubmit(13,2)>`.
