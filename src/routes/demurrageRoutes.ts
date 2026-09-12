@@ -38,12 +38,13 @@ interface PortalDates {
   gateOut: string | null;
   emptyReturn: string | null;
   dischargeDate: string | null;
+  availableDate: string | null;
 }
 
 /** Datas do PORTAL (raspadas, cache do bot) por número de contêiner normalizado. */
 function portalDatesByContainer(): Map<string, PortalDates> {
   const score = (x: PortalDates) =>
-    (x.gateOut ? 1 : 0) + (x.emptyReturn ? 1 : 0) + (x.dischargeDate ? 1 : 0);
+    (x.gateOut ? 1 : 0) + (x.emptyReturn ? 1 : 0) + (x.dischargeDate ? 1 : 0) + (x.availableDate ? 1 : 0);
   const map = new Map<string, PortalDates>();
   const all = getAllBotResults();
   for (const key of Object.keys(all)) {
@@ -55,6 +56,7 @@ function portalDatesByContainer(): Map<string, PortalDates> {
         gateOut: ct.gateOut || null,
         emptyReturn: ct.emptyReturn || null,
         dischargeDate: ct.dischargeDate || null,
+        availableDate: ct.availableDate || null,
       };
       const prev = map.get(refKey(ct.numero));
       if (!prev || score(cur) > score(prev)) map.set(refKey(ct.numero), cur);
@@ -74,6 +76,10 @@ function mergePortalDates(
     ...ct,
     dataRetirada: ct.dataRetirada || pd.gateOut,
     dataDevolucao: ct.dataDevolucao || pd.emptyReturn,
+    // Descarga/disponibilidade vêm SÓ do portal (o e-mail não traz) — usadas como
+    // início da contagem no calcContainer (descarga > disponib. > retirada).
+    dischargeDate: pd.dischargeDate,
+    availableDate: pd.availableDate,
   };
 }
 
@@ -194,7 +200,9 @@ export type ContainerStatus =
   | 'indefinido';
 
 export interface ContainerCalc extends DemurrageContainer {
-  /** Prazo final = retirada + free time (AAAA-MM-DD) ou null. */
+  /** Data que iniciou a contagem (descarga > disponib. > retirada) ou null. */
+  inicioContagem: string | null;
+  /** Prazo final = início da contagem + free time (AAAA-MM-DD) ou null. */
   deadline: string | null;
   /** Dias em demurrage (após o prazo), quando calculável. */
   demurrageDias: number | null;
@@ -210,13 +218,21 @@ export interface ContainerCalc extends DemurrageContainer {
  * NADA é inventado: sem data/free time/diária, os campos ficam null e o status
  * cai para "indefinido".
  */
-function calcContainer(ct: DemurrageContainer, hojeMs: number): ContainerCalc {
-  const retiradaMs = parseDateMs(ct.dataRetirada);
+export function calcContainer(ct: DemurrageContainer, hojeMs: number): ContainerCalc {
+  // Início da contagem (decisão confirmada): DESCARGA no destino, com fallback p/
+  // disponibilidade e, por fim, retirada (gate-out) — usa a MELHOR data disponível
+  // sem descartar nenhuma. `inicioContagem` é exposto p/ transparência na UI.
+  const inicioMs =
+    parseDateMs(ct.dischargeDate ?? null) ??
+    parseDateMs(ct.availableDate ?? null) ??
+    parseDateMs(ct.dataRetirada);
+  const inicioContagem =
+    inicioMs != null ? new Date(inicioMs).toISOString().slice(0, 10) : null;
   const devolucaoMs = parseDateMs(ct.dataDevolucao);
   let deadlineMs: number | null = null;
   let deadline: string | null = null;
-  if (retiradaMs != null && ct.freeTimeDias != null) {
-    deadlineMs = retiradaMs + ct.freeTimeDias * MS_DIA;
+  if (inicioMs != null && ct.freeTimeDias != null) {
+    deadlineMs = inicioMs + ct.freeTimeDias * MS_DIA;
     deadline = new Date(deadlineMs).toISOString().slice(0, 10);
   }
 
@@ -243,7 +259,7 @@ function calcContainer(ct: DemurrageContainer, hojeMs: number): ContainerCalc {
     }
   }
 
-  return { ...ct, deadline, demurrageDias, diasRestantes, valor, status };
+  return { ...ct, inicioContagem, deadline, demurrageDias, diasRestantes, valor, status };
 }
 
 export type CardBucket = 'custo' | 'risco' | 'pend';

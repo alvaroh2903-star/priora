@@ -47,9 +47,12 @@ leia-o para o desenho pretendido. Este arquivo resume o **estado atual** e as
   já existe no módulo Demurrage. O portal dá as DATAS; o e-mail dá free time/tarifa.
 - **Início da contagem (confirmado):** configurável por cliente/contrato
   (descarga x disponibilidade). A calculadora aceita `startDate` arbitrário.
-- **TODO de modelo:** reconciliar o cálculo por `dataRetirada` (calcContainer em
-  demurrageRoutes) com a calculadora por faixas (`calculator.ts`) — decidir com
-  dados reais qual evento inicia a contagem por cliente.
+- **Reconciliação (FEITO):** `calcContainer` (demurrageRoutes) inicia a contagem
+  pela **descarga do portal** (fallback: disponibilidade → retirada) e expõe
+  `inicioContagem`. As datas do portal (descarga/disponib./retirada/devolução)
+  entram via `mergePortalDates` — nenhuma é descartada. Free time/diária vêm do
+  e-mail (Clara). Cobertura: `npm run reconciliation:selftest`. (Pendente: tornar o
+  início configurável POR CLIENTE quando o multi-tenant entrar — hoje é global.)
 
 ## Convenções
 - TS `strict`. Comentários e mensagens em **pt-BR**.

@@ -36,6 +36,13 @@ export interface DemurrageContainer {
   dataDevolucao: string | null;
   /** Minuta/nota de débito recebida? true/false/null(desconhecido). */
   minutaRecebida: boolean | null;
+  /**
+   * Datas vindas do PORTAL (bot), preenchidas por mergePortalDates — NÃO pela
+   * Clara. Início da contagem de demurrage por prioridade: descarga > disponib. >
+   * retirada. Opcionais: só existem quando o bot raspou o contêiner.
+   */
+  dischargeDate?: string | null;
+  availableDate?: string | null;
 }
 
 export interface DemurrageExtraction {
