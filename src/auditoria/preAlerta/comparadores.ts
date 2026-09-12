@@ -55,7 +55,61 @@ export function cmpNumeroExato(
     : { resultado: 'Divergencia', motivo: `Divergência: ${a}${u} × ${b}${u} (sem tolerância).` };
 }
 
-/** Texto literal (ex.: tipo de volume no v1 — sem tabela de equivalência, Q2). */
+// Sinônimos de TIPO DE PACOTE → forma canônica. Resolve falsos positivos de
+// grafia (CARTONS × CARTON(S), CTNS × CARTONS, PLTS × PALLETS…) sem forçar
+// consistência entre tipos realmente diferentes (CARTON × PALLET = divergência).
+const PACOTE_SINONIMOS: Record<string, string> = {
+  CARTON: 'CARTON', CARTONS: 'CARTON', CTN: 'CARTON', CTNS: 'CARTON',
+  PALLET: 'PALLET', PALLETS: 'PALLET', PLT: 'PALLET', PLTS: 'PALLET',
+  PACKAGE: 'PACKAGE', PACKAGES: 'PACKAGE', PKG: 'PACKAGE', PKGS: 'PACKAGE', PKGE: 'PACKAGE',
+  BOX: 'BOX', BOXES: 'BOX',
+  CASE: 'CASE', CASES: 'CASE',
+  BAG: 'BAG', BAGS: 'BAG',
+  ROLL: 'ROLL', ROLLS: 'ROLL',
+  DRUM: 'DRUM', DRUMS: 'DRUM',
+  CRATE: 'CRATE', CRATES: 'CRATE',
+  PIECE: 'PIECE', PIECES: 'PIECE', PCS: 'PIECE', PC: 'PIECE',
+  BALE: 'BALE', BALES: 'BALE',
+  SACK: 'SACK', SACKS: 'SACK',
+  BUNDLE: 'BUNDLE', BUNDLES: 'BUNDLE',
+};
+
+/**
+ * Normaliza o tipo de pacote: remove "(s)"/pontuação/espaços/dígitos e mapeia ao
+ * canônico. `conhecido`=true só quando o token está na tabela de sinônimos (para
+ * um tipo não catalogado — ex.: "CAJAS" — virar ATENÇÃO, nunca divergência). PURO.
+ */
+export function normalizarTipoPacote(s: string | null): { chave: string; conhecido: boolean } {
+  const bruto = (s || '').toUpperCase().replace(/\([^)]*\)/g, '').replace(/[^A-Z]/g, '');
+  const canon = PACOTE_SINONIMOS[bruto];
+  return { chave: canon || bruto, conhecido: !!canon };
+}
+
+/**
+ * Compara TIPO DE PACOTE com equivalência controlada: mesma forma canônica →
+ * Consistente; dois tipos CATALOGADOS e diferentes → Divergência; qualquer tipo
+ * não catalogado (sem equivalência conhecida) → Validação Humana ("confirmar
+ * equivalência"), nunca vermelho automático (§22).
+ */
+export function cmpTipoPacote(a: string | null, b: string | null, incerto = false): Comparacao {
+  if (ausente(a) || ausente(b)) {
+    return { resultado: 'NaoAvaliada', motivo: 'Tipo de pacote ausente em um dos documentos.' };
+  }
+  if (incerto) {
+    return { resultado: 'ValidacaoHumana', motivo: 'Leitura incerta — confirmar tipo de pacote no documento.' };
+  }
+  const na = normalizarTipoPacote(a);
+  const nb = normalizarTipoPacote(b);
+  if (na.chave === nb.chave) {
+    return { resultado: 'Consistente', motivo: `Tipo de pacote equivalente (${na.chave}).` };
+  }
+  if (na.conhecido && nb.conhecido) {
+    return { resultado: 'Divergencia', motivo: `Divergência de tipo de pacote: "${a}" × "${b}".` };
+  }
+  return { resultado: 'ValidacaoHumana', motivo: `Confirmar equivalência do tipo de pacote: "${a}" × "${b}".` };
+}
+
+/** Texto literal (ex.: usado onde não há tabela de equivalência). */
 export function cmpTextoLiteral(
   a: string | null,
   b: string | null,

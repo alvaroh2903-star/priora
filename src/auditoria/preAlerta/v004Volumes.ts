@@ -7,7 +7,7 @@
  */
 import { consolidar, Criticidade, ResultadoValidacao } from './estados';
 import { numeroIgual } from './normalizacao';
-import { cmpTextoLiteral } from './comparadores';
+import { cmpTipoPacote } from './comparadores';
 import { Evidencia, Operacao, ResultadoFamilia } from './modelo';
 
 const FONTE = 'MBL';
@@ -52,7 +52,7 @@ export function familiaV004(op: Operacao): ResultadoFamilia {
   // V-004.2 — Tipo de Volume (literal, por House contra o Master).
   for (const h of op.houses) {
     const inc = (master.leituraIncerta ?? []).includes('tipoVolume') || (h.leituraIncerta ?? []).includes('tipoVolume');
-    const cmp = cmpTextoLiteral(master.tipoVolume, h.tipoVolume, inc);
+    const cmp = cmpTipoPacote(master.tipoVolume, h.tipoVolume, inc);
     ev.push(mk('V-004.2', 'Tipo de Volume', cmp.resultado, 'Media', h.nome, [
       { doc: 'MBL', valor: master.tipoVolume ?? '—' },
       { doc: `HBL ${h.nome}`, valor: h.tipoVolume ?? '—' },

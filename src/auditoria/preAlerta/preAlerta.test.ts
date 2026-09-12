@@ -10,6 +10,7 @@ import { normalizarNumero, numeroIgual, validaISO6346 } from './normalizacao';
 import { ContainerDoc, DocPreAlerta, Operacao, Evidencia } from './modelo';
 import { familiaV003 } from './v003Containers';
 import { familiaV004 } from './v004Volumes';
+import { cmpTipoPacote } from './comparadores';
 import { familiaV005 } from './v005PesoBruto';
 import { familiaV006 } from './v006PesoLiquido';
 import { familiaV007 } from './v007Cubagem';
@@ -466,6 +467,17 @@ test('classificarPapel: rótulo no nome (OMBL/OHBL) vence e é confiável', () =
     classificarPapel({ temMBL: false, temHBL: true, tipoDetectado: null, nome: 'x-OHBL.pdf', legivel: true, qtdContainers: 0 }),
     { tipo: 'HBL', papelConfiavel: true },
   );
+});
+
+// ---- tipo de pacote (V-004.2) — equivalência controlada, sem falso positivo ----
+test('cmpTipoPacote: grafias equivalentes → Consistente; tipos diferentes → Divergência; desconhecido → Atenção', () => {
+  assert.equal(cmpTipoPacote('CARTONS', 'CARTON(S)').resultado, 'Consistente');
+  assert.equal(cmpTipoPacote('CTNS', 'CARTONS').resultado, 'Consistente');
+  assert.equal(cmpTipoPacote('PLTS', 'PALLETS').resultado, 'Consistente');
+  assert.equal(cmpTipoPacote('PKGS', 'PACKAGE').resultado, 'Consistente');
+  assert.equal(cmpTipoPacote('CARTON', 'PALLET').resultado, 'Divergencia'); // ambos catalogados e diferentes
+  assert.equal(cmpTipoPacote('BOXES', 'CAJAS').resultado, 'ValidacaoHumana'); // CAJAS sem equivalência → atenção, não vermelho
+  assert.equal(cmpTipoPacote('CARTONS', null).resultado, 'NaoAvaliada');
 });
 
 test('ehConsigneeRocket: Rocket (a agência) = Master; qualquer outro = House', () => {
