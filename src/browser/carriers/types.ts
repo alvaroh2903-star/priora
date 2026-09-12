@@ -130,6 +130,14 @@ export interface CarrierMeta {
    * fallback quando o scraping não traz resultado.
    */
   apiFirst?: boolean;
+  /**
+   * Scraping SABIDAMENTE bloqueado (anti-bot comportamental que não vencemos hoje:
+   * DataDome/CargoSmart, ou captcha que a injeção não cede). Quando true, a
+   * PRODUÇÃO nem abre sessão no navegador remoto (economia de crédito Scrapfly) e
+   * devolve um resultado claro "use API". O diagnóstico (/health/scrape-sb) IGNORA
+   * este flag — continua livre para testar/retestar o portal.
+   */
+  scrapeBlocked?: boolean;
   /** Observações de implementação (o que está confirmado x a verificar). */
   notes?: string;
 }

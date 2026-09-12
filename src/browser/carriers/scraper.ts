@@ -111,6 +111,18 @@ export async function scrapeCarrier(
     fetchedAt: new Date().toISOString(),
   };
 
+  // EFICIÊNCIA (crédito Scrapfly): armadores com scraping SABIDAMENTE bloqueado
+  // (DataDome/CargoSmart/hCaptcha-em-React) NÃO abrem sessão no navegador remoto —
+  // retornam na hora um resultado claro "use API". O diagnóstico ignora este flag.
+  if (carrier.scrapeBlocked) {
+    return {
+      ...base,
+      needsCaptcha: true,
+      message:
+        'Scraping bloqueado por anti-bot comportamental neste portal — integração via API oficial (não gasta crédito de navegador).',
+    };
+  }
+
   // Portais difíceis (Cloudflare/SPA) rodam no navegador remoto do Bright Data;
   // simples, no Chromium local. O corpo do scraper é o MESMO nos dois casos.
   const useRemote = shouldUseScrapingBrowser(carrier);

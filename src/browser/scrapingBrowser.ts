@@ -1,11 +1,6 @@
 import { chromium, Browser, Page } from 'playwright';
-import {
-  acceptCookies,
-  tryFillSearch,
-  driveShipmentLinkForm,
-  driveMscForm,
-  driveZimForm,
-} from './carriers/pageUtils';
+import { acceptCookies, tryFillSearch } from './carriers/pageUtils';
+import { findCarrierDriver } from './carriers/drivers';
 import { solveCaptchaIfPresent } from './antiCaptcha';
 
 /**
@@ -357,10 +352,10 @@ export async function driveTrackingPage(
   await acceptCookies(page);
   // Captcha INTERATIVO (reCAPTCHA/hCaptcha/Turnstile) na entrada: resolve via
   // anti-captcha se configurado (no-op rápido quando não há widget). Beneficia
-  // tanto o diagnóstico quanto a produção, que compartilham este motor.
-  // EXCEÇÃO: na ZIM o hCaptcha gateia a BUSCA (não o load) — resolver aqui gastaria
-  // um solve à toa (o token expira antes do submit); é tratado no ramo isZim.
-  if (!/zim\.com/i.test(page.url())) {
+  // tanto o diagnóstico quanto a produção, que compartilham este motor. EXCEÇÃO:
+  // portais cujo driver marca entrySolve:false (ZIM) — o captcha gateia a BUSCA,
+  // não o load; resolver aqui gastaria um solve à toa (token expira antes do submit).
+  if (findCarrierDriver(page.url())?.entrySolve !== false) {
     await solveCaptchaIfPresent(page, opts.url).catch(() => undefined);
   }
   await page.waitForSelector(RESULT_SELECTOR, { timeout: 25_000 }).catch(() => {});
@@ -382,56 +377,19 @@ export async function driveTrackingPage(
     const body0 = await collectFramesText(page); // varre todos os frames
     const refSeen = body0.toUpperCase().includes(opts.reference.toUpperCase());
     const containerSeen = /\b[A-Z]{4}\d{7}\b/.test(body0);
-    // ShipmentLink (Evergreen) mostra um contêiner de EXEMPLO no próprio form
-    // (EISU1234567), que engana o atalho containerSeen — nesse host ignoramos o
-    // atalho e sempre pilotamos o form dedicado (radio B/L + input#NO + Submit).
-    const isShipmentLink = /shipmentlink/i.test(page.url());
-    const isMsc = /msc\.com/i.test(page.url());
-    const isZim = /zim\.com/i.test(page.url());
-    const shouldFill = isShipmentLink || isMsc || isZim ? !refSeen : !refSeen && !containerSeen;
+    // Driver dedicado do portal (registro em carriers/drivers.ts). Portais com
+    // driver (form gated, exemplo de contêiner no form, captcha na busca, JSON de
+    // API) ignoram o atalho containerSeen; os demais usam o atalho p/ evitar refill.
+    const driver = findCarrierDriver(page.url());
+    const shouldFill = driver ? !refSeen : !refSeen && !containerSeen;
     if (shouldFill) {
       let filled = false;
-      if (isShipmentLink) {
-        const r = await driveShipmentLinkForm(page, opts.reference);
-        if (r) {
-          filled = true;
-          activePage = r.resultPage; // pode ser um popup
-          diag = {
-            driver: 'shipmentlink',
-            submitted: r.submitted,
-            valueAfterFill: r.valueAfterFill,
-            popupOpened: r.popupOpened,
-            cookieVisibleBefore: r.cookieVisibleBefore,
-            urlAfter: activePage.url(),
-          };
-        }
-      } else if (isMsc) {
-        const r = await driveMscForm(page, opts.reference);
-        filled = r.filled;
-        if (r.apiJson) apiJson = r.apiJson;
-        if (filled) {
-          diag = {
-            driver: 'msc',
-            apiJsonCaptured: Boolean(r.apiJson),
-            apiJsonLen: r.apiJson?.length || 0,
-            urlAfter: page.url(),
-          };
-        }
-      } else if (isZim) {
-        // ZIM: preenche + submete; a busca é gated por hCaptcha. Resolve o captcha
-        // (anti-captcha) e dispara o "Verify"/re-submit. Best-effort — se o
-        // hCaptcha não ceder, os resultados não vêm (reportado honestamente).
-        filled = await driveZimForm(page, opts.reference);
-        if (filled) {
-          const solved = await solveCaptchaIfPresent(page, opts.url).catch(() => false);
-          // Após injetar o token, dispara o Verify e re-submete a busca.
-          await page
-            .locator('[aria-label="Verify Answers"], .button-submit, .chips-search-button')
-            .first()
-            .click({ timeout: 5000 })
-            .catch(() => undefined);
-          diag = { driver: 'zim', hcaptchaSolved: solved };
-        }
+      if (driver) {
+        const outcome = await driver.drive(page, opts.reference, opts.url);
+        filled = outcome.filled;
+        if (outcome.resultPage) activePage = outcome.resultPage; // ex.: popup
+        if (outcome.apiJson) apiJson = outcome.apiJson; // ex.: JSON da MSC
+        if (outcome.diag) diag = outcome.diag;
       }
       if (!filled) filled = await tryFillSearch(page, opts.reference);
       if (filled) {

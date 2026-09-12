@@ -115,11 +115,12 @@ export const CARRIERS: CarrierMeta[] = [
     trackingUrl: 'https://www.cma-cgm.com/ebusiness/tracking/search',
     needsLoginForDemurrage: true,
     needsScrapingBrowser: true, // SPA React → render real; protegido por DataDome.
+    scrapeBlocked: true, // DataDome comportamental — não vencemos por código; economiza crédito.
     // Parser DEDICADO scrapers/cma.ts (Date|Moves|Location|Vessel) PRONTO e
     // testado offline. PORÉM o portal é protegido por DataDome (anti-bot
     // comportamental) — o acesso automatizado é bloqueado de forma intermitente.
     // A própria CMA anuncia API-EDI: candidata forte à API oficial (api.cma-cgm.com).
-    notes: 'parser scrapers/cma.ts pronto (Date|Moves|Location|Vessel) + expande "Display Previous Moves". BLOQUEIO: portal com DataDome — scraping frágil. CMA oferece API oficial (API-EDI) → caminho recomendado.',
+    notes: 'parser scrapers/cma.ts pronto (Date|Moves|Location|Vessel) + expande "Display Previous Moves". BLOQUEIO: portal com DataDome — scrapeBlocked (produção não abre sessão). CMA oferece API oficial (API-EDI) → caminho recomendado.',
   },
   {
     id: 'zim',
@@ -133,7 +134,10 @@ export const CARRIERS: CarrierMeta[] = [
         ? `https://www.zim.com/tools/track-a-shipment?consnumber=${encodeURIComponent(ref)}`
         : null,
     needsLoginForDemurrage: true,
-    notes: 'deep link por contêiner (consnumber) a verificar; SPA.',
+    needsScrapingBrowser: true,
+    scrapeBlocked: true, // busca gated por hCaptcha em React (ZimCaptcha) — token resolve mas a
+    // injeção não registra no React; volume ZERO. Produção não abre sessão (economia).
+    notes: 'SPA React; busca gated por hCaptcha (ZimCaptcha, 2 sitekeys). Anti-captcha RESOLVE o token (validado, hcaptchaSolved:true) mas o React ignora a injeção via DOM. scrapeBlocked (produção não abre sessão). Volume zero.',
   },
   {
     id: 'hapag',
@@ -196,7 +200,8 @@ export const CARRIERS: CarrierMeta[] = [
     },
     needsLoginForDemurrage: true,
     needsScrapingBrowser: true, // SPA SCCT + captcha slider → navegador remoto (Scrapfly).
-    notes: 'SCCT em pbcontroltower.digital.oocl.com. Parser DEDICADO scrapers/oocl.ts (Event|Time|Location|Stage|Transport). Captcha de slider na entrada — resolver por código.',
+    scrapeBlocked: true, // Cloudflare + captcha de slider (CargoSmart/AJ-Captcha) comportamental — economiza crédito.
+    notes: 'SCCT em pbcontroltower.digital.oocl.com. Parser DEDICADO scrapers/oocl.ts (Event|Time|Location|Stage|Transport). BLOQUEIO: Cloudflare + slider CargoSmart (comportamental) — scrapeBlocked (produção não abre sessão). API oficial recomendada.',
   },
 ];
 
