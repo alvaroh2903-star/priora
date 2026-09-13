@@ -55,14 +55,15 @@ export const config = {
   },
   /**
    * OCR documental via Mistral — ISOLADO do Gemini (não substitui a Clara nesta
-   * etapa). A credencial é EXCLUSIVA do serviço de OCR (MISTRAL_OCR_API_KEY):
+   * etapa). A credencial é EXCLUSIVA do serviço de OCR (MISTRAL_OCR_KEY):
    * embora a chave possa tecnicamente acessar outras funções da Mistral, o código
    * NÃO a trata como chave genérica. Modelo PINADO (mistral-ocr-4-1) — priorizamos
    * reprodutibilidade a upgrade silencioso; trocar só após benchmark. Lida apenas
    * de process.env; nunca exposta ao front nem a logs.
    */
   mistralOcr: {
-    apiKey: (process.env.MISTRAL_OCR_API_KEY || '').trim(),
+    // Nome canônico MISTRAL_OCR_KEY (fallback MISTRAL_OCR_API_KEY p/ compatibilidade).
+    apiKey: (process.env.MISTRAL_OCR_KEY || process.env.MISTRAL_OCR_API_KEY || '').trim(),
     model: (process.env.MISTRAL_OCR_MODEL || 'mistral-ocr-4-1').trim(),
     // Trava extra: a rota de self-test (que dispara chamada PAGA) só liga com isto.
     selftestEnabled: (process.env.MISTRAL_SELFTEST_ENABLED || '').trim().toLowerCase() === 'true',
@@ -232,7 +233,7 @@ export function isAzureConfigured(): boolean {
   return Boolean(config.azure.clientId && config.azure.clientSecret);
 }
 
-/** Indica se o OCR da Mistral está configurado (MISTRAL_OCR_API_KEY presente). */
+/** Indica se o OCR da Mistral está configurado (MISTRAL_OCR_KEY presente). */
 export function isMistralOcrConfigured(): boolean {
   return Boolean(config.mistralOcr.apiKey);
 }

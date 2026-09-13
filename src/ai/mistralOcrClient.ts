@@ -3,7 +3,7 @@
  *
  * NÃO conecta ao PB-001, ao Rule Engine, à UI nem ao banco. Não substitui a Clara
  * (Gemini) — é um provedor de OCR paralelo em avaliação. A credencial é EXCLUSIVA
- * do OCR (MISTRAL_OCR_API_KEY), lida só de process.env (via config); nunca exposta
+ * do OCR (MISTRAL_OCR_KEY), lida só de process.env (via config); nunca exposta
  * ao front nem a logs. Modelo PINADO em `mistral-ocr-4-1` (reprodutibilidade).
  *
  * Doc oficial (set/2026): SDK `@mistralai/mistralai`, `client.ocr.process({ model,
@@ -55,7 +55,7 @@ export interface MistralOcrResumoSeguro {
 let client: Mistral | null = null;
 function getClient(): Mistral {
   if (!config.mistralOcr.apiKey) {
-    throw new Error('MISTRAL_OCR_API_KEY não configurada.');
+    throw new Error('MISTRAL_OCR_KEY não configurada.');
   }
   if (!client) client = new Mistral({ apiKey: config.mistralOcr.apiKey });
   return client;

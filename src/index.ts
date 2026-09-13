@@ -191,7 +191,7 @@ app.post('/health/mistral-selftest', async (req, res) => {
     return res.status(403).json({ error: 'Desativado (defina MISTRAL_SELFTEST_ENABLED=true para liberar esta chamada paga).' });
   }
   if (!isMistralOcrConfigured()) {
-    return res.status(503).json({ ok: false, provider: 'mistral', error: 'MISTRAL_OCR_API_KEY não configurada.' });
+    return res.status(503).json({ ok: false, provider: 'mistral', error: 'MISTRAL_OCR_KEY não configurada.' });
   }
   try {
     const safe = await rodarSelfTestMistralOcr();

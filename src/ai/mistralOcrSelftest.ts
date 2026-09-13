@@ -6,7 +6,7 @@
  * Registra SOMENTE metadados seguros (provider, model, pagesProcessed, docSizeBytes,
  * textLength, durationMs, status/error) — NUNCA o markdown/texto.
  *
- * CLI:  npm run mistral:selftest   (exige MISTRAL_OCR_API_KEY no ambiente)
+ * CLI:  npm run mistral:selftest   (exige MISTRAL_OCR_KEY no ambiente)
  * Rota: POST /health/mistral-selftest  (usa a mesma função abaixo)
  */
 import fs from 'fs';
@@ -59,7 +59,7 @@ async function main(): Promise<void> {
       JSON.stringify({
         ok: false,
         provider: 'mistral',
-        error: 'MISTRAL_OCR_API_KEY ausente — defina no ambiente para rodar o self-test.',
+        error: 'MISTRAL_OCR_KEY ausente — defina no ambiente para rodar o self-test.',
       }),
     );
     process.exit(0);
