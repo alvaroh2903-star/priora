@@ -69,6 +69,11 @@ async function genericScrape(
   // Sem estrutura reconhecida ainda: texto cru p/ a Clara + diagnóstico honesto.
   const raw = driven.textContent.slice(0, 4000);
   const mentionsRef = raw.toUpperCase().includes(ctx.reference.toUpperCase());
+  // NÃO dizemos "exigiu login": o rastreio dos armadores é PÚBLICO (free time/
+  // tarifa vêm do e-mail). Um campo de senha na página é o widget de login de
+  // MEMBRO, não uma parede — reportá-lo como login confunde (ex.: Yang Ming). O
+  // `needsLogin` fica só como flag. Vazio sem captcha = provável bloqueio
+  // temporário/rate-limit → o scrapeCarrier tenta de novo numa sessão nova.
   return {
     needsCaptcha,
     needsLogin,
@@ -76,11 +81,9 @@ async function genericScrape(
     ok: false,
     message: needsCaptcha
       ? 'Portal exigiu CAPTCHA (resolução entra na próxima etapa).'
-      : needsLogin
-      ? 'Portal exigiu login (autenticação entra na próxima etapa).'
       : mentionsRef
       ? 'Página carregada. Parser específico deste portal a implementar.'
-      : 'Página carregada, mas a referência não apareceu (verificar deep link/seletores).',
+      : 'Página carregada, mas sem resultados — provável bloqueio temporário/rate-limit (nova tentativa recomendada).',
   };
 }
 
@@ -127,14 +130,13 @@ export async function scrapeCarrier(
   // simples, no Chromium local. O corpo do scraper é o MESMO nos dois casos.
   const useRemote = shouldUseScrapingBrowser(carrier);
   const runner = useRemote ? withRemotePage : withPage;
+  const specific = SCRAPERS[carrier.id];
 
   try {
-    return await runner(async (page) => {
-      const specific = SCRAPERS[carrier.id];
-
-      // Caminho do scraper ESPECÍFICO (ex.: Hapag): navega, tenta captcha e roda,
-      // com 1 retry se o captcha persistir.
-      if (specific) {
+    // Caminho do scraper ESPECÍFICO (ex.: Hapag): navega, tenta captcha e roda,
+    // com 1 retry se o captcha persistir.
+    if (specific) {
+      return await runner(async (page) => {
         await page.goto(sourceUrl, { waitUntil: 'domcontentloaded' });
         await solveCaptchaIfPresent(page, sourceUrl);
         let partial = await specific(page, ctx);
@@ -154,13 +156,21 @@ export async function scrapeCarrier(
           };
         }
         return { ...base, ...partial };
-      }
+      });
+    }
 
-      // Caminho GENÉRICO unificado: o driveTrackingPage cuida do goto + cookies +
-      // anti-captcha + drivers dedicados (ShipmentLink/MSC) + captura de JSON.
-      const partial = await genericScrape(page, ctx, sourceUrl);
-      return { ...base, ...partial };
-    });
+    // Caminho GENÉRICO: até 2 tentativas, cada uma numa SESSÃO NOVA (IP/fingerprint
+    // novo do Scrapfly). Só REINTENTA quando o resultado parece TRANSITÓRIO (veio
+    // vazio, sem captcha) — bloqueio temporário/rate-limit costuma ceder com IP
+    // novo (foi o caso da Yang Ming). Sucesso OU parede de captcha param na hora,
+    // sem gastar sessão extra (economia de crédito).
+    const maxAttempts = 2;
+    let partial: Partial<TrackingResult> = {};
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      partial = await runner(async (page) => genericScrape(page, ctx, sourceUrl));
+      if (partial.ok || partial.needsCaptcha) break;
+    }
+    return { ...base, ...partial };
   } catch (err) {
     return {
       ...base,
