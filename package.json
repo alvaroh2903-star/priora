@@ -28,7 +28,8 @@
     "events:selftest": "ts-node src/browser/carriers/scrapers/demurrageEventsSelftest.ts",
     "demurrage:calc": "ts-node src/demurrage/calculatorSelftest.ts",
     "auth:selftest": "ts-node src/auth/accountSwitchSelftest.ts",
-    "rocket:selftest": "ts-node src/rocket/rocketSelftest.ts"
+    "rocket:selftest": "ts-node src/rocket/rocketSelftest.ts",
+    "mistral:selftest": "ts-node src/ai/mistralOcrSelftest.ts"
   },
   "keywords": [
     "outlook",
@@ -41,6 +42,7 @@
     "@azure/msal-node": "^2.13.1",
     "@google/genai": "^2.10.0",
     "@microsoft/microsoft-graph-client": "^3.0.7",
+    "@mistralai/mistralai": "^2.7.0",
     "@supabase/supabase-js": "^2.112.3",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",

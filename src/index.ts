@@ -34,6 +34,8 @@ import { prioraAuthRouter, ensureOrgForUser } from './auth/prioraAuthRoutes';
 import { rocketRouter } from './routes/rocketRoutes';
 import { getSupabase, isSupabaseConfigured } from './db/supabase';
 import { generateStructured, isAiConfigured } from './ai/geminiClient';
+import { isMistralOcrConfigured } from './config';
+import { rodarSelfTestMistralOcr } from './ai/mistralOcrSelftest';
 import { z } from 'zod/v4';
 
 const app = express();
@@ -170,6 +172,36 @@ app.get('/health/ai-selftest', async (_req, res) => {
   }
   aiSelftestCache = { at: Date.now(), body };
   res.json({ ...body, commit });
+});
+
+/**
+ * SMOKE TEST isolado do OCR da Mistral (OCR 4.1). Dispara UMA chamada externa
+ * PAGA, então é POST (não GET) e tem DUAS travas: DIAG_TOKEN + MISTRAL_SELFTEST_ENABLED
+ * =true — para nunca ficar uma rota paga ligada por acidente em produção. Roda o
+ * fixture rasterizado e devolve SÓ metadados seguros (nunca o texto/markdown).
+ * NÃO conecta a PB-001/Rule Engine/UI/banco.
+ *   POST /health/mistral-selftest?token=<DIAG_TOKEN>
+ */
+app.post('/health/mistral-selftest', async (req, res) => {
+  const token = (process.env.DIAG_TOKEN || '').trim();
+  if (!token) return res.status(404).json({ error: 'Desativado (defina DIAG_TOKEN).' });
+  const enviado = String(req.query.token ?? (req.body && (req.body as { token?: unknown }).token) ?? '');
+  if (enviado !== token) return res.status(401).json({ error: 'token inválido.' });
+  if (!config.mistralOcr.selftestEnabled) {
+    return res.status(403).json({ error: 'Desativado (defina MISTRAL_SELFTEST_ENABLED=true para liberar esta chamada paga).' });
+  }
+  if (!isMistralOcrConfigured()) {
+    return res.status(503).json({ ok: false, provider: 'mistral', error: 'MISTRAL_OCR_API_KEY não configurada.' });
+  }
+  try {
+    const safe = await rodarSelfTestMistralOcr();
+    // Log só metadados seguros (jamais markdown/texto).
+    console.log('[mistral-ocr-selftest]', JSON.stringify(safe));
+    return res.status(safe.ok ? 200 : 502).json(safe);
+  } catch (err) {
+    const e = err as { message?: string };
+    return res.status(500).json({ ok: false, provider: 'mistral', error: String(e?.message || err).slice(0, 300) });
+  }
 });
 
 /**
