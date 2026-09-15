@@ -118,6 +118,18 @@ export function isFresh(rec: StoredBotResult, maxAgeMs: number): boolean {
 }
 
 /**
+ * BL "resolvido" (encerrado): tem contêiner(es) e TODOS já têm devolução do vazio
+ * (emptyReturn) — a janela de demurrage fechou e as datas do portal não mudam mais.
+ * ECONOMIA: um BL resolvido é servido do cache PARA SEMPRE (nunca mais abre sessão
+ * no Cloud Browser), mesmo depois de vencer o TTL. É o maior corte de crédito numa
+ * operação com muitos embarques já encerrados.
+ */
+export function isResolved(result: TrackingResult): boolean {
+  const cs = result.containers || [];
+  return cs.length > 0 && cs.every((c) => Boolean(c.emptyReturn));
+}
+
+/**
  * Apaga TODO o cache de rastreio (memória + disco). Usado no reset de troca de
  * conta Microsoft — os resultados vieram dos BLs da conta anterior.
  */

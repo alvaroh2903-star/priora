@@ -319,6 +319,25 @@ async function waitForResults(
 }
 
 /**
+ * ECONOMIA DE CRÉDITO (Cloud Browser cobra por TEMPO + BANDA): bloqueia recursos
+ * pesados e irrelevantes p/ extração — imagens, mídia e fontes. Corta MB (banda) E
+ * acelera o load (menos coisa p/ baixar → sessão mais curta → menos blocos de 30s).
+ * CSS/JS/XHR seguem passando (a SPA e a captura de JSON dependem deles). Best-effort:
+ * se o browser remoto não suportar interceptação, segue sem bloqueio (sem dano).
+ */
+async function blockHeavyResources(page: Page): Promise<void> {
+  try {
+    await page.route('**/*', (route) => {
+      const t = route.request().resourceType();
+      if (t === 'image' || t === 'media' || t === 'font') route.abort().catch(() => undefined);
+      else route.continue().catch(() => undefined);
+    });
+  } catch {
+    /* interceptação pode não ser suportada no remoto — segue sem bloqueio */
+  }
+}
+
+/**
  * Pilota UMA página (local OU remota) até os resultados do rastreio: navega,
  * aceita cookies, espera a SPA/tabela, e se a referência não aparecer preenche
  * o formulário de busca. Retorna HTML + texto + contagem. É a lógica ÚNICA usada
@@ -334,6 +353,9 @@ export async function driveTrackingPage(
 ): Promise<Omit<SBScrapeResult, 'ms'>> {
   const navTimeout = opts.navigationTimeout ?? 90_000;
   const postWait = opts.postLoadWait ?? 8000;
+
+  // Economia de banda/tempo: bloqueia imagens/mídia/fontes ANTES de navegar.
+  await blockHeavyResources(page);
 
   let navError: string | null = null;
   try {

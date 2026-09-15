@@ -1,4 +1,4 @@
-import { mergeEvents, saveBotResult, getBotResult, clearAll } from './demurrageBotStore';
+import { mergeEvents, saveBotResult, getBotResult, clearAll, isResolved } from './demurrageBotStore';
 import { TrackingResult } from '../browser/carriers';
 import { TrackingEvent } from '../browser/carriers/types';
 
@@ -85,6 +85,21 @@ function main(): void {
   check('dischargeDate ainda 2026-08-12', rec?.result.containers?.[0]?.dischargeDate === '2026-08-12');
 
   clearAll();
+
+  console.log('[selftest] isResolved — BL encerrado (todos devolvidos) pula raspagem');
+  const resolvido = result([]);
+  resolvido.containers = [
+    { numero: 'AAAU1111111', tipo: '40HC', status: null, dischargeDate: '2026-08-10', availableDate: null, gateOut: '2026-08-12', emptyReturn: '2026-08-20', lastFreeDay: null },
+    { numero: 'BBBU2222222', tipo: '40HC', status: null, dischargeDate: '2026-08-10', availableDate: null, gateOut: '2026-08-12', emptyReturn: '2026-08-21', lastFreeDay: null },
+  ];
+  check('todos devolvidos → resolvido', isResolved(resolvido) === true);
+  const parcial = result([]);
+  parcial.containers = [
+    { numero: 'AAAU1111111', tipo: null, status: null, dischargeDate: '2026-08-10', availableDate: null, gateOut: null, emptyReturn: '2026-08-20', lastFreeDay: null },
+    { numero: 'BBBU2222222', tipo: null, status: null, dischargeDate: '2026-08-10', availableDate: null, gateOut: null, emptyReturn: null, lastFreeDay: null },
+  ];
+  check('um sem devolução → NÃO resolvido (ainda raspa)', isResolved(parcial) === false);
+  check('sem contêineres → NÃO resolvido', isResolved(result([])) === false);
 
   if (failures === 0) console.log('\n[selftest] ✅ store do bot: acumulação de eventos OK');
   else {

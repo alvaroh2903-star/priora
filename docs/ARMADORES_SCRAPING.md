@@ -102,18 +102,35 @@ CMA (DataDome) · OOCL (Cloudflare + slider CargoSmart)
 > **Regra geral de custo:** deep link (1 navegação, resultado auto-carregado) é mais
 > barato que form (navegação + interação). Onde há deep link confirmado, ele é usado.
 
-### Eficiência de crédito Scrapfly (o que já está no código)
+### Como o Cloud Browser do Scrapfly cobra (confirmado na doc oficial)
+Fonte: [Cloud Browser Billing](https://scrapfly.io/docs/cloud-browser-api/billing).
+**NÃO** é "+25 por chamada" (isso é o Scrape API, outro produto). O Cloud Browser
+(o que usamos via CDP) cobra por:
+- **Tempo de sessão** — blocos de **30s**, arredondado pra cima; **mínimo 5 créditos**
+  por sessão.
+- **Banda** — por **MB** trafegado (varia por plano).
+- **Captcha** — valor fixo por solve, **somado** ao tempo/banda.
+
+Logo, gastar menos = **menos sessões**, **sessões mais curtas** e **menos banda**.
+
+### Eficiência de crédito (o que já está no código)
 1. **Cache com TTL** (`BOT_RESULT_TTL_HOURS`, 12h): `enrichOne` não re-raspa uma
-   referência fresca — reusa o resultado em disco. É a maior economia.
-2. **`scrapeBlocked`** (CMA/OOCL/ZIM): a produção **nem abre sessão** no navegador
-   remoto — devolve "use API" na hora. Zero crédito em falha garantida.
-3. **`waitForResults`** (espera por conteúdo): a sessão encerra assim que o dado
-   aparece, em vez de segurar tempo fixo — sessões mais curtas.
-4. **Acúmulo no store** (`saveBotResult` faz merge de eventos): reconstrói o
-   histórico ao longo das raspagens periódicas — não precisa re-raspar páginas de
-   detalhe (que ainda gastariam sessão e batem em anti-bot).
-5. **Concorrência limitada** (`BOT_CONCURRENCY`, 2) + **teto de lote**
-   (`BOT_MAX_BATCH`, 10): controla o paralelismo do `enrich-batch`.
+   referência fresca — reusa o resultado em disco. **Menos sessões.**
+2. **Pular BL RESOLVIDO** (`isResolved`): BL com TODOS os contêineres já devolvidos
+   (emptyReturn) é servido do cache **para sempre** (mesmo vencido o TTL) — encerrado
+   não muda mais. **Maior corte numa operação com muitos embarques fechados.**
+3. **`scrapeBlocked`** (CMA/OOCL/ZIM): a produção **nem abre sessão** — "use API".
+   **Zero crédito** em falha garantida.
+4. **Bloqueio de recursos pesados** (`blockHeavyResources`): aborta **imagens/mídia/
+   fontes** no navegador — corta **banda** E encurta a sessão (menos blocos de 30s).
+   CSS/JS/XHR seguem (a SPA e a captura de JSON dependem deles). **Menos banda + menos tempo.**
+5. **`waitForResults`** (espera por conteúdo): a sessão encerra assim que o dado
+   aparece, não em tempo fixo. **Sessões mais curtas.**
+6. **Retry só em falha transitória** (1 retry, sessão nova): não gasta sessão extra
+   quando a 1ª já deu certo (o comum nos 9).
+7. **Acúmulo no store** (merge de eventos): reconstrói o histórico entre raspagens —
+   dispensa re-raspar páginas de detalhe (que gastariam sessão e batem em anti-bot).
+8. **Concorrência** (`BOT_CONCURRENCY`, 2) + **teto de lote** (`BOT_MAX_BATCH`, 10).
 
 **Evergreen (ShipmentLink) — notas do driver dedicado (`driveShipmentLinkForm`):**
 - **Form "Quick Tracking":** radios `#s_bl/#s_cntr/#s_bk` (tipo) + `input#NO`
