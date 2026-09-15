@@ -1,4 +1,4 @@
-import { mergeEvents, saveBotResult, getBotResult, clearAll, isResolved } from './demurrageBotStore';
+import { mergeEvents, saveBotResult, getBotResult, clearAll, isResolved, scrapeIntervalMs } from './demurrageBotStore';
 import { TrackingResult } from '../browser/carriers';
 import { TrackingEvent } from '../browser/carriers/types';
 
@@ -100,6 +100,22 @@ function main(): void {
   ];
   check('um sem devolução → NÃO resolvido (ainda raspa)', isResolved(parcial) === false);
   check('sem contêineres → NÃO resolvido', isResolved(result([])) === false);
+
+  console.log('[selftest] scrapeIntervalMs — TTL adaptativo (trânsito × ativo × resolvido)');
+  const ACTIVE = 12 * 3600e3; // 12h
+  const TRANSIT = 72 * 3600e3; // 72h
+  const emTransito = result([]);
+  emTransito.containers = [
+    { numero: 'CCCU3333333', tipo: null, status: null, dischargeDate: null, availableDate: null, gateOut: null, emptyReturn: null, lastFreeDay: null },
+  ];
+  check('em trânsito (sem evento de destino) → TTL longo (72h)', scrapeIntervalMs(emTransito, ACTIVE, TRANSIT) === TRANSIT, scrapeIntervalMs(emTransito, ACTIVE, TRANSIT));
+  const ativo = result([]);
+  ativo.containers = [
+    { numero: 'CCCU3333333', tipo: null, status: null, dischargeDate: '2026-09-11', availableDate: null, gateOut: null, emptyReturn: null, lastFreeDay: null },
+  ];
+  check('descarregado (janela ativa) → TTL curto (12h)', scrapeIntervalMs(ativo, ACTIVE, TRANSIT) === ACTIVE, scrapeIntervalMs(ativo, ACTIVE, TRANSIT));
+  check('resolvido → Infinity (nunca raspa)', scrapeIntervalMs(resolvido, ACTIVE, TRANSIT) === Infinity);
+  check('sem dados (0 contêineres) → TTL curto (busca dado)', scrapeIntervalMs(result([]), ACTIVE, TRANSIT) === ACTIVE);
 
   if (failures === 0) console.log('\n[selftest] ✅ store do bot: acumulação de eventos OK');
   else {

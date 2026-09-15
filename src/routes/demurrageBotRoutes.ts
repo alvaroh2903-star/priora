@@ -6,8 +6,8 @@ import { mapLimit } from '../browser/carriers/concurrency';
 import {
   getBotResult,
   saveBotResult,
-  isFresh,
   isResolved,
+  scrapeIntervalMs,
   getAllBotResults,
 } from '../demurrage/demurrageBotStore';
 import { trackingToDemurrageContainers } from '../demurrage/trackingMapper';
@@ -43,6 +43,7 @@ demurrageBotRouter.get('/status', (_req: AuthedRequest, res) => {
     carriers: listCarriers().length,
     cachedResults: Object.keys(getAllBotResults()).length,
     cacheTtlHours: config.bot.resultTtlMs / 3_600_000,
+    transitTtlHours: config.bot.transitTtlMs / 3_600_000,
     concurrency: config.bot.concurrency,
   });
 });
@@ -141,18 +142,25 @@ async function enrichOne(
   refresh: boolean,
 ) {
   const cached = refresh ? null : getBotResult(ref);
-  // ECONOMIA de crédito Scrapfly — serve do cache SEM abrir sessão quando:
-  //  (a) fresco dentro do TTL, OU
-  //  (b) RESOLVIDO (todos os contêineres devolvidos → encerrado, não muda mais).
-  // BLs encerrados nunca mais gastam crédito, mesmo vencido o TTL.
-  if (cached && (isFresh(cached, config.bot.resultTtlMs) || isResolved(cached.result))) {
-    return {
-      ...shapeEnrich(cached.result),
-      cached: true,
-      resolved: isResolved(cached.result),
-      at: cached.at,
-      organizedByAI: false,
-    };
+  // ECONOMIA de crédito Scrapfly — TTL ADAPTATIVO ao estado do BL: serve do cache
+  // SEM abrir sessão enquanto dentro do intervalo (Infinity=resolvido nunca raspa;
+  // trânsito=espera dias até o navio chegar; ativo=12h p/ pegar retirada/devolução).
+  if (cached) {
+    const interval = scrapeIntervalMs(
+      cached.result,
+      config.bot.resultTtlMs,
+      config.bot.transitTtlMs,
+    );
+    const idadeMs = Date.now() - Date.parse(cached.at);
+    if (Number.isFinite(idadeMs) && idadeMs < interval) {
+      return {
+        ...shapeEnrich(cached.result),
+        cached: true,
+        resolved: isResolved(cached.result),
+        at: cached.at,
+        organizedByAI: false,
+      };
+    }
   }
 
   const result = await trackShipment(ref, { carrierId });

@@ -173,8 +173,16 @@ export const config = {
    * paralelo — proteção contra timeout/OOM no Render e bloqueio nos portais.
    */
   bot: {
+    // TTL "ativo": BL com descarga já detectada (janela de demurrage correndo) —
+    // re-raspa a cada 12h p/ pegar retirada/devolução.
     resultTtlMs:
       parseInt(process.env.BOT_RESULT_TTL_HOURS || '12', 10) * 60 * 60 * 1000,
+    // TTL "em trânsito": BL ainda navegando (sem descarga no destino) — nada muda
+    // até o navio chegar, então fica em ESPERA por vários dias (economia grande de
+    // crédito Scrapfly). Detectar a descarga com alguns dias de atraso NÃO afeta as
+    // datas (o portal dá a data real quando raspamos). Encerrado = nunca mais raspa.
+    transitTtlMs:
+      parseInt(process.env.BOT_TRANSIT_TTL_HOURS || '72', 10) * 60 * 60 * 1000,
     concurrency: Math.max(1, parseInt(process.env.BOT_CONCURRENCY || '2', 10)),
     maxBatch: Math.max(1, parseInt(process.env.BOT_MAX_BATCH || '10', 10)),
   },

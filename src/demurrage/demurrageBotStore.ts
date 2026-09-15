@@ -130,6 +130,29 @@ export function isResolved(result: TrackingResult): boolean {
 }
 
 /**
+ * Intervalo até a PRÓXIMA raspagem, ADAPTATIVO ao estado do BL (economia máxima):
+ *  - RESOLVIDO (todos devolvidos) → Infinity: nunca mais raspa.
+ *  - EM TRÂNSITO (tem contêiner mas SEM nenhum evento de destino — descarga/
+ *    retirada/devolução) → `transitMs` (dias): o navio ainda não chegou, nada muda;
+ *    fica em espera. Pegar a descarga alguns dias depois NÃO altera as datas.
+ *  - ATIVO (já descarregou, janela de demurrage correndo) OU sem dados ainda →
+ *    `activeMs` (12h): re-raspa com frequência p/ pegar retirada/devolução.
+ */
+export function scrapeIntervalMs(
+  result: TrackingResult,
+  activeMs: number,
+  transitMs: number,
+): number {
+  const cs = result.containers || [];
+  if (cs.length > 0 && cs.every((c) => Boolean(c.emptyReturn))) return Infinity; // resolvido
+  const temEventoDestino = cs.some(
+    (c) => c.dischargeDate || c.availableDate || c.gateOut || c.emptyReturn,
+  );
+  const emTransito = cs.length > 0 && !temEventoDestino;
+  return emTransito ? transitMs : activeMs;
+}
+
+/**
  * Apaga TODO o cache de rastreio (memória + disco). Usado no reset de troca de
  * conta Microsoft — os resultados vieram dos BLs da conta anterior.
  */

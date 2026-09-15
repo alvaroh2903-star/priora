@@ -114,11 +114,15 @@ Fonte: [Cloud Browser Billing](https://scrapfly.io/docs/cloud-browser-api/billin
 Logo, gastar menos = **menos sessões**, **sessões mais curtas** e **menos banda**.
 
 ### Eficiência de crédito (o que já está no código)
-1. **Cache com TTL** (`BOT_RESULT_TTL_HOURS`, 12h): `enrichOne` não re-raspa uma
-   referência fresca — reusa o resultado em disco. **Menos sessões.**
-2. **Pular BL RESOLVIDO** (`isResolved`): BL com TODOS os contêineres já devolvidos
-   (emptyReturn) é servido do cache **para sempre** (mesmo vencido o TTL) — encerrado
-   não muda mais. **Maior corte numa operação com muitos embarques fechados.**
+1. **TTL ADAPTATIVO ao estado do BL** (`scrapeIntervalMs`): o intervalo até a
+   próxima raspagem depende de onde o BL está — a economia mais inteligente:
+   - **Em trânsito** (sem descarga no destino): navio ainda navegando, nada muda →
+     fica em ESPERA por dias (`BOT_TRANSIT_TTL_HOURS`, 72h). Pegar a descarga alguns
+     dias depois NÃO altera as datas (o portal dá a data real quando raspamos).
+   - **Ativo** (já descarregou, janela de demurrage correndo): re-raspa a cada 12h
+     (`BOT_RESULT_TTL_HOURS`) p/ pegar retirada/devolução.
+   - **Resolvido** (todos devolvidos, `isResolved`): **nunca mais raspa** (cache
+     eterno). Maior corte numa carteira com muitos embarques fechados.
 3. **`scrapeBlocked`** (CMA/OOCL/ZIM): a produção **nem abre sessão** — "use API".
    **Zero crédito** em falha garantida.
 4. **Bloqueio de recursos pesados** (`blockHeavyResources`): aborta **imagens/mídia/
