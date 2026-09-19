@@ -172,7 +172,15 @@ export async function scrapeCarrier(
     let partial: Partial<TrackingResult> = {};
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       partial = await runner(async (page) => genericScrape(page, ctx, sourceUrl));
-      if (partial.ok || partial.needsCaptcha) break;
+      // Só reintenta em falha TRANSITÓRIA — quando a página nem carregou (bloqueio/
+      // IP, `raw` vazio/curto). Se a página CARREGOU mas o parser não extraiu
+      // (raw com conteúdo), reintentar NÃO resolve e gastaria outra sessão (cara,
+      // ~140 créditos) à toa — para na hora. Sucesso e captcha também param.
+      const transitorio =
+        !partial.ok &&
+        !partial.needsCaptcha &&
+        (!partial.raw || partial.raw.trim().length < 200);
+      if (!transitorio) break;
     }
     return { ...base, ...partial };
   } catch (err) {
