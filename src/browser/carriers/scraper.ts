@@ -5,7 +5,7 @@ import { resolveTrackingUrl, resolveSearchRef } from './registry';
 import { withPage, withRemotePage } from '../browser';
 import { isSBConfigured, driveTrackingPage } from '../scrapingBrowser';
 import { detectCaptcha, detectLogin } from './pageUtils';
-import { scrapeHapag, deriveContainers, firstContainerNo } from './scrapers/hapag';
+import { deriveContainers, firstContainerNo } from './scrapers/hapag';
 import { extractCarrierEvents } from './scrapers/dispatch';
 import { solveCaptchaIfPresent } from '../antiCaptcha';
 import { isAntiCaptchaConfigured } from '../../config';
@@ -18,10 +18,14 @@ import { isAntiCaptchaConfigured } from '../../config';
  * CAPTCHA e captura o texto bruto — base honesta, sem inventar dados.
  */
 
-/** Scrapers específicos por armador (vão crescendo conforme afinamos cada um). */
-const SCRAPERS: Record<string, PortalScraper> = {
-  hapag: scrapeHapag,
-};
+/**
+ * Scrapers ESPECÍFICOS por armador (raro). Hoje vazio: até a Hapag usa o motor
+ * genérico (driveTrackingPage), que tem `waitOutChallenge` (essencial p/ o
+ * Cloudflare interativo da Hapag) + retry + bloqueio de recursos. O parser da
+ * Hapag já é o fallback do dispatch (extractCarrierEvents). Um scraper próprio só
+ * entra aqui se algum portal precisar de um fluxo que o genérico não cobre.
+ */
+const SCRAPERS: Record<string, PortalScraper> = {};
 
 /**
  * Decide se este armador roda no Scraping Browser (navegador remoto que fura
