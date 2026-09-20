@@ -73,6 +73,15 @@ async function genericScrape(
   // Sem estrutura reconhecida ainda: texto cru p/ a Clara + diagnóstico honesto.
   const raw = driven.textContent.slice(0, 4000);
   const mentionsRef = raw.toUpperCase().includes(ctx.reference.toUpperCase());
+  // Resposta do portal que NÃO é defeito nosso: referência inválida/expirada, sem
+  // resultado, ou manutenção (ex.: Hapag "The value ... is invalid" / "Online
+  // Business Services are currently not available"). Reporta a VERDADE — assim não
+  // se confunde BL velha com parser quebrado.
+  const low = raw.toLowerCase();
+  const portalSemDado =
+    /\bis invalid\b|invalid (booking|b\/l|bl|reference|number)|not found|no (results?|data|matching|shipment|records?)|nenhum resultado|n[aã]o encontrad|inv[aá]lid|currently not available|temporarily unavailable|under maintenance|em manuten/.test(
+      low,
+    );
   // NÃO dizemos "exigiu login": o rastreio dos armadores é PÚBLICO (free time/
   // tarifa vêm do e-mail). Um campo de senha na página é o widget de login de
   // MEMBRO, não uma parede — reportá-lo como login confunde (ex.: Yang Ming). O
@@ -85,6 +94,8 @@ async function genericScrape(
     ok: false,
     message: needsCaptcha
       ? 'Portal exigiu CAPTCHA (resolução entra na próxima etapa).'
+      : portalSemDado
+      ? 'Portal respondeu SEM dados: referência inválida/expirada, sem resultado ou em manutenção (não é erro do scraper — checar o número).'
       : mentionsRef
       ? 'Página carregada. Parser específico deste portal a implementar.'
       : 'Página carregada, mas sem resultados — provável bloqueio temporário/rate-limit (nova tentativa recomendada).',
