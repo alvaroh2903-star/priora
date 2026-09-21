@@ -8,7 +8,13 @@
  * Defensivo: qualquer falha vira documento ilegível (6.3 / degradar com elegância).
  */
 import { z } from 'zod/v4';
-import { generateStructuredFromDocument, generateStructuredFromDocuments } from '../../ai/geminiClient';
+import {
+  generateStructured,
+  generateStructuredFromDocument,
+  generateStructuredFromDocuments,
+} from '../../ai/geminiClient';
+import { ocrDocumentoMistral, isMistralOcrConfigured } from '../../ai/mistralOcrClient';
+import { config } from '../../config';
 import { getAttachmentContent } from '../../graph/graphService';
 import { ContainerDoc, DocPreAlerta, Operacao, TipoDoc } from './modelo';
 
@@ -164,6 +170,46 @@ export interface PaginaDoc {
  * Defensivo: páginas que falham no download são ignoradas; se nenhuma vier,
  * documento ilegível.
  */
+/** OCR do PB-001 está no Mistral? (ligado por config E com chave presente). */
+function mistralOcrLigado(): boolean {
+  return config.mistralOcr.enabled && isMistralOcrConfigured();
+}
+
+/**
+ * Caminho NOVO (blueprint 3.11 — camada de OCR substituível): o MISTRAL faz o OCR
+ * (pixels → texto) e o GEMINI ESTRUTURA o texto no ExtractionSchema (texto → campos).
+ * As REGRAS continuam no motor determinístico — nada de regra aqui. Cada anexo é
+ * OCR'd pelo Mistral (base64 data URI; base64 é provisório p/ docs grandes — Files
+ * API fica p/ depois) e os markdowns são concatenados. Retorna null em QUALQUER
+ * falha/vazio para o chamador cair no Gemini-visão (fallback que não quebra a auditoria).
+ */
+async function extrairViaMistral(
+  partes: Array<{ data: string; mimeType: string }>,
+  tipo: TipoDoc,
+  nome: string,
+): Promise<{ doc: DocPreAlerta; tipoDetectado: Extracao['tipoDetectado'] | null } | null> {
+  try {
+    let markdown = '';
+    for (const parte of partes) {
+      const r = await ocrDocumentoMistral(`data:${parte.mimeType};base64,${parte.data}`);
+      if (!r.ok) return null; // erro do Mistral → fallback Gemini-visão
+      markdown += r.pages.map((p) => p.markdown).join('\n\n') + '\n\n';
+    }
+    markdown = markdown.trim();
+    if (!markdown) return null; // OCR vazio → fallback
+    // Gemini em modo TEXTO (sem tokens de imagem): estrutura o markdown no schema.
+    const ai = await generateStructured(
+      ExtractionSchema,
+      SYSTEM_PROMPT,
+      `Tipo esperado deste documento (dica): ${tipo}. O TEXTO abaixo já foi transcrito por OCR ` +
+        `do documento (não há imagem) — ESTRUTURE os campos EXCLUSIVAMENTE a partir dele, sem inventar:\n\n${markdown}`,
+    );
+    return { doc: mapExtracaoParaDoc(ai, nome, tipo), tipoDetectado: ai.tipoDetectado ?? null };
+  } catch {
+    return null; // qualquer exceção → fallback
+  }
+}
+
 export async function extrairDocPreAlertaMultiplo(
   accessToken: string,
   paginas: PaginaDoc[],
@@ -175,6 +221,8 @@ export async function extrairDocPreAlertaMultiplo(
   erro?: string;
   /** Diagnóstico: quantas páginas retornaram bytes do anexo. */
   paginasComBytes?: number;
+  /** Qual OCR foi efetivamente usado (mistral | gemini) — observabilidade. */
+  ocrProvider?: 'mistral' | 'gemini';
 }> {
   const nome = paginas[0]?.nome ?? 'documento';
   let comBytes = 0;
@@ -200,6 +248,15 @@ export async function extrairDocPreAlertaMultiplo(
       return { doc: docIlegivelPreAlerta(nome, tipo), tipoDetectado: null, erro, paginasComBytes: comBytes };
     }
 
+    // NOVO: OCR pelo Mistral → estruturação pelo Gemini (texto). Se falhar/vier
+    // vazio, cai no Gemini-visão abaixo (fallback — a auditoria nunca quebra por isso).
+    if (mistralOcrLigado()) {
+      const viaMistral = await extrairViaMistral(partes, tipo, nome);
+      if (viaMistral) {
+        return { ...viaMistral, paginasComBytes: comBytes, ocrProvider: 'mistral' };
+      }
+    }
+
     const dica =
       partes.length > 1
         ? `As ${partes.length} imagens/PDFs anexados são PÁGINAS do MESMO conhecimento — leia todas como um único documento e consolide os campos.`
@@ -210,7 +267,12 @@ export async function extrairDocPreAlertaMultiplo(
       partes,
       `Tipo esperado deste documento (dica): ${tipo}. ${dica}`,
     );
-    return { doc: mapExtracaoParaDoc(ai, nome, tipo), tipoDetectado: ai.tipoDetectado ?? null, paginasComBytes: comBytes };
+    return {
+      doc: mapExtracaoParaDoc(ai, nome, tipo),
+      tipoDetectado: ai.tipoDetectado ?? null,
+      paginasComBytes: comBytes,
+      ocrProvider: 'gemini',
+    };
   } catch (err) {
     const e = err as { message?: string };
     return {

@@ -939,6 +939,7 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
       papelConfiavel: boolean | null;
       deCache: boolean;
       erro: string | null;
+      ocrProvider: string | null;
     }> = [];
     const extraidos = await mapLimit(listaGrupos, 3, async (grupo) => {
       const temHBL = grupo.some((d) => d.tipo === 'HBL');
@@ -957,6 +958,7 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
       let deCache = false;
       let erro: string | null = null;
       let bytesBaixados: number | null = null;
+      let ocrProvider: string | null = null;
       const emCache = await lerOcrCache(chave);
       if (emCache) {
         doc = emCache.doc;
@@ -977,6 +979,7 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
         tipoDetectado = r.tipoDetectado ?? null;
         erro = ('erro' in r ? r.erro : undefined) ?? null;
         bytesBaixados = ('paginasComBytes' in r ? r.paginasComBytes : undefined) ?? null;
+        ocrProvider = ('ocrProvider' in r ? (r.ocrProvider as string | undefined) : undefined) ?? null;
         if (erro && ehErroIA(erro) && !avisoIA) avisoIA = avisoDeErroIA(erro);
         // Só cacheia leituras BEM-sucedidas (legíveis) — falha/ilegível re-tenta.
         if (doc && doc.legivel) await gravarOcrCache(chave, { doc, tipoDetectado }, nome0);
@@ -1015,6 +1018,7 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
           papelConfiavel: cls ? cls.papelConfiavel : null,
           deCache,
           erro,
+          ocrProvider,
         });
       }
       if (!cls) return null;

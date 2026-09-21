@@ -67,6 +67,12 @@ export const config = {
     model: (process.env.MISTRAL_OCR_MODEL || 'mistral-ocr-4-1').trim(),
     // Trava extra: a rota de self-test (que dispara chamada PAGA) só liga com isto.
     selftestEnabled: (process.env.MISTRAL_SELFTEST_ENABLED || '').trim().toLowerCase() === 'true',
+    /**
+     * OCR do PB-001 via Mistral (Mistral lê → Gemini estrutura → motor aplica as
+     * regras). LIGADO por padrão quando há chave; kill switch: MISTRAL_OCR_ENABLED=false.
+     * Se o Mistral falhar, o pipeline cai automaticamente no Gemini-visão (não quebra).
+     */
+    enabled: (process.env.MISTRAL_OCR_ENABLED || '').trim().toLowerCase() !== 'false',
   },
   /** FedEx Track API (OAuth2 client_credentials). Opcional: sem as chaves, o
    *  rastreio ao vivo fica indisponível, mas o resto do app funciona. */
