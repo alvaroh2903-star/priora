@@ -1,0 +1,5 @@
+# Capturas de diagnóstico contêm OCR bruto / documentos REAIS (dados sensíveis).
+# NUNCA commitar o conteúdo — só este .gitignore e o README.
+*
+!.gitignore
+!README.md
