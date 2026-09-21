@@ -176,27 +176,29 @@ function mistralOcrLigado(): boolean {
 }
 
 /**
- * Caminho NOVO (blueprint 3.11 — camada de OCR substituível): o MISTRAL faz o OCR
+ * Caminho ATIVO (blueprint 3.11 — camada de OCR substituível): o MISTRAL faz o OCR
  * (pixels → texto) e o GEMINI ESTRUTURA o texto no ExtractionSchema (texto → campos).
- * As REGRAS continuam no motor determinístico — nada de regra aqui. Cada anexo é
- * OCR'd pelo Mistral (base64 data URI; base64 é provisório p/ docs grandes — Files
- * API fica p/ depois) e os markdowns são concatenados. Retorna null em QUALQUER
- * falha/vazio para o chamador cair no Gemini-visão (fallback que não quebra a auditoria).
+ * O Gemini NÃO faz mais OCR de visão no pipeline ligado — só texto. As REGRAS
+ * continuam no motor determinístico. Cada anexo é OCR'd pelo Mistral (base64 data
+ * URI; base64 é provisório p/ docs grandes — Files API fica p/ depois) e os markdowns
+ * são concatenados. Devolve o erro real quando falha (para aparecer no ?debug=1).
  */
 async function extrairViaMistral(
   partes: Array<{ data: string; mimeType: string }>,
   tipo: TipoDoc,
   nome: string,
-): Promise<{ doc: DocPreAlerta; tipoDetectado: Extracao['tipoDetectado'] | null } | null> {
+): Promise<{ doc: DocPreAlerta | null; tipoDetectado: Extracao['tipoDetectado'] | null; erro: string | null }> {
   try {
     let markdown = '';
     for (const parte of partes) {
       const r = await ocrDocumentoMistral(`data:${parte.mimeType};base64,${parte.data}`);
-      if (!r.ok) return null; // erro do Mistral → fallback Gemini-visão
+      if (!r.ok) {
+        return { doc: null, tipoDetectado: null, erro: `OCR (Mistral) falhou: ${String(r.error || 'erro').slice(0, 240)}` };
+      }
       markdown += r.pages.map((p) => p.markdown).join('\n\n') + '\n\n';
     }
     markdown = markdown.trim();
-    if (!markdown) return null; // OCR vazio → fallback
+    if (!markdown) return { doc: null, tipoDetectado: null, erro: 'OCR (Mistral) não retornou texto.' };
     // Gemini em modo TEXTO (sem tokens de imagem): estrutura o markdown no schema.
     const ai = await generateStructured(
       ExtractionSchema,
@@ -204,9 +206,13 @@ async function extrairViaMistral(
       `Tipo esperado deste documento (dica): ${tipo}. O TEXTO abaixo já foi transcrito por OCR ` +
         `do documento (não há imagem) — ESTRUTURE os campos EXCLUSIVAMENTE a partir dele, sem inventar:\n\n${markdown}`,
     );
-    return { doc: mapExtracaoParaDoc(ai, nome, tipo), tipoDetectado: ai.tipoDetectado ?? null };
-  } catch {
-    return null; // qualquer exceção → fallback
+    return { doc: mapExtracaoParaDoc(ai, nome, tipo), tipoDetectado: ai.tipoDetectado ?? null, erro: null };
+  } catch (e) {
+    return {
+      doc: null,
+      tipoDetectado: null,
+      erro: `Estruturação (Gemini texto) falhou: ${String((e as { message?: string })?.message || e).slice(0, 240)}`,
+    };
   }
 }
 
@@ -248,13 +254,22 @@ export async function extrairDocPreAlertaMultiplo(
       return { doc: docIlegivelPreAlerta(nome, tipo), tipoDetectado: null, erro, paginasComBytes: comBytes };
     }
 
-    // NOVO: OCR pelo Mistral → estruturação pelo Gemini (texto). Se falhar/vier
-    // vazio, cai no Gemini-visão abaixo (fallback — a auditoria nunca quebra por isso).
+    // OCR pelo Mistral → estruturação pelo Gemini (texto). O Gemini-VISÃO está
+    // DESLIGADO no pipeline ativo: se o Mistral falhar, o documento sai ilegível
+    // (com o erro real no ?debug=1) — NÃO cai na visão do Gemini. O Gemini-visão
+    // abaixo só roda quando o Mistral está desligado (kill switch / sem chave).
     if (mistralOcrLigado()) {
-      const viaMistral = await extrairViaMistral(partes, tipo, nome);
-      if (viaMistral) {
-        return { ...viaMistral, paginasComBytes: comBytes, ocrProvider: 'mistral' };
+      const via = await extrairViaMistral(partes, tipo, nome);
+      if (via.doc) {
+        return { doc: via.doc, tipoDetectado: via.tipoDetectado, paginasComBytes: comBytes, ocrProvider: 'mistral' };
       }
+      return {
+        doc: docIlegivelPreAlerta(nome, tipo),
+        tipoDetectado: null,
+        erro: via.erro || 'OCR (Mistral) falhou.',
+        paginasComBytes: comBytes,
+        ocrProvider: 'mistral',
+      };
     }
 
     const dica =
