@@ -1,8 +1,18 @@
 # Plano de Migração — Demurrage V1 → Demurrage Engine V2
 
-**Data:** 23/09/2026
+**Data:** 23/09/2026 (revisão 2)
 **Base:** `docs/demurrage-blueprint-gap-analysis.md` (diagnóstico aprovado, com as 3 correções de premissa abaixo)
-**Status:** planejamento apenas. Nenhum código será escrito ou alterado nesta etapa.
+**Status:** plano aprovado em linhas gerais. Esta revisão incorpora 7 ajustes pedidos após a primeira aprovação (lista abaixo) e encerra a rodada de planejamento — a partir daqui, só a Fase 1 é iniciada (fundação persistente), começando pela apresentação do schema para aprovação, sem escrever migrations.
+
+## Ajustes incorporados nesta revisão
+
+1. Estratégia explícita de bootstrap/backfill para processos já ativos na virada para V2 — nada ausente é inventado, tudo vira pendência rastreável (ver Fase 1).
+2. Contrato do Tracking Service expandido: timestamp da coleta, fonte/armador, identificador original do evento, status da consulta e referência ao dado bruto para auditoria (ver Fase 5).
+3. Princípio de arquitetura explícito: a Demurrage V2 é exclusivamente consumidora do Tracking Service central — nunca acessa Scrapfly ou o armador diretamente (ver abaixo e Fase 5).
+4. Shadow mode adicionado antes do corte de frontend: V1 permanece produtiva enquanto V2 calcula os mesmos processos em paralelo, só para comparação (ver "Estratégia de coexistência e corte").
+5. Idempotência explícita para scheduler, ingestão de eventos e alertas — contra execução/disparo duplicado (ver Fases 5 e 6).
+6. Fixtures oficiais de cálculo como pré-requisito bloqueante das Fases 2–4, cobrindo off-by-one, House×Master, múltiplos contêineres, mudança de faixa, Empty Return, minuta e tabelas provisórias (nova seção antes da Fase 2).
+7. Separação explícita dos três motores comerciais (Termo por Embarque, Termo Único, Exposição Rocket) como estratégias distintas, não uma função genérica (ver Fase 4).
 
 ## Correções de premissa incorporadas (vs. o diagnóstico anterior)
 
@@ -13,6 +23,10 @@
 ## Princípio geral: sem reescrita destrutiva
 
 A V1 (`src/demurrage/*`, `src/routes/demurrageRoutes.ts`, `public/Demurrage.dc.html`, `public/PortalCliente.dc.html`) **permanece intocada e funcional** até o momento explícito de corte descrito na seção "Estratégia de coexistência e corte" mais abaixo. A V2 nasce em um namespace novo (`src/demurrage-engine/*` — nome proposto, ajustável), com sua própria rota (`/api/demurrage/v2` ou equivalente), sua própria persistência e seus próprios testes, sem tocar nos arquivos da V1 até que uma fase específica diga explicitamente "agora sim, isto afeta a V1".
+
+## Princípio de arquitetura: única porta de saída para tracking
+
+A partir da Fase 5, **toda** a Demurrage V2 (motor, scheduler, UI, Gestão) consome tracking exclusivamente através do Tracking Service central da Priora. Nenhum código de `src/demurrage-engine/*` faz — nem pode fazer — chamada direta a Scrapfly, a um endpoint de armador, ou a qualquer scraper. O adaptador `armadorTrackingSource.ts` (Fase 5) é a única peça do sistema autorizada a conhecer a existência do Tracking Service; todo o resto do motor conhece apenas a porta `ContainerDataSource` (Fase 1), agnóstica de onde o dado veio. Isso vale também para o scheduler (Fase 6): ele decide **quando** pedir uma atualização, nunca **como** — o "como" é sempre delegado ao mesmo adaptador único.
 
 Cada fase abaixo segue este roteiro fixo: **objetivo · arquivos/modelos novos · arquivos existentes afetados · migrations · dependências · testes obrigatórios · condição de aceite · risco de regressão.**
 
@@ -57,19 +71,44 @@ Lista de destinatários (e-mail/webhook) configurada via `config.ts`/variável d
 
 **Migrations:**
 - Decisão de motor de persistência a ser tomada no início da fase (não é uma "migration" em si, é pré-requisito dela): hoje a Priora não tem banco algum, só arquivos JSON planos (`.data/*.json`). Duas opções compatíveis com a infra atual (Render free, sem serviço de banco externo hoje): (a) SQLite em arquivo (ex.: `better-sqlite3`) — mesma filosofia "disco local" já usada por sessão/minutas; (b) Postgres, se/quando a Priora provisionar um serviço de banco. Esta escolha é bloqueante para o início do código da fase, mas não para o desenho — o plano assume uma interface `ContainerRepository` que funciona com qualquer um dos dois.
-- Schema inicial: tabelas/coleções de `container`, `snapshot`, `sourced_field` (genérica ou embutida no `container`).
+- Schema inicial: tabelas/coleções de `container`, `snapshot`, `sourced_field` (genérica ou embutida no `container`) — proposta completa na seção "Schema proposto — Fase 1" ao final deste documento, para aprovação antes de qualquer migration ser escrita.
 - **Backfill (não é migração de schema, é carga inicial):** rodar `emailHeuristicSource` uma vez sobre as threads atualmente identificadas pela V1 para popular a base V2 com um estado inicial equivalente ao que a V1 mostra hoje; e importar os registros existentes de `demurrage-minutas.json`/`demurrage-atividades.json` (via `procKey`) para os novos registros de contêiner/processo, preservando o que já foi feito operacionalmente (ex.: "minuta já solicitada" não pode ser perdido na virada).
+
+**Estratégia de bootstrap para processos já ativos (ponto de atenção explícito):**
+Quando a V2 entra em operação, já existem processos em pleno andamento (contêiner descarregado há dias, alguns já em demurrage) que a V1 está acompanhando via e-mail. O backfill **não inventa histórico que não existe**:
+- Para cada contêiner identificado pela V1 hoje, o backfill cria o contêiner V2 com os campos que a heurística de e-mail conseguir extrair **no momento do backfill**, cada um com `fonte = 'email_heuristic'` e `status = 'preenchido'`.
+- Todo campo que a V1 mostra como "a confirmar" (ou que a heurística de e-mail nunca conseguiu extrair) nasce na V2 com `status = 'pendente'` e `valor = null` — nunca um valor plausível é fabricado para preencher a lacuna, mesmo que isso signifique que o contêiner nasça com o relógio do cliente ou da Rocket incompleto.
+- **Não há tentativa de reconstruir a data de descarga retroativa** a partir de heurísticas (ex.: "data do primeiro e-mail que menciona o contêiner"). Se a Fase 5 (Tracking Service) ainda não estiver acoplada no momento do backfill, `dataDescarga` nasce `pendente` para todo contêiner cuja única fonte disponível seja e-mail — mesmo que o texto do e-mail mencione uma data de retirada/Gate Out (esse valor vai para o campo correto, não é usado como substituto silencioso da descarga).
+- Cada execução do backfill grava um registro em `BackfillRun` (ver schema) com contagem de processos processados, campos marcados como pendentes e erros — para auditoria de quando/como cada contêiner "nasceu" na V2.
+- O backfill é **idempotente**: reexecutá-lo sobre o mesmo conjunto de threads não duplica contêineres nem regride um campo já promovido a uma fonte melhor (ex.: se a Fase 5 já tiver preenchido `dataDescarga` via tracking real, uma nova rodada de backfill de e-mail não pode sobrescrever esse valor — a hierarquia de fontes do Cap. 4 vale desde o primeiro backfill).
 
 **Dependências:** decisão de motor de persistência (acima); nenhuma dependência de Fase 5 (Tracking Service) — a fonte inicial é a heurística de e-mail, tratada desde já como fonte de **contingência**, não prioritária (alinhado ao Cap. 4 do Blueprint: quando a Fase 5 acoplar o Tracking Service real, ele entra como fonte prioritária sem precisar redesenhar o modelo).
 
 **Testes obrigatórios:**
 - CRUD do repositório de contêiner com versionamento de snapshot (nova versão preserva a anterior, não sobrescreve).
 - `emailHeuristicSource` produzindo o mesmo resultado que a V1 produz hoje para o mesmo conjunto de e-mails de teste (teste de caracterização, para garantir que a base V2 nasce equivalente à V1 e não diverge por acidente nesta fase).
-- Backfill idempotente (rodar duas vezes não duplica registros).
+- Backfill idempotente (rodar duas vezes não duplica registros nem regride campo já promovido a fonte melhor — teste explícito desse cenário).
+- Teste dedicado de "nada é inventado": para um contêiner sem `dataDescarga` em nenhuma fonte disponível no momento do backfill, o campo nasce `pendente`/`null`, nunca com um valor derivado de heurística de data de e-mail.
 
-**Condição de aceite:** para um conjunto de threads de teste, a base V2 populada via backfill contém um contêiner por número de contêiner extraído, com o `DadoComFonte` de cada campo preenchido com fonte `email_heuristic` e o mesmo valor que a V1 mostraria hoje.
+**Condição de aceite:** para um conjunto de threads de teste, a base V2 populada via backfill contém um contêiner por número de contêiner extraído, com o `DadoComFonte` de cada campo preenchido com fonte `email_heuristic` (ou `pendente`, quando não encontrado) e o mesmo valor que a V1 mostraria hoje; e um `BackfillRun` registrado com as contagens da execução.
 
-**Risco de regressão:** **nulo para a V1** (nenhum arquivo da V1 é alterado). Risco interno: erro no backfill pode gerar uma base V2 inconsistente — mitigado por rodar o backfill em ambiente de teste antes de qualquer uso real, e por ele ser reexecutável (idempotente) sem side effect na V1.
+**Risco de regressão:** **nulo para a V1** (nenhum arquivo da V1 é alterado). Risco interno: erro no backfill pode gerar uma base V2 inconsistente — mitigado por rodar o backfill em ambiente de teste antes de qualquer uso real, por ele ser reexecutável (idempotente) sem side effect na V1, e pelo registro em `BackfillRun` permitir auditar exatamente o que cada execução fez.
+
+---
+
+## Fixtures oficiais de cálculo — pré-requisito bloqueante das Fases 2–4
+
+Antes de escrever qualquer código das Fases 2, 3 e 4, um conjunto único de fixtures oficiais deve existir e ser revisado — todas as três fases (motor temporal, dois relógios, motor tarifário) são testadas contra o **mesmo** conjunto de casos, para garantir que não há divergência de premissa entre elas. As fixtures cobrem, no mínimo:
+
+1. **Off-by-one:** a tabela literal do Cap. 23.1 do Blueprint (descarga 01/09, FT 14 dias → 14/09:0, 15/09:1, 16/09:2, 20/09:6), mais um caso de FT=0 confirmado e um caso de FT ausente (pendente).
+2. **House × Master divergentes:** um contêiner onde o relógio do cliente vence antes do relógio da Rocket, outro onde é o inverso, e um onde os dois vencem no mesmo dia.
+3. **Múltiplos contêineres por processo:** um processo com 3 contêineres em estados diferentes (um devolvido sem custo, um em demurrage, um ainda dentro do free time) — para validar que a consolidação no processo preserva o detalhamento individual (Cap. 3/25) e não "contamina" um contêiner com o estado de outro.
+4. **Mudança de faixa tarifária:** um contêiner cujo free time é maior que o padrão da tabela do armador, fazendo a primeira diária cair numa faixa que não é a primeira (exemplo do Cap. 24), tanto para Termo Único (faixas paralelas ao FT) quanto para a tabela de armador (Cap. 24.3.1).
+5. **Empty Return:** evento chegando antes da descarga (caso inválido, Cap. 31.5), evento com data retroativa recebido atrasado (Cap. 31.6), e o caso normal (encerra os dois relógios daquele contêiner, não afeta os demais do mesmo processo/BL).
+6. **Minuta:** minuta com data igual ao Empty Return (caso trivial), minuta com data divergente (preserva as duas evidências, usa a da minuta), e minuta chegando depois de um fechamento sem custo, criando custo (vai para reabertura).
+7. **Tabelas provisórias/incompletas:** um cálculo com a tabela da PIL (estimativa por ponto médio, sempre `ESTIMATED_PROVISIONAL`) e um com uma tabela incompleta (Yang Ming/COSCO/ZIM) caindo numa faixa sem dado (`UNAVAILABLE`, nunca aproximação por semelhança).
+
+Essas fixtures vivem em um único local compartilhado (ex.: `src/demurrage-engine/__fixtures__/casos-oficiais.ts` ou equivalente em JSON) e são referenciadas pelos testes das Fases 2, 3 e 4 — não duplicadas em cada fase. Nenhuma dessas fixtures é escrita nesta etapa (a instrução desta rodada é iniciar apenas a Fase 1); elas ficam registradas aqui como o primeiro entregável de código da Fase 2, antes de qualquer linha do motor temporal.
 
 ---
 
@@ -129,9 +168,20 @@ Lista de destinatários (e-mail/webhook) configurada via `config.ts`/variável d
 
 **Objetivo:** substituir o "número solto que a IA encontrou no e-mail" por um motor de tabelas versionadas — tabela Rocket×cliente (Termo por Embarque/Único) e as tabelas de armador do Cap. 24.3.1 — com faixas progressivas em paralelo ao free time e estados `CONFIRMED`/`ESTIMATED`/`ESTIMATED_PROVISIONAL`/`UNAVAILABLE`.
 
+**Separação explícita dos três motores comerciais (não um cálculo genérico):**
+o Blueprint trata Termo por Embarque, Termo Único e Exposição da Rocket como três regras de negócio diferentes (Cap. 24.1/24.2/24.3), com fontes de tabela, gatilhos de vigência e (no caso do Termo Único) lógica de faixa paralela ao free time distintos entre si. A Fase 4 implementa isso como **três estratégias nomeadas e isoláveis**, nunca uma função única "calcula tarifa" com `if`s internos:
+- **`TermoPorEmbarqueEngine`** → usa a Tabela Rocket vinculada ao embarque/termo assinado (Cap. 24.1): `valor = dias_demurrage_cliente × diária da tabela Rocket para o tipo de equipamento`, versão fixada no processo.
+- **`TermoUnicoEngine`** → usa a tabela vigente na data do fato gerador (Cap. 24.2), com o motor de faixas (`bracketEngine`) avançando em paralelo ao free time desde a descarga, sem reiniciar na primeira faixa ao fim do FT.
+- **`ExposicaoRocketEngine`** → usa Master FT + tabela do armador (Cap. 24.3), com os estados `ESTIMATED`/`ESTIMATED_PROVISIONAL`/`CONFIRMED`/`UNAVAILABLE`, totalmente independente da tabela usada para o cliente.
+
+Cada motor produz um `ValorApurado` com um campo `motorComercial` identificando qual dos três o gerou (rastreabilidade obrigatória — nunca dá pra confundir "quanto o cliente paga" com "quanto a Rocket está exposta").
+
 **Arquivos/modelos novos:**
 - `src/demurrage-engine/tariffs/tariffTable.ts` (entidade: armador/Rocket, tipo de equipamento, faixas, vigência, versão, status).
-- `src/demurrage-engine/tariffs/bracketEngine.ts` (posiciona um dia na faixa certa, contando desde a data-âncora, sem reiniciar na 1ª faixa ao fim do free time).
+- `src/demurrage-engine/tariffs/bracketEngine.ts` (posiciona um dia na faixa certa, contando desde a data-âncora, sem reiniciar na 1ª faixa ao fim do free time — reaproveitado pelo `TermoUnicoEngine` e pelo `ExposicaoRocketEngine`, nunca pelo `TermoPorEmbarqueEngine`, que é tarifa fixa por dia).
+- `src/demurrage-engine/tariffs/engines/termoPorEmbarqueEngine.ts`
+- `src/demurrage-engine/tariffs/engines/termoUnicoEngine.ts`
+- `src/demurrage-engine/tariffs/engines/exposicaoRocketEngine.ts`
 - `src/demurrage-engine/tariffs/seed/` (dados iniciais: as 12 tabelas de armador + tabela Rocket×cliente, literalmente copiadas do Blueprint Cap. 24.1/24.3.1).
 - `src/demurrage-engine/domain/containerType.ts` (normalização de tipo de contêiner + mapeamento — Cap. 9; mapeamento inicial vazio/mínimo, já que o próprio Blueprint deixa a tabela de equivalências como pendência dele mesmo).
 
@@ -146,8 +196,9 @@ Lista de destinatários (e-mail/webhook) configurada via `config.ts`/variável d
 - PIL: estimativa por ponto médio, status sempre `ESTIMATED_PROVISIONAL`, nunca `CONFIRMED`.
 - Tabelas incompletas (Yang Ming/COSCO/ZIM) retornando `UNAVAILABLE` nas faixas sem dado — nunca aproximação por semelhança.
 - Tipo de contêiner não reconhecido → bloqueia só a seleção de tarifa, mantém os relógios ativos (Cap. 31.9).
+- Um mesmo contêiner processado pelos três motores em paralelo (Termo por Embarque para o cliente, Exposição Rocket para o armador) produz dois `ValorApurado` com `motorComercial` diferentes e valores independentes — teste explícito de que nenhum motor lê ou influencia o resultado do outro.
 
-**Condição de aceite:** para cada armador com tabela completa no Blueprint, o motor reproduz os valores de exemplo do próprio documento; para os incompletos, retorna `UNAVAILABLE`/`ESTIMATED_PROVISIONAL` conforme o caso, nunca um número inventado.
+**Condição de aceite:** para cada armador com tabela completa no Blueprint, o motor reproduz os valores de exemplo do próprio documento; para os incompletos, retorna `UNAVAILABLE`/`ESTIMATED_PROVISIONAL` conforme o caso, nunca um número inventado. Os três motores comerciais existem como módulos separados e testáveis isoladamente (nenhum teste de um motor depende de código dos outros dois).
 
 **Risco de regressão:** nulo (motor isolado, sem consumidor em produção ainda).
 
@@ -159,18 +210,30 @@ Lista de destinatários (e-mail/webhook) configurada via `config.ts`/variável d
 
 **Pré-condição de início (bloqueante, fora do controle de código):** obter, junto ao time responsável pelo serviço existente, (a) acesso/credenciais, e (b) o contrato real de request/resposta. Sem isso, esta fase não pode começar — ver "Busca realizada" acima.
 
-**Contrato assumido (a validar contra o serviço real assim que houver acesso):**
+**Princípio de fonte única (reforço):** `armadorTrackingSource.ts` é o **único** arquivo de todo o sistema autorizado a saber que o Tracking Service existe. Nenhum outro módulo da V2 — scheduler, motor de cálculo, UI, Gestão — chama Scrapfly, o armador ou qualquer conector diretamente; todos passam pela porta `ContainerDataSource`. Isso é tratado como regra de arquitetura, não sugestão: um code review que encontre uma chamada de rede fora deste único arquivo em direção a tracking é um bug de arquitetura, independente de funcionar ou não.
+
+**Contrato assumido (a validar contra o serviço real assim que houver acesso) — expandido:**
 - Entrada: identificador de armador + BL (House/Master) e/ou número de contêiner.
-- Saída esperada, por contêiner: data de descarga, data de Gate Out (quando houver), data de Empty Return (quando houver), lista de eventos com timestamp, timestamp da última atualização da fonte, indicador de sucesso/falha da consulta.
+- Saída esperada, **por evento normalizado** (não só por contêiner — cada evento é um registro auditável independente):
+  - tipo de evento (descarga, gate out, empty return, outro);
+  - data do evento;
+  - **timestamp da coleta** (quando o Tracking Service obteve esse dado do armador — distinto da data do evento em si);
+  - **fonte/armador** (qual armador originou o evento);
+  - **identificador original do evento** no Tracking Service (para deduplicação e para poder perguntar "de onde veio exatamente este dado" depois);
+  - **status da consulta** (sucesso, falha, parcial);
+  - **referência ao dado bruto** (um ponteiro/ID que permita, em auditoria, recuperar o payload original do armador que originou o evento — não necessariamente o payload inteiro trafegando em toda resposta, mas uma referência resolvível).
 - Assumir que o serviço já resolve cache/consulta ao armador internamente (não duplicar cache na Priora se o serviço existente já fizer isso — a decisão exata depende do contrato real).
 
 **Arquivos/modelos novos:**
-- `src/demurrage-engine/sources/armadorTrackingSource.ts` (implementa `ContainerDataSource`, chamando o serviço existente via HTTP/SDK — a definir conforme o contrato real).
+- `src/demurrage-engine/sources/armadorTrackingSource.ts` (implementa `ContainerDataSource`, chamando o serviço existente via HTTP/SDK — a definir conforme o contrato real; **único ponto de contato com o Tracking Service em todo o sistema**).
 - `src/demurrage-engine/sources/sourceHierarchy.ts` (orquestra prioridade: tracking do armador > House/MBL estruturado, quando existir > heurística de e-mail > `MANUAL_FALLBACK`).
+- `src/demurrage-engine/sources/eventIngestion.ts` (normaliza a resposta do Tracking Service em `EventoTracking`, calcula a chave de deduplicação e decide se o evento já foi processado — ver idempotência abaixo).
 
 **Arquivos existentes afetados:** nenhum arquivo da V1. `config.ts` ganha uma nova seção (`trackingService: { baseUrl, apiKey, ... }`, nomes a definir com o contrato real).
 
-**Migrations:** nenhuma nova entidade; passa a popular os campos já existentes (`dataDescarga`, `masterFreeTime`, etc.) com `fonte = 'armador_tracking'` em vez de `'email_heuristic'` quando disponível, preservando ambos os valores em caso de divergência (Cap. 4: "a Priora mantém ambos os registros, aplica a hierarquia e sinaliza a divergência").
+**Migrations:** nova entidade `EventoTracking` (ver "Schema proposto — Fase 1" para o desenho geral, que já reserva este ponto de extensão); passa a popular os campos já existentes (`dataDescarga`, `masterFreeTime`, etc.) com `fonte = 'armador_tracking'` em vez de `'email_heuristic'` quando disponível, preservando ambos os valores em caso de divergência (Cap. 4: "a Priora mantém ambos os registros, aplica a hierarquia e sinaliza a divergência").
+
+**Idempotência da ingestão (ponto de atenção explícito):** cada evento recebido do Tracking Service é deduplicado por uma chave composta de `(armador, BL/contêiner, tipo_evento, identificador_original_evento)`. Reprocessar a mesma resposta do Tracking Service duas vezes (ex.: por retry de rede, por reprocessamento manual, por dois workers concorrentes) não cria dois eventos nem aplica o mesmo evento duas vezes ao relógio do contêiner — `eventIngestion.ts` verifica a chave antes de gravar e é seguro para chamada concorrente/repetida.
 
 **Dependências:** acesso ao serviço real (pré-condição acima); Fase 1 (porta `ContainerDataSource` já definida).
 
@@ -178,8 +241,10 @@ Lista de destinatários (e-mail/webhook) configurada via `config.ts`/variável d
 - Contrato do adaptador testado contra um mock do serviço real (respostas de sucesso, falha, timeout).
 - Divergência entre `armador_tracking` e `email_heuristic` para o mesmo campo → ambos preservados, hierarquia aplicada, divergência sinalizada (não silenciosa).
 - Campo presente só na heurística de e-mail (tracking não retornou) → continua usável como contingência.
+- **Idempotência:** o mesmo evento normalizado (mesma chave de dedupe) ingerido duas vezes — inclusive de forma concorrente (duas chamadas simultâneas) — resulta em um único `EventoTracking` gravado e um único efeito sobre o relógio do contêiner.
+- Teste estático/arquitetural: nenhuma chamada de rede em direção a tracking existe fora de `armadorTrackingSource.ts` (pode ser um teste de lint/import-boundary, não só um teste funcional).
 
-**Condição de aceite:** para um contêiner de teste, o adaptador retorna os campos do contrato assumido e o `sourceHierarchy` prioriza corretamente `armador_tracking` sobre `email_heuristic` quando ambos têm valor.
+**Condição de aceite:** para um contêiner de teste, o adaptador retorna os campos do contrato assumido (incluindo timestamp de coleta, identificador original e referência ao dado bruto) e o `sourceHierarchy` prioriza corretamente `armador_tracking` sobre `email_heuristic` quando ambos têm valor. Reingestão do mesmo evento é comprovadamente um no-op.
 
 **Risco de regressão:** nulo para a V1. Risco técnico principal desta fase: o contrato assumido acima pode não bater com o serviço real — o adaptador deve ser a **única** peça a mudar se o contrato real for diferente (por isso ele fica isolado atrás da porta `ContainerDataSource`, sem vazar formato específico do serviço para o resto do motor).
 
@@ -197,7 +262,12 @@ Lista de destinatários (e-mail/webhook) configurada via `config.ts`/variável d
 
 **Arquivos existentes afetados:** `src/config.ts` ganha `trackingAlertRecipients: string[]` (env var). Nenhum arquivo da V1.
 
-**Migrations:** entidade `tracking_failure` (armador, BL, contador, última resposta válida, histórico de tentativas).
+**Migrations:** entidade `tracking_failure` (armador, BL, contador, última resposta válida, histórico de tentativas); entidade `agendamento_consulta` para controle de idempotência (ver abaixo).
+
+**Idempotência do scheduler e dos alertas (ponto de atenção explícito):**
+- Cada disparo previsto pela cadência (uma "janela", ex.: "D+9 deste contêiner") tem uma **chave de idempotência** própria (`contêiner_id + janela_prevista`). Antes de consultar o Tracking Service, o scheduler verifica se aquela janela já foi executada (ou está em execução); se sim, não dispara de novo — isso protege contra o próprio processo Node reiniciar no meio de um ciclo (comum no plano free do Render, que "dorme" por inatividade) e contra duas instâncias do worker rodarem simultaneamente por engano.
+- O mesmo vale para alertas técnicos: a 3ª falha consecutiva de um armador/BL gera **um** alerta por incidente, com chave de idempotência própria (`incidente_id + tipo_alerta`); se o job de verificação de falhas rodar mais de uma vez sobre o mesmo estado (ex.: retry), o alerta não é reenviado — só uma nova falha (4ª, 5ª...) ou um novo incidente distinto gera novo disparo.
+- Esse desenho reaproveita o mesmo padrão de dedupe da ingestão de eventos (Fase 5) — chave de idempotência + registro do que já foi processado — para manter a mesma lógica em todo o sistema, não inventar um mecanismo novo por fase.
 
 **Dependências:** Fase 5 (a cadência só faz sentido chamando o adaptador real); trilho T2 (lista de destinatários configurável) e T1 (papel `MANAGER` já existir para receber o alerta operacional).
 
@@ -205,8 +275,10 @@ Lista de destinatários (e-mail/webhook) configurada via `config.ts`/variável d
 - Simulação de relógio (mock de tempo) percorrendo D0→D+5→D+9→D+13→D+17→diário→a cada 2 dias→suspensão aos 30 dias, verificando a data da próxima consulta em cada etapa.
 - Reaproveitamento: se outro consumidor já tiver tracking válido dentro da janela, a cadência não dispara nova consulta (Cap. 16.9) — depende do serviço real informar "quando foi obtido", conforme contrato da Fase 5.
 - Falha consecutiva zera após sucesso; 3ª falha consecutiva dispara os dois alertas (operacional + técnico), agrupando por armador quando múltiplos processos são afetados.
+- **Idempotência do scheduler:** disparar o job da mesma janela duas vezes (simulando reinício do processo ou dupla execução) resulta em uma única consulta real ao Tracking Service.
+- **Idempotência dos alertas:** executar a verificação de falhas duas vezes sobre o mesmo estado de falha não duplica o alerta enviado ao Gestor nem aos destinatários técnicos.
 
-**Condição de aceite:** para um contêiner de teste avançando no tempo simulado, o scheduler gera exatamente as consultas previstas pela cadência do Cap. 16 e suspende automaticamente aos 30 dias de demurrage sem Empty Return.
+**Condição de aceite:** para um contêiner de teste avançando no tempo simulado, o scheduler gera exatamente as consultas previstas pela cadência do Cap. 16 e suspende automaticamente aos 30 dias de demurrage sem Empty Return; reexecuções da mesma janela ou do mesmo estado de falha são comprovadamente no-op.
 
 **Risco de regressão:** nulo para a V1 (job novo, isolado). Risco operacional: um scheduler mal calibrado pode gerar volume de chamadas ao serviço de tracking real acima do esperado — mitigar rodando primeiro em ambiente de teste/staging com o adaptador mockado antes de apontar para o serviço real.
 
@@ -277,7 +349,7 @@ Lista de destinatários (e-mail/webhook) configurada via `config.ts`/variável d
 
 **Migrations:** nenhuma nova (consome o que já existe das Fases 1–8).
 
-**Dependências:** Fases 1–8 completas o suficiente para o payload ter dado real; T1 (RBAC) para os gates de ação.
+**Dependências:** Fases 1–8 completas o suficiente para o payload ter dado real; T1 (RBAC) para os gates de ação; **shadow mode concluído** (seção "Estratégia de coexistência e corte") — nenhuma tela V2 é exposta antes de todas as diferenças V1×V2 estarem catalogadas e explicadas.
 
 **Testes obrigatórios:**
 - Contrato do novo endpoint (schema do payload) coberto por teste, incluindo os campos que o Cap. 28.2/28.4 exigem (MBL, armador, os dois relógios separados, etc.).
@@ -372,7 +444,15 @@ Lista de destinatários (e-mail/webhook) configurada via `config.ts`/variável d
 
 **Enquanto isso (Fases 1–8):** `GET /api/demurrage` (V1) e `Demurrage.dc.html` continuam servindo os usuários normalmente, sem nenhuma alteração de comportamento. A V2 evolui em arquivos, rotas e (na Fase 9) tela totalmente separados. Nenhum usuário é afetado nesse período.
 
-**Fase 9 (paralelo controlado):** o novo endpoint (`GET /api/demurrage/v2`) e a nova tela ficam disponíveis **ao lado** da V1, atrás de uma flag de acesso (ex.: rota separada acessível só a quem souber o link, ou flag de config `DEMURRAGE_V2_ENABLED`). Isso permite validar a V2 com dado real em produção sem expor todos os usuários a ela.
+**Shadow mode (novo estágio, obrigatório, entre o fim da Fase 8 e a exposição de qualquer tela V2 na Fase 9):**
+Antes de qualquer usuário ver a V2, ela roda **sem UI e sem tráfego de usuário**, calculando os mesmos processos que a V1 está mostrando em produção, só para comparação:
+- Um job de shadow (reaproveita o scheduler da Fase 6, ou um script dedicado) processa, em paralelo à V1, o mesmo conjunto de processos ativos, gerando o resultado completo da V2 (estados, dias de demurrage, valores) para cada um.
+- Cada resultado V2 é comparado ao resultado que a V1 mostra **hoje** para o mesmo processo, e a diferença é gravada em `ShadowDiff` (ver schema) — nunca corrigida automaticamente, nunca exibida a nenhum usuário.
+- Diferenças esperadas (ex.: V2 usa `dataDescarga` e a V1 usa `dataRetirada` — Fase 2 corrigiu isso de propósito) são **catalogadas e explicadas**, não tratadas como bug; diferenças inesperadas (ex.: um contêiner que a V1 mostra em demurrage e a V2 não encontra) são investigadas antes de prosseguir.
+- Critério para sair do shadow mode e entrar no "paralelo controlado" da Fase 9: todas as diferenças observadas estão catalogadas e explicadas (esperadas pela correção de regras, ou por lacuna de dado ainda pendente de fonte) — nenhuma diferença "misteriosa" sem explicação.
+- O shadow mode não expõe nenhuma rota nova a usuários finais — é um processo interno/job, sem tela.
+
+**Fase 9 (paralelo controlado, só depois do shadow mode ter sido concluído):** o novo endpoint (`GET /api/demurrage/v2`) e a nova tela ficam disponíveis **ao lado** da V1, atrás de uma flag de acesso (ex.: rota separada acessível só a quem souber o link, ou flag de config `DEMURRAGE_V2_ENABLED`). Isso permite validar a V2 com dado real em produção sem expor todos os usuários a ela.
 
 **Corte (não é uma fase numerada — é um evento controlado, proposto para acontecer só depois da Fase 9 estar validada, tipicamente em paralelo às Fases 10–12):**
 1. Trocar, em `public/Demurrage.dc.html` (ou por uma variável de config lida por `index.ts`), a URL que o front chama de `/api/demurrage` para `/api/demurrage/v2` — **atrás de flag**, reversível sem novo deploy (só mudando a config).
@@ -397,3 +477,127 @@ Fase 1 ──► Fase 2 ──► Fase 3 ──► Fase 4
 ```
 
 Fases 2, 3 e 4 são motores puros e podem ser desenvolvidas e 100% testadas por fixtures **antes** até de a Fase 5 ter acesso ao serviço real — não há motivo para esperar o acesso externo para começar o trabalho de cálculo. O único bloqueio externo real do plano inteiro é a Fase 5 (acesso ao Tracking Service existente); a Fase 11 depende de outro bloqueio externo (Liberação), mas foi desenhada para não travar nada além de si mesma.
+
+---
+
+# Schema proposto — Fase 1 (Fundação persistente)
+
+**Status: PROPOSTA AGUARDANDO APROVAÇÃO. Nenhuma migration foi escrita. Nenhum arquivo de código desta fase foi criado ainda.** Este schema é a base de todas as entidades citadas nas 12 fases acima — está consolidado aqui num único lugar para revisão, em vez de espalhado; os "Migrations" de cada fase referenciam as entidades definidas aqui.
+
+O schema é desenhado **agnóstico de motor de banco** (funciona tanto com SQLite quanto Postgres — a escolha do motor continua uma decisão em aberto, sem impacto no desenho abaixo). Tipos são descritos conceitualmente (texto, número, data, booleano, enum, JSON), não como tipos SQL específicos.
+
+## Princípios do schema
+
+1. **Nada é inventado — tudo pendente é explícito.** Todo campo que pode ser desconhecido usa o padrão `CampoComFonte`, que carrega um `status` (`preenchido` | `pendente` | `fallback_manual`) em vez de só permitir `null`. Um campo `pendente` é uma afirmação ativa de "não sabemos", nunca um esquecimento.
+2. **Fonte e timestamp viajam junto com o valor.** Nenhum valor crítico (descarga, free time, tipo de contêiner, devolução) existe no schema sem sua fonte e o momento em que foi obtido — pré-requisito direto do Cap. 4 do Blueprint.
+3. **Histórico nunca é sobrescrito.** `Snapshot` e `ValorApurado` são *append-only*: uma correção cria um novo registro, não apaga o anterior. Isso implementa diretamente o Cap. 10 ("nenhuma correção apaga o valor anterior") e o Cap. 11 ("uma correção posterior não deve apagar o cálculo fechado").
+4. **Idempotência é modelada, não deixada para o código.** `EventoTracking`, `AgendamentoConsulta`, `AlertaTecnico` e `BackfillRun` carregam chaves de deduplicação como parte do próprio schema (índice único), não como uma checagem opcional na aplicação.
+5. **Armador e Cliente são entidades, não strings soltas.** Evita duplicação/inconsistência de nomes espalhados por `TabelaTarifaria`, `EventoTracking`, `FalhaTracking`.
+
+## Entidades
+
+### Núcleo operacional
+
+| Entidade | Papel | Campos principais |
+|---|---|---|
+| **Cliente** | Titular comercial de um ou mais processos; ponto de amarração do papel `CLIENT` do RBAC. | id, nome, documento, contatos |
+| **Armador** | Normaliza o nome do armador, referenciado por tabelas, eventos e falhas. | id, nome, código interno |
+| **Processo** | Unidade de apresentação (Cap. 3) — agrupa contêineres de um mesmo embarque. | id, numero_processo, cliente_id → Cliente, mbl, armador_id → Armador, termo_comercial (`embarque`\|`unico`), criado_em |
+| **Contêiner** | Unidade de cálculo (Cap. 3) — todo relógio, valor e estado vivem aqui. | id, processo_id → Processo, numero (ISO 6346), tipo_original, tipo_normalizado_id → MapeamentoTipoContainer, estado (Cap. 21), prioridade, motivo_prioridade, criado_em, atualizado_em |
+| **CampoComFonte** | Genérica (EAV) — qualquer campo crítico de qualquer entidade acima, com proveniência. | id, entidade_tipo, entidade_id, campo, valor (serializado), status (`preenchido`\|`pendente`\|`fallback_manual`), fonte, coletado_em, fonte_alternativa, tem_divergencia, valor_divergente, fonte_divergente |
+| **Snapshot** | Fotografia versionada de um contêiner (Cap. 14) — histórico imutável. | id, contêiner_id → Contêiner, versao, criado_em, evento_origem_id → EventoTracking (nullable), dados_congelados (JSON) |
+
+### Relógios e valores
+
+| Entidade | Papel | Campos principais |
+|---|---|---|
+| **Relogio** | Um por tipo (`cliente`\|`rocket`) por contêiner — núcleo do Cap. 5. | id, contêiner_id → Contêiner, tipo (`cliente`\|`rocket`), free_time_dias, free_time_fonte_id → CampoComFonte, ultimo_dia_livre, primeiro_dia_demurrage, data_final_apuracao, dias_demurrage, estado (`aberto`\|`fechado`\|`pendente`), atualizado_em |
+| **TabelaTarifaria** | Tabela versionada — Rocket×cliente ou armador. | id, tipo (`rocket_cliente`\|`armador`), armador_id → Armador (nullable), termo_comercial (`embarque`\|`unico`, nullable), versao, vigencia_inicio, vigencia_fim, status (`CONFIRMED`\|`ESTIMATED`\|`ESTIMATED_PROVISIONAL`\|`UNAVAILABLE`), fonte |
+| **FaixaTarifaria** | Faixa (bracket) de uma tabela. | id, tabela_id → TabelaTarifaria, tipo_equipamento, dia_inicial, dia_final (nullable = aberto), valor_dia, moeda |
+| **MapeamentoTipoContainer** | Normalização de tipo de equipamento (Cap. 9). | id, valor_original, fonte, tipo_normalizado, regra_aplicada, vigente_desde, vigente_ate (nullable) |
+| **ValorApurado** | Memória de cálculo — uma linha por apuração (histórico, nunca sobrescrita). | id, contêiner_id → Contêiner, relogio_tipo (`cliente`\|`rocket`), **motor_comercial** (`termo_embarque`\|`termo_unico`\|`exposicao_armador`), dias_cobrados, faixas_aplicadas (JSON), tabela_id → TabelaTarifaria, versao_tabela, total, moeda, estado (`estimado`\|`confirmado`\|`fechado`), data_congelamento (nullable), criado_em |
+
+### Tracking e agendamento
+
+| Entidade | Papel | Campos principais |
+|---|---|---|
+| **EventoTracking** | Evento normalizado vindo do Tracking Service (Fase 5) — granularidade de evento, não de contêiner. | id, contêiner_id (nullable até resolução), armador_id → Armador, bl, numero_contêiner, tipo_evento (`descarga`\|`gate_out`\|`empty_return`\|`outro`), data_evento, **identificador_original_evento**, **coletado_em**, **status_consulta** (`sucesso`\|`falha`\|`parcial`), fonte (`tracking_service`), **referencia_dado_bruto**, **chave_dedupe** (única: armador+bl/contêiner+tipo_evento+identificador_original_evento) |
+| **FalhaTracking** | Contador de falhas consecutivas por armador/BL (Cap. 18). | id, armador_id → Armador, bl, contador_consecutivo, ultima_resposta_valida_em, incidente_agrupado_id (nullable) |
+| **AgendamentoConsulta** | Controle de idempotência do scheduler (Cap. 16). | id, contêiner_id → Contêiner, janela_prevista, executado_em (nullable), status (`pendente`\|`executado`\|`pulado_cache`), **chave_idempotencia** (única: contêiner_id+janela_prevista) |
+| **AlertaTecnico** | Registro de alerta disparado (operacional + técnico). | id, tipo, falha_tracking_id → FalhaTracking, disparado_em, destinatarios (JSON), **chave_idempotencia** (única: incidente_id+tipo) |
+
+### Encerramento, responsabilidade e auditoria
+
+| Entidade | Papel | Campos principais |
+|---|---|---|
+| **Minuta** | Comprovação documental de devolução (Cap. 19.1). | id, contêiner_id → Contêiner, data_informada, numero_contêiner_validado, data_validada (effective_return_date), diverge_do_tracking, usuario_id → Usuario, criado_em, estado_conferencia |
+| **DecisaoResponsabilidade** | Pré-análise Rocket×cliente (Cap. 26) — Fase 11, plugável. | id, contêiner_id → Contêiner, data_apta_liberacao, data_liberacao_efetiva, intervalo_sugerido_inicio, intervalo_sugerido_fim, dias_confirmados_rocket, dias_confirmados_cliente, justificativa, evidencias (JSON), gestor_id → Usuario, decidido_em, estado (`em_analise`\|`confirmada_rocket`\|`confirmada_cliente`\|`dividida`) |
+| **DocumentoEvidencia** | Documentos vinculados (House, Master, comprovantes). | id, entidade_tipo, entidade_id, tipo, origem, data_inclusao, usuario_id → Usuario, arquivo_ref |
+| **Auditoria** | Trilha genérica (Cap. 10) — polimórfica. | id, entidade_tipo, entidade_id, campo, valor_anterior, valor_novo, usuario_id → Usuario, timestamp, motivo, evidencia_ref |
+
+### Acesso e operação da migração
+
+| Entidade | Papel | Campos principais |
+|---|---|---|
+| **Usuario** | RBAC (correção de premissa #3). | id, nome, email, papel (`ANALYST`\|`MANAGER`\|`ADMIN`\|`CLIENT`), cliente_id → Cliente (nullable, só p/ `CLIENT`) |
+| **BackfillRun** | Log de execução do backfill (Fase 1) — auditoria de bootstrap. | id, executado_em, processos_processados, campos_marcados_pendentes, erros (JSON) |
+| **ShadowDiff** | Diferença V1×V2 durante o shadow mode (pré-Fase 9). | id, processo_id → Processo, contêiner_id → Contêiner (nullable), campo, valor_v1, valor_v2, explicada (booleano), explicacao, comparado_em |
+
+*(Nota: "Destinatário de alerta técnico" — trilho T2 — permanece configuração, não entidade de banco, conforme já definido nas fases acima.)*
+
+## Relacionamentos (visão Mermaid)
+
+```mermaid
+erDiagram
+    Cliente ||--o{ Processo : possui
+    Processo ||--o{ Contêiner : agrupa
+    Armador ||--o{ Processo : atende
+    Armador ||--o{ TabelaTarifaria : define
+    Armador ||--o{ EventoTracking : origina
+    Armador ||--o{ FalhaTracking : acumula
+
+    Contêiner ||--o{ Snapshot : versiona
+    Contêiner ||--o{ Relogio : possui
+    Contêiner ||--o{ ValorApurado : apura
+    Contêiner ||--o{ Minuta : recebe
+    Contêiner ||--o| DecisaoResponsabilidade : "analisa (Fase 11)"
+    Contêiner }o--|| MapeamentoTipoContainer : "normalizado por"
+    Contêiner ||--o{ EventoTracking : "resolvido de"
+    Contêiner ||--o{ AgendamentoConsulta : agenda
+    Contêiner ||--o{ ShadowDiff : compara
+
+    TabelaTarifaria ||--o{ FaixaTarifaria : contem
+    ValorApurado }o--|| TabelaTarifaria : usa
+
+    FalhaTracking ||--o{ AlertaTecnico : dispara
+
+    Usuario ||--o{ DecisaoResponsabilidade : decide
+    Usuario ||--o{ Auditoria : realiza
+    Usuario ||--o{ Minuta : envia
+    Usuario }o--o| Cliente : "vinculado (papel CLIENT)"
+
+    CampoComFonte }o--|| Contêiner : "descreve (polimórfico)"
+    Auditoria }o--|| Contêiner : "descreve (polimórfico)"
+    DocumentoEvidencia }o--|| Contêiner : "anexa (polimórfico)"
+```
+
+*(As linhas "polimórfico" representam `entidade_tipo`+`entidade_id` — `CampoComFonte`, `Auditoria` e `DocumentoEvidencia` podem apontar para `Processo`, `Contêiner` ou outras entidades, não só Contêiner; o diagrama simplifica para o caso mais comum.)*
+
+## Rastreabilidade schema → fases
+
+- **Fase 1:** Cliente, Armador, Processo, Contêiner, CampoComFonte, Snapshot, BackfillRun.
+- **Fase 2/3:** Relogio (campos de cálculo temporal e dual-clock vivem aqui).
+- **Fase 4:** TabelaTarifaria, FaixaTarifaria, MapeamentoTipoContainer, ValorApurado (com `motor_comercial`).
+- **Fase 5:** EventoTracking (com os 5 campos do contrato expandido).
+- **Fase 6:** FalhaTracking, AgendamentoConsulta, AlertaTecnico.
+- **Fase 7:** campos `estado`/`prioridade`/`motivo_prioridade` em Contêiner (já previstos acima, sem entidade nova).
+- **Fase 8:** Minuta; estados de `Relogio`/`ValorApurado` cobrem o fechamento.
+- **Fase 9:** ShadowDiff (shadow mode).
+- **Fase 10:** nenhuma entidade nova — leitura agregada sobre o que já existe.
+- **Fase 11:** DecisaoResponsabilidade.
+- **Fase 12:** nenhuma entidade nova — `Usuario.papel = CLIENT` + `Usuario.cliente_id` já dão a base de isolamento; o payload filtrado é lógica de leitura, não schema novo.
+- **Transversal (T1/T2):** Usuario; DocumentoEvidencia e Auditoria são usadas por praticamente todas as fases a partir da 7/8.
+
+## O que fica para depois desta aprovação
+
+Só depois deste schema ser aprovado (ou ajustado e reaprovado): escolha final do motor de persistência (SQLite vs. Postgres — decisão que não muda o desenho acima), escrita das migrations propriamente ditas, e o primeiro código de `src/demurrage-engine/*` (entidades + `ContainerRepository` + `emailHeuristicSource`, conforme descrito na Fase 1). Nenhum desses três itens foi feito nesta etapa.
