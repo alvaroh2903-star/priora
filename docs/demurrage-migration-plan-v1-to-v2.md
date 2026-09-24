@@ -1,8 +1,16 @@
 # Plano de Migração — Demurrage V1 → Demurrage Engine V2
 
-**Data:** 24/09/2026 (revisão 4)
+**Data:** 24/09/2026 (revisão 5)
 **Base:** `docs/demurrage-blueprint-gap-analysis.md` (diagnóstico aprovado, com as 3 correções de premissa da revisão 1)
-**Status:** schema aprovado para avançar à Fase 1, com 6 decisões finais obrigatórias (lista abaixo). A implementação da Fase 1 está em andamento neste momento — ver relatório de entrega no final deste documento.
+**Status:** Fase 1 concluída (com a migration corretiva 0006 da revisão 5) e Fase 2 — Motor temporal concluída. Fase 3 aguarda autorização. Ver "Relatório de entrega — revisão 5" no final deste documento.
+
+## Aprovações e decisões da revisão 5
+
+1. `Processo.numero_processo` e `Processo.cliente_id` nullable quando a informação ainda não existe — pendência real, nunca placeholder.
+2. `BackfillRun` operacional/mutável; `BackfillItem` append-only.
+3. Responsável operacional passa a ser `Processo.responsavel_operacional_membership_id → OrganizationMembership`, da mesma organização do processo, garantido pelo PostgreSQL — implementado pela migration corretiva `0006` (as migrations já aplicadas não foram reescritas).
+4. `TrackingTarget` global/compartilhado, sem `organization_id`, ligado aos contêineres pela tabela N:N `ContainerTrackingTarget` (Fase 5). Não existe coluna de target em `Contêiner`. As entidades de tracking operam por `TrackingTarget`; o isolamento multiempresa segue no acesso via `Processo`/`Contêiner`.
+5. Motor temporal com datas civis, sem hora e sem conversão UTC.
 
 ## Decisões finais desta revisão (obrigatórias, incorporadas ao schema e à implementação)
 
@@ -863,3 +871,159 @@ Nenhuma delas altera regra de negócio, fluxo, cálculo ou fonte de verdade apro
 ### 9. Próximo passo
 
 Fase 1 concluída e testada. **Não avanço para a Fase 2 sem nova autorização**, conforme solicitado.
+
+---
+
+## Relatório de entrega — revisão 5 (migration corretiva da Fase 1 + Fase 2)
+
+### 1. Migration corretiva da Fase 1 e resultado dos testes
+
+`src/demurrage-engine/db/migrations/0006_responsavel_operacional_membership.sql` — aditiva; `0001`–`0005` não foram tocadas.
+
+- Cria a chave candidata `organization_memberships (id, organization_id)` e a coluna `processos.responsavel_operacional_membership_id`.
+- A mesma organização é garantida por **FK composta** `(responsavel_operacional_membership_id, organization_id) → organization_memberships (id, organization_id)`. Escolhida em vez de trigger porque vale nos dois sentidos: rejeita um membership de outra organização e também impede mover para outra organização um membership que já é responsável. Responsável `NULL` segue permitido (MATCH SIMPLE).
+- Migra registros existentes do vínculo antigo para o membership do mesmo usuário na mesma organização. Se algum vínculo antigo não tiver membership correspondente, a migration **aborta** (rollback completo) em vez de criar um membership — o que seria inventar uma concessão de acesso — ou descartar a atribuição.
+- Remove `processos.responsavel_operacional_id` (e sua FK para `usuarios`). Índice parcial `(responsavel_operacional_membership_id, organization_id) WHERE ... IS NOT NULL`.
+- Idempotente: além do `schema_migrations`, cada passo checa o estado atual antes de agir.
+- Excluir um membership que é responsável fica bloqueado (NO ACTION): o Blueprint não define reatribuição automática, então nenhuma foi inventada.
+- O runner ganhou `runMigrations(pool, { until })` para testar a passagem de dados legados entre versões do schema.
+
+Aplicação real no banco de dev, que tinha dados do backfill de demonstração: `Migrations aplicadas: 1 ['0006_...']`, os 2 processos existentes preservados; reexecução: `Migrations aplicadas: 0`.
+
+Testes novos (Postgres real), todos passando:
+
+| Caso | Resultado |
+|---|---|
+| Membership da mesma organização (criação e atualização) | permitido |
+| Membership de outra organização — pelo repositório **e** por SQL direto | rejeitado pelo PostgreSQL (`processos_responsavel_membership_same_org_fk`) |
+| Processo sem responsável (criação, e remoção posterior do responsável) | permitido |
+| Mover para outra organização um membership que é responsável | rejeitado |
+| Excluir um membership que é responsável | bloqueado |
+| Coluna antiga `responsavel_operacional_id` | removida |
+| Dado legado com membership na mesma organização | migrado; processo sem responsável continua `NULL` |
+| Dado legado sem membership na organização do processo | migration aborta, `0006` não consta como aplicada, vínculo antigo intacto |
+
+Suíte da Fase 1 após a correção: **33/33** (as 23 anteriores + 10 novas).
+
+### 2. Arquivos criados na Fase 2
+
+```
+src/demurrage-engine/
+├── __fixtures__/
+│   └── casosOficiais.ts         — fixtures oficiais (criado antes do motor; seções das Fases 3 e 4 reservadas)
+├── temporal/
+│   ├── civilDate.ts             — data civil 'AAAA-MM-DD': validação e ordinal do dia, só inteiros, sem Date
+│   └── freeTimeClock.ts         — o motor temporal
+└── __tests__/
+    ├── civilDate.test.ts
+    └── freeTimeClock.test.ts
+```
+
+Nenhum arquivo existente foi alterado pela Fase 2. Nenhuma migration nova (o motor não lê o banco).
+
+### 3. Fixtures oficiais
+
+`casosOficiais.ts` é especificação: não importa nada da implementação, e cada caso cita a regra de origem (capítulo do Blueprint ou decisão aprovada). As datas esperadas foram conferidas, antes de gravadas, contra a aritmética de `DATE` do PostgreSQL como oráculo independente. 19 casos do motor temporal:
+
+- **off-by-one** (T01–T04): a tabela literal do Cap. 23.1.
+- **FT 0** (T05–T06).
+- **FT ausente** (T07).
+- **descarga ausente** (T08–T09) — *adicionado além da lista mínima*: é o caso mais comum hoje (o backfill por e-mail nunca preenche a descarga) e a regra já está no Blueprint (Cap. 31.1: sem descarga, os relógios não são iniciados). Não é regra nova.
+- **virada de mês** (T10–T11) e **virada de ano** (T12–T13): um caso em que o free time atravessa a virada e outro em que a contagem de demurrage atravessa.
+- **fevereiro** (T14–T15): as mesmas datas de entrada em ano bissexto (2028) e comum (2026), com resultados diferentes.
+- **data final anterior à descarga** (T16), mais o limite (T17: data final no dia da descarga é válida).
+- **devolução no último dia livre** (T18) e **no primeiro dia de demurrage** (T19), num cenário diferente do T01/T02.
+
+Seções vazias já existentes no arquivo para as fases seguintes: `CASOS_DOIS_RELOGIOS`, `CASOS_MULTIPLOS_CONTEINERES` (Fase 3), `CASOS_FAIXA_TARIFARIA`, `CASOS_TABELAS_PROVISORIAS` (Fase 4), `CASOS_EMPTY_RETURN`, `CASOS_MINUTA`.
+
+### 4. API do `freeTimeClock`
+
+```ts
+// src/demurrage-engine/temporal/freeTimeClock.ts
+function freeTimeClock(input: FreeTimeClockInput): FreeTimeClockResult
+
+interface FreeTimeClockInput {
+  dischargeDate: CivilDate | null; // 'AAAA-MM-DD'; null = sem descarga (relógio não iniciado)
+  freeTimeDays: number | null;     // inteiro >= 0; null = ausente (0 é válido e diferente de null)
+  finalDate: CivilDate;            // 'AAAA-MM-DD': hoje, ou a data de devolução
+}
+
+type FreeTimeClockResult =
+  | { status: 'OK'; ultimoDiaLivre: CivilDate; primeiroDiaDemurrage: CivilDate; diasDemurrage: number }
+  | { status: 'PENDING'; pendencias: ('DESCARGA_AUSENTE' | 'FREE_TIME_AUSENTE')[] }
+  | { status: 'INVALID'; motivo: 'DATA_FINAL_ANTERIOR_A_DESCARGA'; pendencias: ('DESCARGA_AUSENTE' | 'FREE_TIME_AUSENTE')[] };
+
+// src/demurrage-engine/temporal/civilDate.ts
+type CivilDate = string;                        // 'AAAA-MM-DD'
+function toOrdinal(date: CivilDate): number     // 1 = 0001-01-01; valida formato e existência da data
+function fromOrdinal(ordinal: number): CivilDate
+```
+
+Situações de negócio (FT ausente, descarga ausente, data final antes da descarga) **retornam** um resultado explícito. Entrada malformada é violação de contrato e **lança erro**: `Date` do JavaScript ou timestamp no lugar de data civil, data inexistente (ex.: 29/02 em ano comum), FT negativo ou não inteiro, campo omitido em vez de `null`, e qualquer campo extra — em especial `gateOutDate`: o motor recusa a entrada, o que torna "nada é inferido do Gate Out" uma garantia da API, não só uma convenção.
+
+### 5. Casos testados — entrada → esperado → real
+
+A coluna "Real" foi gerada executando o motor sobre cada fixture, não copiada do esperado.
+
+| # | Categoria | Entrada (descarga · FT · data final) | Esperado | Real | ✓ |
+|---|---|---|---|---|---|
+| T01 | off-by-one | 2026-09-01 · 14 · 2026-09-14 | OK · último livre 2026-09-14 · 1º demurrage 2026-09-15 · **0 d** | OK · último livre 2026-09-14 · 1º demurrage 2026-09-15 · **0 d** | ✅ |
+| T02 | off-by-one | 2026-09-01 · 14 · 2026-09-15 | OK · último livre 2026-09-14 · 1º demurrage 2026-09-15 · **1 d** | OK · último livre 2026-09-14 · 1º demurrage 2026-09-15 · **1 d** | ✅ |
+| T03 | off-by-one | 2026-09-01 · 14 · 2026-09-16 | OK · último livre 2026-09-14 · 1º demurrage 2026-09-15 · **2 d** | OK · último livre 2026-09-14 · 1º demurrage 2026-09-15 · **2 d** | ✅ |
+| T04 | off-by-one | 2026-09-01 · 14 · 2026-09-20 | OK · último livre 2026-09-14 · 1º demurrage 2026-09-15 · **6 d** | OK · último livre 2026-09-14 · 1º demurrage 2026-09-15 · **6 d** | ✅ |
+| T05 | ft-zero | 2026-09-01 · 0 · 2026-09-01 | OK · último livre 2026-08-31 · 1º demurrage 2026-09-01 · **1 d** | OK · último livre 2026-08-31 · 1º demurrage 2026-09-01 · **1 d** | ✅ |
+| T06 | ft-zero | 2026-09-01 · 0 · 2026-09-03 | OK · último livre 2026-08-31 · 1º demurrage 2026-09-01 · **3 d** | OK · último livre 2026-08-31 · 1º demurrage 2026-09-01 · **3 d** | ✅ |
+| T07 | ft-ausente | 2026-09-01 · null · 2026-09-20 | PENDING [FREE_TIME_AUSENTE] | PENDING [FREE_TIME_AUSENTE] | ✅ |
+| T08 | descarga-ausente | null · 14 · 2026-09-20 | PENDING [DESCARGA_AUSENTE] | PENDING [DESCARGA_AUSENTE] | ✅ |
+| T09 | descarga-ausente | null · null · 2026-09-20 | PENDING [DESCARGA_AUSENTE, FREE_TIME_AUSENTE] | PENDING [DESCARGA_AUSENTE, FREE_TIME_AUSENTE] | ✅ |
+| T10 | virada-de-mes | 2026-09-25 · 10 · 2026-10-07 | OK · último livre 2026-10-04 · 1º demurrage 2026-10-05 · **3 d** | OK · último livre 2026-10-04 · 1º demurrage 2026-10-05 · **3 d** | ✅ |
+| T11 | virada-de-mes | 2026-09-20 · 7 · 2026-10-03 | OK · último livre 2026-09-26 · 1º demurrage 2026-09-27 · **7 d** | OK · último livre 2026-09-26 · 1º demurrage 2026-09-27 · **7 d** | ✅ |
+| T12 | virada-de-ano | 2026-12-28 · 10 · 2027-01-10 | OK · último livre 2027-01-06 · 1º demurrage 2027-01-07 · **4 d** | OK · último livre 2027-01-06 · 1º demurrage 2027-01-07 · **4 d** | ✅ |
+| T13 | virada-de-ano | 2026-12-20 · 7 · 2027-01-02 | OK · último livre 2026-12-26 · 1º demurrage 2026-12-27 · **7 d** | OK · último livre 2026-12-26 · 1º demurrage 2026-12-27 · **7 d** | ✅ |
+| T14 | fevereiro | 2028-02-10 · 20 · 2028-03-05 | OK · último livre 2028-02-29 · 1º demurrage 2028-03-01 · **5 d** | OK · último livre 2028-02-29 · 1º demurrage 2028-03-01 · **5 d** | ✅ |
+| T15 | fevereiro | 2026-02-10 · 20 · 2026-03-05 | OK · último livre 2026-03-01 · 1º demurrage 2026-03-02 · **4 d** | OK · último livre 2026-03-01 · 1º demurrage 2026-03-02 · **4 d** | ✅ |
+| T16 | data-final-anterior-a-descarga | 2026-09-10 · 14 · 2026-09-05 | INVALID DATA_FINAL_ANTERIOR_A_DESCARGA | INVALID DATA_FINAL_ANTERIOR_A_DESCARGA | ✅ |
+| T17 | data-final-anterior-a-descarga | 2026-09-10 · 14 · 2026-09-10 | OK · último livre 2026-09-23 · 1º demurrage 2026-09-24 · **0 d** | OK · último livre 2026-09-23 · 1º demurrage 2026-09-24 · **0 d** | ✅ |
+| T18 | devolucao-ultimo-dia-livre | 2026-10-10 · 7 · 2026-10-16 | OK · último livre 2026-10-16 · 1º demurrage 2026-10-17 · **0 d** | OK · último livre 2026-10-16 · 1º demurrage 2026-10-17 · **0 d** | ✅ |
+| T19 | devolucao-primeiro-dia-demurrage | 2026-10-10 · 7 · 2026-10-17 | OK · último livre 2026-10-16 · 1º demurrage 2026-10-17 · **1 d** | OK · último livre 2026-10-16 · 1º demurrage 2026-10-17 · **1 d** | ✅ |
+
+19/19 iguais. Sobre o T05/T06: com FT 0, a fórmula do Blueprint (último dia livre = descarga + N − 1) dá a véspera da descarga — ou seja, não existe dia livre. O motor aplica a fórmula literalmente; como a tela e o Portal exibem "último dia livre" quando FT é 0 é decisão de apresentação das Fases 9/12.
+
+### 6. Quantidade de testes e resultado
+
+| Suíte | Resultado |
+|---|---|
+| `npm run test:demurrage-engine` com Postgres | **69/69** — Fase 1: 33 (23 anteriores + 10 da migration 0006); Fase 2: 36 (5 de `civilDate`, 31 de `freeTimeClock`) |
+| `npm run test:demurrage-engine` sem banco configurado | 40 passam, 6 suítes de integração puladas, 0 falhas — o motor da Fase 2 não precisa de banco |
+| `npm test` (V1) | 25/25 |
+| `tsc --noEmit` e `npm run build` | sem erros |
+
+Os 31 testes de `freeTimeClock` são: um por fixture (19); cobertura das categorias exigidas e integridade da tabela literal do Cap. 23.1; FT 0 ≠ FT ausente; propriedade "nunca negativo, +1 por dia corrido" varrendo 91 datas finais para 5 valores de FT atravessando uma virada de ano; determinismo; contrato de entrada (sem `Date`, sem timestamp, sem Gate Out, ausência declarada com `null`, FT inteiro ≥ 0); pureza (o código do motor só importa arquivos do próprio diretório e não usa `Date` nem relógio do sistema); e o comportamento provisório do item 8(b). Os de `civilDate` conferem o calendário dia a dia de 1900 a 2100 (73.414 dias) contra um calendário de referência independente, incluindo as regras de século (1900 e 2100 não bissextos, 2000 bissexto).
+
+**Os testes realmente pegam erro:** três bugs injetados de propósito numa cópia do motor — o off-by-one da V1 (sem o dia inclusivo), FT ausente tratado como zero, e sem a checagem de data final antes da descarga — foram pegos por 13, 2 e 3 testes, respectivamente. O arquivo original foi restaurado byte a byte depois.
+
+### 7. V1 intacta
+
+`git diff --stat` de `src/demurrage/`, `src/routes/demurrageRoutes.ts`, `public/Demurrage.dc.html` e `public/PortalCliente.dc.html` está vazio tanto contra o último commit quanto contra `48ba7c1`, o estado anterior a todo o trabalho da V2. `src/config.ts`, `src/index.ts` e `src/middleware/` também não foram tocados. `npm test` 25/25.
+
+### 8. `PRECISA DE SUA VALIDAÇÃO`
+
+**(a) Limitação na garantia multiempresa da Fase 1 — encontrada nesta revisão.**
+1. *O que foi encontrado:* os triggers de consistência de organização das migrations 0003/0004 validam só a escrita da linha **filha**. Alterar o `organization_id` de uma linha **pai** que já é referenciada não é verificado. Reproduzido no banco de teste, em transações desfeitas, por dois caminhos: um `Processo` da organização A passou a referenciar um `Cliente` movido para a organização B; e um `Processo` movido para B deixou seu `Contêiner` registrado em A — ambos sem nenhum erro. Isso vale para `clientes` (referenciado por `processos` e `organization_memberships`), `condicoes_comerciais` (por `processos`), `processos` (por `containers` e `field_observations`) e `containers` (por `field_observations` e `snapshots`). Declarei na entrega da Fase 1 que os triggers impediam a associação entre organizações; a afirmação estava incompleta.
+2. *Por que é um problema:* contraria diretamente a decisão final #1 ("não permita que dados de uma organização sejam associados acidentalmente a registros pertencentes a outra"). Não há exposição hoje: nenhum código da aplicação altera `organization_id`, e não há dados reais. A migration 0006 não tem esse problema (a FK composta cobre os dois sentidos).
+3. *Alternativas:*
+   - **A — `organization_id` imutável** em toda tabela de tenant: um trigger genérico `BEFORE UPDATE` que rejeita a alteração, numa migration aditiva `0007`. Fecha todos os caminhos de uma vez, inclusive o polimórfico de `field_observations`.
+   - **B — FKs compostas** (como a da 0006) para as referências não polimórficas, mais A só nas tabelas com referência polimórfica. Mais declarativo, mais migração.
+   - **C — triggers também no lado pai**, verificando os filhos quando o `organization_id` muda. Permite mover um pai sem filhos; é o que mais código exige.
+4. *Impactos:* A torna impossível mover um registro de uma organização para outra (a correção passa a ser recriá-lo) — o Blueprint nunca prevê essa operação. B tem o mesmo efeito prático para os registros referenciados e toca mais tabelas. C preserva a possibilidade de mover registros sem filhos, ao custo de mais lógica em trigger.
+5. *Recomendação:* **A**, antes da Fase 5 (a primeira a escrever dados reais em volume). Não bloqueia a Fase 3, que é um motor puro como a Fase 2.
+
+**(b) Precedência quando FT está ausente e a data final é anterior à descarga.**
+O Blueprint e a revisão 5 definem cada condição isoladamente (FT ausente → `PENDING`; data final antes da descarga → inválido), mas não a combinação. Hoje o motor devolve `INVALID` com `pendencias: ['FREE_TIME_AUSENTE']` — nenhuma informação se perde e uma inconsistência de datas não fica escondida atrás de um "pendente". A alternativa é devolver `PENDING`. Recomendo manter como está. O caso está num teste marcado como PROVISÓRIO, fora das fixtures oficiais, até a decisão. Não bloqueia.
+
+**(c) Papel do responsável operacional.**
+Hoje o banco aceita como responsável qualquer membership da mesma organização, inclusive de papel `CLIENT`. O Blueprint não restringe explicitamente, mas trata o responsável operacional como alguém da operação da Rocket (Cap. 28.7, 29.1, 30.1). Restringir a `ANALYST`/`MANAGER`/`ADMIN` seria regra nova, então não foi implementado. Se aprovado, exige um trigger (o papel vive no membership) cobrindo também a troca de papel de um membership que já é responsável. Não bloqueia.
+
+### 9. Próximo passo
+
+Fase 2 concluída. **Não avanço para a Fase 3 sem autorização.**
