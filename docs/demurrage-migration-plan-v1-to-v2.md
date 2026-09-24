@@ -1,8 +1,12 @@
 # Plano de Migração — Demurrage V1 → Demurrage Engine V2
 
-**Data:** 24/09/2026 (revisão 6)
+**Data:** 24/09/2026 (revisão 7)
 **Base:** `docs/demurrage-blueprint-gap-analysis.md` (diagnóstico aprovado, com as 3 correções de premissa da revisão 1)
-**Status:** Fase 1 concluída (migrations corretivas 0006 e 0007), Fase 2 — Motor temporal concluída, e Fase 3 — Dois relógios House × Master concluída (migration aditiva 0008 do cache `relogios`). Fase 4 aguarda autorização. Ver "Relatório de entrega — revisão 6" no final deste documento.
+**Status:** Fase 1 concluída (migrations corretivas 0006 e 0007), Fase 2 — Motor temporal concluída, Fase 3 — Dois relógios concluída (migration 0008), e Fase 4 — Motor tarifário **parcialmente** concluída (migration 0009: infraestrutura completa dos três motores + Termo por Embarque com valores reais do Blueprint; Termo Único e tabelas de armador aguardando os números literais do Blueprint — ver PENDÊNCIA DE DADOS). Fase 5 aguarda autorização. Ver "Relatório de entrega — revisão 7" no final deste documento.
+
+**Decisões aprovadas na revisão 7:**
+1. **Seleção de versão do Termo Único:** a versão da tabela aplicada é a **vigente no 1º dia de demurrage do cliente** (fim do House Free Time). Não se cria um `fato_gerador_data` universal — a regra vale para o Termo Único; o Termo por Embarque fixa a versão na condição comercial, e a Exposição Rocket seleciona por data de referência análoga do relógio da Rocket.
+2. **`tariff_tables` também é imutável quanto à organização** (convenção da DECISÃO 1): recebeu o trigger `organization_id_immutable` na 0009.
 
 ## Aprovações e decisões da revisão 5
 
@@ -200,7 +204,7 @@ Essas fixtures vivem em um único arquivo compartilhado, `src/demurrage-engine/_
 **Separação explícita dos três motores comerciais (não um cálculo genérico):**
 o Blueprint trata Termo por Embarque, Termo Único e Exposição da Rocket como três regras de negócio diferentes (Cap. 24.1/24.2/24.3), com fontes de tabela, gatilhos de vigência e (no caso do Termo Único) lógica de faixa paralela ao free time distintos entre si. A Fase 4 implementa isso como **três estratégias nomeadas e isoláveis**, nunca uma função única "calcula tarifa" com `if`s internos:
 - **`TermoPorEmbarqueEngine`** → usa a Tabela Rocket vinculada ao embarque/termo assinado (Cap. 24.1): `valor = dias_demurrage_cliente × diária da tabela Rocket para o tipo de equipamento`, versão fixada no processo.
-- **`TermoUnicoEngine`** → usa a tabela vigente na data do fato gerador (Cap. 24.2), com o motor de faixas (`bracketEngine`) avançando em paralelo ao free time desde a descarga, sem reiniciar na primeira faixa ao fim do FT.
+- **`TermoUnicoEngine`** → usa a tabela Rocket do Termo Único vigente no **1º dia de demurrage do cliente** (decisão aprovada, revisão 7 — Cap. 24.2), com o motor de faixas (`bracketEngine`) avançando em paralelo ao free time desde a descarga, sem reiniciar na primeira faixa ao fim do FT.
 - **`ExposicaoRocketEngine`** → usa Master FT + tabela do armador (Cap. 24.3), com os estados `ESTIMATED`/`ESTIMATED_PROVISIONAL`/`CONFIRMED`/`UNAVAILABLE`, totalmente independente da tabela usada para o cliente.
 
 Cada motor produz um `ValorApurado` com um campo `motorComercial` identificando qual dos três o gerou (rastreabilidade obrigatória — nunca dá pra confundir "quanto o cliente paga" com "quanto a Rocket está exposta").
@@ -216,7 +220,7 @@ Cada motor produz um `ValorApurado` com um campo `motorComercial` identificando 
 
 **Arquivos existentes afetados:** nenhum arquivo da V1.
 
-**Migrations:** tabelas `tariff_table`, `tariff_bracket`, `container_type_mapping`; seed inicial das tabelas do Blueprint.
+**Migrations:** aditiva `0009_tariffs.sql` — `tariff_tables` (versionada, imutável quanto à organização), `tariff_brackets`, `valores_apurados` (append-only exceto a transição de `calculation_status`, via trigger), vínculo `condicoes_comerciais.tabela_id` (mesma organização), e seed global das 12 classes de equipamento em `container_types`. A tabela Rocket do Termo por Embarque (valores reais do Blueprint) é seedada por organização em `tariffs/seed/rocketTermoPorEmbarque.ts`. Seed das tabelas de armador/Termo Único: pendente dos números do Blueprint.
 
 **Dependências:** Fase 3 (dias de demurrage por relógio já calculados) para o motor tarifário ter "quantos dias" e "em qual data" aplicar a faixa. Não depende de Fase 5.
 
@@ -1134,3 +1138,89 @@ Nenhum outro ponto exigiu decisão nova: DECISÕES 1–3 e a Fase 3 couberam no 
 ### 11. Próximo passo
 
 Fase 3 concluída. **Não avanço para a Fase 4 sem nova autorização.**
+
+---
+
+## Relatório de entrega — revisão 7 (migration 0009 + Fase 4: motor tarifário)
+
+**Escopo autorizado:** Fase 4 — motor tarifário e versionamento. Entregue a INFRAESTRUTURA completa dos três motores comerciais + o Termo por Embarque com os valores reais do Blueprint. Termo Único e as 12 tabelas de armador aguardam os números literais (ver item 11). Nada de Tracking real, scheduler, prioridade, Empty Return, minuta, frontend, responsabilidade Rocket×cliente ou faturamento foi tocado. V1 intacta.
+
+### 1. Migration criada — `0009_tariffs.sql` (aditiva; 0001–0008 preservadas)
+
+- `tariff_tables` (TabelaTarifaria): versionada e histórica; `organization_id` nullable (NULL = pública de armador, preenchido = privada Rocket×cliente); `tipo`, `armador_id`, `termo_comercial`, `versao`, `vigencia_inicio/fim`, `qualidade_fonte`, **`day_count_basis` explícito** (`since_discharge_absolute` | `excess_over_free_time`), `fonte`. `CHECK` de coerência tipo×instrumento; `UNIQUE(organization_id, tipo, armador_id, termo_comercial, versao)` + índice único parcial para as públicas de armador; **trigger `organization_id_immutable`** (convenção da DECISÃO 1).
+- `tariff_brackets` (FaixaTarifaria): `tipo_equipamento`, `dia_inicial`, `dia_final` (NULL = aberta), `valor_dia`, `moeda`; `UNIQUE(tariff_table_id, tipo_equipamento, dia_inicial)`.
+- `valores_apurados` (ValorApurado): a memória de cálculo completa (container, relógio, motor, tabela+versão, `day_count_basis_aplicada`, período, dias, `faixas_aplicadas` JSONB, total, moeda, `confirmation_status`, `calculation_status`, `engine_version`, `input_hash`, `supersedes_id`). Índice parcial único garante **no máximo um ativo** (OPEN/FINAL) por (container, relógio, motor). Trigger `valores_apurados_append_only`: sem DELETE; no UPDATE só a transição de `calculation_status` (para frente) e a confirmação de custo real; `CHECK` de que CONFIRMED exige `custo_real_confirmado_ref`.
+- `condicoes_comerciais.tabela_id` (vínculo condição→tabela Rocket) com trigger de mesma organização + mesmo termo.
+
+### 2. Tabelas/versões seedadas
+
+- **Global (na migration):** 12 classes de equipamento em `container_types` (`20DV/40DV/20HC/40HC/20OT/40OT/20FR/40FR/20NOR/40NOR/20RE/40RE`) — o vocabulário que as tarifas usam, não uma tabela de equivalências ISO (essa o Blueprint deixa como pendência dele mesmo).
+- **Por organização (módulo de seed `tariffs/seed/rocketTermoPorEmbarque.ts`):** tabela Rocket×cliente do Termo por Embarque, valores LITERAIS do Blueprint Cap. 24.1 (`20DV/HC=150`, `40DV/HC=250`, `20OT=230`, `40OT=300`, `20FR=230`, `40FR=300`, `20NOR=275`, `40NOR=400`, `20RE=450`, `40RE=600` USD/dia), `day_count_basis=since_discharge_absolute`, `qualidade_fonte=OFICIAL_VALIDADA`. Uma faixa aberta [1,∞) por equipamento (tarifa fixa por dia).
+
+### 3. Fixtures oficiais da Fase 4
+
+`CASOS_TERMO_POR_EMBARQUE` (valores reais): E01–E06. `CASOS_FAIXA_TARIFARIA` e `CASOS_TABELAS_PROVISORIAS` seguem vazias por **pendência de dados** (números do Termo Único e das tabelas de armador — item 11). O mecanismo é coberto por testes com tabelas **sintéticas rotuladas** (não são valores do Blueprint), incluindo o exemplo conceitual que você deu (faixas 7–9/10+, FT até o dia 21).
+
+### 4. Implementação dos três motores (separados, infra comum)
+
+- `tariffs/bracketEngine.ts` — infra comum (posiciona o dia na faixa por `day_count_basis`; buraco → UNAVAILABLE). Usada por Termo Único e Exposição Rocket, **nunca** pelo Termo por Embarque.
+- `tariffs/engines/termoPorEmbarqueEngine.ts` — tarifa fixa: `dias × diária Rocket`, sem faixa, `day_count_basis_aplicada=null`.
+- `tariffs/engines/termoUnicoEngine.ts` — faixas da tabela Rocket do Termo Único; versão selecionada pelo 1º dia de demurrage do cliente (no repositório).
+- `tariffs/engines/exposicaoRocketEngine.ts` — Master FT + tabela do armador, independente do cliente; nunca CONFIRMED.
+- `domain/containerType.ts` (normalização sem fuzzy), `domain/valorApurado.ts` (input_hash), `persistence/tariffTableRepository.ts` (seleção por vigência), `persistence/valorApuradoRepository.ts` (supersede + idempotência por hash).
+
+### 5. Tabela esperado × real (Termo por Embarque, valores reais)
+
+| Fixture | Equipamento | Dias cliente | Esperado | Real |
+|---|---|---|---|---|
+| E01 | 20DV | 8 | OK 1200 USD (150/dia) | OK 1200 USD |
+| E02 | 40HC | 8 | OK 2000 USD (250/dia) | OK 2000 USD |
+| E03 | 20RE | 3 | OK 1350 USD (450/dia) | OK 1350 USD |
+| E04 | 40NOR | 10 | OK 4000 USD (400/dia) | OK 4000 USD |
+| E05 | 20DV | 0 | OK 0 USD | OK 0 USD |
+| E06 | não reconhecido | 8 | UNAVAILABLE | UNAVAILABLE |
+
+Mecanismo de faixa (tabela sintética 1–6@100 / 7–14@200 / 15+@300, base `since_discharge_absolute`, FT 5, 12 dias): esperado 2600 = 1×100 + 8×200 + 3×300; real 2600, `faixas_aplicadas` `[{1–6,100,1},{7–14,200,8},{15+,300,3}]`. Exemplo conceitual (7–9/10+, FT 21, 1 dia): a 1ª diária cai em 10+ (300), não volta para 7–9. Sob base `excess_over_free_time`, o mesmo caso dá UNAVAILABLE (1º dia excedente = dia 1, fora das faixas) — provando que a semântica vem da tabela, nunca é inferida.
+
+### 6. Exemplo completo de `ValorApurado`
+
+Termo por Embarque, 20DV, 8 dias:
+```json
+{
+  "motorComercial": "termo_embarque", "relogioTipo": "cliente",
+  "tabelaId": "<uuid-rocket>", "versaoTabela": 1, "dayCountBasisAplicada": null,
+  "confirmationStatus": "ESTIMATED", "calculationStatus": "OPEN",
+  "total": 1200, "moeda": "USD", "diasCobrados": 8,
+  "faixasAplicadas": [{ "diaInicial": 1, "diaFinal": null, "valorDia": 150, "dias": 8 }],
+  "engineVersion": "tariff-1.0.0", "supersedesId": null
+}
+```
+`input_hash` (muda quando um input muda): 8 dias → `9e8a7206…`; 10 dias / final 24/09 → `479e40b6…`.
+
+### 7. Prova de versionamento histórico
+
+Seed v1 (Blueprint, vigência até 30/06) e v2 (sintética, a partir de 01/07): `selecionarVigente` na data de referência devolve v1 (150) para 10/05 e v2 (160) para 10/08. Ao recalcular com input diferente, o `ValorApurado` anterior vira `SUPERSEDED` (preservado, com seu próprio `total`/`versao_tabela`) e nasce um novo OPEN com `supersedes_id` apontando para ele; o índice parcial garante um único ativo. Idempotência: registrar os mesmos inputs de novo não cria linha (`efeito: inalterado`).
+
+### 8. Prova de `UNAVAILABLE` sem aproximação
+
+Tabela sintética com buraco (1–6 e 15+, sem 7–14): o dia 7 não tem faixa → o cálculo inteiro é `UNAVAILABLE` (nunca cai na faixa vizinha). Equipamento não reconhecido → `UNAVAILABLE` (bloqueia só a tarifa; o relógio segue vivo). Uma tabela `OFICIAL_VALIDADA`/`OFICIAL_NAO_VALIDADA` **não** vira `CONFIRMED` sozinha; `CONFIRMED` só com `custo_real_confirmado_ref` (barrado por `CHECK` no banco).
+
+### 9. Prova de independência cobrança do cliente × exposição Rocket
+
+No mesmo contêiner coexistem dois `ValorApurado`: `termo_embarque`/`cliente` (1200 USD, tabela Rocket) e `exposicao_armador`/`rocket` (270 USD, tabela de armador sintética) — motores, tabelas e relógios distintos, nenhum lê o outro. Dois contêineres do mesmo processo com equipamentos diferentes (20DV → 1200, 40HC → 2000) apurados independentemente.
+
+### 10. Testes totais e regressão da V1
+
+Suíte da engine: **137/137 verde** (era 117; +20 da Fase 4). `tsc --noEmit` limpo; `npm run build` limpo. Suíte original da V1: **25/25 verde**. V1 intacta: `git diff` de `src/demurrage/*`, `demurrageRoutes.ts` e os portais contra `48ba7c1` = vazio.
+
+### 11. PENDÊNCIA DE DADOS / PRECISA DE SUA VALIDAÇÃO
+
+**Faltam os números literais do Blueprint para completar a Fase 4** (a regra proíbe inventá-los):
+1. **Tabela Rocket do Termo Único** (Cap. 24.2): por equipamento — faixas (`dia_inicial`/`dia_final`|aberto), `valor/dia`, moeda, vigência, `day_count_basis`; e ao menos duas versões para as fixtures de mudança de versão.
+2. **As 12 tabelas de armador** (Cap. 24.3.1): por tabela — faixas por equipamento, moeda, `day_count_basis`, `qualidade_fonte`, vigência; quais estão incompletas e onde (Yang Ming/COSCO/ZIM → `UNAVAILABLE`); e os parâmetros da **PIL** (ponto médio → `ESTIMATED_PROVISIONAL`).
+
+Com esses números, seedo as tabelas e preencho `CASOS_FAIXA_TARIFARIA`/`CASOS_TABELAS_PROVISORIAS` com a reprodução dos exemplos do próprio documento — a infraestrutura já está pronta e testada para recebê-los. Formato sugerido por tabela: `armador | equipamento | dia_inicial | dia_final(ou "aberto") | valor | moeda | day_count_basis | qualidade_fonte | vigencia_inicio`.
+
+### 12. Próximo passo
+
+Fase 4 concluída na parte que os dados permitem. **Não avanço para a Fase 5 sem nova autorização**; e aguardo os números do Blueprint para fechar Termo Único + tabelas de armador dentro da própria Fase 4.

@@ -115,6 +115,9 @@ test('0007 — organization_id imutável nas tabelas de tenant', { skip: !url },
 
   await t.test('toda tabela com organization_id tem o trigger de imutabilidade (regra padrão para tabelas futuras)', async () => {
     const EXCECOES_APROVADAS: string[] = [];
+    // tariff_tables (Fase 4) também carrega organization_id e, pela convenção da
+    // DECISÃO 1, recebeu o mesmo trigger — entra na expectativa do catálogo.
+    const TABELAS_COM_ORG = [...TABELAS_TENANT, 'tariff_tables'];
     const { rows } = await pool.query(`
       SELECT c.table_name,
              EXISTS (SELECT 1 FROM pg_trigger tg
@@ -125,7 +128,7 @@ test('0007 — organization_id imutável nas tabelas de tenant', { skip: !url },
        ORDER BY c.table_name`);
     const semTrigger = rows.filter((r) => !r.tem_trigger && !EXCECOES_APROVADAS.includes(r.table_name));
     assert.deepEqual(semTrigger, [], 'tabela de tenant sem organization_id_immutable');
-    assert.deepEqual(rows.map((r) => r.table_name).sort(), [...TABELAS_TENANT].sort());
+    assert.deepEqual(rows.map((r) => r.table_name).sort(), [...TABELAS_COM_ORG].sort());
   });
 
   await pool.end();

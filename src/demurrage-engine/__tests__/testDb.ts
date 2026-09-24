@@ -27,11 +27,12 @@ export function testPool(): Pool {
 export async function truncateAll(pool: Pool): Promise<void> {
   await pool.query(`
     TRUNCATE TABLE
+      valores_apurados, tariff_brackets, tariff_tables,
       relogios,
       backfill_items, backfill_runs,
       snapshots, field_observations,
       containers, processos, condicoes_comerciais, clientes,
-      container_type_mappings, container_types, armadores,
+      container_type_mappings, armadores,
       organization_memberships, usuarios, organizations
     RESTART IDENTITY CASCADE;
   `);

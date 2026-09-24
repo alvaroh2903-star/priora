@@ -19,6 +19,7 @@ test('migrations: aplica todas as migrations pendentes em um banco novo e é ide
       '0006_responsavel_operacional_membership.sql',
       '0007_org_imutavel_e_responsavel_interno.sql',
       '0008_relogios.sql',
+      '0009_tariffs.sql',
     ];
 
     const first = await runMigrations(pool);
@@ -49,6 +50,9 @@ test('migrations: aplica todas as migrations pendentes em um banco novo e é ide
       'backfill_runs',
       'backfill_items',
       'relogios',
+      'tariff_tables',
+      'tariff_brackets',
+      'valores_apurados',
     ]) {
       assert.ok(tables.includes(expected), `tabela ${expected} deveria existir após a Fase 1`);
     }

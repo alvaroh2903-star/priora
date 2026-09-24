@@ -496,10 +496,88 @@ export const CASOS_MULTIPLOS_CONTEINERES: readonly CasoMultiplosConteineres[] = 
   },
 ];
 
-/** Fase 4 — mudança de faixa tarifária, Termo Único e armador (item 4). */
+/* ------------------------------------------------------------------ *
+ * Fase 4 — Motor tarifário
+ *
+ * VALORES REAIS que temos do Blueprint: só a tabela Rocket×cliente do Termo por
+ * Embarque (Cap. 24.1), fornecida na autorização da Fase 4. Estão abaixo, em
+ * `CASOS_TERMO_POR_EMBARQUE`, conferidos aritmeticamente.
+ *
+ * PENDÊNCIA DE DADOS (revisão 7): os números do Termo Único (Cap. 24.2) e das 12
+ * tabelas de armador (Cap. 24.3.1 — incl. PIL provisória e as incompletas Yang
+ * Ming/COSCO/ZIM) NÃO estão neste repositório. Como a regra é "usar literalmente
+ * os valores do Blueprint, sem completar lacunas", essas fixtures de reprodução
+ * (`CASOS_FAIXA_TARIFARIA`, `CASOS_TABELAS_PROVISORIAS`) ficam vazias até os
+ * números chegarem. A CORREÇÃO DO MECANISMO (posicionamento em faixa, dois
+ * day_count_basis, UNAVAILABLE sem aproximação, ESTIMATED_PROVISIONAL, seleção
+ * de versão, supersede) é provada por testes de mecanismo com tabelas SINTÉTICAS
+ * claramente rotuladas (não são valores do Blueprint) em `tariffs.test.ts`.
+ * ------------------------------------------------------------------ */
+
+export interface CasoTermoPorEmbarque {
+  id: string;
+  descricao: string;
+  referencia: string;
+  /** Código normalizado do equipamento; null = não reconhecido. */
+  equipamento: string | null;
+  diasDemurrageCliente: number;
+  esperado:
+    | { status: 'OK'; total: number; moeda: string; valorDia: number }
+    | { status: 'UNAVAILABLE'; motivoContem: string };
+}
+
+export const CASOS_TERMO_POR_EMBARQUE: readonly CasoTermoPorEmbarque[] = [
+  {
+    id: 'E01', descricao: '20DV, 8 dias de demurrage do cliente → 8 × 150',
+    referencia: 'Blueprint Cap. 24.1 (tabela Rocket aprovada)',
+    equipamento: '20DV', diasDemurrageCliente: 8,
+    esperado: { status: 'OK', total: 1200, moeda: 'USD', valorDia: 150 },
+  },
+  {
+    id: 'E02', descricao: '40HC, 8 dias → 8 × 250',
+    referencia: 'Blueprint Cap. 24.1',
+    equipamento: '40HC', diasDemurrageCliente: 8,
+    esperado: { status: 'OK', total: 2000, moeda: 'USD', valorDia: 250 },
+  },
+  {
+    id: 'E03', descricao: '20RE (reefer), 3 dias → 3 × 450',
+    referencia: 'Blueprint Cap. 24.1',
+    equipamento: '20RE', diasDemurrageCliente: 3,
+    esperado: { status: 'OK', total: 1350, moeda: 'USD', valorDia: 450 },
+  },
+  {
+    id: 'E04', descricao: '40NOR, 10 dias → 10 × 400',
+    referencia: 'Blueprint Cap. 24.1',
+    equipamento: '40NOR', diasDemurrageCliente: 10,
+    esperado: { status: 'OK', total: 4000, moeda: 'USD', valorDia: 400 },
+  },
+  {
+    id: 'E05', descricao: '20DV, 0 dias (ainda no free time) → total 0',
+    referencia: 'Blueprint Cap. 24.1',
+    equipamento: '20DV', diasDemurrageCliente: 0,
+    esperado: { status: 'OK', total: 0, moeda: 'USD', valorDia: 150 },
+  },
+  {
+    id: 'E06', descricao: 'Equipamento não reconhecido → UNAVAILABLE (bloqueia só a tarifa)',
+    referencia: 'Blueprint Cap. 31.9',
+    equipamento: null, diasDemurrageCliente: 8,
+    esperado: { status: 'UNAVAILABLE', motivoContem: 'equipamento nao reconhecido' },
+  },
+];
+
+/**
+ * Fase 4 — Termo Único e tabelas de armador (Cap. 24.2/24.3.1).
+ * VAZIO por pendência de dados (revisão 7): faltam os números literais do
+ * Blueprint. Preencher quando as tabelas forem fornecidas.
+ */
 export const CASOS_FAIXA_TARIFARIA: readonly never[] = [];
 
-/** Fase 4 — tabelas provisórias (PIL) e incompletas (Yang Ming/COSCO/ZIM) (item 7). */
+/**
+ * Fase 4 — tabelas provisórias (PIL) e incompletas (Yang Ming/COSCO/ZIM).
+ * VAZIO por pendência de dados (revisão 7): faltam os números literais do
+ * Blueprint. O mecanismo (ESTIMATED_PROVISIONAL, UNAVAILABLE sem aproximação)
+ * está coberto por testes de mecanismo com tabelas sintéticas.
+ */
 export const CASOS_TABELAS_PROVISORIAS: readonly never[] = [];
 
 /**
