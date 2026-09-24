@@ -156,6 +156,7 @@ test('migration 0006: compatibilidade com registros existentes do vínculo antig
       '0007_org_imutavel_e_responsavel_interno.sql',
       '0008_relogios.sql',
       '0009_tariffs.sql',
+      '0010_tariff_vigencia_desconhecida.sql',
     ]);
 
     const processos = new ProcessoRepository(pool);

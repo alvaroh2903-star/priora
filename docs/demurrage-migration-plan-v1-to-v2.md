@@ -1,12 +1,17 @@
 # Plano de Migração — Demurrage V1 → Demurrage Engine V2
 
-**Data:** 24/09/2026 (revisão 7)
+**Data:** 24/09/2026 (revisão 8)
 **Base:** `docs/demurrage-blueprint-gap-analysis.md` (diagnóstico aprovado, com as 3 correções de premissa da revisão 1)
-**Status:** Fase 1 concluída (migrations corretivas 0006 e 0007), Fase 2 — Motor temporal concluída, Fase 3 — Dois relógios concluída (migration 0008), e Fase 4 — Motor tarifário **parcialmente** concluída (migration 0009: infraestrutura completa dos três motores + Termo por Embarque com valores reais do Blueprint; Termo Único e tabelas de armador aguardando os números literais do Blueprint — ver PENDÊNCIA DE DADOS). Fase 5 aguarda autorização. Ver "Relatório de entrega — revisão 7" no final deste documento.
+**Status:** Fase 1 concluída (migrations corretivas 0006 e 0007), Fase 2 — Motor temporal concluída, Fase 3 — Dois relógios concluída (migration 0008), e Fase 4 — Motor tarifário **concluída** (migrations 0009 e 0010: os três motores, Termo por Embarque + Termo Único + as 12 tabelas de armador com valores reais do Blueprint, e a governança de vigência desconhecida). Fase 5 aguarda autorização. Ver "Relatório de entrega — revisão 8" no final deste documento.
 
 **Decisões aprovadas na revisão 7:**
-1. **Seleção de versão do Termo Único:** a versão da tabela aplicada é a **vigente no 1º dia de demurrage do cliente** (fim do House Free Time). Não se cria um `fato_gerador_data` universal — a regra vale para o Termo Único; o Termo por Embarque fixa a versão na condição comercial, e a Exposição Rocket seleciona por data de referência análoga do relógio da Rocket.
+1. **Seleção de versão do Termo Único:** a versão da tabela aplicada é a **vigente no 1º dia de demurrage do cliente** (fim do House Free Time). Não se cria um `fato_gerador_data` universal.
 2. **`tariff_tables` também é imutável quanto à organização** (convenção da DECISÃO 1): recebeu o trigger `organization_id_immutable` na 0009.
+
+**Decisões aprovadas na revisão 8:**
+3. **Vigência tarifária desconhecida** (migration 0010): `tariff_tables.vigencia_inicio` passa a NULLABLE (NULL = início desconhecido, nunca -infinito) e ganha `verificada_em TIMESTAMPTZ NOT NULL`. Uma versão de início desconhecido só é aplicável a partir da data civil de `verificada_em`; versão datada que cubra a data tem prioridade; sem versão comprovada → `UNAVAILABLE`/`TARIFF_VERSION_NOT_PROVEN` (nunca zero).
+4. **Seleção da versão da tabela de ARMADOR pela data de descarga** (Blueprint). Termo Único continua pelo 1º dia de demurrage; Termo por Embarque fixa na condição comercial.
+5. **Hapag-Lloyd é a exceção aprovada** com `day_count_basis = excess_over_free_time`; todas as outras tabelas de armador `since_discharge_absolute`. O **Master FT vem do processo**; o "FT padrão" das tabelas é informativo e não entra no cálculo (nem é cadastrado).
 
 ## Aprovações e decisões da revisão 5
 
@@ -1224,3 +1229,73 @@ Com esses números, seedo as tabelas e preencho `CASOS_FAIXA_TARIFARIA`/`CASOS_T
 ### 12. Próximo passo
 
 Fase 4 concluída na parte que os dados permitem. **Não avanço para a Fase 5 sem nova autorização**; e aguardo os números do Blueprint para fechar Termo Único + tabelas de armador dentro da própria Fase 4.
+
+---
+
+## Relatório de entrega — revisão 8 (migration 0010 + Fase 4 completa: tabelas de armador + Termo Único + vigência desconhecida)
+
+**Escopo autorizado:** completar a Fase 4 com os números literais do Blueprint (Termo Único, 12 tabelas de armador) e a governança de vigência desconhecida. V1 intacta. Fase 5 segue aguardando autorização.
+
+### 1. Seeds realmente cadastrados
+
+- **Termo por Embarque** (Cap. 24.1) e **Termo Único** (Cap. 24.2): tabela Rocket×cliente, faixa aberta única por equipamento, valores reais (`20DV/HC=150`, `40DV/HC=250`, `20OT=230`, `40OT=300`, `20FR=230`, `40FR=300`, `20NOR=275`, `40NOR=400`, `20RE=450`, `40RE=600` USD). Motores e tabelas separados apesar de coincidirem numericamente. Módulo `tariffs/seed/rocketTermoPorEmbarque.ts`.
+- **12 tabelas de armador** (Cap. 24.3.1): MSC, Hapag-Lloyd, CMA CGM, Maersk, ONE, PIL, Yang Ming, HMM, Evergreen, COSCO, OOCL, ZIM — valores literais, agrupamento de equipamento preservado exatamente (ex.: CMA `40/45 Dry` uma chave só; Maersk `20/40 Reefer` idem). Públicas (`organization_id = NULL`). Módulo `tariffs/seed/armadorTables.ts`. Verificado em teste: 14 tabelas no total, **Hapag** é a única `excess_over_free_time`, **PIL** a única `PROVISORIA_INCOMPLETA`.
+- **Vigência:** todas com `vigencia_inicio = NULL` (início desconhecido) e `verificada_em = 2026-09-24`. Nenhuma data histórica inventada.
+- **Especial incompleto** (Yang Ming/COSCO/ZIM): a "faixa inicial" sem limites cronológicos **não é cadastrada** — nenhuma linha de bracket para Especial desses armadores, então o cálculo cai em `UNAVAILABLE`.
+- **FT padrão** das fontes: informativo, **não cadastrado** — o cálculo usa o Master FT do processo.
+
+### 2. Fixtures
+
+`CASOS_TERMO_POR_EMBARQUE` (E01–E06), `CASOS_TERMO_UNICO` (TU01–TU02) e `CASOS_EXPOSICAO_ARMADOR` (AR-MSC … AR-ZIM, incl. os Especiais → UNAVAILABLE) em `__fixtures__/casosOficiais.ts` — todos com valores reais, conferidos contra o mesmo oráculo aritmético do bracketEngine. As tabelas sintéticas restantes cobrem **só propriedades abstratas** (excess × absoluto, buraco → UNAVAILABLE, agregação por faixa), não valores comerciais.
+
+### 3. Esperado × real
+
+| Fixture | Tabela | Equip. | day_count_basis | Master FT | Dias | Esperado | Real |
+|---|---|---|---|---|---|---|---|
+| AR-MSC | MSC | 20DRY | absoluto | 6 | 6 | 495 USD (3×55+3×110) | 495 |
+| AR-HAPAG | Hapag | 20DRY | **excedente** | 10 | 20 | 2448 USD (16×113+4×160) | 2448 |
+| AR-CMA | CMA | 20DRY | absoluto | 12 | 5 | 450 USD (2×60+3×110) | 450 |
+| AR-MAERSK | Maersk | 20DRY | absoluto | 5 | 20 | 1925 USD (4 faixas) | 1925 |
+| AR-ONE | ONE | 20REEFER | absoluto | 3 | 15 | 3535 USD (3 faixas) | 3535 |
+| AR-PIL | PIL | 20DRY | absoluto | 7 | 16 | 1037,50 USD · ESTIMATED_PROVISIONAL | 1037,50 |
+| AR-YANGMING-ESP | Yang Ming | 20ESPECIAL | absoluto | 7 | 10 | UNAVAILABLE | UNAVAILABLE |
+| AR-HMM | HMM | 20DRY | absoluto | 7 | 16 | 1185 USD | 1185 |
+| AR-EVERGREEN | Evergreen | 40DRYHC | absoluto | 7 | 16 | 2155 USD | 2155 |
+| AR-COSCO | COSCO | 40DRYHC | absoluto | 7 | 16 | 2065 USD | 2065 |
+| AR-COSCO-ESP | COSCO | 20ESPECIAL | absoluto | 7 | 10 | UNAVAILABLE | UNAVAILABLE |
+| AR-OOCL | OOCL | 20DRY | absoluto | 10 | 10 | 690 USD | 690 |
+| AR-ZIM | ZIM | 20DRY | absoluto | 7 | 16 | 1140 USD | 1140 |
+| AR-ZIM-ESP | ZIM | 20ESPECIAL | absoluto | 7 | 10 | UNAVAILABLE | UNAVAILABLE |
+| TU01 | Termo Único | 20DV | absoluto | 14 | 8 | 1200 USD | 1200 |
+| TU02 | Termo Único | 40HC | absoluto | 14 | 10 | 2500 USD | 2500 |
+
+AR-CMA prova o ponto do enunciado: Master FT (12) > FT padrão (7) e a faixa **não reinicia** — o dia 13 cai em `8–14` e o dia 15 em `15+`, pela contagem absoluta desde a descarga. AR-HAPAG prova o `excess_over_free_time` (o dia excedente 1 é o 1º de demurrage), sem converter para dias desde a descarga.
+
+### 4. Testes totais e regressão
+
+Suíte da engine: **152/152 verde** (era 137; +35 no arquivo de tarifas). `tsc`/`build` limpos. V1: **25/25 verde**. V1 intacta: `git diff` vs `48ba7c1` = vazio.
+
+### 5. Prova de versionamento
+
+- Seleção por vigência conhecida × início desconhecido: versão datada que cobre a data de referência tem prioridade sobre a de início desconhecido (teste `vigência desconhecida — ... datada vence`).
+- `recálculo faz supersede; inclusão posterior de vigência não apaga o ValorApurado anterior`: o valor antigo vira `SUPERSEDED` com seu próprio `total`/`versao_tabela` preservados; o novo nasce com `supersedes_id` apontando para ele.
+
+### 6. Prova das lacunas UNAVAILABLE
+
+Especial de Yang Ming, COSCO e ZIM (faixa inicial sem limites) não têm bracket cadastrado → `UNAVAILABLE` (`sem faixa`), nunca aproximação. Equipamento não reconhecido → `UNAVAILABLE`. Sem versão de tabela comprovada → `UNAVAILABLE`/`TARIFF_VERSION_NOT_PROVEN`, com prova explícita de que o total é `null`, **não zero**.
+
+### 7. Comportamento PIL
+
+PIL é `PROVISORIA_INCOMPLETA`; todo cálculo com ela sai `ESTIMATED_PROVISIONAL` (AR-PIL: 1037,50 USD). Nunca `CONFIRMED` — e `CONFIRMED` em geral só com `custo_real_confirmado_ref` (barrado por `CHECK`). Os valores usados são os do ponto médio informados no Blueprint (ex.: 20 Dry `8–14=50`, `15–21=67,50`, `22+=107,50`; Reefer com o mínimo estimado nas faixas abertas `220`/`380`).
+
+### 8. V1 intacta
+
+`git diff` de `src/demurrage/*`, `src/routes/demurrageRoutes.ts`, `public/Demurrage.dc.html` e `public/PortalCliente.dc.html` contra `48ba7c1`: vazio. Toda a Fase 4 vive em `src/demurrage-engine/`.
+
+### 9. PRECISA DE SUA VALIDAÇÃO
+
+Nenhum bloqueio novo. Um limite conhecido, não urgente, registrado para transparência: a **normalização do tipo de contêiner do processo para a classe de equipamento do armador** (ex.: `20DV` do contêiner → `20DRY` da tabela MSC; `OT`/`FR` → `Especial`; onde entra `NOR`) depende da tabela de equivalências que o **próprio Blueprint deixa como pendência dele mesmo**. As fixtures e o motor operam sobre a classe de equipamento já resolvida; o mapeamento fino contêiner→classe fica para quando a equivalência for fornecida, sem inventar correspondências. Não bloqueia a Fase 4 nem a Fase 5.
+
+### 10. Próximo passo
+
+Fase 4 concluída. **Não avanço para a Fase 5 sem nova autorização.**

@@ -499,19 +499,13 @@ export const CASOS_MULTIPLOS_CONTEINERES: readonly CasoMultiplosConteineres[] = 
 /* ------------------------------------------------------------------ *
  * Fase 4 — Motor tarifário
  *
- * VALORES REAIS que temos do Blueprint: só a tabela Rocket×cliente do Termo por
- * Embarque (Cap. 24.1), fornecida na autorização da Fase 4. Estão abaixo, em
- * `CASOS_TERMO_POR_EMBARQUE`, conferidos aritmeticamente.
- *
- * PENDÊNCIA DE DADOS (revisão 7): os números do Termo Único (Cap. 24.2) e das 12
- * tabelas de armador (Cap. 24.3.1 — incl. PIL provisória e as incompletas Yang
- * Ming/COSCO/ZIM) NÃO estão neste repositório. Como a regra é "usar literalmente
- * os valores do Blueprint, sem completar lacunas", essas fixtures de reprodução
- * (`CASOS_FAIXA_TARIFARIA`, `CASOS_TABELAS_PROVISORIAS`) ficam vazias até os
- * números chegarem. A CORREÇÃO DO MECANISMO (posicionamento em faixa, dois
- * day_count_basis, UNAVAILABLE sem aproximação, ESTIMATED_PROVISIONAL, seleção
- * de versão, supersede) é provada por testes de mecanismo com tabelas SINTÉTICAS
- * claramente rotuladas (não são valores do Blueprint) em `tariffs.test.ts`.
+ * VALORES REAIS do Blueprint (revisão 8): tabela Rocket do Termo por Embarque
+ * (Cap. 24.1) e do Termo Único (Cap. 24.2), e as 12 tabelas de armador
+ * (Cap. 24.3.1). Todos conferidos aritmeticamente. Hapag-Lloyd é a exceção
+ * aprovada com `excess_over_free_time`; PIL é `PROVISORIA_INCOMPLETA` →
+ * `ESTIMATED_PROVISIONAL`; Especial incompleto (Yang Ming/COSCO/ZIM) →
+ * `UNAVAILABLE`, sem inventar limites. O Master FT vem do processo; o "FT
+ * padrão" das fontes é informativo e não entra no cálculo.
  * ------------------------------------------------------------------ */
 
 export interface CasoTermoPorEmbarque {
@@ -565,20 +559,138 @@ export const CASOS_TERMO_POR_EMBARQUE: readonly CasoTermoPorEmbarque[] = [
   },
 ];
 
-/**
- * Fase 4 — Termo Único e tabelas de armador (Cap. 24.2/24.3.1).
- * VAZIO por pendência de dados (revisão 7): faltam os números literais do
- * Blueprint. Preencher quando as tabelas forem fornecidas.
- */
-export const CASOS_FAIXA_TARIFARIA: readonly never[] = [];
+/* --- Termo Único (Cap. 24.2), valores reais da tabela Rocket verificada --- */
 
-/**
- * Fase 4 — tabelas provisórias (PIL) e incompletas (Yang Ming/COSCO/ZIM).
- * VAZIO por pendência de dados (revisão 7): faltam os números literais do
- * Blueprint. O mecanismo (ESTIMATED_PROVISIONAL, UNAVAILABLE sem aproximação)
- * está coberto por testes de mecanismo com tabelas sintéticas.
- */
-export const CASOS_TABELAS_PROVISORIAS: readonly never[] = [];
+export interface CasoTermoUnico {
+  id: string;
+  descricao: string;
+  referencia: string;
+  equipamento: string;
+  freeTimeDaysCliente: number;
+  diasDemurrageCliente: number;
+  esperado: { status: 'OK'; total: number; moeda: string };
+}
+
+export const CASOS_TERMO_UNICO: readonly CasoTermoUnico[] = [
+  {
+    id: 'TU01', descricao: '20DV, tabela Rocket atual do Termo Único (faixa aberta única): 8 × 150',
+    referencia: 'Blueprint Cap. 24.2 (verificada 24/09/2026)',
+    equipamento: '20DV', freeTimeDaysCliente: 14, diasDemurrageCliente: 8,
+    esperado: { status: 'OK', total: 1200, moeda: 'USD' },
+  },
+  {
+    id: 'TU02', descricao: '40HC, 10 dias → 10 × 250 (mesmo número do Termo por Embarque, tabela/motor diferentes)',
+    referencia: 'Blueprint Cap. 24.2',
+    equipamento: '40HC', freeTimeDaysCliente: 14, diasDemurrageCliente: 10,
+    esperado: { status: 'OK', total: 2500, moeda: 'USD' },
+  },
+];
+
+/* --- Exposição Rocket: 12 tabelas de armador (Cap. 24.3.1), valores reais --- */
+
+export type DayCountBasisFixture = 'since_discharge_absolute' | 'excess_over_free_time';
+
+export interface CasoExposicaoArmador {
+  id: string;
+  armador: string;
+  descricao: string;
+  referencia: string;
+  equipamento: string;
+  dayCountBasis: DayCountBasisFixture;
+  /** Master FT do processo (nunca o "FT padrão" da tabela). */
+  masterFreeTimeDays: number;
+  diasDemurrageRocket: number;
+  esperado:
+    | { status: 'OK'; total: number; moeda: string; confirmationStatus: 'ESTIMATED' | 'ESTIMATED_PROVISIONAL' }
+    | { status: 'UNAVAILABLE'; motivoContem: string };
+}
+
+export const CASOS_EXPOSICAO_ARMADOR: readonly CasoExposicaoArmador[] = [
+  {
+    id: 'AR-MSC', armador: 'MSC', descricao: '20DRY atravessa 7–9 → 10+ (FT6, 6 dias): 3×55 + 3×110',
+    referencia: 'Blueprint Cap. 24.3.1 (MSC)', equipamento: '20DRY', dayCountBasis: 'since_discharge_absolute',
+    masterFreeTimeDays: 6, diasDemurrageRocket: 6,
+    esperado: { status: 'OK', total: 495, moeda: 'USD', confirmationStatus: 'ESTIMATED' },
+  },
+  {
+    id: 'AR-HAPAG', armador: 'HAPAG', descricao: 'EXCESS_OVER_FREE_TIME: 20DRY excedente 1–16→113, 17+→160 (FT10, 20 dias)',
+    referencia: 'Blueprint Cap. 24.3.1 (Hapag — exceção aprovada)', equipamento: '20DRY', dayCountBasis: 'excess_over_free_time',
+    masterFreeTimeDays: 10, diasDemurrageRocket: 20,
+    esperado: { status: 'OK', total: 2448, moeda: 'USD', confirmationStatus: 'ESTIMATED' },
+  },
+  {
+    id: 'AR-CMA', armador: 'CMA', descricao: 'Master FT (12) > FT padrão (7): a faixa NÃO reinicia (20DRY, 5 dias): 2×60 + 3×110',
+    referencia: 'Blueprint Cap. 24.3.1 (CMA CGM)', equipamento: '20DRY', dayCountBasis: 'since_discharge_absolute',
+    masterFreeTimeDays: 12, diasDemurrageRocket: 5,
+    esperado: { status: 'OK', total: 450, moeda: 'USD', confirmationStatus: 'ESTIMATED' },
+  },
+  {
+    id: 'AR-MAERSK', armador: 'MAERSK', descricao: '20DRY atravessa as quatro faixas (FT5, 20 dias)',
+    referencia: 'Blueprint Cap. 24.3.1 (Maersk)', equipamento: '20DRY', dayCountBasis: 'since_discharge_absolute',
+    masterFreeTimeDays: 5, diasDemurrageRocket: 20,
+    esperado: { status: 'OK', total: 1925, moeda: 'USD', confirmationStatus: 'ESTIMATED' },
+  },
+  {
+    id: 'AR-ONE', armador: 'ONE', descricao: '20REEFER atravessa três faixas (FT3, 15 dias)',
+    referencia: 'Blueprint Cap. 24.3.1 (ONE)', equipamento: '20REEFER', dayCountBasis: 'since_discharge_absolute',
+    masterFreeTimeDays: 3, diasDemurrageRocket: 15,
+    esperado: { status: 'OK', total: 3535, moeda: 'USD', confirmationStatus: 'ESTIMATED' },
+  },
+  {
+    id: 'AR-PIL', armador: 'PIL', descricao: 'PIL 20DRY (FT7, 16 dias) → ESTIMATED_PROVISIONAL (nunca CONFIRMED)',
+    referencia: 'Blueprint Cap. 24.3.1 (PIL — provisória)', equipamento: '20DRY', dayCountBasis: 'since_discharge_absolute',
+    masterFreeTimeDays: 7, diasDemurrageRocket: 16,
+    esperado: { status: 'OK', total: 1037.5, moeda: 'USD', confirmationStatus: 'ESTIMATED_PROVISIONAL' },
+  },
+  {
+    id: 'AR-YANGMING-ESP', armador: 'YANGMING', descricao: 'Yang Ming Especial sem limites cadastrados → UNAVAILABLE',
+    referencia: 'Blueprint Cap. 24.3.1 (Yang Ming — Especial incompleto)', equipamento: '20ESPECIAL', dayCountBasis: 'since_discharge_absolute',
+    masterFreeTimeDays: 7, diasDemurrageRocket: 10,
+    esperado: { status: 'UNAVAILABLE', motivoContem: 'sem faixa' },
+  },
+  {
+    id: 'AR-HMM', armador: 'HMM', descricao: 'HMM 20DRY (FT7, 16 dias): 7×55 + 7×80 + 2×120',
+    referencia: 'Blueprint Cap. 24.3.1 (HMM)', equipamento: '20DRY', dayCountBasis: 'since_discharge_absolute',
+    masterFreeTimeDays: 7, diasDemurrageRocket: 16,
+    esperado: { status: 'OK', total: 1185, moeda: 'USD', confirmationStatus: 'ESTIMATED' },
+  },
+  {
+    id: 'AR-EVERGREEN', armador: 'EVERGREEN', descricao: 'Evergreen 40DRYHC (FT7, 16 dias): 7×95 + 7×150 + 2×220',
+    referencia: 'Blueprint Cap. 24.3.1 (Evergreen)', equipamento: '40DRYHC', dayCountBasis: 'since_discharge_absolute',
+    masterFreeTimeDays: 7, diasDemurrageRocket: 16,
+    esperado: { status: 'OK', total: 2155, moeda: 'USD', confirmationStatus: 'ESTIMATED' },
+  },
+  {
+    id: 'AR-COSCO', armador: 'COSCO', descricao: 'COSCO 40DRYHC (FT7, 16 dias): 7×95 + 7×140 + 2×210',
+    referencia: 'Blueprint Cap. 24.3.1 (COSCO)', equipamento: '40DRYHC', dayCountBasis: 'since_discharge_absolute',
+    masterFreeTimeDays: 7, diasDemurrageRocket: 16,
+    esperado: { status: 'OK', total: 2065, moeda: 'USD', confirmationStatus: 'ESTIMATED' },
+  },
+  {
+    id: 'AR-COSCO-ESP', armador: 'COSCO', descricao: 'COSCO Especial incompleto → UNAVAILABLE',
+    referencia: 'Blueprint Cap. 24.3.1 (COSCO — Especial incompleto)', equipamento: '20ESPECIAL', dayCountBasis: 'since_discharge_absolute',
+    masterFreeTimeDays: 7, diasDemurrageRocket: 10,
+    esperado: { status: 'UNAVAILABLE', motivoContem: 'sem faixa' },
+  },
+  {
+    id: 'AR-OOCL', armador: 'OOCL', descricao: 'OOCL 20DRY (FT10, 10 dias): 7×60 + 3×90',
+    referencia: 'Blueprint Cap. 24.3.1 (OOCL)', equipamento: '20DRY', dayCountBasis: 'since_discharge_absolute',
+    masterFreeTimeDays: 10, diasDemurrageRocket: 10,
+    esperado: { status: 'OK', total: 690, moeda: 'USD', confirmationStatus: 'ESTIMATED' },
+  },
+  {
+    id: 'AR-ZIM', armador: 'ZIM', descricao: 'ZIM 20DRY (FT7, 16 dias): 7×55 + 7×75 + 2×115',
+    referencia: 'Blueprint Cap. 24.3.1 (ZIM)', equipamento: '20DRY', dayCountBasis: 'since_discharge_absolute',
+    masterFreeTimeDays: 7, diasDemurrageRocket: 16,
+    esperado: { status: 'OK', total: 1140, moeda: 'USD', confirmationStatus: 'ESTIMATED' },
+  },
+  {
+    id: 'AR-ZIM-ESP', armador: 'ZIM', descricao: 'ZIM Especial incompleto → UNAVAILABLE',
+    referencia: 'Blueprint Cap. 24.3.1 (ZIM — Especial incompleto)', equipamento: '20ESPECIAL', dayCountBasis: 'since_discharge_absolute',
+    masterFreeTimeDays: 7, diasDemurrageRocket: 10,
+    esperado: { status: 'UNAVAILABLE', motivoContem: 'sem faixa' },
+  },
+];
 
 /**
  * Empty Return (item 5) e minuta (item 6): a parte temporal — devolução no

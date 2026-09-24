@@ -5,9 +5,16 @@ import { DayCountBasis, Faixa, QualidadeFonte } from '../tariffs/types';
 
 /**
  * Leitura das tabelas tarifárias versionadas. A regra de SELEÇÃO de versão vive
- * aqui (não no motor): dada uma data de referência, escolhe a versão vigente
- * nela. Para o Termo Único, a data de referência é o 1º dia de demurrage do
- * cliente (decisão aprovada, revisão 7) — quem chama passa essa data.
+ * aqui (não no motor). A data de referência é passada por quem chama:
+ *  - Termo Único → 1º dia de demurrage do cliente (decisão revisão 7);
+ *  - Exposição Rocket / armador → data de descarga (Blueprint, revisão 8);
+ *  - Termo por Embarque → versão fixada na condição comercial (não é por data).
+ *
+ * Vigência desconhecida (revisão 8): `vigencia_inicio = NULL` = início
+ * desconhecido — só aplicável a partir da data civil de `verificada_em`, nunca
+ * retroativo. Prioridade da versão com vigência conhecida que cubra a data;
+ * se nada é comprovadamente aplicável, o resultado é TARIFF_VERSION_NOT_PROVEN
+ * (jamais zero).
  */
 
 export interface TabelaResolvida {
@@ -16,8 +23,9 @@ export interface TabelaResolvida {
   versao: number;
   dayCountBasis: DayCountBasis;
   qualidadeFonte: QualidadeFonte;
-  vigenciaInicio: CivilDate;
+  vigenciaInicio: CivilDate | null;
   vigenciaFim: CivilDate | null;
+  verificadaEmData: CivilDate;
   faixas: Faixa[];
 }
 
@@ -29,6 +37,13 @@ export interface SelecaoTabela {
   referenceDate: CivilDate;
 }
 
+export type MotivoIndisponivel = 'TARIFF_VERSION_NOT_PROVEN' | 'TARIFF_TABLE_NOT_FOUND';
+
+export interface SelecaoResultado {
+  tabela: TabelaResolvida | null;
+  motivo: MotivoIndisponivel | null;
+}
+
 function mapFaixa(row: any): Faixa {
   return {
     tipoEquipamento: row.tipo_equipamento,
@@ -37,6 +52,17 @@ function mapFaixa(row: any): Faixa {
     valorDia: parseFloat(row.valor_dia),
     moeda: row.moeda,
   };
+}
+
+interface CandidatoRow {
+  id: string;
+  tipo: 'rocket_cliente' | 'armador';
+  versao: number;
+  day_count_basis: DayCountBasis;
+  qualidade_fonte: QualidadeFonte;
+  vigencia_inicio: CivilDate | null;
+  vigencia_fim: CivilDate | null;
+  verificada_data: CivilDate;
 }
 
 export class TariffTableRepository {
@@ -52,56 +78,69 @@ export class TariffTableRepository {
     return rows.map(mapFaixa);
   }
 
+  private async resolver(row: CandidatoRow): Promise<TabelaResolvida> {
+    return {
+      id: row.id,
+      tipo: row.tipo,
+      versao: row.versao,
+      dayCountBasis: row.day_count_basis,
+      qualidadeFonte: row.qualidade_fonte,
+      vigenciaInicio: row.vigencia_inicio,
+      vigenciaFim: row.vigencia_fim,
+      verificadaEmData: row.verificada_data,
+      faixas: await this.faixas(row.id),
+    };
+  }
+
   /**
-   * Escolhe a versão vigente na data de referência: maior vigencia_inicio que
-   * seja <= ref e cuja vigencia_fim (se houver) seja >= ref. null se nenhuma.
+   * Escolhe a versão aplicável na data de referência, seguindo a governança de
+   * vigência desconhecida. Datas civis comparadas como strings 'AAAA-MM-DD'.
    */
-  async selecionarVigente(sel: SelecaoTabela): Promise<TabelaResolvida | null> {
-    const { rows } = await this.pool.query(
-      `SELECT id, tipo, versao, day_count_basis, qualidade_fonte, vigencia_inicio, vigencia_fim
+  async selecionarVigente(sel: SelecaoTabela): Promise<SelecaoResultado> {
+    const { rows } = await this.pool.query<CandidatoRow>(
+      `SELECT id, tipo, versao, day_count_basis, qualidade_fonte,
+              vigencia_inicio, vigencia_fim,
+              to_char(verificada_em AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS verificada_data
          FROM tariff_tables
         WHERE tipo = $1
           AND organization_id IS NOT DISTINCT FROM $2
           AND armador_id IS NOT DISTINCT FROM $3
-          AND termo_comercial IS NOT DISTINCT FROM $4
-          AND vigencia_inicio <= $5
-          AND (vigencia_fim IS NULL OR vigencia_fim >= $5)
-        ORDER BY vigencia_inicio DESC, versao DESC
-        LIMIT 1`,
-      [
-        sel.tipo,
-        sel.organizationId ?? null,
-        sel.armadorId ?? null,
-        sel.termoComercial ?? null,
-        sel.referenceDate,
-      ],
+          AND termo_comercial IS NOT DISTINCT FROM $4`,
+      [sel.tipo, sel.organizationId ?? null, sel.armadorId ?? null, sel.termoComercial ?? null],
     );
-    if (rows.length === 0) return null;
-    const t = rows[0];
-    return {
-      id: t.id,
-      tipo: t.tipo,
-      versao: t.versao,
-      dayCountBasis: t.day_count_basis,
-      qualidadeFonte: t.qualidade_fonte,
-      vigenciaInicio: t.vigencia_inicio,
-      vigenciaFim: t.vigencia_fim,
-      faixas: await this.faixas(t.id),
-    };
+
+    if (rows.length === 0) return { tabela: null, motivo: 'TARIFF_TABLE_NOT_FOUND' };
+    const ref = sel.referenceDate;
+
+    // (1) Vigência conhecida que cobre a data tem prioridade (a mais recente).
+    const conhecidasCobrindo = rows
+      .filter((r) => r.vigencia_inicio !== null && r.vigencia_inicio <= ref && (r.vigencia_fim === null || r.vigencia_fim >= ref))
+      .sort((a, b) => (a.vigencia_inicio! < b.vigencia_inicio! ? 1 : -1));
+    if (conhecidasCobrindo.length > 0) {
+      return { tabela: await this.resolver(conhecidasCobrindo[0]), motivo: null };
+    }
+
+    // (2) Início desconhecido: só a partir da data civil de verificada_em.
+    const desconhecidasElegiveis = rows
+      .filter((r) => r.vigencia_inicio === null && ref >= r.verificada_data)
+      .sort((a, b) => (a.verificada_data < b.verificada_data ? 1 : -1));
+    if (desconhecidasElegiveis.length > 0) {
+      return { tabela: await this.resolver(desconhecidasElegiveis[0]), motivo: null };
+    }
+
+    // (4) Existe tabela, mas nenhuma versão é comprovadamente aplicável.
+    return { tabela: null, motivo: 'TARIFF_VERSION_NOT_PROVEN' };
   }
 
   async buscarPorId(tabelaId: string): Promise<TabelaResolvida | null> {
-    const { rows } = await this.pool.query(
-      `SELECT id, tipo, versao, day_count_basis, qualidade_fonte, vigencia_inicio, vigencia_fim
+    const { rows } = await this.pool.query<CandidatoRow>(
+      `SELECT id, tipo, versao, day_count_basis, qualidade_fonte,
+              vigencia_inicio, vigencia_fim,
+              to_char(verificada_em AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS verificada_data
          FROM tariff_tables WHERE id = $1`,
       [tabelaId],
     );
     if (rows.length === 0) return null;
-    const t = rows[0];
-    return {
-      id: t.id, tipo: t.tipo, versao: t.versao, dayCountBasis: t.day_count_basis,
-      qualidadeFonte: t.qualidade_fonte, vigenciaInicio: t.vigencia_inicio, vigenciaFim: t.vigencia_fim,
-      faixas: await this.faixas(t.id),
-    };
+    return this.resolver(rows[0]);
   }
 }
