@@ -12,7 +12,7 @@ function mapRow(row: any): Processo {
     hbl: row.hbl,
     armadorId: row.armador_id,
     condicaoComercialId: row.condicao_comercial_id,
-    responsavelOperacionalId: row.responsavel_operacional_id,
+    responsavelOperacionalMembershipId: row.responsavel_operacional_membership_id,
     refExterna: row.ref_externa,
     criadoEm: row.criado_em,
   };
@@ -22,6 +22,7 @@ export interface CreateProcessoInput {
   organizationId: string;
   numeroProcesso: string | null;
   clienteId: string | null;
+  responsavelOperacionalMembershipId?: string | null;
 }
 
 export class ProcessoRepository {
@@ -29,8 +30,22 @@ export class ProcessoRepository {
 
   async create(input: CreateProcessoInput): Promise<Processo> {
     const { rows } = await this.pool.query(
-      `INSERT INTO processos (organization_id, numero_processo, cliente_id) VALUES ($1, $2, $3) RETURNING *`,
-      [input.organizationId, input.numeroProcesso, input.clienteId],
+      `INSERT INTO processos (organization_id, numero_processo, cliente_id, responsavel_operacional_membership_id)
+       VALUES ($1, $2, $3, $4) RETURNING *`,
+      [input.organizationId, input.numeroProcesso, input.clienteId, input.responsavelOperacionalMembershipId ?? null],
+    );
+    return mapRow(rows[0]);
+  }
+
+  /**
+   * Define (ou remove, com null) o responsável operacional. Não valida a
+   * organização do membership na aplicação de propósito: essa garantia é do
+   * PostgreSQL (FK composta da migration 0006) e o erro dele é propagado.
+   */
+  async setResponsavelOperacional(processoId: string, membershipId: string | null): Promise<Processo> {
+    const { rows } = await this.pool.query(
+      `UPDATE processos SET responsavel_operacional_membership_id = $2 WHERE id = $1 RETURNING *`,
+      [processoId, membershipId],
     );
     return mapRow(rows[0]);
   }

@@ -120,7 +120,8 @@ export interface Processo {
   hbl: string | null;
   armadorId: string | null;
   condicaoComercialId: string | null;
-  responsavelOperacionalId: string | null;
+  /** OrganizationMembership da MESMA organização do processo (FK composta no Postgres — migration 0006). Null = sem responsável. */
+  responsavelOperacionalMembershipId: string | null;
   refExterna: string | null;
   criadoEm: Date;
 }

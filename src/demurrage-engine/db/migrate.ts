@@ -34,8 +34,16 @@ async function ensureMigrationsTable(pool: Pool): Promise<void> {
   `);
 }
 
+export interface RunMigrationsOptions {
+  /** Aplica só até este arquivo (inclusive). Usado para testar a migração de dados legados entre versões do schema. */
+  until?: string;
+}
+
 /** Aplica as migrations pendentes, em ordem lexical, cada uma em sua própria transação. Idempotente: reexecutar não reaplica o que já está em `schema_migrations`. */
-export async function runMigrations(pool: Pool = getPool()): Promise<MigrationResult> {
+export async function runMigrations(
+  pool: Pool = getPool(),
+  options: RunMigrationsOptions = {},
+): Promise<MigrationResult> {
   await ensureMigrationsTable(pool);
 
   const { rows } = await pool.query<{ filename: string }>('SELECT filename FROM schema_migrations');
@@ -43,7 +51,8 @@ export async function runMigrations(pool: Pool = getPool()): Promise<MigrationRe
 
   const result: MigrationResult = { applied: [], alreadyApplied: [] };
 
-  for (const filename of listMigrationFiles()) {
+  const files = listMigrationFiles().filter((f) => !options.until || f <= options.until);
+  for (const filename of files) {
     if (applied.has(filename)) {
       result.alreadyApplied.push(filename);
       continue;
