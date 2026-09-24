@@ -62,7 +62,7 @@ Lista de destinatários (e-mail/webhook) configurada via `config.ts`/variável d
 **Arquivos/modelos novos:**
 - `src/demurrage-engine/domain/container.ts` (entidade Contêiner: processo, número, tipo original+normalizado, armador, House/Master BL, estado, prioridade+motivo, timestamps).
 - `src/demurrage-engine/domain/snapshot.ts` (fotografia versionada — Cap. 14 do Blueprint).
-- `src/demurrage-engine/domain/sourcedField.ts` (`DadoComFonte<T>`: valor, fonte, timestamp, fonte alternativa, divergência).
+- `src/demurrage-engine/sources/fieldObservation.ts` (persistência de `FieldObservation` — ver "Schema proposto — Fase 1"; os campos críticos de `Contêiner` são colunas tipadas, cada uma com um ponteiro para a `FieldObservation` que a originou, não um valor em uma tabela EAV genérica).
 - `src/demurrage-engine/sources/containerDataSource.ts` (porta/interface).
 - `src/demurrage-engine/sources/emailHeuristicSource.ts` (adaptador que **reaproveita** `demurrageFilters.ts` + `demurrageParser.ts` da V1 como fonte de contingência — ver nota abaixo).
 - `src/demurrage-engine/persistence/containerRepository.ts` (camada de acesso a dados, interface + implementação inicial).
@@ -90,7 +90,7 @@ Quando a V2 entra em operação, já existem processos em pleno andamento (cont�
 - Backfill idempotente (rodar duas vezes não duplica registros nem regride campo já promovido a fonte melhor — teste explícito desse cenário).
 - Teste dedicado de "nada é inventado": para um contêiner sem `dataDescarga` em nenhuma fonte disponível no momento do backfill, o campo nasce `pendente`/`null`, nunca com um valor derivado de heurística de data de e-mail.
 
-**Condição de aceite:** para um conjunto de threads de teste, a base V2 populada via backfill contém um contêiner por número de contêiner extraído, com o `DadoComFonte` de cada campo preenchido com fonte `email_heuristic` (ou `pendente`, quando não encontrado) e o mesmo valor que a V1 mostraria hoje; e um `BackfillRun` registrado com as contagens da execução.
+**Condição de aceite:** para um conjunto de threads de teste, a base V2 populada via backfill contém um contêiner por número de contêiner extraído, com cada campo crítico apontando para uma `FieldObservation` de fonte `email_heuristic` (ou `null`/sem ponteiro, quando não encontrado) e o mesmo valor que a V1 mostraria hoje; um `BackfillRun` com suas contagens agregadas; e um `BackfillItem` por contêiner processado, rastreando individualmente o resultado (`criado`/`pendencia_marcada`/etc.).
 
 **Risco de regressão:** **nulo para a V1** (nenhum arquivo da V1 é alterado). Risco interno: erro no backfill pode gerar uma base V2 inconsistente — mitigado por rodar o backfill em ambiente de teste antes de qualquer uso real, por ele ser reexecutável (idempotente) sem side effect na V1, e pelo registro em `BackfillRun` permitir auditar exatamente o que cada execução fez.
 
@@ -122,7 +122,7 @@ Essas fixtures vivem em um único local compartilhado (ex.: `src/demurrage-engin
 
 **Arquivos existentes afetados:** nenhum.
 
-**Migrations:** nenhuma além de, no modelo do Cap. 1, acrescentar o campo `dataDescarga` (como `DadoComFonte<Date>`) à entidade Contêiner da Fase 1 — `dataRetirada`/Gate Out passa a ser um campo informativo separado, não a âncora de cálculo.
+**Migrations:** nenhuma nova entidade — usa a coluna tipada `discharge_date` (DATE) e o ponteiro `discharge_date_observation_id` já definidos em `Contêiner` (ver "Schema proposto — Fase 1"). `gate_out_date` é um campo informativo separado, não a âncora de cálculo.
 
 **Dependências:** Fase 1 (entidade Contêiner existir para o campo `dataDescarga` ter onde morar). Não depende de Fase 3/4/5.
 
@@ -149,7 +149,7 @@ Essas fixtures vivem em um único local compartilhado (ex.: `src/demurrage-engin
 
 **Arquivos existentes afetados:** nenhum arquivo da V1.
 
-**Migrations:** adicionar `masterFreeTime` (`DadoComFonte<number>`), `masterBl`, e os dois blocos de resultado de relógio à entidade Contêiner.
+**Migrations:** nenhuma nova entidade — usa `master_free_time_days` (já tipado em `Contêiner`) e a entidade `Relogio` (uma linha por `tipo` — `cliente`/`rocket` — por contêiner), ambas definidas em "Schema proposto — Fase 1".
 
 **Dependências:** Fase 2 (motor temporal pronto e testado). Não depende de Fase 4/5 — Master Free Time pode vir inicialmente como `null`/pendente (fonte ainda não conectada) sem travar o desenvolvimento desta fase; o relógio do cliente já fica funcional isoladamente.
 
@@ -227,13 +227,13 @@ Cada motor produz um `ValorApurado` com um campo `motorComercial` identificando 
 **Arquivos/modelos novos:**
 - `src/demurrage-engine/sources/armadorTrackingSource.ts` (implementa `ContainerDataSource`, chamando o serviço existente via HTTP/SDK — a definir conforme o contrato real; **único ponto de contato com o Tracking Service em todo o sistema**).
 - `src/demurrage-engine/sources/sourceHierarchy.ts` (orquestra prioridade: tracking do armador > House/MBL estruturado, quando existir > heurística de e-mail > `MANUAL_FALLBACK`).
-- `src/demurrage-engine/sources/eventIngestion.ts` (normaliza a resposta do Tracking Service em `EventoTracking`, calcula a chave de deduplicação e decide se o evento já foi processado — ver idempotência abaixo).
+- `src/demurrage-engine/sources/eventIngestion.ts` (registra a execução da consulta como `TrackingFetch`, normaliza a resposta em zero ou mais `TrackingEvent`, calcula `dedupe_hash` e decide se cada evento já foi processado — ver idempotência abaixo).
 
 **Arquivos existentes afetados:** nenhum arquivo da V1. `config.ts` ganha uma nova seção (`trackingService: { baseUrl, apiKey, ... }`, nomes a definir com o contrato real).
 
-**Migrations:** nova entidade `EventoTracking` (ver "Schema proposto — Fase 1" para o desenho geral, que já reserva este ponto de extensão); passa a popular os campos já existentes (`dataDescarga`, `masterFreeTime`, etc.) com `fonte = 'armador_tracking'` em vez de `'email_heuristic'` quando disponível, preservando ambos os valores em caso de divergência (Cap. 4: "a Priora mantém ambos os registros, aplica a hierarquia e sinaliza a divergência").
+**Migrations:** nenhuma nova além das já reservadas no schema (`TrackingTarget`, `TrackingFetch`, `TrackingEvent` — ver "Schema proposto — Fase 1"); passa a popular os campos tipados já existentes em `Contêiner` (`discharge_date`, `master_free_time_days`, etc.) com observações de `fonte = 'tracking_service'` em vez de `'email_heuristic'` quando disponível, preservando ambos os valores em caso de divergência (Cap. 4: "a Priora mantém ambos os registros, aplica a hierarquia e sinaliza a divergência").
 
-**Idempotência da ingestão (ponto de atenção explícito):** cada evento recebido do Tracking Service é deduplicado por uma chave composta de `(armador, BL/contêiner, tipo_evento, identificador_original_evento)`. Reprocessar a mesma resposta do Tracking Service duas vezes (ex.: por retry de rede, por reprocessamento manual, por dois workers concorrentes) não cria dois eventos nem aplica o mesmo evento duas vezes ao relógio do contêiner — `eventIngestion.ts` verifica a chave antes de gravar e é seguro para chamada concorrente/repetida.
+**Idempotência da ingestão (ponto de atenção explícito):** cada evento recebido do Tracking Service é deduplicado pelo `dedupe_hash` de `TrackingEvent` — calculado a partir do `external_event_id` quando o serviço fornecer um identificador estável, ou por um fallback determinístico (armador+target+tipo_evento+contêiner+data_evento) quando não fornecer. Reprocessar a mesma resposta do Tracking Service duas vezes (ex.: por retry de rede, por reprocessamento manual, por dois workers concorrentes) não cria dois eventos nem aplica o mesmo evento duas vezes ao relógio do contêiner — `eventIngestion.ts` verifica a chave antes de gravar e é seguro para chamada concorrente/repetida. Falhas de consulta (sem nenhum evento retornado) ficam registradas só em `TrackingFetch.status_consulta`, nunca geram um `TrackingEvent` fantasma.
 
 **Dependências:** acesso ao serviço real (pré-condição acima); Fase 1 (porta `ContainerDataSource` já definida).
 
@@ -241,7 +241,7 @@ Cada motor produz um `ValorApurado` com um campo `motorComercial` identificando 
 - Contrato do adaptador testado contra um mock do serviço real (respostas de sucesso, falha, timeout).
 - Divergência entre `armador_tracking` e `email_heuristic` para o mesmo campo → ambos preservados, hierarquia aplicada, divergência sinalizada (não silenciosa).
 - Campo presente só na heurística de e-mail (tracking não retornou) → continua usável como contingência.
-- **Idempotência:** o mesmo evento normalizado (mesma chave de dedupe) ingerido duas vezes — inclusive de forma concorrente (duas chamadas simultâneas) — resulta em um único `EventoTracking` gravado e um único efeito sobre o relógio do contêiner.
+- **Idempotência:** o mesmo evento normalizado (mesmo `dedupe_hash`) ingerido duas vezes — inclusive de forma concorrente (duas chamadas simultâneas) — resulta em um único `TrackingEvent` gravado e um único efeito sobre o relógio do contêiner.
 - Teste estático/arquitetural: nenhuma chamada de rede em direção a tracking existe fora de `armadorTrackingSource.ts` (pode ser um teste de lint/import-boundary, não só um teste funcional).
 
 **Condição de aceite:** para um contêiner de teste, o adaptador retorna os campos do contrato assumido (incluindo timestamp de coleta, identificador original e referência ao dado bruto) e o `sourceHierarchy` prioriza corretamente `armador_tracking` sobre `email_heuristic` quando ambos têm valor. Reingestão do mesmo evento é comprovadamente um no-op.
@@ -262,23 +262,23 @@ Cada motor produz um `ValorApurado` com um campo `motorComercial` identificando 
 
 **Arquivos existentes afetados:** `src/config.ts` ganha `trackingAlertRecipients: string[]` (env var). Nenhum arquivo da V1.
 
-**Migrations:** entidade `tracking_failure` (armador, BL, contador, última resposta válida, histórico de tentativas); entidade `agendamento_consulta` para controle de idempotência (ver abaixo).
+**Migrations:** nenhuma nova além das já reservadas no schema (`FalhaTracking`, `AgendamentoConsulta`, `AlertaTecnico` — ver "Schema proposto — Fase 1").
 
 **Idempotência do scheduler e dos alertas (ponto de atenção explícito):**
-- Cada disparo previsto pela cadência (uma "janela", ex.: "D+9 deste contêiner") tem uma **chave de idempotência** própria (`contêiner_id + janela_prevista`). Antes de consultar o Tracking Service, o scheduler verifica se aquela janela já foi executada (ou está em execução); se sim, não dispara de novo — isso protege contra o próprio processo Node reiniciar no meio de um ciclo (comum no plano free do Render, que "dorme" por inatividade) e contra duas instâncias do worker rodarem simultaneamente por engano.
-- O mesmo vale para alertas técnicos: a 3ª falha consecutiva de um armador/BL gera **um** alerta por incidente, com chave de idempotência própria (`incidente_id + tipo_alerta`); se o job de verificação de falhas rodar mais de uma vez sobre o mesmo estado (ex.: retry), o alerta não é reenviado — só uma nova falha (4ª, 5ª...) ou um novo incidente distinto gera novo disparo.
-- Esse desenho reaproveita o mesmo padrão de dedupe da ingestão de eventos (Fase 5) — chave de idempotência + registro do que já foi processado — para manter a mesma lógica em todo o sistema, não inventar um mecanismo novo por fase.
+- Cada disparo previsto pela cadência (uma "janela", ex.: "D+9 deste BL") tem uma **chave de idempotência** própria em `AgendamentoConsulta` (`tracking_target_id + janela_prevista`) — agendado por `TrackingTarget`, não por contêiner (ponto 3): um BL que alimenta vários contêineres é consultado uma vez só, não uma vez por contêiner. Antes de consultar o Tracking Service, o scheduler verifica se aquela janela já foi executada (ou está em execução); se sim, não dispara de novo — isso protege contra o próprio processo Node reiniciar no meio de um ciclo (comum no plano free do Render, que "dorme" por inatividade) e contra duas instâncias do worker rodarem simultaneamente por engano.
+- Para alertas técnicos, o comportamento pedido é **suprimir, não só deduplicar**: a 3ª falha consecutiva de um `TrackingTarget` dispara um `AlertaTecnico` e marca `FalhaTracking.alerta_disparado = true`; a 4ª, 5ª... falha consecutiva **não** gera novo alerta, porque a condição de disparo (`contador_consecutivo=3 AND alerta_disparado=false`) deixou de ser satisfeita. Só um sucesso (que zera `contador_consecutivo` e `alerta_disparado`) seguido de uma nova sequência até 3 falhas (incrementando `incidente_seq`) libera um novo disparo — um incidente novo, não um reforço do mesmo.
+- Esse desenho reaproveita o mesmo padrão de dedupe da ingestão de eventos (Fase 5) — chave/condição de idempotência + estado do que já foi processado — para manter a mesma lógica em todo o sistema, não inventar um mecanismo novo por fase.
 
 **Dependências:** Fase 5 (a cadência só faz sentido chamando o adaptador real); trilho T2 (lista de destinatários configurável) e T1 (papel `MANAGER` já existir para receber o alerta operacional).
 
 **Testes obrigatórios:**
 - Simulação de relógio (mock de tempo) percorrendo D0→D+5→D+9→D+13→D+17→diário→a cada 2 dias→suspensão aos 30 dias, verificando a data da próxima consulta em cada etapa.
 - Reaproveitamento: se outro consumidor já tiver tracking válido dentro da janela, a cadência não dispara nova consulta (Cap. 16.9) — depende do serviço real informar "quando foi obtido", conforme contrato da Fase 5.
-- Falha consecutiva zera após sucesso; 3ª falha consecutiva dispara os dois alertas (operacional + técnico), agrupando por armador quando múltiplos processos são afetados.
+- Falha consecutiva zera `contador_consecutivo`/`alerta_disparado` após sucesso; a 3ª falha consecutiva dispara **um** `AlertaTecnico` (com o `MANAGER` responsável e os destinatários técnicos configurados — T2 — como destinatários do mesmo registro, não dois alertas separados), agrupando por armador quando múltiplos targets são afetados simultaneamente.
+- **Supressão (ponto 14):** simular uma 4ª e 5ª falha consecutiva após a 3ª já ter dispara o alerta — nenhum novo `AlertaTecnico` é criado. Só depois de uma consulta bem-sucedida (reset) e uma nova sequência até 3 falhas (novo `incidente_seq`) um novo alerta é permitido.
 - **Idempotência do scheduler:** disparar o job da mesma janela duas vezes (simulando reinício do processo ou dupla execução) resulta em uma única consulta real ao Tracking Service.
-- **Idempotência dos alertas:** executar a verificação de falhas duas vezes sobre o mesmo estado de falha não duplica o alerta enviado ao Gestor nem aos destinatários técnicos.
 
-**Condição de aceite:** para um contêiner de teste avançando no tempo simulado, o scheduler gera exatamente as consultas previstas pela cadência do Cap. 16 e suspende automaticamente aos 30 dias de demurrage sem Empty Return; reexecuções da mesma janela ou do mesmo estado de falha são comprovadamente no-op.
+**Condição de aceite:** para um contêiner de teste avançando no tempo simulado, o scheduler gera exatamente as consultas previstas pela cadência do Cap. 16 e suspende automaticamente aos 30 dias de demurrage sem Empty Return; reexecuções da mesma janela são comprovadamente no-op; uma sequência de 3, 4 e 5 falhas consecutivas gera exatamente **um** `AlertaTecnico`, não três.
 
 **Risco de regressão:** nulo para a V1 (job novo, isolado). Risco operacional: um scheduler mal calibrado pode gerar volume de chamadas ao serviço de tracking real acima do esperado — mitigar rodando primeiro em ambiente de teste/staging com o adaptador mockado antes de apontar para o serviço real.
 
@@ -480,94 +480,123 @@ Fases 2, 3 e 4 são motores puros e podem ser desenvolvidas e 100% testadas por 
 
 ---
 
-# Schema proposto — Fase 1 (Fundação persistente)
+# Schema proposto — Fase 1 (revisão 3)
 
-**Status: PROPOSTA AGUARDANDO APROVAÇÃO. Nenhuma migration foi escrita. Nenhum arquivo de código desta fase foi criado ainda.** Este schema é a base de todas as entidades citadas nas 12 fases acima — está consolidado aqui num único lugar para revisão, em vez de espalhado; os "Migrations" de cada fase referenciam as entidades definidas aqui.
+**Status: PROPOSTA AGUARDANDO APROVAÇÃO. Nenhuma migration foi escrita.** Esta revisão substitui a anterior por completo, incorporando os 14 ajustes pedidos após a revisão 2. Tipos são conceituais (TEXT, INTEGER, DATE, TIMESTAMP, BOOLEAN, ENUM, JSON), agnósticos de motor de banco (SQLite/Postgres — decisão ainda em aberto, sem impacto no desenho).
 
-O schema é desenhado **agnóstico de motor de banco** (funciona tanto com SQLite quanto Postgres — a escolha do motor continua uma decisão em aberto, sem impacto no desenho abaixo). Tipos são descritos conceitualmente (texto, número, data, booleano, enum, JSON), não como tipos SQL específicos.
+**Nota de investigação (ponto 11):** verifiquei `src/routes/processRoutes.ts` — o único candidato a "registro central de Processo" já existente na Priora — e confirmei que ele também é *stateless* (monta "processos" ao vivo agrupando e-mail por `conversationId`, sem persistência). Não há hoje, neste código, nenhum cadastro central de Cliente/Processo para referenciar em vez de criar. `Cliente` e `Processo` abaixo nascem, portanto, como registros **locais e operacionais do módulo Demurrage**, não como cadastro corporativo — cada um leva um campo de referência externa nullable (`ref_externa`) reservado para o dia em que uma integração (HeadCargo ou outro cadastro central) existir, para então *linkar* em vez de duplicar. Já `Usuario` **evita** duplicar identidade: em vez de criar um sistema de contas paralelo, ele referencia o `homeAccountId` do MSAL que `requireAuth.ts` já usa — RBAC só adiciona `papel`/`cliente_id` em cima da identidade que já existe.
 
-## Princípios do schema
+## Convenções
 
-1. **Nada é inventado — tudo pendente é explícito.** Todo campo que pode ser desconhecido usa o padrão `CampoComFonte`, que carrega um `status` (`preenchido` | `pendente` | `fallback_manual`) em vez de só permitir `null`. Um campo `pendente` é uma afirmação ativa de "não sabemos", nunca um esquecimento.
-2. **Fonte e timestamp viajam junto com o valor.** Nenhum valor crítico (descarga, free time, tipo de contêiner, devolução) existe no schema sem sua fonte e o momento em que foi obtido — pré-requisito direto do Cap. 4 do Blueprint.
-3. **Histórico nunca é sobrescrito.** `Snapshot` e `ValorApurado` são *append-only*: uma correção cria um novo registro, não apaga o anterior. Isso implementa diretamente o Cap. 10 ("nenhuma correção apaga o valor anterior") e o Cap. 11 ("uma correção posterior não deve apagar o cálculo fechado").
-4. **Idempotência é modelada, não deixada para o código.** `EventoTracking`, `AgendamentoConsulta`, `AlertaTecnico` e `BackfillRun` carregam chaves de deduplicação como parte do próprio schema (índice único), não como uma checagem opcional na aplicação.
-5. **Armador e Cliente são entidades, não strings soltas.** Evita duplicação/inconsistência de nomes espalhados por `TabelaTarifaria`, `EventoTracking`, `FalhaTracking`.
+- **DATE** (data civil, sem hora/fuso) é usado em todo campo que participa da contagem de dias de demurrage (ponto 10) — nunca TIMESTAMP. A conversão de um instante (ex.: evento de tracking) para DATE depende da decisão de fuso ainda pendente (ver diagnóstico, item H5); o schema só fixa o *tipo*, não resolve a decisão.
+- **TIMESTAMP** é reservado para coleta/auditoria/execução (quando algo foi registrado pela Priora), nunca para contagem de dias.
+- Toda entidade marcada **append-only** não sofre `UPDATE` de conteúdo — só `INSERT`; quando uma transição de status é necessária (ex.: `ValorApurado.calculation_status`), é a única exceção documentada por entidade.
 
 ## Entidades
 
+### Cadastro e identidade
+
+| Entidade | Campos principais | Constraints / unique keys |
+|---|---|---|
+| **Cliente** | id, nome, documento, contatos (JSON), ref_externa (nullable) | — |
+| **Armador** | id, nome, codigo_interno | UNIQUE(codigo_interno) |
+| **Usuario** | id, nome, email, papel (`ANALYST`\|`MANAGER`\|`ADMIN`\|`CLIENT`), cliente_id → Cliente (nullable, só p/ `CLIENT`), home_account_id (nullable — referência à identidade MSAL já existente) | UNIQUE(email) |
+| **ContainerType** | id, codigo (ex. `40HC`), nome, categoria (`dry`\|`reefer`\|`open_top`\|`flat_rack`\|`especial`), tamanho_pes (`20`\|`40`\|`45`) | UNIQUE(codigo) |
+| **ContainerTypeMapping** | id, valor_original, fonte, container_type_id → ContainerType, regra_aplicada, vigente_desde (DATE), vigente_ate (DATE, nullable) | UNIQUE(valor_original, fonte, vigente_desde) — permite reversionar sem apagar histórico |
+| **CondicaoComercial** | id, termo_tipo (`embarque`\|`unico`), tabela_id → TabelaTarifaria, fato_gerador_data (DATE, nullable), fonte_documental, criado_em | — |
+
 ### Núcleo operacional
 
-| Entidade | Papel | Campos principais |
+| Entidade | Campos principais | Constraints / unique keys |
 |---|---|---|
-| **Cliente** | Titular comercial de um ou mais processos; ponto de amarração do papel `CLIENT` do RBAC. | id, nome, documento, contatos |
-| **Armador** | Normaliza o nome do armador, referenciado por tabelas, eventos e falhas. | id, nome, código interno |
-| **Processo** | Unidade de apresentação (Cap. 3) — agrupa contêineres de um mesmo embarque. | id, numero_processo, cliente_id → Cliente, mbl, armador_id → Armador, termo_comercial (`embarque`\|`unico`), criado_em |
-| **Contêiner** | Unidade de cálculo (Cap. 3) — todo relógio, valor e estado vivem aqui. | id, processo_id → Processo, numero (ISO 6346), tipo_original, tipo_normalizado_id → MapeamentoTipoContainer, estado (Cap. 21), prioridade, motivo_prioridade, criado_em, atualizado_em |
-| **CampoComFonte** | Genérica (EAV) — qualquer campo crítico de qualquer entidade acima, com proveniência. | id, entidade_tipo, entidade_id, campo, valor (serializado), status (`preenchido`\|`pendente`\|`fallback_manual`), fonte, coletado_em, fonte_alternativa, tem_divergencia, valor_divergente, fonte_divergente |
-| **Snapshot** | Fotografia versionada de um contêiner (Cap. 14) — histórico imutável. | id, contêiner_id → Contêiner, versao, criado_em, evento_origem_id → EventoTracking (nullable), dados_congelados (JSON) |
+| **Processo** | id, numero_processo, cliente_id → Cliente, mbl, hbl (nullable), armador_id → Armador, condicao_comercial_id → CondicaoComercial (nullable), responsavel_operacional_id → Usuario (nullable), ref_externa (nullable), criado_em | UNIQUE(numero_processo) |
+| **Contêiner** | id, processo_id → Processo, numero (ISO 6346), tracking_target_id → TrackingTarget (nullable), container_type_id → ContainerType (nullable), container_type_source_observation_id → FieldObservation (nullable), **discharge_date** (DATE, nullable), discharge_date_observation_id → FieldObservation (nullable), **house_free_time_days** (INTEGER, nullable), house_free_time_observation_id → FieldObservation (nullable), **master_free_time_days** (INTEGER, nullable), master_free_time_observation_id → FieldObservation (nullable), **gate_out_date** (DATE, nullable), gate_out_observation_id → FieldObservation (nullable), **tracking_return_date** (DATE, nullable), tracking_return_observation_id → FieldObservation (nullable), **effective_return_date** (DATE, nullable — derivado; ver nota), estado (Cap. 21, enum), prioridade, motivo_prioridade, criado_em, atualizado_em | UNIQUE(processo_id, numero) |
 
-### Relógios e valores
+*Nota sobre `Contêiner`: os 7 campos em negrito são os dados críticos tipados (ponto 1) — cada um é o valor **atualmente selecionado** pela hierarquia de fontes, com um ponteiro `<campo>_observation_id` apontando para o `FieldObservation` que o originou. `pendente` deixa de precisar de um enum próprio: é simplesmente o campo estar `null`. `effective_return_date` é recalculado (não é uma observação direta) sempre que `tracking_return_date` ou uma `Minuta` validada mudam — o mesmo gatilho que invalida `Relogio` (ver abaixo) recalcula este campo.*
 
-| Entidade | Papel | Campos principais |
+| Entidade | Campos principais | Constraints / unique keys |
 |---|---|---|
-| **Relogio** | Um por tipo (`cliente`\|`rocket`) por contêiner — núcleo do Cap. 5. | id, contêiner_id → Contêiner, tipo (`cliente`\|`rocket`), free_time_dias, free_time_fonte_id → CampoComFonte, ultimo_dia_livre, primeiro_dia_demurrage, data_final_apuracao, dias_demurrage, estado (`aberto`\|`fechado`\|`pendente`), atualizado_em |
-| **TabelaTarifaria** | Tabela versionada — Rocket×cliente ou armador. | id, tipo (`rocket_cliente`\|`armador`), armador_id → Armador (nullable), termo_comercial (`embarque`\|`unico`, nullable), versao, vigencia_inicio, vigencia_fim, status (`CONFIRMED`\|`ESTIMATED`\|`ESTIMATED_PROVISIONAL`\|`UNAVAILABLE`), fonte |
-| **FaixaTarifaria** | Faixa (bracket) de uma tabela. | id, tabela_id → TabelaTarifaria, tipo_equipamento, dia_inicial, dia_final (nullable = aberto), valor_dia, moeda |
-| **MapeamentoTipoContainer** | Normalização de tipo de equipamento (Cap. 9). | id, valor_original, fonte, tipo_normalizado, regra_aplicada, vigente_desde, vigente_ate (nullable) |
-| **ValorApurado** | Memória de cálculo — uma linha por apuração (histórico, nunca sobrescrita). | id, contêiner_id → Contêiner, relogio_tipo (`cliente`\|`rocket`), **motor_comercial** (`termo_embarque`\|`termo_unico`\|`exposicao_armador`), dias_cobrados, faixas_aplicadas (JSON), tabela_id → TabelaTarifaria, versao_tabela, total, moeda, estado (`estimado`\|`confirmado`\|`fechado`), data_congelamento (nullable), criado_em |
+| **FieldObservation** *(append-only)* | id, entidade_tipo (`processo`\|`container`), entidade_id, campo, valor (serializado, tipado conforme o campo), fonte (`tracking_service`\|`email_heuristic`\|`manual_fallback`\|`house_document`\|`master_bl`\|`headcargo`\|`outro`), observado_em (TIMESTAMP — quando a fonte disse que o valor é este), coletado_em (TIMESTAMP — quando a Priora gravou), evidencia_ref (nullable), criado_por → Usuario (nullable, obrigatório se fonte=`manual_fallback`), criado_em | UNIQUE(entidade_tipo, entidade_id, campo, fonte, observado_em) — impede a mesma fonte gravar o mesmo instante duas vezes, mas **não limita quantas fontes distintas** podem observar o mesmo campo (ponto 1: "mais de duas fontes concorrentes"). Divergência é uma consulta (`WHERE campo=X AND id <> ponteiro_atual AND valor <> valor_atual`), não um campo armazenado — a tabela é 100% imutável, sem nenhum campo de flag mutável. |
+| **Snapshot** *(append-only)* | id, contêiner_id → Contêiner, versao (INTEGER), criado_em, evento_origem_id → TrackingEvent (nullable), dados_congelados (JSON) | UNIQUE(contêiner_id, versao) |
 
-### Tracking e agendamento
+### Relógio (projeção/cache)
 
-| Entidade | Papel | Campos principais |
+| Entidade | Campos principais | Constraints / unique keys |
 |---|---|---|
-| **EventoTracking** | Evento normalizado vindo do Tracking Service (Fase 5) — granularidade de evento, não de contêiner. | id, contêiner_id (nullable até resolução), armador_id → Armador, bl, numero_contêiner, tipo_evento (`descarga`\|`gate_out`\|`empty_return`\|`outro`), data_evento, **identificador_original_evento**, **coletado_em**, **status_consulta** (`sucesso`\|`falha`\|`parcial`), fonte (`tracking_service`), **referencia_dado_bruto**, **chave_dedupe** (única: armador+bl/contêiner+tipo_evento+identificador_original_evento) |
-| **FalhaTracking** | Contador de falhas consecutivas por armador/BL (Cap. 18). | id, armador_id → Armador, bl, contador_consecutivo, ultima_resposta_valida_em, incidente_agrupado_id (nullable) |
-| **AgendamentoConsulta** | Controle de idempotência do scheduler (Cap. 16). | id, contêiner_id → Contêiner, janela_prevista, executado_em (nullable), status (`pendente`\|`executado`\|`pulado_cache`), **chave_idempotencia** (única: contêiner_id+janela_prevista) |
-| **AlertaTecnico** | Registro de alerta disparado (operacional + técnico). | id, tipo, falha_tracking_id → FalhaTracking, disparado_em, destinatarios (JSON), **chave_idempotencia** (única: incidente_id+tipo) |
+| **Relogio** *(projeção/cache — descartável, nunca fonte de verdade)* | id, contêiner_id → Contêiner, tipo (`cliente`\|`rocket`), ultimo_dia_livre (DATE), primeiro_dia_demurrage (DATE), data_final_apuracao (DATE), dias_demurrage (INTEGER), estado (`aberto`\|`fechado`\|`pendente`), **calculated_at** (TIMESTAMP), **engine_version** (TEXT), **input_hash** (TEXT — hash determinístico de discharge_date + free_time_days do tipo + effective_return_date/tracking_return_date + "hoje" quando aberto) | UNIQUE(contêiner_id, tipo) — uma linha "atual" por contêiner+tipo, sobrescrita a cada recomputo. Um consumidor deve comparar `input_hash` contra os inputs atuais do `Contêiner` antes de confiar no valor; divergência = cache obsoleto, recalcular antes de usar. |
 
-### Encerramento, responsabilidade e auditoria
+### Tarifas — três motores comerciais explícitos
 
-| Entidade | Papel | Campos principais |
+| Entidade | Campos principais | Constraints / unique keys |
 |---|---|---|
-| **Minuta** | Comprovação documental de devolução (Cap. 19.1). | id, contêiner_id → Contêiner, data_informada, numero_contêiner_validado, data_validada (effective_return_date), diverge_do_tracking, usuario_id → Usuario, criado_em, estado_conferencia |
-| **DecisaoResponsabilidade** | Pré-análise Rocket×cliente (Cap. 26) — Fase 11, plugável. | id, contêiner_id → Contêiner, data_apta_liberacao, data_liberacao_efetiva, intervalo_sugerido_inicio, intervalo_sugerido_fim, dias_confirmados_rocket, dias_confirmados_cliente, justificativa, evidencias (JSON), gestor_id → Usuario, decidido_em, estado (`em_analise`\|`confirmada_rocket`\|`confirmada_cliente`\|`dividida`) |
-| **DocumentoEvidencia** | Documentos vinculados (House, Master, comprovantes). | id, entidade_tipo, entidade_id, tipo, origem, data_inclusao, usuario_id → Usuario, arquivo_ref |
-| **Auditoria** | Trilha genérica (Cap. 10) — polimórfica. | id, entidade_tipo, entidade_id, campo, valor_anterior, valor_novo, usuario_id → Usuario, timestamp, motivo, evidencia_ref |
+| **TabelaTarifaria** | id, tipo (`rocket_cliente`\|`armador`), armador_id → Armador (nullable), termo_comercial (`embarque`\|`unico`, nullable), versao, vigencia_inicio (DATE), vigencia_fim (DATE, nullable), **qualidade_fonte** (`OFICIAL_VALIDADA`\|`OFICIAL_NAO_VALIDADA`\|`PUBLICA_ESTIMATIVA`\|`PROVISORIA_INCOMPLETA` — ponto 8: qualidade da *tabela em si*), **day_count_basis** (`since_discharge_absolute`\|`excess_over_free_time` — ponto 9: ex. MSC/Maersk/CMA CGM contam dia corrido desde a descarga; Hapag-Lloyd publica em "dias excedentes ao FT" — semânticas diferentes, não intercambiáveis), fonte | UNIQUE(tipo, armador_id, termo_comercial, versao) |
+| **FaixaTarifaria** | id, tabela_id → TabelaTarifaria, tipo_equipamento, dia_inicial (INTEGER), dia_final (INTEGER, nullable = aberto), valor_dia, moeda | UNIQUE(tabela_id, tipo_equipamento, dia_inicial) |
+| **ValorApurado** *(append-only, exceto a transição de `calculation_status`)* | id, contêiner_id → Contêiner, relogio_tipo (`cliente`\|`rocket`), **motor_comercial** (`termo_embarque`\|`termo_unico`\|`exposicao_armador`), tabela_id → TabelaTarifaria (nullable se UNAVAILABLE), versao_tabela, period_start (DATE), period_end (DATE), dias_cobrados (INTEGER), faixas_aplicadas (JSON), total, moeda, **confirmation_status** (`ESTIMATED`\|`ESTIMATED_PROVISIONAL`\|`CONFIRMED`\|`UNAVAILABLE` — ponto 8: só chega a `CONFIRMED` quando `custo_real_confirmado_ref` está preenchido, **nunca** só por a tabela ser `OFICIAL_VALIDADA`), custo_real_confirmado_ref (nullable — ponteiro para a evidência do custo efetivamente cobrado), **calculation_status** (`OPEN`\|`FINAL`\|`SUPERSEDED`), **engine_version**, **input_hash**, **supersedes_id** → ValorApurado (nullable, autorreferência), calculated_at, criado_em | Índice parcial único: no máximo um `ValorApurado` com `calculation_status IN ('OPEN','FINAL')` por (contêiner_id, relogio_tipo, motor_comercial) — quando um novo cálculo substitui, o antigo transiciona para `SUPERSEDED` e o novo referencia `supersedes_id`. |
 
-### Acesso e operação da migração
+*Os três motores (Termo por Embarque → `TabelaTarifaria.tipo='rocket_cliente', termo_comercial='embarque'`; Termo Único → `tipo='rocket_cliente', termo_comercial='unico'`, usa `FaixaTarifaria` + `day_count_basis`; Exposição Rocket → `tipo='armador'`) permanecem três estratégias de código isoláveis (Fase 4) — o schema os distingue por `motor_comercial` em `ValorApurado` e por `tipo`/`termo_comercial` em `TabelaTarifaria`, nunca por inferência implícita.*
 
-| Entidade | Papel | Campos principais |
+### Tracking (target → fetch → evento)
+
+| Entidade | Campos principais | Constraints / unique keys |
 |---|---|---|
-| **Usuario** | RBAC (correção de premissa #3). | id, nome, email, papel (`ANALYST`\|`MANAGER`\|`ADMIN`\|`CLIENT`), cliente_id → Cliente (nullable, só p/ `CLIENT`) |
-| **BackfillRun** | Log de execução do backfill (Fase 1) — auditoria de bootstrap. | id, executado_em, processos_processados, campos_marcados_pendentes, erros (JSON) |
-| **ShadowDiff** | Diferença V1×V2 durante o shadow mode (pré-Fase 9). | id, processo_id → Processo, contêiner_id → Contêiner (nullable), campo, valor_v1, valor_v2, explicada (booleano), explicacao, comparado_em |
+| **TrackingTarget** | id, armador_id → Armador, reference_type (`bl_master`\|`bl_house`\|`container`), reference_value (TEXT) | UNIQUE(armador_id, reference_type, reference_value) |
+| **TrackingFetch** *(append-only após conclusão)* | id, tracking_target_id → TrackingTarget, iniciado_em, finalizado_em (nullable), **status_consulta** (`sucesso`\|`falha`\|`parcial`\|`timeout`), erro_mensagem (nullable), origem_disparo (`scheduler`\|`manual`\|`shadow`\|`backfill`), usuario_id → Usuario (nullable, disparo manual), referencia_dado_bruto (nullable) | — |
+| **TrackingEvent** *(append-only)* | id, tracking_fetch_id → TrackingFetch, tracking_target_id → TrackingTarget (denormalizado), tipo_evento (`descarga`\|`gate_out`\|`empty_return`\|`outro`), numero_contêiner (nullable — o evento pode ser do target inteiro), data_evento (DATE), **external_event_id** (nullable, ponto 5), **dedupe_hash** (NOT NULL — hash(external_event_id) quando existe; senão fallback determinístico hash(armador+target+tipo_evento+numero_contêiner+data_evento)), referencia_dado_bruto, criado_em | UNIQUE(tracking_target_id, dedupe_hash) |
+| **FalhaTracking** | id, tracking_target_id → TrackingTarget, contador_consecutivo (INTEGER), **incidente_seq** (INTEGER, default 0 — incrementa cada vez que, após reset por sucesso, o contador volta a atingir 3), **alerta_disparado** (BOOLEAN), ultima_falha_em, ultima_resposta_valida_em, atualizado_em | UNIQUE(tracking_target_id) — atualizada in-place a cada `TrackingFetch` concluído para o target (incrementa em falha, zera `contador_consecutivo`+`alerta_disparado` em sucesso). |
+| **AlertaTecnico** *(append-only)* | id, falha_tracking_id → FalhaTracking, incidente_seq (copiado no disparo), armador_id → Armador (denormalizado, para agrupar mensagem — Cap. 18 "34 processos afetados"), disparado_em, destinatarios (JSON) | UNIQUE(falha_tracking_id, incidente_seq) — **ponto 14:** dispara só na transição para a 3ª falha (`contador_consecutivo=3 AND alerta_disparado=false`); 4ª/5ª falha não geram novo alerta porque `alerta_disparado` já é `true`; só um sucesso (zera o contador) seguido de nova sequência até 3 (novo `incidente_seq`) libera um novo disparo. |
+| **AgendamentoConsulta** | id, tracking_target_id → TrackingTarget, janela_prevista (DATE), executado_em (TIMESTAMP, nullable), tracking_fetch_id → TrackingFetch (nullable), status (`pendente`\|`executado`\|`pulado_cache`) | UNIQUE(tracking_target_id, janela_prevista) — **ponto 3:** agendado por target, não por contêiner; quando um target alimenta vários contêineres, uma janela cobre todos de uma vez. A cadência (Cap. 16) usa o estado mais urgente entre os contêineres do target para decidir a próxima janela. |
 
-*(Nota: "Destinatário de alerta técnico" — trilho T2 — permanece configuração, não entidade de banco, conforme já definido nas fases acima.)*
+### Encerramento, responsabilidade, evidências e auditoria
 
-## Relacionamentos (visão Mermaid)
+| Entidade | Campos principais | Constraints / unique keys |
+|---|---|---|
+| **Minuta** | id, contêiner_id → Contêiner, data_informada (DATE), numero_contêiner_validado, data_validada (DATE, nullable — vira `effective_return_date`), diverge_do_tracking (BOOLEAN), usuario_id → Usuario, criado_em, estado_conferencia | — |
+| **DecisaoResponsabilidade** | id, contêiner_id → Contêiner, data_apta_liberacao (DATE), data_liberacao_efetiva (DATE), intervalo_sugerido_inicio (DATE), intervalo_sugerido_fim (DATE), dias_confirmados_rocket (INTEGER), dias_confirmados_cliente (INTEGER), justificativa, evidencias (JSON), gestor_id → Usuario, decidido_em, estado (`em_analise`\|`confirmada_rocket`\|`confirmada_cliente`\|`dividida`) | — (uma revisão cria novo registro; "vigente" = mais recente por contêiner) |
+| **DocumentoEvidencia** *(append-only)* | id, entidade_tipo, entidade_id, tipo, origem, data_inclusao, usuario_id → Usuario, arquivo_ref | — |
+| **Auditoria** *(append-only)* | id, entidade_tipo, entidade_id, campo, valor_anterior, valor_novo, usuario_id → Usuario, timestamp, motivo, evidencia_ref (nullable) | — |
+
+### Operação da migração (backfill e shadow)
+
+| Entidade | Campos principais | Constraints / unique keys |
+|---|---|---|
+| **BackfillRun** *(append-only)* | id, executado_em, processos_processados (INTEGER), campos_marcados_pendentes (INTEGER), erros (JSON) | — |
+| **BackfillItem** *(append-only — ponto 12: rastreabilidade por item, não só contador agregado)* | id, backfill_run_id → BackfillRun, entidade_tipo, entidade_id, resultado (`criado`\|`atualizado`\|`pendencia_marcada`\|`ignorado`\|`erro`), detalhe (JSON), criado_em | — |
+| **ShadowRun** *(append-only)* | id, iniciado_em, finalizado_em (nullable), **engine_version**, processos_comparados (INTEGER), diferencas_encontradas (INTEGER), diferencas_nao_explicadas (INTEGER), status (`em_andamento`\|`concluido`) | — |
+| **ShadowDiff** *(append-only)* | id, shadow_run_id → ShadowRun, processo_id → Processo, contêiner_id → Contêiner (nullable), campo, valor_v1, valor_v2, explicada (BOOLEAN), explicacao (nullable), comparado_em | — |
+
+## Relacionamentos (Mermaid)
 
 ```mermaid
 erDiagram
     Cliente ||--o{ Processo : possui
     Processo ||--o{ Contêiner : agrupa
+    Processo }o--o| CondicaoComercial : aplica
     Armador ||--o{ Processo : atende
     Armador ||--o{ TabelaTarifaria : define
-    Armador ||--o{ EventoTracking : origina
+    Armador ||--o{ TrackingTarget : identifica
     Armador ||--o{ FalhaTracking : acumula
+    Armador ||--o{ AlertaTecnico : agrupa
 
+    Contêiner }o--o| ContainerType : classificado_como
     Contêiner ||--o{ Snapshot : versiona
-    Contêiner ||--o{ Relogio : possui
+    Contêiner ||--o{ Relogio : cacheia
     Contêiner ||--o{ ValorApurado : apura
     Contêiner ||--o{ Minuta : recebe
     Contêiner ||--o| DecisaoResponsabilidade : "analisa (Fase 11)"
-    Contêiner }o--|| MapeamentoTipoContainer : "normalizado por"
-    Contêiner ||--o{ EventoTracking : "resolvido de"
-    Contêiner ||--o{ AgendamentoConsulta : agenda
+    Contêiner }o--o| TrackingTarget : consultado_via
     Contêiner ||--o{ ShadowDiff : compara
 
+    TrackingTarget ||--o{ TrackingFetch : origina
+    TrackingTarget ||--o{ TrackingEvent : "produz (via fetch)"
+    TrackingTarget ||--o| FalhaTracking : monitora
+    TrackingTarget ||--o{ AgendamentoConsulta : agenda
+    TrackingFetch ||--o{ TrackingEvent : retorna
+
     TabelaTarifaria ||--o{ FaixaTarifaria : contem
-    ValorApurado }o--|| TabelaTarifaria : usa
+    ValorApurado }o--o| TabelaTarifaria : usa
+    ValorApurado }o--o| ValorApurado : supersedes
+
+    ContainerTypeMapping }o--|| ContainerType : resolve_para
 
     FalhaTracking ||--o{ AlertaTecnico : dispara
 
@@ -576,28 +605,25 @@ erDiagram
     Usuario ||--o{ Minuta : envia
     Usuario }o--o| Cliente : "vinculado (papel CLIENT)"
 
-    CampoComFonte }o--|| Contêiner : "descreve (polimórfico)"
+    FieldObservation }o--|| Contêiner : "observa (polimórfico)"
     Auditoria }o--|| Contêiner : "descreve (polimórfico)"
     DocumentoEvidencia }o--|| Contêiner : "anexa (polimórfico)"
+
+    BackfillRun ||--o{ BackfillItem : detalha
+    ShadowRun ||--o{ ShadowDiff : agrupa
 ```
 
-*(As linhas "polimórfico" representam `entidade_tipo`+`entidade_id` — `CampoComFonte`, `Auditoria` e `DocumentoEvidencia` podem apontar para `Processo`, `Contêiner` ou outras entidades, não só Contêiner; o diagrama simplifica para o caso mais comum.)*
+*(Linhas "polimórfico" = `entidade_tipo`+`entidade_id`, podendo apontar para `Processo` ou `Contêiner`; diagrama simplificado ao caso mais comum.)*
 
-## Rastreabilidade schema → fases
+## Classificação das entidades
 
-- **Fase 1:** Cliente, Armador, Processo, Contêiner, CampoComFonte, Snapshot, BackfillRun.
-- **Fase 2/3:** Relogio (campos de cálculo temporal e dual-clock vivem aqui).
-- **Fase 4:** TabelaTarifaria, FaixaTarifaria, MapeamentoTipoContainer, ValorApurado (com `motor_comercial`).
-- **Fase 5:** EventoTracking (com os 5 campos do contrato expandido).
-- **Fase 6:** FalhaTracking, AgendamentoConsulta, AlertaTecnico.
-- **Fase 7:** campos `estado`/`prioridade`/`motivo_prioridade` em Contêiner (já previstos acima, sem entidade nova).
-- **Fase 8:** Minuta; estados de `Relogio`/`ValorApurado` cobrem o fechamento.
-- **Fase 9:** ShadowDiff (shadow mode).
-- **Fase 10:** nenhuma entidade nova — leitura agregada sobre o que já existe.
-- **Fase 11:** DecisaoResponsabilidade.
-- **Fase 12:** nenhuma entidade nova — `Usuario.papel = CLIENT` + `Usuario.cliente_id` já dão a base de isolamento; o payload filtrado é lógica de leitura, não schema novo.
-- **Transversal (T1/T2):** Usuario; DocumentoEvidencia e Auditoria são usadas por praticamente todas as fases a partir da 7/8.
+| Classe | Entidades | Regra |
+|---|---|---|
+| **Fonte de verdade (cadastral/operacional)** | Cliente, Armador, Usuario, ContainerType, ContainerTypeMapping, CondicaoComercial, Processo, Contêiner (colunas típadas), TrackingTarget, TabelaTarifaria, FaixaTarifaria, Minuta, DecisaoResponsabilidade | Mutáveis in-place; representam o estado operacional atual. `Cliente`/`Processo` são locais ao módulo (ver nota de investigação acima), não um cadastro corporativo. |
+| **Append-only (histórico imutável)** | FieldObservation, Snapshot, ValorApurado (exceto a transição de `calculation_status`), TrackingFetch, TrackingEvent, AlertaTecnico, DocumentoEvidencia, Auditoria, BackfillRun, BackfillItem, ShadowRun, ShadowDiff | Nunca `UPDATE` de conteúdo — só `INSERT`. `ValorApurado` é o único caso com uma transição de status permitida (`OPEN`/`FINAL` → `SUPERSEDED`), documentada explicitamente. |
+| **Projeção / cache (descartável)** | Relogio | Nunca é fonte de verdade; pode ser apagado e recalculado a qualquer momento a partir de `Contêiner` + `TabelaTarifaria` sem perda de informação. `input_hash`/`calculated_at`/`engine_version` existem só para detectar obsolescência, não para reconstituir dado perdido. |
+| **Operacional (controle de execução, não é dado de negócio)** | FalhaTracking, AgendamentoConsulta | Mutáveis in-place; existem para coordenar o scheduler/alertas, não para registrar fatos do domínio Demurrage em si. |
 
 ## O que fica para depois desta aprovação
 
-Só depois deste schema ser aprovado (ou ajustado e reaprovado): escolha final do motor de persistência (SQLite vs. Postgres — decisão que não muda o desenho acima), escrita das migrations propriamente ditas, e o primeiro código de `src/demurrage-engine/*` (entidades + `ContainerRepository` + `emailHeuristicSource`, conforme descrito na Fase 1). Nenhum desses três itens foi feito nesta etapa.
+Só depois deste schema (revisão 3) ser aprovado: escolha final do motor de persistência, escrita das migrations, e o primeiro código de `src/demurrage-engine/*`. Nenhum desses itens foi feito nesta etapa.
