@@ -1,0 +1,234 @@
+import { CarrierMeta, ReferenceType } from './types';
+
+/**
+ * Priora — Registro dos armadores suportados pelo bot de demurrage.
+ *
+ * Cada armador tem:
+ *  - scac[]: prefixos de BL/booking (4 letras) para detecção;
+ *  - containerPrefixes[]: owner codes ISO 6346 (4 letras) para detecção pelo contêiner;
+ *  - trackingUrl: a página de rastreio;
+ *  - buildTrackingUrl?: deep link quando o padrão é conhecido/confirmado.
+ *
+ * Legenda das notas:
+ *  - "deep link confirmado": padrão de URL veio de exemplo real fornecido.
+ *  - "verificar seletores/URL": estrutura a afinar rodando contra o site real
+ *    (o sandbox de build não alcança os portais).
+ *
+ * Os prefixos de contêiner listados são os mais comuns por armador; a lista não
+ * é exaustiva — quando não há match, a detecção devolve "desconhecido" e o
+ * operador pode informar o armador manualmente.
+ */
+export const CARRIERS: CarrierMeta[] = [
+  {
+    id: 'maersk',
+    name: 'Maersk',
+    scac: ['MAEU', 'MRKU', 'MSKU', 'SEJJ'],
+    containerPrefixes: ['MAEU', 'MSKU', 'MRKU', 'MRSU', 'MSWU', 'MNBU', 'MHHU', 'PONU', 'SUDU', 'SEGU'],
+    trackingUrl: 'https://www.maersk.com/tracking/',
+    // Deep link amplamente usado: /tracking/{referência}.
+    buildTrackingUrl: (ref) => `https://www.maersk.com/tracking/${encodeURIComponent(ref)}`,
+    needsLoginForDemurrage: true,
+    // Scrapfly raspa a Maersk (Bright Data recusava por robots.txt). Scraping é
+    // primário; a API oficial (MAERSK_API_KEY) fica como fallback. BLs 9 dígitos.
+    notes: 'parser da transport-plan (data-test) implementado; raspa via Scrapfly. API oficial DCSA como fallback.',
+  },
+  {
+    id: 'one',
+    name: 'Ocean Network Express (ONE)',
+    scac: ['ONEY'],
+    containerPrefixes: ['ONEU', 'ONEY', 'NYKU', 'MOLU', 'MOAU', 'MOEU', 'KKLU', 'KKFU', 'TCKU'],
+    trackingUrl: 'https://ecomm.one-line.com/one-ecom/manage-shipment/cargo-tracking',
+    // Deep link confirmado pelo exemplo: ?trakNoParam={ref}&trakNoTpCdParam={B|C|R}.
+    buildTrackingUrl: (ref, type) => {
+      const tp = type === 'container' ? 'C' : type === 'booking' ? 'R' : 'B';
+      return `https://ecomm.one-line.com/one-ecom/manage-shipment/cargo-tracking?trakNoParam=${encodeURIComponent(
+        ref,
+      )}&trakNoTpCdParam=${tp}`;
+    },
+    needsLoginForDemurrage: true,
+    notes: 'deep link confirmado (trakNoParam/trakNoTpCdParam: B=BL, C=contêiner, R=booking). SPA — verificar seletores.',
+  },
+  {
+    id: 'yangming',
+    name: 'Yang Ming',
+    scac: ['YMLU', 'YMJA'],
+    containerPrefixes: ['YMLU', 'YMMU', 'YMPU', 'YMYU'],
+    trackingUrl: 'https://www.yangming.com/en/esolution/cargo_tracking',
+    needsLoginForDemurrage: true,
+    notes: 'formulário na página; verificar URL de deep link e seletores.',
+  },
+  {
+    id: 'msc',
+    name: 'MSC',
+    scac: ['MSCU', 'MEDU'],
+    containerPrefixes: ['MSCU', 'MEDU', 'MSDU', 'MSMU', 'MSNU', 'MSZU', 'GLDU'],
+    trackingUrl: 'https://www.msc.com/en/track-a-shipment',
+    needsLoginForDemurrage: true,
+    notes: 'SPA com formulário; costuma exigir aceite/anti-bot. Verificar deep link e seletores.',
+  },
+  {
+    id: 'pil',
+    name: 'Pacific International Lines (PIL)',
+    scac: ['PABV', 'NNPL', 'PILU'],
+    containerPrefixes: ['PCIU', 'PCVU', 'PILU', 'PABV'],
+    trackingUrl: 'https://www.pilship.com/digital-solutions/',
+    // Deep link confirmado pelo exemplo (?...&refNo={ref}).
+    buildTrackingUrl: (ref) =>
+      `https://www.pilship.com/digital-solutions/?tab=customer&id=track-trace&label=containerTandT&module=TrackTraceJob&refNo=${encodeURIComponent(
+        ref,
+      )}`,
+    needsLoginForDemurrage: true,
+    notes: 'deep link confirmado (refNo). Parser scrapers/pil.ts VALIDADO ao vivo: histórico completo (Trace → sub-info-table) por contêiner — descarga/retirada/devolução + tipo; fallback p/ resumo. Self-test com DOM real (npm run pil:selftest).',
+  },
+  {
+    id: 'evergreen',
+    name: 'Evergreen (ShipmentLink)',
+    scac: ['EGLV', 'EMCU', 'EVGL'],
+    containerPrefixes: ['EGHU', 'EGSU', 'EISU', 'EMCU', 'HMCU', 'EITU', 'UGMU'],
+    trackingUrl: 'https://ct.shipmentlink.com/servlet/TDB1_CargoTracking.do',
+    // O Quick Tracking da ShipmentLink aceita o B/L SÓ com a parte numérica
+    // (o exemplo do site é "012345678900"). "EGLV010600577145" dá "B/L not valid";
+    // "010600577145" funciona. Tiramos o prefixo EGLV/EVGL antes de buscar.
+    searchRef: (ref) => ref.replace(/^(EGLV|EVGL)/i, ''),
+    needsLoginForDemurrage: true,
+    needsScrapingBrowser: true, // servlet + JS; render real (sem captcha, validado ao vivo).
+    notes: 'servlet clássico, SEM captcha (validado ao vivo). Busca por B/L SEM prefixo (searchRef). Resultado na MESMA página. Parser scrapers/evergreen.ts (tabela de contêineres).',
+  },
+  {
+    id: 'hmm',
+    name: 'HMM (Hyundai)',
+    scac: ['HDMU', 'HMMU'],
+    containerPrefixes: ['HDMU', 'HMMU'],
+    trackingUrl: 'https://www.hmm21.com/e-service/general/trackNTrace/TrackNTrace.do',
+    needsLoginForDemurrage: true,
+    needsScrapingBrowser: true, // SPA form; render real (sem captcha, confirmado ao vivo).
+    // Form-based, SEM captcha (confirmado ao vivo). O motor preenche srchBlNo1 +
+    // clica "Retrieve". Parser DEDICADO scrapers/hmm.ts lê a tabela Shipment
+    // History (#shipmentProgress). Descarga de TRANSBORDO (T/S) é ignorada.
+    notes: 'form-based sem captcha (validado ao vivo, SGNM68262800). Parser scrapers/hmm.ts (#shipmentProgress). Transbordo (T/S) não conta como descarga. 38 BLs — maior volume.',
+  },
+  {
+    id: 'cmacgm',
+    name: 'CMA CGM',
+    scac: ['CMDU', 'CMAU', 'APLU'],
+    containerPrefixes: ['CMAU', 'CGMU', 'CXDU', 'ECMU', 'APLU', 'APHU', 'CXRU'],
+    trackingUrl: 'https://www.cma-cgm.com/ebusiness/tracking/search',
+    needsLoginForDemurrage: true,
+    needsScrapingBrowser: true, // SPA React → render real; protegido por DataDome.
+    scrapeBlocked: true, // DataDome comportamental — não vencemos por código; economiza crédito.
+    // Parser DEDICADO scrapers/cma.ts (Date|Moves|Location|Vessel) PRONTO e
+    // testado offline. PORÉM o portal é protegido por DataDome (anti-bot
+    // comportamental) — o acesso automatizado é bloqueado de forma intermitente.
+    // A própria CMA anuncia API-EDI: candidata forte à API oficial (api.cma-cgm.com).
+    notes: 'parser scrapers/cma.ts pronto (Date|Moves|Location|Vessel) + expande "Display Previous Moves". BLOQUEIO: portal com DataDome — scrapeBlocked (produção não abre sessão). CMA oferece API oficial (API-EDI) → caminho recomendado.',
+  },
+  {
+    id: 'zim',
+    name: 'ZIM',
+    scac: ['ZIMU'],
+    containerPrefixes: ['ZIMU', 'ZCSU', 'ZMOU', 'ZBDU'],
+    trackingUrl: 'https://www.zim.com/tools/track-a-shipment',
+    // Padrão conhecido: ?consnumber={ref} (contêiner). Verificar para BL.
+    buildTrackingUrl: (ref, type) =>
+      type === 'container'
+        ? `https://www.zim.com/tools/track-a-shipment?consnumber=${encodeURIComponent(ref)}`
+        : null,
+    needsLoginForDemurrage: true,
+    needsScrapingBrowser: true,
+    scrapeBlocked: true, // busca gated por hCaptcha em React (ZimCaptcha) — token resolve mas a
+    // injeção não registra no React; volume ZERO. Produção não abre sessão (economia).
+    notes: 'SPA React; busca gated por hCaptcha (ZimCaptcha, 2 sitekeys). Anti-captcha RESOLVE o token (validado, hcaptchaSolved:true) mas o React ignora a injeção via DOM. scrapeBlocked (produção não abre sessão). Volume zero.',
+  },
+  {
+    id: 'hapag',
+    name: 'Hapag-Lloyd',
+    scac: ['HLCU', 'HLXU', 'UACU'],
+    containerPrefixes: ['HLXU', 'HLBU', 'HPCU', 'HASU', 'UACU', 'CSQU'],
+    trackingUrl: 'https://www.hapag-lloyd.com/en/online-business/track/track-by-booking-solution.html',
+    // Contêiner -> track-by-container; BL/booking -> track-by-booking.
+    // Nome do parâmetro (container=/booking=) a confirmar no site real; o scraper
+    // cai para o preenchimento do formulário caso a referência não apareça.
+    buildTrackingUrl: (ref, type) =>
+      type === 'container'
+        ? `https://www.hapag-lloyd.com/en/online-business/track/track-by-container-solution.html?container=${encodeURIComponent(
+            ref,
+          )}`
+        : `https://www.hapag-lloyd.com/en/online-business/track/track-by-booking-solution.html?booking=${encodeURIComponent(
+            ref,
+          )}`,
+    needsLoginForDemurrage: true,
+    needsScrapingBrowser: true, // Cloudflare interativo + SPA → precisa do navegador remoto.
+    notes: 'páginas track-by-container / track-by-booking (aceita B/L). Scraper de eventos (.hal-event) implementado e validado ao vivo via Scraping Browser.',
+  },
+  {
+    id: 'cosco',
+    name: 'COSCO Shipping',
+    scac: ['COSU'],
+    containerPrefixes: ['CBHU', 'CCLU', 'COSU', 'CSNU', 'CSLU', 'CBEU', 'CIPU'],
+    trackingUrl: 'https://elines.coscoshipping.com/ebusiness/cargotracking',
+    // Deep-link CONFIRMADO ao vivo: o rastreio vive num iframe (scct/public/ct/base)
+    // que aceita ?trackingType=&number= direto na URL. trackingType=BILLOFLADING
+    // renderizou o BL 6502154060 (Fuzhou→Navegantes, "Discharged at Last POD").
+    // Os números da COSCO (10 díg.) são BL/booking com o MESMO valor → BILLOFLADING.
+    // CONTAINER só p/ referência de contêiner (enum a confirmar quando tivermos uma).
+    buildTrackingUrl: (ref, type) => {
+      const tt = type === 'container' ? 'CONTAINER' : 'BILLOFLADING';
+      return `https://elines.coscoshipping.com/scct/public/ct/base?lang=en&trackingType=${tt}&number=${encodeURIComponent(
+        ref,
+      )}`;
+    },
+    needsLoginForDemurrage: true,
+    needsScrapingBrowser: true, // SPA Ant/Vue no iframe → precisa render real (Scrapfly).
+    notes: 'deep-link do iframe scct/public/ct/base (trackingType=BILLOFLADING&number=) CONFIRMADO ao vivo. Parser scrapers/cosco.ts (Transport Detail, 1 evento/contêiner) implementado e coberto por self-test offline (npm run cosco:selftest).',
+  },
+  {
+    id: 'oocl',
+    name: 'OOCL',
+    scac: ['OOLU'],
+    containerPrefixes: ['OOLU', 'OOCU'],
+    trackingUrl: 'https://pbcontroltower.digital.oocl.com/scct/public/moc/cargoTracking?language=en',
+    // Deep-link do SCCT da OOCL (mesmo grupo COSCO, domínio pbcontroltower). A
+    // OOCL usa só a PARTE NUMÉRICA do BL (ex.: OOLU2038860350 → 2038860350).
+    // trackingType/number a confirmar ao vivo; layout tem captcha de slider na
+    // entrada (resolvido por CÓDIGO: Scrapfly solve_captcha / anti-captcha).
+    buildTrackingUrl: (ref, type) => {
+      const num = ref.replace(/^OOLU/i, '');
+      const tt = type === 'container' ? 'CONTAINER' : 'BILLOFLADING';
+      return `https://pbcontroltower.digital.oocl.com/scct/public/moc/cargoTracking?language=en&trackingType=${tt}&number=${encodeURIComponent(
+        num,
+      )}`;
+    },
+    needsLoginForDemurrage: true,
+    needsScrapingBrowser: true, // SPA SCCT + captcha slider → navegador remoto (Scrapfly).
+    scrapeBlocked: true, // Cloudflare + captcha de slider (CargoSmart/AJ-Captcha) comportamental — economiza crédito.
+    notes: 'SCCT em pbcontroltower.digital.oocl.com. Parser DEDICADO scrapers/oocl.ts (Event|Time|Location|Stage|Transport). BLOQUEIO: Cloudflare + slider CargoSmart (comportamental) — scrapeBlocked (produção não abre sessão). API oficial recomendada.',
+  },
+];
+
+const BY_ID = new Map(CARRIERS.map((c) => [c.id, c]));
+
+export function getCarrier(id: string): CarrierMeta | undefined {
+  return BY_ID.get(id);
+}
+
+/** Resolve o deep link (ou a página de rastreio) para uma referência. */
+export function resolveTrackingUrl(
+  carrier: CarrierMeta,
+  ref: string,
+  type: ReferenceType,
+): string {
+  const deep = carrier.buildTrackingUrl?.(ref, type) || null;
+  return deep || carrier.trackingUrl;
+}
+
+/**
+ * Referência a DIGITAR no formulário de busca — aplica o transform do armador
+ * (ex.: Evergreen tira o prefixo EGLV/EVGL). Sem transform, devolve a original.
+ */
+export function resolveSearchRef(
+  carrier: CarrierMeta,
+  ref: string,
+  type: ReferenceType,
+): string {
+  return carrier.searchRef?.(ref, type) ?? ref;
+}

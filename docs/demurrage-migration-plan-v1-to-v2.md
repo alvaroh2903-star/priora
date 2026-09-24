@@ -2,7 +2,7 @@
 
 **Data:** 24/09/2026 (revisão 8)
 **Base:** `docs/demurrage-blueprint-gap-analysis.md` (diagnóstico aprovado, com as 3 correções de premissa da revisão 1)
-**Status:** Fase 1 concluída (migrations corretivas 0006 e 0007), Fase 2 — Motor temporal concluída, Fase 3 — Dois relógios concluída (migration 0008), e Fase 4 — Motor tarifário **concluída** (migrations 0009 e 0010: os três motores, Termo por Embarque + Termo Único + as 12 tabelas de armador com valores reais do Blueprint, e a governança de vigência desconhecida). Fase 5 aguarda autorização. Ver "Relatório de entrega — revisão 8" no final deste documento.
+**Status:** Fases 1–4 concluídas (migrations 0001–0010). Fase 5 — Integração com a API central de Tracking da Priora **concluída** (migration 0011; stack de tracking trazida do branch `claude/demurrage-api-playwright-5q2lqq` sem alterações alheias; serviço central extraído e consumido in-process; ingestão/dedupe/proveniência/matriz por campo). Fase 6 aguarda autorização. Ver "Relatório de entrega — revisão 9" no final deste documento.
 
 **Decisões aprovadas na revisão 7:**
 1. **Seleção de versão do Termo Único:** a versão da tabela aplicada é a **vigente no 1º dia de demurrage do cliente** (fim do House Free Time). Não se cria um `fato_gerador_data` universal.
@@ -1312,3 +1312,97 @@ Nenhum bloqueio novo. Um limite conhecido, não urgente, registrado para transpa
 ### 10. Próximo passo
 
 Fase 4 concluída. **Não avanço para a Fase 5 sem nova autorização.**
+
+---
+
+## Relatório de entrega — revisão 9 (Fase 5: integração com a API central de Tracking)
+
+**Escopo autorizado:** integrar a Demurrage Engine V2 à **API central de Tracking da própria Priora** (Playwright/Scrapfly atrás dela), sem criar outro serviço/scraper/cliente Scrapfly, sem loop HTTP, sem tocar a V1, sem o scheduler da Fase 6.
+
+### 1. Como integrei os arquivos do branch de Tracking sem trazer alterações alheias
+
+O branch `claude/demurrage-api-playwright-5q2lqq` diverge do merge-base `1f5165c` em 136 arquivos, misturando trabalho de PreAlerta/OCR/Auditoria/mistral/supabase que **não** pertence a esta integração. Tracei o **closure de imports** de `enrichOne`/`trackShipment` e trouxe só ele:
+- `src/browser/**` (45 arquivos: fachada de carriers, detecção, registry, scrapers dos 12 armadores, Playwright/Scrapfly em `browser.ts`/`scrapingBrowser.ts`, anti-captcha) — importam apenas `playwright`/`undici`/`proxy-chain` + `src/config`.
+- `src/demurrage/demurrageBotStore.ts` (cache/TTL/merge), `trackingMapper.ts`, `trackingOrganizer.ts`.
+- `src/config.ts`: adicionei **só** os blocos de tracking (`browser`, `unblocker`, `brightData`, `carrierApis`, `antiCaptcha`, `bot`) + helpers (`hasProxy`, `isUnblockerConfigured`, `isBrightDataConfigured`, `isAntiCaptchaConfigured`) — **não** trouxe mistral/supabase/rocket/billing.
+- `package.json`: só `playwright@1.56.1`, `undici`, `proxy-chain`.
+- `geminiClient`/`demurrageParser` já existiam na branch da Demurrage (não sobrescritos).
+
+Nenhum arquivo de PreAlerta/OCR/Auditoria foi trazido. Modificados (existentes): `config.ts`, `package.json`, lockfile e 3 arquivos de teste. Tudo o mais é novo.
+
+### 2. Fluxo real: Tracking API → adapter → TrackingFetch → TrackingEvent → FieldObservation → campo
+
+```
+sincronizarReferencia(ref)
+  → armadorTrackingSource (porta ArmadorTrackingPort)  [ÚNICO ponto de contato]
+      → trackingService.enrichReference(ref)  [IN-PROCESS, sem HTTP]
+          → demurrageBotStore (cache/TTL adaptativo/merge)  [reuso do cache existente]
+              → trackShipment → Playwright → Scrapfly → armador   (só em miss/stale)
+  → TrackingTargetRepository.upsert (target global por referência)
+  → ingestTrackingResult:
+       TrackingFetch (auditoria de consumo: cached/resolved/status/erro)
+       TrackingEvent[] (dedupe por hash no banco)
+       matriz por campo → FieldObservation(fonte=tracking_service) → campo tipado do Contêiner
+```
+`armadorTrackingSource` é o único arquivo de `src/demurrage-engine/*` que fala com a camada de tracking; a ligação real usa `import()` dinâmico para não carregar Playwright nos testes do motor.
+
+### 3. Migrations
+
+`0011_tracking.sql` (aditiva): `tracking_targets` (global, `UNIQUE(reference_value)`), `container_tracking_targets` (N:N, `UNIQUE(container_id, tracking_target_id)`), `tracking_fetches` (append-only), `tracking_events` (append-only, **`UNIQUE(dedupe_hash)` = idempotência no Postgres**). Fecha também a FK reservada `snapshots.evento_origem_id → tracking_events`.
+
+### 4. Matriz de promoção por campo (implementada e testada)
+
+| Campo | Regra | Efeito na ingestão |
+|---|---|---|
+| `dischargeDate` | Tracking = fonte de verdade | promove `Contêiner.discharge_date` |
+| `gateOut` | evento inequívoco (já ≥ descarga) | promove `gate_out_date` |
+| `emptyReturn` | tracking | promove `tracking_return_date` (effective/minuta/fechamento = Fase 8) |
+| `availableDate` | preservar sem equivalência nova | **só** vira `tracking_event(available)`; não promove nada |
+| tipo | evidência | `FieldObservation`, **nunca** sobrescreve o Master/MBL |
+| House FT / Master FT | tracking nunca promove | ignorado (a API real nem fornece) |
+
+### 5. Testes
+
+9 testes novos em `tracking.test.ts` (engine total: **161/161 verde**; V1 **25/25**; tsc/build limpos): dedupe estável (mesmo evento em duas consultas = mesma chave; nunca posição/timestamp); reuso do cache central (mergeEvents dedup, TTL adaptativo, resolvido = cache eterno); matriz de promoção; idempotência (reingestão não duplica); **concorrência** (duas ingestões simultâneas → 1 evento); fetch falho / **carrier bloqueado** (não inventa evento, não apaga dado); tipo divergente (Master prevalece); target compartilhado por vários contêineres (promoção independente); `cached` registrado; ponta-a-ponta pela porta (fake).
+
+### 6. Exemplo sanitizado (resposta real do contrato)
+
+`GET /health/track?refs=274319835` (Maersk), do `docs/tracking-api-contract.md`:
+```json
+{ "ref": "274319835", "carrier": "Maersk", "ok": true, "eventsCount": 16,
+  "containers": [{ "numero": "TRHU1477661", "tipo": null,
+    "dischargeDate": "2026-08-26", "gateOut": "2026-08-27",
+    "emptyReturn": "2026-09-09", "lastFreeDay": null }] }
+```
+Ingerido: `discharge_date=2026-08-26`, `gate_out_date=2026-08-27`, `tracking_return_date=2026-09-09`; `lastFreeDay` nunca vem do portal (login comercial).
+
+### 7. Prova de dedupe concorrente
+
+`Promise.all([ingest, ingest])` do mesmo resultado → `SELECT count(*) FROM tracking_events` = número de eventos distintos (não o dobro). Garantido pela `UNIQUE(dedupe_hash)` + `ON CONFLICT DO NOTHING` (banco, não só TypeScript).
+
+### 8. Prova de reutilização do cache existente
+
+Não criei segundo cache. `enrichReference` (serviço extraído) usa o `demurrageBotStore` existente: TTL adaptativo (`scrapeIntervalMs`: resolvido→`Infinity`, trânsito→dias, ativo→12h) e `mergeEvents` (histórico não “desacontece”). `TrackingFetch.cached` registra quando a resposta veio do cache central (sem gastar Scrapfly). Testado.
+
+### 9. Carriers funcionais × bloqueados (estado real do código trazido)
+
+Raspando: **Hapag, Maersk, ONE, COSCO, PIL, HMM, Evergreen, MSC, Yang Ming** (COSCO **está** operacional — corrige o planejamento antigo). Bloqueados (`scrapeBlocked`, não resolvidos nesta fase): **CMA CGM** (DataDome), **OOCL** (Cloudflare+slider; parser existe), **ZIM** (hCaptcha). Para bloqueado/falha: `TrackingFetch` `falha`/`parcial`, sem evento fictício, sem apagar último dado, sem inferir Empty Return.
+
+### 10. Nenhuma chamada Scrapfly/Playwright dentro de `demurrage-engine`
+
+nenhum `import`/`require` de `playwright`, `scrapfly` ou `src/browser` em `src/demurrage-engine/*` (as palavras só aparecem em comentários/testes). O único acoplamento com a camada de tracking é `armadorTrackingSource`, que consome a porta e faz `import()` dinâmico de `src/demurrage/trackingService` (fora do `demurrage-engine`). Scrapfly/Playwright ficam atrás da API central.
+
+### 11. V1 intacta
+
+`git diff` de `src/demurrage/{demurrageParser,demurrageFilters}.ts`, `demurrageRoutes.ts` e os dois portais contra `48ba7c1`: vazio.
+
+### 12. PRECISA DE SUA VALIDAÇÃO
+
+Três pontos de transparência (nenhum bloqueia a Fase 5; não alterei estrutura aprovada sem reportar):
+- **Identidade do TrackingTarget = `reference_value`** (não a tripla `armador+reference_type+reference_value`). Motivo: a API central aceita ref genérica e não distingue MBL/HBL, e o cache central é por ref; `reference_type`/`armador` ficam como metadados. Se preferir a tripla como identidade, é uma migration aditiva simples.
+- **Rota Express não trazida.** Extraí o serviço reutilizável `src/demurrage/trackingService.ts`; a rota `demurrageBotRoutes` vive no branch de tracking e deve passar a **delegar** a esse serviço quando os branches forem unificados (rota → serviço; `armadorTrackingSource` → serviço). Não a tornei ativa aqui para não arrastar o `calculator`/`tariffs` antigos, que a Fase 4 já substitui. A rota continua funcionando como hoje no branch dela.
+- **Payload bruto não persistido**: a API real não guarda payload bruto por consulta; `tracking_events.raw_ref` e `external_event_id` nascem `NULL` (não inventei entidade/coluna). Se a auditoria aprovada exigir o payload bruto, é mudança estrutural nova — reporto antes de implementar.
+
+### 13. Próximo passo
+
+Fase 5 concluída. **Não avanço para a Fase 6 sem nova autorização.**

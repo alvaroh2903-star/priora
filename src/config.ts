@@ -69,6 +69,56 @@ export const config = {
     apiSecret: (process.env.DHL_API_SECRET || '').trim(), // reservado (outras APIs DHL usam OAuth)
     baseUrl: (process.env.DHL_BASE_URL || 'https://api-eu.dhl.com').trim(),
   },
+  /**
+   * Automação de navegador (Playwright) — base dos scrapers de tracking de
+   * armador. Trazido do módulo de Tracking central da Priora (Fase 5).
+   */
+  browser: {
+    headless: (process.env.BROWSER_HEADLESS || 'true').trim().toLowerCase() !== 'false',
+    executablePath: (process.env.PLAYWRIGHT_CHROMIUM_PATH || '').trim(),
+    navigationTimeoutMs: parseInt(process.env.BROWSER_NAV_TIMEOUT_MS || '30000', 10),
+    proxy: {
+      server: (process.env.PROXY_SERVER || '').trim(),
+      username: (process.env.PROXY_USERNAME || '').trim(),
+      password: (process.env.PROXY_PASSWORD || '').trim(),
+    },
+  },
+  /** Web Unblocker (proxy que fura anti-bot). */
+  unblocker: {
+    server: (process.env.WEB_UNBLOCKER_SERVER || '').trim(),
+    username: (process.env.WEB_UNBLOCKER_USERNAME || '').trim(),
+    password: (process.env.WEB_UNBLOCKER_PASSWORD || '').trim(),
+  },
+  /** Bright Data Web Unlocker (modo API). */
+  brightData: {
+    apiKey: (process.env.BRIGHTDATA_API_KEY || '').trim(),
+    zone: (process.env.BRIGHTDATA_ZONE || '').trim(),
+  },
+  /** APIs oficiais de rastreio dos armadores (fallback do scraping). */
+  carrierApis: {
+    maersk: {
+      apiKey: (process.env.MAERSK_API_KEY || '').trim(),
+      baseUrl: (process.env.MAERSK_TRACK_URL || 'https://api.maersk.com/track').trim().replace(/\/+$/, ''),
+      authHeader: (process.env.MAERSK_AUTH_HEADER || 'Consumer-Key').trim(),
+    },
+    hmm: {
+      apiKey: (process.env.HMM_API_KEY || '').trim(),
+      baseUrl: (process.env.HMM_TRACK_URL || '').trim().replace(/\/+$/, ''),
+      authHeader: (process.env.HMM_AUTH_HEADER || 'x-api-key').trim(),
+    },
+  },
+  /** Serviço de resolução de CAPTCHA (anti-captcha.com / 2captcha). */
+  antiCaptcha: {
+    provider: (process.env.ANTICAPTCHA_PROVIDER || 'anti-captcha').trim(),
+    apiKey: (process.env.ANTICAPTCHA_KEY || '').trim(),
+  },
+  /** Parâmetros do loop de rastreio (bot de demurrage): cache/TTL/concorrência. */
+  bot: {
+    resultTtlMs: parseInt(process.env.BOT_RESULT_TTL_HOURS || '12', 10) * 60 * 60 * 1000,
+    transitTtlMs: parseInt(process.env.BOT_TRANSIT_TTL_HOURS || '72', 10) * 60 * 60 * 1000,
+    concurrency: Math.max(1, parseInt(process.env.BOT_CONCURRENCY || '2', 10)),
+    maxBatch: Math.max(1, parseInt(process.env.BOT_MAX_BATCH || '10', 10)),
+  },
   /** Palavras-chave usadas para filtrar e-mails de logística/comércio exterior. */
   logisticsKeywords: (
     process.env.LOGISTICS_KEYWORDS ||
@@ -84,4 +134,25 @@ export const authority = `https://login.microsoftonline.com/${config.azure.tenan
 /** Indica se o login com a Microsoft está configurado (client id + secret). */
 export function isAzureConfigured(): boolean {
   return Boolean(config.azure.clientId && config.azure.clientSecret);
+}
+
+
+/** Indica se há um proxy de saída configurado para os scrapers. */
+export function hasProxy(): boolean {
+  return Boolean(config.browser.proxy.server);
+}
+
+/** Indica se o Web Unblocker (bypass de anti-bot) está configurado. */
+export function isUnblockerConfigured(): boolean {
+  return Boolean(config.unblocker.server && config.unblocker.username);
+}
+
+/** Indica se o Bright Data Web Unlocker (modo API) está configurado. */
+export function isBrightDataConfigured(): boolean {
+  return Boolean(config.brightData.apiKey && config.brightData.zone);
+}
+
+/** Indica se o serviço de resolução de CAPTCHA está configurado. */
+export function isAntiCaptchaConfigured(): boolean {
+  return Boolean(config.antiCaptcha.apiKey);
 }
