@@ -42,7 +42,7 @@
 
 ## Correções de premissa incorporadas (vs. o diagnóstico anterior)
 
-1. **Tracking de armador já existe na Priora** fora deste repositório/módulo. Não será construído um novo scraper/integração. Ver "Busca realizada" e "Contrato assumido" na Fase 5.
+1. **Tracking de armador é da própria Priora** (revisão 9): a Priora tem uma **API central de Tracking construída internamente**, que usa Scrapfly para consultar os armadores. A arquitetura é `Armador → Scrapfly → API central de Tracking da Priora → módulos`. O Demurrage **consome exclusivamente** essa API central; **não** cria outro serviço de tracking, outro scraper nem qualquer chamada direta a Scrapfly. Scrapfly fica sempre atrás da API central. Ver "Busca realizada" e a Fase 5. **Achado da investigação (revisão 9):** essa API central de tracking de armador **não está presente neste repositório nem em nenhum repositório acessível** desta conta (só existe tracking de encomenda FedEx/DHL em `src/tracking`+`src/fedex`+`src/dhl`, domínio diferente). Falta o contrato real para conectar — ver o relatório da revisão 9.
 2. **Liberação é desacoplada.** A pré-análise de responsabilidade Rocket × cliente (Cap. 26 do Blueprint) não bloqueia o Demurrage Core. Ela entra como módulo plugável na Fase 11, consumindo eventos estruturados da Liberação quando existirem — sem gate no fechamento operacional (Fase 8).
 3. **RBAC inicial:** `ANALYST`, `MANAGER`, `ADMIN`, `CLIENT`. "Responsável técnico/desenvolvedor" deixa de ser um papel de sistema e passa a ser um **destinatário configurável de alertas técnicos** (lista de e-mail/webhook em configuração, sem login nem permissões no app).
 
@@ -242,11 +242,24 @@ Cada motor produz um `ValorApurado` com um campo `motorComercial` identificando 
 
 ---
 
-## Fase 5 — Integração com o Tracking Service existente
+## Fase 5 — Integração com a API central de Tracking da Priora
 
-**Objetivo:** conectar `ContainerDataSource` (Fase 1) a um novo adaptador que consome o **serviço de tracking de armador já existente na Priora** (fora deste repositório), promovendo-o a fonte prioritária conforme a hierarquia do Cap. 4 — sem construir nenhum scraper/integração nova. A `emailHeuristicSource` (Fase 1) passa a atuar exatamente como o Blueprint prevê: fonte de contingência, usada só quando o tracking estruturado não tiver o dado.
+**Correção de premissa (revisão 9):** a fonte de tracking é a **API central de Tracking da própria Priora** (construída internamente, com Scrapfly atrás dela). O Demurrage é apenas **consumidor** dela; não há serviço de terceiros, não se cria outro scraper nem cliente Scrapfly. `Demurrage Engine → armadorTrackingSource → API central de Tracking → Scrapfly → armador`.
 
-**Pré-condição de início (bloqueante, fora do controle de código):** obter, junto ao time responsável pelo serviço existente, (a) acesso/credenciais, e (b) o contrato real de request/resposta. Sem isso, esta fase não pode começar — ver "Busca realizada" acima.
+**Objetivo:** conectar `ContainerDataSource` (Fase 1) a um adaptador (`armadorTrackingSource`) que consome a **API central de Tracking da Priora**, promovendo-a a fonte prioritária **por campo** conforme a hierarquia do Cap. 4. A `emailHeuristicSource` (Fase 1) segue como contingência.
+
+**Hierarquia de fontes — POR CAMPO (revisão 9; a API ser nossa não muda a autoridade funcional):**
+- **Descarga** e **Empty Return** → tracking do armador (via nossa API) é **fonte de verdade**.
+- **House FT** → House/Auditoria → HeadCargo. Tracking **não sobrescreve**.
+- **Master FT** → MBL → HeadCargo. Tracking **não sobrescreve**.
+- **Tipo de contêiner** → MBL → HeadCargo. Tracking pode ser preservado como evidência (`FieldObservation`), mas **não promove** o campo tipado automaticamente.
+- Toda informação recebida pode virar `FieldObservation`; a promoção ao campo tipado segue a regra específica daquele campo (a hierarquia de prioridade já implementada na Fase 1 respeita isso: uma observação de `tracking_service` só promove um campo se sua prioridade vencer a fonte atual — e para House/Master FT e tipo, as fontes documentais têm prioridade maior).
+
+**Reutilização e custo (revisão 9):** `TrackingTarget` continua global (`armador + reference_type + reference_value`) e pode alimentar vários contêineres/módulos. Antes de pedir uma nova atualização, a Demurrage verifica se a **API central** já tem resposta recente/reutilizável — **não** se cria uma segunda política de cache concorrente; a lógica de fetch/cache pertence ao serviço central. A Demurrage mantém só seus metadados de ingestão (`TrackingFetch`, `TrackingEvent`).
+
+**`TrackingFetch` (revisão 9):** representa uma tentativa da Demurrage de **consumir** tracking pela API central — **não** é 1:1 com uma chamada Scrapfly. Uma resposta pode ter sido reutilizada do cache da API central, vinda de nova consulta Scrapfly, parcial ou falha. Quando a API informar isso, registrar (`origem_resposta`: `cache_central` | `scrapfly_novo` | `parcial` | `falha`), para depois medir consultas solicitadas × realizadas, respostas reutilizadas, chamadas Scrapfly evitadas e custo por processo/armador.
+
+**Pré-condição de início (bloqueante, revisão 9):** o contrato real da API central de Tracking (endpoints, request, response, carriers, identificadores MBL/HBL/contêiner, formato de evento, cache, dedupe, referência ao payload bruto, timestamps, erro, auth). A investigação da revisão 9 confirmou que essa API **não está no ambiente acessível**; o adaptador concreto não pode ser escrito sem o contrato — não inventar contrato.
 
 **Princípio de fonte única (reforço):** `armadorTrackingSource.ts` é o **único** arquivo de todo o sistema autorizado a saber que o Tracking Service existe. Nenhum outro módulo da V2 — scheduler, motor de cálculo, UI, Gestão — chama Scrapfly, o armador ou qualquer conector diretamente; todos passam pela porta `ContainerDataSource`. Isso é tratado como regra de arquitetura, não sugestão: um code review que encontre uma chamada de rede fora deste único arquivo em direção a tracking é um bug de arquitetura, independente de funcionar ou não.
 
