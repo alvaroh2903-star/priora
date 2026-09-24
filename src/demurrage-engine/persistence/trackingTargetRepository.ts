@@ -96,4 +96,52 @@ export class TrackingTargetRepository {
     );
     return rows.map(mapTarget);
   }
+
+  /** Vínculos de tracking de um contêiner, com o contexto (mbl/container + grafia bruta). */
+  async linksForContainer(
+    containerId: string,
+  ): Promise<Array<{ target: TrackingTarget; referenceType: ReferenceType | null; referenceRaw: string | null }>> {
+    const { rows } = await this.pool.query(
+      `SELECT t.*, ctt.reference_type, ctt.reference_raw
+         FROM container_tracking_targets ctt
+         JOIN tracking_targets t ON t.id = ctt.tracking_target_id
+        WHERE ctt.container_id = $1`,
+      [containerId],
+    );
+    return rows.map((r) => ({ target: mapTarget(r), referenceType: r.reference_type, referenceRaw: r.reference_raw }));
+  }
+
+  /** Organizações afetadas por um target (via contêineres vinculados). */
+  async orgsForTarget(trackingTargetId: string): Promise<string[]> {
+    const { rows } = await this.pool.query(
+      `SELECT DISTINCT c.organization_id
+         FROM container_tracking_targets ctt
+         JOIN containers c ON c.id = ctt.container_id
+        WHERE ctt.tracking_target_id = $1
+        ORDER BY c.organization_id`,
+      [trackingTargetId],
+    );
+    return rows.map((r) => r.organization_id);
+  }
+
+  /** Contêineres de UMA organização vinculados a um target (entrega segregada). */
+  async containersForTargetAndOrg(trackingTargetId: string, organizationId: string): Promise<ContainerVinculado[]> {
+    const { rows } = await this.pool.query(
+      `SELECT c.id, c.numero, c.organization_id
+         FROM container_tracking_targets ctt
+         JOIN containers c ON c.id = ctt.container_id
+        WHERE ctt.tracking_target_id = $1 AND c.organization_id = $2`,
+      [trackingTargetId, organizationId],
+    );
+    return rows.map((r) => ({ containerId: r.id, numero: r.numero, organizationId: r.organization_id }));
+  }
+
+  async marcarConsultaManual(trackingTargetId: string, agora: Date): Promise<void> {
+    await this.pool.query(`UPDATE tracking_targets SET ultima_consulta_manual_em = $2 WHERE id = $1`, [trackingTargetId, agora]);
+  }
+
+  async ultimaConsultaManual(trackingTargetId: string): Promise<Date | null> {
+    const { rows } = await this.pool.query(`SELECT ultima_consulta_manual_em FROM tracking_targets WHERE id = $1`, [trackingTargetId]);
+    return rows[0]?.ultima_consulta_manual_em ?? null;
+  }
 }

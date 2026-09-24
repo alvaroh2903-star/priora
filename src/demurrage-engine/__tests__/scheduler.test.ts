@@ -1,0 +1,264 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { Pool } from 'pg';
+import { runMigrations } from '../db/migrate';
+import { testPool, testDatabaseUrl, truncateAll } from './testDb';
+import { OrganizationRepository } from '../persistence/organizationRepository';
+import { ProcessoRepository } from '../persistence/processoRepository';
+import { ContainerRepository } from '../persistence/containerRepository';
+import { TrackingTargetRepository } from '../persistence/trackingTargetRepository';
+import { TrackingIncidentRepository } from '../persistence/trackingIncidentRepository';
+import { avaliarCadencia, proximaConsulta, deveConsultarAgora } from '../scheduler/cadencePolicy';
+import { falhasConsecutivas, deveAbrirIncidente, podeAtualizarManual } from '../scheduler/failurePolicy';
+import { sincronizarContainer, sincronizarCiclo } from '../scheduler/trackingScheduler';
+import { ArmadorTrackingPort, TrackingEnrichResult } from '../sources/armadorTrackingSource';
+
+const url = testDatabaseUrl();
+
+/* ================================================================== *
+ * PARTE A — políticas puras
+ * ================================================================== */
+
+test('cadência: exemplo obrigatório — menor vencimento 20/09 → início diário 16/09', () => {
+  const base = { dischargeDate: '2026-09-01', houseLastFreeDay: '2026-09-20', masterLastFreeDay: '2026-09-25', emptyReturn: null, algumEmDemurrage: false };
+  assert.equal(avaliarCadencia({ ...base, hoje: '2026-09-16' }).inicioDiario, '2026-09-16');
+  assert.equal(avaliarCadencia({ ...base, hoje: '2026-09-15' }).fase, 'a_cada_4_dias');
+  assert.equal(avaliarCadencia({ ...base, hoje: '2026-09-16' }).fase, 'diario');
+  assert.equal(avaliarCadencia({ ...base, hoje: '2026-09-16', algumEmDemurrage: true }).fase, 'a_cada_2_dias');
+});
+
+test('cadência: D0 → D+5 → a cada 4 dias; empty return encerra', () => {
+  const base = { dischargeDate: '2026-09-01', houseLastFreeDay: '2026-09-20', masterLastFreeDay: '2026-09-25', emptyReturn: null, algumEmDemurrage: false };
+  assert.equal(proximaConsulta({ ...base, hoje: '2026-09-03' }, null), '2026-09-06'); // D+5
+  assert.equal(proximaConsulta({ ...base, hoje: '2026-09-07' }, '2026-09-06'), '2026-09-10'); // D+9
+  assert.equal(proximaConsulta({ ...base, hoje: '2026-09-11' }, '2026-09-10'), '2026-09-14'); // D+13
+  assert.equal(deveConsultarAgora({ ...base, hoje: '2026-09-04' }, null), false); // antes de D+5
+  // Empty Return → para o tracking automático.
+  assert.equal(avaliarCadencia({ ...base, hoje: '2026-09-30', emptyReturn: '2026-09-28' }).fase, 'encerrado');
+  assert.equal(proximaConsulta({ ...base, hoje: '2026-09-30', emptyReturn: '2026-09-28' }, '2026-09-25'), null);
+});
+
+test('falha: 3ª consecutiva abre incidente; sucesso reseta; manual só MANAGER/ADMIN + cooldown', () => {
+  assert.equal(falhasConsecutivas(['falha', 'falha', 'ok', 'falha']), 2);
+  assert.equal(falhasConsecutivas(['falha', 'falha', 'falha']), 3);
+  assert.equal(deveAbrirIncidente(3, false), true);
+  assert.equal(deveAbrirIncidente(3, true), false); // já aberto → não reabre
+  assert.equal(deveAbrirIncidente(2, false), false);
+  const agora = new Date('2026-09-24T12:00:00Z');
+  assert.equal(podeAtualizarManual('ANALYST', null, agora).permitido, false);
+  assert.equal(podeAtualizarManual('CLIENT', null, agora).permitido, false);
+  assert.equal(podeAtualizarManual('MANAGER', null, agora).permitido, true);
+  assert.equal(podeAtualizarManual('MANAGER', new Date('2026-09-24T11:00:00Z'), agora).permitido, false); // 1h < 2h
+  assert.equal(podeAtualizarManual('ADMIN', new Date('2026-09-24T09:30:00Z'), agora).permitido, true); // 2h30 > 2h
+});
+
+/* ================================================================== *
+ * PARTE B — orquestrador (banco + porta fake)
+ * ================================================================== */
+
+function resultado(over: Partial<TrackingEnrichResult> = {}): TrackingEnrichResult {
+  return {
+    carrier: { id: 'hmm', name: 'HMM' }, reference: '', referenceType: 'bl', ok: true,
+    needsLogin: false, needsCaptcha: false, message: undefined, events: [], containers: [],
+    cached: false, resolved: false, at: '2026-09-24T00:00:00Z', ...over,
+  };
+}
+function conteiner(numero: string, dischargeDate: string | null): any {
+  return { numero, tipo: null, dischargeDate, availableDate: null, gateOut: null, emptyReturn: null };
+}
+function fakePort(byRef: Record<string, () => TrackingEnrichResult>) {
+  const calls: Record<string, number> = {};
+  const port: ArmadorTrackingPort = {
+    async enrich(ref) {
+      calls[ref] = (calls[ref] || 0) + 1;
+      const f = byRef[ref];
+      if (!f) throw new Error(`fake sem fixture para ${ref}`);
+      return f();
+    },
+  };
+  return { port, calls };
+}
+
+async function setup(pool: Pool) {
+  await runMigrations(pool);
+  await truncateAll(pool);
+  const org = await new OrganizationRepository(pool).create('Rocket', 'rocket');
+  const processo = await new ProcessoRepository(pool).create({ organizationId: org.id, numeroProcesso: 'IM13', clienteId: null });
+  return { orgId: org.id, processoId: processo.id };
+}
+
+test('HBL nunca é target executável: reference_type "hbl" é rejeitado pelo banco', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    const { orgId, processoId } = await setup(pool);
+    const container = await new ContainerRepository(pool).create(orgId, processoId, 'HDMU0000001');
+    const { target } = await new TrackingTargetRepository(pool).upsert({ carrier: 'hmm', reference: 'SZPM51914400' });
+    await assert.rejects(
+      () => pool.query(`INSERT INTO container_tracking_targets (container_id, tracking_target_id, reference_type) VALUES ($1,$2,'hbl')`, [container.id, target.id]),
+      /reference_type_check/,
+    );
+  } finally { await pool.end(); }
+});
+
+test('MBL disponível → NÃO consulta o container separadamente; HBL não origina consulta', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    const { orgId, processoId } = await setup(pool);
+    const containers = new ContainerRepository(pool);
+    const targets = new TrackingTargetRepository(pool);
+    const c = await containers.create(orgId, processoId, 'HDMU0000001');
+    const { target: mbl } = await targets.upsert({ carrier: 'hmm', reference: 'SZPM51914400' });
+    await targets.linkContainer(c.id, mbl.id, { referenceType: 'mbl', referenceRaw: 'SZPM51914400' });
+    // também há um target do próprio contêiner (fallback), que NÃO deve ser consultado.
+    const { target: cont } = await targets.upsert({ carrier: 'hmm', reference: 'HDMU0000001' });
+    await targets.linkContainer(c.id, cont.id, { referenceType: 'container', referenceRaw: 'HDMU0000001' });
+
+    const { port, calls } = fakePort({
+      SZPM51914400: () => resultado({ containers: [conteiner('HDMU0000001', '2026-09-01')], events: [{ date: '2026-09-01', status: 'Discharge', location: 'Santos', type: 'discharge', container: 'HDMU0000001' }] }),
+      HDMU0000001: () => resultado({ containers: [conteiner('HDMU0000001', '2026-09-02')] }),
+    });
+    const r = await sincronizarContainer({ pool, port, containerId: c.id });
+    assert.equal(r.usouMbl, true);
+    assert.equal(r.consultouContainer, false);
+    assert.equal(calls.SZPM51914400, 1);
+    assert.equal(calls.HDMU0000001, undefined, 'o número do contêiner não foi consultado');
+    // Descarga do MBL foi promovida (2026-09-01, não a do container 2026-09-02).
+    assert.equal((await containers.findById(c.id))?.dischargeDate, '2026-09-01');
+  } finally { await pool.end(); }
+});
+
+test('MBL indisponível (bloqueado) → o número do contêiner funciona como fallback', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    const { orgId, processoId } = await setup(pool);
+    const containers = new ContainerRepository(pool);
+    const targets = new TrackingTargetRepository(pool);
+    const c = await containers.create(orgId, processoId, 'BMOU0000001');
+    const { target: mbl } = await targets.upsert({ carrier: 'cmacgm', reference: 'CMAU1' });
+    await targets.linkContainer(c.id, mbl.id, { referenceType: 'mbl', referenceRaw: 'CMAU1' });
+    const { target: cont } = await targets.upsert({ carrier: 'cmacgm', reference: 'BMOU0000001' });
+    await targets.linkContainer(c.id, cont.id, { referenceType: 'container', referenceRaw: 'BMOU0000001' });
+
+    const { port, calls } = fakePort({
+      CMAU1: () => resultado({ carrier: { id: 'cmacgm', name: 'CMA CGM' }, ok: false, needsCaptcha: true, message: 'Scraping bloqueado', containers: [], events: [] }),
+      BMOU0000001: () => resultado({ carrier: { id: 'cmacgm', name: 'CMA CGM' }, containers: [conteiner('BMOU0000001', '2026-09-03')], events: [{ date: '2026-09-03', status: 'Discharge', location: 'Santos', type: 'discharge', container: 'BMOU0000001' }] }),
+    });
+    const r = await sincronizarContainer({ pool, port, containerId: c.id });
+    assert.equal(r.usouMbl, false);
+    assert.equal(r.consultouContainer, true);
+    assert.equal(calls.CMAU1, 1);
+    assert.equal(calls.BMOU0000001, 1);
+    assert.equal((await containers.findById(c.id))?.dischargeDate, '2026-09-03');
+  } finally { await pool.end(); }
+});
+
+test('MBL compartilhado por dois processos → UMA consulta; múltiplos contêineres reaproveitados', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    const { orgId } = await setup(pool);
+    const processos = new ProcessoRepository(pool);
+    const containers = new ContainerRepository(pool);
+    const targets = new TrackingTargetRepository(pool);
+    const p1 = await processos.create({ organizationId: orgId, numeroProcesso: 'IM2734', clienteId: null });
+    const p2 = await processos.create({ organizationId: orgId, numeroProcesso: 'IM3087', clienteId: null });
+    const c1 = await containers.create(orgId, p1.id, 'HDMU2734001');
+    const c2 = await containers.create(orgId, p2.id, 'HDMU3087001');
+    const { target: mbl } = await targets.upsert({ carrier: 'hmm', reference: 'SZPM51914400' });
+    await targets.linkContainer(c1.id, mbl.id, { referenceType: 'mbl', referenceRaw: 'SZPM51914400' });
+    await targets.linkContainer(c2.id, mbl.id, { referenceType: 'mbl', referenceRaw: 'SZPM51914400' });
+
+    const { port, calls } = fakePort({
+      SZPM51914400: () => resultado({ containers: [conteiner('HDMU2734001', '2026-09-01'), conteiner('HDMU3087001', '2026-09-05')],
+        events: [
+          { date: '2026-09-01', status: 'Discharge', location: 'S', type: 'discharge', container: 'HDMU2734001' },
+          { date: '2026-09-05', status: 'Discharge', location: 'S', type: 'discharge', container: 'HDMU3087001' },
+        ] }),
+    });
+    await sincronizarCiclo({ pool, port, containerIds: [c1.id, c2.id] });
+    assert.equal(calls.SZPM51914400, 1, 'nunca duas puxadas só porque há dois processos');
+    // Um único TrackingFetch para o target compartilhado.
+    const { rows } = await pool.query(`SELECT count(*)::int n FROM tracking_fetches WHERE tracking_target_id=$1`, [mbl.id]);
+    assert.equal(rows[0].n, 1);
+    assert.equal((await containers.findById(c1.id))?.dischargeDate, '2026-09-01');
+    assert.equal((await containers.findById(c2.id))?.dischargeDate, '2026-09-05');
+  } finally { await pool.end(); }
+});
+
+test('duas organizações compartilhando o target → UMA consulta global; entregas de alerta segregadas; sem vazamento A→B', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await runMigrations(pool); await truncateAll(pool);
+    const orgRepo = new OrganizationRepository(pool);
+    const orgA = await orgRepo.create('Org A', 'orga');
+    const orgB = await orgRepo.create('Org B', 'orgb');
+    const processos = new ProcessoRepository(pool);
+    const containers = new ContainerRepository(pool);
+    const targets = new TrackingTargetRepository(pool);
+    const pA = await processos.create({ organizationId: orgA.id, numeroProcesso: 'A-1', clienteId: null });
+    const pB = await processos.create({ organizationId: orgB.id, numeroProcesso: 'B-1', clienteId: null });
+    const cA = await containers.create(orgA.id, pA.id, 'HDMUA000001');
+    const cB = await containers.create(orgB.id, pB.id, 'HDMUB000001');
+    const { target } = await targets.upsert({ carrier: 'hmm', reference: 'SZPM99999999' });
+    await targets.linkContainer(cA.id, target.id, { referenceType: 'mbl', referenceRaw: 'SZPM99999999' });
+    await targets.linkContainer(cB.id, target.id, { referenceType: 'mbl', referenceRaw: 'SZPM99999999' });
+
+    // MBL falha (bloqueado). 3 ciclos → incidente. Cada ciclo = uma consulta global.
+    const { port, calls } = fakePort({ SZPM99999999: () => resultado({ ok: false, needsCaptcha: true, message: 'bloqueado', containers: [], events: [] }) });
+    for (let i = 0; i < 3; i++) await sincronizarCiclo({ pool, port, containerIds: [cA.id, cB.id] });
+    assert.equal(calls.SZPM99999999, 3, 'uma consulta global por ciclo (não por organização/contêiner)');
+    const { rows: fetches } = await pool.query(`SELECT count(*)::int n FROM tracking_fetches WHERE tracking_target_id=$1`, [target.id]);
+    assert.equal(fetches[0].n, 3);
+
+    const incidentes = new TrackingIncidentRepository(pool);
+    const inc = await incidentes.incidenteAberto(target.id);
+    assert.ok(inc, 'incidente aberto na 3ª falha');
+    const entregas = await incidentes.entregas(inc!.id);
+    const tecnicas = entregas.filter((e) => e.escopo === 'tecnico_global');
+    const ops = entregas.filter((e) => e.escopo === 'operacional_org');
+    assert.equal(tecnicas.length, 1, 'um alerta técnico global');
+    assert.deepEqual(ops.map((e) => e.organizationId).sort(), [orgA.id, orgB.id].sort(), 'uma entrega operacional por organização');
+    // Segregação: o conteúdo da entrega de cada org só tem os contêineres dela.
+    const soA = await targets.containersForTargetAndOrg(target.id, orgA.id);
+    const soB = await targets.containersForTargetAndOrg(target.id, orgB.id);
+    assert.deepEqual(soA.map((c) => c.numero), ['HDMUA000001']);
+    assert.deepEqual(soB.map((c) => c.numero), ['HDMUB000001']);
+    assert.ok(!soA.some((c) => c.organizationId === orgB.id), 'nenhum dado da Org B na entrega da Org A');
+  } finally { await pool.end(); }
+});
+
+test('supressão: 4ª/5ª falha não geram novo alerta; sucesso reseta; nova sequência = novo incidente', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    const { orgId, processoId } = await setup(pool);
+    const containers = new ContainerRepository(pool);
+    const targets = new TrackingTargetRepository(pool);
+    const c = await containers.create(orgId, processoId, 'HDMU5000001');
+    const { target } = await targets.upsert({ carrier: 'hmm', reference: 'SZPM50000000' });
+    await targets.linkContainer(c.id, target.id, { referenceType: 'mbl', referenceRaw: 'SZPM50000000' });
+    const incidentes = new TrackingIncidentRepository(pool);
+
+    let modo: 'falha' | 'ok' = 'falha';
+    const { port } = fakePort({
+      SZPM50000000: () => modo === 'falha'
+        ? resultado({ ok: false, needsCaptcha: true, message: 'bloqueado', containers: [], events: [] })
+        : resultado({ containers: [conteiner('HDMU5000001', '2026-09-01')], events: [{ date: '2026-09-01', status: 'Discharge', location: 'S', type: 'discharge', container: 'HDMU5000001' }] }),
+    });
+    const sync = () => sincronizarContainer({ pool, port, containerId: c.id });
+
+    await sync(); await sync(); await sync(); // 3 falhas → incidente
+    const inc1 = await incidentes.incidenteAberto(target.id);
+    assert.ok(inc1);
+    const dep3 = await incidentes.entregas(inc1!.id);
+    await sync(); await sync(); // 4ª e 5ª → sem novo alerta
+    const dep5 = await incidentes.entregas(inc1!.id);
+    assert.deepEqual(dep5.map((e) => e.id).sort(), dep3.map((e) => e.id).sort(), '4ª/5ª não criam novas entregas');
+    assert.equal(inc1!.seq, 1);
+
+    modo = 'ok'; await sync(); // sucesso reseta e fecha o incidente
+    assert.equal(await incidentes.incidenteAberto(target.id), null);
+    modo = 'falha'; await sync(); await sync(); await sync(); // nova sequência → novo incidente
+    const inc2 = await incidentes.incidenteAberto(target.id);
+    assert.ok(inc2);
+    assert.equal(inc2!.seq, 2, 'nova sequência de 3 falhas = novo incidente');
+  } finally { await pool.end(); }
+});

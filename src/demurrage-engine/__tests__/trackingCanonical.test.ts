@@ -105,7 +105,7 @@ test('DB: mesma canônica em armadores diferentes → targets diferentes', { ski
   } finally { await pool.end(); }
 });
 
-test('DB: mesma referência conhecida como MBL e como HBL → o MESMO target; contexto fica no vínculo', { skip: !url }, async () => {
+test('DB: mesma referência conhecida como MBL e como CONTAINER → o MESMO target; contexto fica no vínculo', { skip: !url }, async () => {
   const pool = testPool();
   try {
     const { orgId, processoId } = await setup(pool);
@@ -117,12 +117,12 @@ test('DB: mesma referência conhecida como MBL e como HBL → o MESMO target; co
     await targets.linkContainer(c1.id, target.id, { referenceType: 'mbl', referenceRaw: 'HDMUSZPM51914400' });
     // outra origem conhece a mesma referência de outra forma (BL/HBL, grafia sem HDMU)
     const { target: t2 } = await targets.upsert({ carrier: 'hmm', reference: 'SZPM51914400' });
-    await targets.linkContainer(c2.id, t2.id, { referenceType: 'hbl', referenceRaw: 'SZPM51914400' });
-    assert.equal(target.id, t2.id, 'MBL e HBL da mesma referência canônica → um target');
+    await targets.linkContainer(c2.id, t2.id, { referenceType: 'container', referenceRaw: 'SZPM51914400' });
+    assert.equal(target.id, t2.id, 'MBL e CONTAINER da mesma referência canônica → um target');
     const { rows: tgt } = await pool.query(`SELECT count(*)::int n FROM tracking_targets`);
     assert.equal(tgt[0].n, 1);
     const { rows: links } = await pool.query(`SELECT reference_type, reference_raw FROM container_tracking_targets ORDER BY reference_type`);
-    assert.deepEqual(links.map((r) => r.reference_type), ['hbl', 'mbl']);
+    assert.deepEqual(links.map((r) => r.reference_type), ['container', 'mbl']);
     // proveniência preservada: a grafia bruta original de cada origem fica no vínculo.
     assert.ok(links.some((r) => r.reference_raw === 'HDMUSZPM51914400'));
     assert.ok(links.some((r) => r.reference_raw === 'SZPM51914400'));

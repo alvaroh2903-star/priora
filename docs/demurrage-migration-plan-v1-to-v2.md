@@ -2,7 +2,7 @@
 
 **Data:** 24/09/2026 (revisão 8)
 **Base:** `docs/demurrage-blueprint-gap-analysis.md` (diagnóstico aprovado, com as 3 correções de premissa da revisão 1)
-**Status:** Fases 1–4 concluídas (migrations 0001–0010). Fase 5 — Integração com a API central de Tracking da Priora **concluída** (migrations 0011 e 0012; stack de tracking trazida do branch `claude/demurrage-api-playwright-5q2lqq` sem alterações alheias; serviço central extraído e consumido in-process; ingestão/dedupe/proveniência/matriz por campo; identidade do TrackingTarget = `armador + referência canônica`). Fase 6 aguarda autorização. Ver "Relatório de entrega — revisão 10" no final deste documento.
+**Status:** Fases 1–5 concluídas (migrations 0001–0012). Fase 6 — Scheduler e cadência **concluída** (migration 0013): cadência oficial (D0/D+5/a cada 4 dias/diário 4 dias antes do menor LFD/a cada 2 dias em demurrage/Empty Return encerra), seleção MBL→CONTAINER (HBL nunca dispara tracking), reuso do cache central, e o alerta de falha multiempresa (incidente único por target, entregas operacionais segregadas por organização). Fase 7 aguarda autorização. Ver "Relatório de entrega — revisão 11" no final deste documento.
 
 **Decisões aprovadas na revisão 7:**
 1. **Seleção de versão do Termo Único:** a versão da tabela aplicada é a **vigente no 1º dia de demurrage do cliente** (fim do House Free Time). Não se cria um `fato_gerador_data` universal.
@@ -42,7 +42,7 @@
 
 ## Correções de premissa incorporadas (vs. o diagnóstico anterior)
 
-1. **Tracking de armador é da própria Priora** (revisões 9–10): a Priora tem uma **API central de Tracking construída internamente** (Playwright + Scrapfly como navegador remoto), que consulta os portais dos armadores. Arquitetura: `Armador → Scrapfly/Playwright → API central de Tracking da Priora → módulos`. O Demurrage **consome exclusivamente** essa API central, in-process, pela camada `src/demurrage/trackingService.ts`; **não** cria outro serviço/scraper nem chamada direta a Scrapfly. Scrapfly/Playwright ficam sempre atrás dessa camada. **Fase 5 NÃO está bloqueada por serviço externo** — a implementação real foi localizada no branch `claude/demurrage-api-playwright-5q2lqq` (contrato em `docs/tracking-api-contract.md`), integrada sem trazer alterações alheias e consumida in-process. **Fatos do contrato real** (substituem as premissas antigas): a API não fornece **ID estável de evento** (`external_event_id` pode ser `NULL`; a identidade técnica é o `dedupe_hash`); **não persiste payload bruto** hoje (`raw_ref = NULL`, não inventar entidade/coluna); a **hierarquia de fontes é por campo** (descarga/empty return = tracking é fonte de verdade; House/Master FT e tipo não são sobrescritos pelo tracking); a **identidade real do TrackingTarget é `armador + referência canônica`** (a API recebe uma ref genérica e não distingue MBL/HBL — isso vira contexto do vínculo). Ver os relatórios das revisões 9 e 10.
+1. **Tracking de armador é da própria Priora** (revisões 9–10): a Priora tem uma **API central de Tracking construída internamente** (Playwright + Scrapfly como navegador remoto), que consulta os portais dos armadores. Arquitetura: `Armador → Scrapfly/Playwright → API central de Tracking da Priora → módulos`. O Demurrage **consome exclusivamente** essa API central, in-process, pela camada `src/demurrage/trackingService.ts`; **não** cria outro serviço/scraper nem chamada direta a Scrapfly. Scrapfly/Playwright ficam sempre atrás dessa camada. **Fase 5 NÃO está bloqueada por serviço externo** — a implementação real foi localizada no branch `claude/demurrage-api-playwright-5q2lqq` (contrato em `docs/tracking-api-contract.md`), integrada sem trazer alterações alheias e consumida in-process. **Fatos do contrato real** (substituem as premissas antigas): a API não fornece **ID estável de evento** (`external_event_id` pode ser `NULL`; a identidade técnica é o `dedupe_hash`); **não persiste payload bruto** hoje (`raw_ref = NULL`, não inventar entidade/coluna); a **hierarquia de fontes é por campo** (descarga/empty return = tracking é fonte de verdade; House/Master FT e tipo não são sobrescritos pelo tracking); a **identidade real do TrackingTarget é `armador + referência canônica`** (a API recebe uma ref genérica; a origem — MBL/CONTAINER — vira contexto do vínculo). **A API marítima consulta SOMENTE MBL e CONTAINER (revisão 11): HBL nunca dispara tracking, nunca é fallback, nunca gera custo Scrapfly.** HBL continua existindo no domínio Processo/Auditoria, mas não é target executável. Ver os relatórios das revisões 9, 10 e 11.
 2. **Liberação é desacoplada.** A pré-análise de responsabilidade Rocket × cliente (Cap. 26 do Blueprint) não bloqueia o Demurrage Core. Ela entra como módulo plugável na Fase 11, consumindo eventos estruturados da Liberação quando existirem — sem gate no fechamento operacional (Fase 8).
 3. **RBAC inicial:** `ANALYST`, `MANAGER`, `ADMIN`, `CLIENT`. "Responsável técnico/desenvolvedor" deixa de ser um papel de sistema e passa a ser um **destinatário configurável de alertas técnicos** (lista de e-mail/webhook em configuração, sem login nem permissões no app).
 
@@ -303,7 +303,15 @@ Cada motor produz um `ValorApurado` com um campo `motorComercial` identificando 
 
 ## Fase 6 — Scheduler e cadência
 
-**Objetivo:** implementar a cadência automática do Cap. 16 (D0/D+5/D+9/D+13/D+17 → diário → a cada 2 dias em demurrage → suspensão aos 30 dias) e os alertas de falha do Cap. 18 (3 falhas consecutivas → `MANAGER` do processo + destinatários técnicos configuráveis — trilho T2).
+**Objetivo:** implementar a cadência automática oficial (revisão 11) e o alerta de falha multiempresa. **Concluída** (migration 0013).
+
+**Cadência oficial (revisão 11):** Descarga = D0 → D+5 → a cada 4 dias enquanto nenhum vencimento estiver próximo (D+17 é só uma dessas janelas, consulta de controle) → **4 dias antes do MENOR último dia livre (House × Master): DIÁRIO** → qualquer relógio em demurrage: **a cada 2 dias** → **Empty Return: PARA** o tracking automático daquele contêiner. D+17 não determina o início do diário — se o menor vencimento exigir diário antes, começa antes (ex.: House LFD 20/09, Master 25/09 → menor 20/09 → início diário 16/09). Implementada em `scheduler/cadencePolicy.ts` (pura). **Sem suspensão aos 30 dias** — o Empty Return encerra.
+
+**Seleção de target (revisão 11):** MBL → CONTAINER; **HBL nunca dispara tracking**. Havendo MBL válido/resolvido, usa o MBL e NÃO consulta o contêiner separadamente; se o MBL não resolver, cai para o número do contêiner. Um MBL que alimenta N contêineres/processos é consultado UMA vez (reuso do cache central; nunca uma consulta por processo/contêiner).
+
+**Alerta multiempresa (revisão 11):** `FalhaTracking` global por `TrackingTarget` — o incidente técnico é único. A 3ª falha consecutiva abre o incidente; o responsável técnico recebe um **alerta técnico global** e cada organização afetada recebe **sua própria entrega operacional** (uma por `incidente + organization_id`), vendo só os próprios processos/contêineres — nunca misturando organizações. 4ª/5ª falhas do mesmo incidente não geram novo alerta; um sucesso encerra/reseta a sequência; nova sequência de 3 falhas = novo incidente. Falha nunca apaga o último resultado, nunca interrompe relógios, nunca presume Empty Return.
+
+**Atualização manual (revisão 11):** só MANAGER/ADMIN; cooldown ~2h por `TrackingTarget`; reutiliza o cache se houver resposta válida; execução em background (a interface nunca bloqueia). Sem a regra antiga de "duas atualizações por dia".
 
 **Arquivos/modelos novos:**
 - `src/demurrage-engine/scheduler/cadencePolicy.ts` (função pura: dado o estado do contêiner + histórico, decide se/quando a próxima consulta deve ocorrer).
@@ -1415,7 +1423,7 @@ Fase 5 concluída. **Não avanço para a Fase 6 sem nova autorização.**
 
 ### 1. Resultado da migration 0012
 
-`0012_tracking_target_identidade.sql` (aditiva; 0011 não reescrita): em `tracking_targets` troca a identidade de `UNIQUE(reference_value)` para **`UNIQUE(armador, reference_value_canonical)`** (adiciona `reference_value_canonical`, backfill conservador, `armador` NOT NULL, remove `reference_type` e o `reference_value` bruto do target). Em `container_tracking_targets` adiciona o **contexto de origem** (`reference_type` MBL/HBL/CONTAINER + `reference_raw` = grafia bruta preservada). Preserva `vessel`/`voyage` em `tracking_events` (auditoria — ver §5). Aplica limpa e idempotente no runner (`migrate.test` verde).
+`0012_tracking_target_identidade.sql` (aditiva; 0011 não reescrita): em `tracking_targets` troca a identidade de `UNIQUE(reference_value)` para **`UNIQUE(armador, reference_value_canonical)`** (adiciona `reference_value_canonical`, backfill conservador, `armador` NOT NULL, remove `reference_type` e o `reference_value` bruto do target). Em `container_tracking_targets` adiciona o **contexto de origem** (`reference_type` + `reference_raw` = grafia bruta preservada; **na revisão 11 o `reference_type` executável foi restrito a MBL/CONTAINER — HBL removido, pois a API marítima não consulta HBL**). Preserva `vessel`/`voyage` em `tracking_events` (auditoria — ver §5). Aplica limpa e idempotente no runner (`migrate.test` verde).
 
 ### 2. Normalizadores implementados (`tracking/referenceCanonical.ts`)
 
@@ -1470,3 +1478,48 @@ Nenhum ponto aberto. Os três da revisão 9 foram resolvidos: identidade do targ
 ### 8. Próximo passo
 
 Fase 5 concluída (com a 0012). **Não avanço para a Fase 6 sem nova autorização.**
+
+---
+
+## Relatório de entrega — revisão 11 (Fase 6: scheduler, cadência e alerta multiempresa)
+
+**Escopo autorizado:** cadência oficial, seleção MBL→CONTAINER (HBL excluído do tracking), reuso do cache central, alerta de falha multiempresa, atualização manual. Migration aditiva 0013. Não avançar para a Fase 7.
+
+### 1. Migration 0013 (aditiva; 0001–0012 não reescritas)
+
+- `container_tracking_targets.reference_type` restrito a **`mbl`/`container`** (exclui HBL): vínculo de tracking executável representa só MBL ou CONTAINER.
+- `tracking_targets.ultima_consulta_manual_em` (cooldown manual).
+- `tracking_incidents` (incidente único por target; índice parcial "aberto único"; `seq` numera incidentes sucessivos).
+- `tracking_alert_deliveries` (escopo `tecnico_global` = 1 por incidente; `operacional_org` = 1 por incidente+organização; constraints garantem a unicidade). `organization_id` imutável (convenção DECISÃO 1). Aplica limpa (`migrate.test` verde).
+
+### 2. Cadência (`scheduler/cadencePolicy.ts`, pura)
+
+`avaliarCadencia`/`proximaConsulta`/`deveConsultarAgora` sobre datas civis. Fases: `aguardando_descarga` → `inicial` (1ª janela D+5) → `a_cada_4_dias` (D+9, D+13, D+17…) → `diario` (a partir de menor LFD − 4) → `a_cada_2_dias` (algum relógio em demurrage) → `encerrado` (Empty Return). **Exemplo obrigatório conferido:** House LFD 20/09, Master 25/09 → menor 20/09 → **início diário 16/09** (antes de D+17). Janelas pré-diário ancoradas em D0; diário/2-dias ancorados na última consulta.
+
+### 3. Seleção de target e reuso (`scheduler/trackingScheduler.ts`)
+
+`sincronizarContainer`/`sincronizarCiclo`: tenta o MBL primeiro; se o MBL fornece o tracking do contêiner (o BL retorna aquele contêiner), **não consulta o número do contêiner**; se o MBL não resolve (bloqueado/sem o contêiner), cai para o CONTAINER. A consulta é pela **referência canônica** (uma entrada de cache central por target); o contexto de ciclo garante **uma consulta e um `TrackingFetch` por target por ciclo** — um MBL que alimenta N contêineres/processos é puxado uma vez. HBL nunca entra (não é `reference_type` válido).
+
+### 4. Alerta multiempresa (`persistence/trackingIncidentRepository.ts` + `avaliarFalhaTarget`)
+
+Incidente **global por target**: a 3ª falha consecutiva (`tracking_fetches` status `falha`) abre o incidente + registra o **alerta técnico global** (único) + uma **entrega operacional por organização afetada**. 4ª/5ª falhas não criam novas entregas (incidente já aberto; `ON CONFLICT`). Um sucesso fecha o incidente e reseta; nova sequência de 3 falhas → novo incidente (`seq+1`). Segregação: `containersForTargetAndOrg` entrega a cada organização só os próprios contêineres — nenhum dado de A na entrega de B.
+
+### 5. Atualização manual (`solicitarAtualizacaoManual` + `failurePolicy`)
+
+Só MANAGER/ADMIN; cooldown ~2h por target (`podeAtualizarManual`); reutiliza o cache central; marca `ultima_consulta_manual_em`. Execução em background é responsabilidade da aplicação (a interface nunca bloqueia). Sem a regra antiga de "duas atualizações por dia".
+
+### 6. Testes (todos os obrigatórios)
+
+Suíte da engine: **180/180 verde**; V1 **25/25**; `tsc`/`build` limpos; V1 intacta. Novos (`scheduler.test.ts`, 9): cadência (exemplo obrigatório + fases + Empty Return encerra); falha/manual puros; **HBL rejeitado** pelo banco; **MBL disponível → não consulta container**; **MBL indisponível → container fallback**; **MBL compartilhado por 2 processos → 1 consulta**; **múltiplos contêineres de um MBL reaproveitados**; **2 organizações no mesmo target → 1 consulta global + entregas segregadas + sem vazamento A→B**; **supressão** (4ª/5ª sem novo alerta; sucesso reseta; nova sequência = novo incidente). Plano atualizado: removida toda menção a HBL como identificador aceito pela Tracking API.
+
+### 7. Falhas — invariantes garantidas
+
+Falha registra `TrackingFetch` `falha`/`parcial`, **não** apaga o último resultado (append-only), **não** interrompe relógios (o motor é independente), **não** presume Empty Return (só o evento real de devolução promove `tracking_return_date`). Supressão até um sucesso.
+
+### 8. PRECISA DE SUA VALIDAÇÃO
+
+Nenhum ponto aberto. Um item de transparência (não bloqueia; nada foi alterado sem reportar): a **execução concreta do cron/worker** (quando o processo Node dispara o ciclo) e o **transporte do alerta** (e-mail/webhook ao responsável técnico e aos Gestores) são da camada de aplicação/infra e não foram implementados aqui — a Fase 6 entrega a decisão de cadência, a seleção/reuso, e a máquina de incidente/entregas (registros segregados). Se quiser o worker/transporte dentro deste módulo, é uma adição a combinar.
+
+### 9. Próximo passo
+
+Fase 6 concluída. **Não avanço para a Fase 7 sem nova autorização.**
