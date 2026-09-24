@@ -2,7 +2,7 @@
 
 **Data:** 24/09/2026 (revisão 8)
 **Base:** `docs/demurrage-blueprint-gap-analysis.md` (diagnóstico aprovado, com as 3 correções de premissa da revisão 1)
-**Status:** Fases 1–4 concluídas (migrations 0001–0010). Fase 5 — Integração com a API central de Tracking da Priora **concluída** (migration 0011; stack de tracking trazida do branch `claude/demurrage-api-playwright-5q2lqq` sem alterações alheias; serviço central extraído e consumido in-process; ingestão/dedupe/proveniência/matriz por campo). Fase 6 aguarda autorização. Ver "Relatório de entrega — revisão 9" no final deste documento.
+**Status:** Fases 1–4 concluídas (migrations 0001–0010). Fase 5 — Integração com a API central de Tracking da Priora **concluída** (migrations 0011 e 0012; stack de tracking trazida do branch `claude/demurrage-api-playwright-5q2lqq` sem alterações alheias; serviço central extraído e consumido in-process; ingestão/dedupe/proveniência/matriz por campo; identidade do TrackingTarget = `armador + referência canônica`). Fase 6 aguarda autorização. Ver "Relatório de entrega — revisão 10" no final deste documento.
 
 **Decisões aprovadas na revisão 7:**
 1. **Seleção de versão do Termo Único:** a versão da tabela aplicada é a **vigente no 1º dia de demurrage do cliente** (fim do House Free Time). Não se cria um `fato_gerador_data` universal.
@@ -42,7 +42,7 @@
 
 ## Correções de premissa incorporadas (vs. o diagnóstico anterior)
 
-1. **Tracking de armador é da própria Priora** (revisão 9): a Priora tem uma **API central de Tracking construída internamente**, que usa Scrapfly para consultar os armadores. A arquitetura é `Armador → Scrapfly → API central de Tracking da Priora → módulos`. O Demurrage **consome exclusivamente** essa API central; **não** cria outro serviço de tracking, outro scraper nem qualquer chamada direta a Scrapfly. Scrapfly fica sempre atrás da API central. Ver "Busca realizada" e a Fase 5. **Achado da investigação (revisão 9):** essa API central de tracking de armador **não está presente neste repositório nem em nenhum repositório acessível** desta conta (só existe tracking de encomenda FedEx/DHL em `src/tracking`+`src/fedex`+`src/dhl`, domínio diferente). Falta o contrato real para conectar — ver o relatório da revisão 9.
+1. **Tracking de armador é da própria Priora** (revisões 9–10): a Priora tem uma **API central de Tracking construída internamente** (Playwright + Scrapfly como navegador remoto), que consulta os portais dos armadores. Arquitetura: `Armador → Scrapfly/Playwright → API central de Tracking da Priora → módulos`. O Demurrage **consome exclusivamente** essa API central, in-process, pela camada `src/demurrage/trackingService.ts`; **não** cria outro serviço/scraper nem chamada direta a Scrapfly. Scrapfly/Playwright ficam sempre atrás dessa camada. **Fase 5 NÃO está bloqueada por serviço externo** — a implementação real foi localizada no branch `claude/demurrage-api-playwright-5q2lqq` (contrato em `docs/tracking-api-contract.md`), integrada sem trazer alterações alheias e consumida in-process. **Fatos do contrato real** (substituem as premissas antigas): a API não fornece **ID estável de evento** (`external_event_id` pode ser `NULL`; a identidade técnica é o `dedupe_hash`); **não persiste payload bruto** hoje (`raw_ref = NULL`, não inventar entidade/coluna); a **hierarquia de fontes é por campo** (descarga/empty return = tracking é fonte de verdade; House/Master FT e tipo não são sobrescritos pelo tracking); a **identidade real do TrackingTarget é `armador + referência canônica`** (a API recebe uma ref genérica e não distingue MBL/HBL — isso vira contexto do vínculo). Ver os relatórios das revisões 9 e 10.
 2. **Liberação é desacoplada.** A pré-análise de responsabilidade Rocket × cliente (Cap. 26 do Blueprint) não bloqueia o Demurrage Core. Ela entra como módulo plugável na Fase 11, consumindo eventos estruturados da Liberação quando existirem — sem gate no fechamento operacional (Fase 8).
 3. **RBAC inicial:** `ANALYST`, `MANAGER`, `ADMIN`, `CLIENT`. "Responsável técnico/desenvolvedor" deixa de ser um papel de sistema e passa a ser um **destinatário configurável de alertas técnicos** (lista de e-mail/webhook em configuração, sem login nem permissões no app).
 
@@ -259,7 +259,7 @@ Cada motor produz um `ValorApurado` com um campo `motorComercial` identificando 
 
 **`TrackingFetch` (revisão 9):** representa uma tentativa da Demurrage de **consumir** tracking pela API central — **não** é 1:1 com uma chamada Scrapfly. Uma resposta pode ter sido reutilizada do cache da API central, vinda de nova consulta Scrapfly, parcial ou falha. Quando a API informar isso, registrar (`origem_resposta`: `cache_central` | `scrapfly_novo` | `parcial` | `falha`), para depois medir consultas solicitadas × realizadas, respostas reutilizadas, chamadas Scrapfly evitadas e custo por processo/armador.
 
-**Pré-condição de início (bloqueante, revisão 9):** o contrato real da API central de Tracking (endpoints, request, response, carriers, identificadores MBL/HBL/contêiner, formato de evento, cache, dedupe, referência ao payload bruto, timestamps, erro, auth). A investigação da revisão 9 confirmou que essa API **não está no ambiente acessível**; o adaptador concreto não pode ser escrito sem o contrato — não inventar contrato.
+**Pré-condição resolvida (revisão 10):** o contrato real está em `docs/tracking-api-contract.md` (branch de tracking). A resposta do `enrich` traz `events[]` + `containers[]` (datas por contêiner: `dischargeDate`/`availableDate`/`gateOut`/`emptyReturn`; `lastFreeDay` sempre `null`) + `cached`/`resolved`. O adaptador `armadorTrackingSource` consome o `trackingService` in-process; nada mais precisa do contrato.
 
 **Princípio de fonte única (reforço):** `armadorTrackingSource.ts` é o **único** arquivo de todo o sistema autorizado a saber que o Tracking Service existe. Nenhum outro módulo da V2 — scheduler, motor de cálculo, UI, Gestão — chama Scrapfly, o armador ou qualquer conector diretamente; todos passam pela porta `ContainerDataSource`. Isso é tratado como regra de arquitetura, não sugestão: um code review que encontre uma chamada de rede fora deste único arquivo em direção a tracking é um bug de arquitetura, independente de funcionar ou não.
 
@@ -1406,3 +1406,67 @@ Três pontos de transparência (nenhum bloqueia a Fase 5; não alterei estrutura
 ### 13. Próximo passo
 
 Fase 5 concluída. **Não avanço para a Fase 6 sem nova autorização.**
+
+---
+
+## Relatório de entrega — revisão 10 (Fase 5: identidade canônica do TrackingTarget + normalizadores)
+
+**Escopo autorizado:** validações da Fase 5 aprovadas com ajuste no TrackingTarget (identidade `armador + referência canônica`), normalização determinística/conservadora por armador, migration aditiva 0012, e verificação de auditoria de `TrackingEvent`/`TrackingFetch`.
+
+### 1. Resultado da migration 0012
+
+`0012_tracking_target_identidade.sql` (aditiva; 0011 não reescrita): em `tracking_targets` troca a identidade de `UNIQUE(reference_value)` para **`UNIQUE(armador, reference_value_canonical)`** (adiciona `reference_value_canonical`, backfill conservador, `armador` NOT NULL, remove `reference_type` e o `reference_value` bruto do target). Em `container_tracking_targets` adiciona o **contexto de origem** (`reference_type` MBL/HBL/CONTAINER + `reference_raw` = grafia bruta preservada). Preserva `vessel`/`voyage` em `tracking_events` (auditoria — ver §5). Aplica limpa e idempotente no runner (`migrate.test` verde).
+
+### 2. Normalizadores implementados (`tracking/referenceCanonical.ts`)
+
+Determinístico, conservador, por armador. Limpeza geral: `trim` + `uppercase` + remoção de espaços/hífens. **Nunca** fuzzy, nunca completa/troca caractere, nunca corrige por similaridade.
+- **Evergreen** (`evergreen-corpo-12`): `EGLV`/`EVGL`/`EGVL` + corpo de 12 dígitos, ou o corpo puro → o corpo de 12 dígitos.
+- **HMM** (`hmm-strip-hdmu`): remove só o prefixo `HDMU`; sem `HDMU`, preserva.
+- **COSCO** (`cosco-strip-cosu`): remove `COSU`; a forma numérica preserva.
+- **Maersk** (`maersk-numerico`): 9 dígitos preservados.
+- **MSC / OOCL / ONE / Hapag / CMA CGM / Yang Ming / PIL** (`preserva-integral`): referência íntegra (uppercase limpo), sem remover prefixo.
+- Fora do padrão conhecido → forma **conservadora** + `precisaMapping = true` (registra necessidade de mapping; não inventa canônico).
+- **Detector de mismatch**: se a referência tem prefixo forte de outro armador (`HLCU`→hapag, `OOLU`→oocl, `ONEY`→one, `MEDU`→msc, `HDMU`→hmm, `COSU`→cosco, `EGLV/EVGL/EGVL`→evergreen) diferente do declarado, sinaliza `CARRIER_REFERENCE_MISMATCH` — **sem trocar o armador** (proteção de qualidade, não correção automática).
+
+### 3. Exemplos raw → canonical (amostra real da Rocket, conferidos em teste)
+
+| Armador | raw | canonical |
+|---|---|---|
+| Evergreen | `EGLV149604044674` | `149604044674` |
+| Evergreen | `EVGL140658060933` | `140658060933` |
+| Evergreen | `EGVL140655114952` | `140655114952` |
+| Evergreen | `149604025416` | `149604025416` |
+| HMM | `HDMUHKGM01285200` | `HKGM01285200` |
+| HMM | `HDMUNBOZGV178200` | `NBOZGV178200` |
+| HMM | `HKGM39554800` | `HKGM39554800` |
+| COSCO | `COSU6508496810` | `6508496810` |
+| COSCO | `6505127410` | `6505127410` |
+| Maersk | `272923983` | `272923983` |
+| MSC | `MEDUYJ422987` | `MEDUYJ422987` (não remove MEDU) |
+| OOCL/ONE/Hapag/CMA/YM/PIL | `OOLU…`/`ONEY…`/`HLCU…`/`QGD3…`/`YMLU…`/`NGPN…` | idênticos (íntegros) |
+
+### 4. Caso HMM compartilhado (confirmado)
+
+`SZPM51914400` (HMM), usada por **IM2734** e **IM3087**: `upsert` duas vezes com o mesmo `(armador, canônica)` → **1 TrackingTarget**, **2 vínculos** `ContainerTrackingTarget`, **1 consulta reutilizável** — nunca duas puxadas por haver dois processos. Também: `HDMUSZPM51914400` (com prefixo) e `SZPM51914400` convergem para o mesmo target, e a grafia bruta de cada origem fica preservada em `container_tracking_targets.reference_raw`. Testado.
+
+### 5. Auditoria TrackingEvent + TrackingFetch (confirmada)
+
+Reconstruo o evento normalizado recebido e sei quando foi obtido, sem nada relevante descartado:
+- **evento recebido:** `tracking_events.tipo_evento` + `status_desc` + `location` + `vessel`/`voyage` (preservados na 0012);
+- **data civil do evento:** `data_evento` (DATE);
+- **instante de coleta:** `tracking_events.coletado_em` e `tracking_fetches.iniciado_em`/`finalizado_em`;
+- **fonte/armador:** `tracking_fetches.carrier` + `tracking_targets.armador`;
+- **target:** `tracking_target_id`; **contêiner:** `container_numero`.
+`external_event_id = NULL` (a API não fornece ID estável — a identidade técnica é o `dedupe_hash`) e `raw_ref = NULL` (a API não persiste payload bruto) seguem aprovados. **Não** armazeno HTML/payload bruto do armador (não existe hoje; não inventado).
+
+### 6. Testes
+
+Novos: 6 puros de canonicalização + mismatch/anti-fuzzy, e 4 de identidade no banco (convergência de grafias → 1 target; mesma canônica em armadores diferentes → targets diferentes; mesma ref como MBL e HBL → 1 target com contexto no vínculo; caso HMM 2 processos → 1 target/N vínculos). Suíte da engine: **171/171 verde**; V1 **25/25**; `tsc`/`build` limpos; V1 intacta.
+
+### 7. PRECISA DE SUA VALIDAÇÃO
+
+Nenhum ponto aberto. Os três da revisão 9 foram resolvidos: identidade do target ajustada para `armador + canônica` (0012); rota Express permanece não-ativa aqui (delega ao serviço na unificação); `external_event_id`/`raw_ref` `NULL` aprovados, e a auditoria de evento foi verificada e reforçada com `vessel`/`voyage` para não descartar informação.
+
+### 8. Próximo passo
+
+Fase 5 concluída (com a 0012). **Não avanço para a Fase 6 sem nova autorização.**

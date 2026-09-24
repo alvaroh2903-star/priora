@@ -129,6 +129,8 @@ export async function ingestTrackingResult(input: IngestInput): Promise<IngestRe
       dataEvento: e.date,
       statusDesc: e.status,
       location: e.location,
+      vessel: e.vessel ?? null,
+      voyage: e.voyage ?? null,
       dedupeHash: hash,
       coletadoEm,
     });
@@ -197,24 +199,31 @@ export async function ingestTrackingResult(input: IngestInput): Promise<IngestRe
 }
 
 /**
- * Consumo ponta-a-ponta por referência: cria/reaproveita o target, consome a
- * API central pela porta (cache/TTL/merge do serviço central) e ingere.
+ * Consumo ponta-a-ponta por referência: consome a API central pela porta
+ * (cache/TTL/merge do serviço central), cria/reaproveita o target por
+ * `armador + referência canônica` e ingere. O armador vem da detecção da API
+ * central; um `carrier` explícito (do Processo) é usado como fallback e a
+ * identidade sempre exige um armador conhecido.
  */
 export interface SincronizarInput {
   pool: Pool;
   port: import('../sources/armadorTrackingSource').ArmadorTrackingPort;
   reference: string;
-  referenceType?: import('../persistence/trackingTargetRepository').ReferenceType;
+  /** Armador conhecido pelo Processo (fallback se a API não detectar). */
+  carrier?: string;
   refresh?: boolean;
 }
 
-export async function sincronizarReferencia(input: SincronizarInput): Promise<IngestResult> {
+export async function sincronizarReferencia(
+  input: SincronizarInput,
+): Promise<IngestResult & { mismatchCarrier: string | null }> {
   const targets = new TrackingTargetRepository(input.pool);
-  const result = await input.port.enrich(input.reference, { refresh: input.refresh });
-  const target = await targets.upsert({
-    reference: input.reference,
-    referenceType: input.referenceType ?? 'desconhecido',
-    armador: result.carrier?.id ?? null,
-  });
-  return ingestTrackingResult({ pool: input.pool, target, result });
+  const result = await input.port.enrich(input.reference, { carrierId: input.carrier, refresh: input.refresh });
+  const carrier = result.carrier?.id || input.carrier;
+  if (!carrier) {
+    throw new Error(`sincronizarReferencia: armador desconhecido para a referência ${input.reference} — a identidade do target exige um armador.`);
+  }
+  const { target, canon } = await targets.upsert({ carrier, reference: input.reference });
+  const ing = await ingestTrackingResult({ pool: input.pool, target, result });
+  return { ...ing, mismatchCarrier: canon.mismatchCarrier };
 }

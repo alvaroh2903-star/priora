@@ -1,19 +1,20 @@
 import { Pool } from 'pg';
 import { getPool } from '../db/pool';
-import { normalizarReferencia } from '../sources/armadorTrackingSource';
+import { canonicalizarReferencia, CanonResult } from '../tracking/referenceCanonical';
 
 /**
- * TrackingTarget (global) + vínculo N:N com contêineres. Um target representa
- * uma referência rastreável e pode alimentar vários contêineres/módulos.
+ * TrackingTarget (global) + vínculo N:N com contêineres. Identidade (revisão 10):
+ * `armador + reference_value_canonical`. Grafias equivalentes da mesma referência
+ * apontam para o MESMO target real (uma consulta reutilizável). A grafia bruta e
+ * o `reference_type` de cada origem vivem no vínculo, não no target.
  */
 
 export type ReferenceType = 'mbl' | 'hbl' | 'container' | 'booking' | 'desconhecido';
 
 export interface TrackingTarget {
   id: string;
-  referenceValue: string;
-  referenceType: ReferenceType;
-  armador: string | null;
+  armador: string;
+  referenceValueCanonical: string;
 }
 
 export interface ContainerVinculado {
@@ -22,50 +23,59 @@ export interface ContainerVinculado {
   organizationId: string;
 }
 
+export interface UpsertResultado {
+  target: TrackingTarget;
+  canon: CanonResult;
+}
+
 function mapTarget(row: any): TrackingTarget {
-  return { id: row.id, referenceValue: row.reference_value, referenceType: row.reference_type, armador: row.armador };
+  return { id: row.id, armador: row.armador, referenceValueCanonical: row.reference_value_canonical };
 }
 
 export class TrackingTargetRepository {
   constructor(private pool: Pool = getPool()) {}
 
   /**
-   * Cria (ou reaproveita) o target da referência. A identidade é a referência
-   * normalizada — um target por ref, como a chave de cache da API central.
-   * `reference_type`/`armador` são metadados; atualiza o armador quando detectado.
+   * Cria/reaproveita o target de (armador, referência canônica). Retorna também
+   * o resultado da canonicalização (regra aplicada, `precisaMapping`,
+   * `mismatchCarrier`) — o chamador decide sinalizar CARRIER_REFERENCE_MISMATCH,
+   * mas NUNCA troca o armador automaticamente.
    */
-  async upsert(input: { reference: string; referenceType: ReferenceType; armador?: string | null }): Promise<TrackingTarget> {
-    const referenceValue = normalizarReferencia(input.reference);
+  async upsert(input: { carrier: string; reference: string }): Promise<UpsertResultado> {
+    const canon = canonicalizarReferencia(input.carrier, input.reference);
+    const armador = (input.carrier || '').toLowerCase();
     const { rows } = await this.pool.query(
-      `INSERT INTO tracking_targets (reference_value, reference_type, armador)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (reference_value) DO UPDATE SET
-         armador = COALESCE(EXCLUDED.armador, tracking_targets.armador),
-         atualizado_em = now()
+      `INSERT INTO tracking_targets (armador, reference_value_canonical)
+       VALUES ($1, $2)
+       ON CONFLICT (armador, reference_value_canonical) DO UPDATE SET atualizado_em = now()
        RETURNING *`,
-      [referenceValue, input.referenceType, input.armador ?? null],
+      [armador, canon.canonical],
     );
-    return mapTarget(rows[0]);
+    return { target: mapTarget(rows[0]), canon };
   }
 
-  async findByReference(reference: string): Promise<TrackingTarget | null> {
+  async findByCanonical(carrier: string, referenceCanonical: string): Promise<TrackingTarget | null> {
     const { rows } = await this.pool.query(
-      `SELECT * FROM tracking_targets WHERE reference_value = $1`,
-      [normalizarReferencia(reference)],
+      `SELECT * FROM tracking_targets WHERE armador = $1 AND reference_value_canonical = $2`,
+      [(carrier || '').toLowerCase(), referenceCanonical],
     );
     return rows.length ? mapTarget(rows[0]) : null;
   }
 
-  /** Vincula um contêiner a um target (idempotente). */
-  async linkContainer(containerId: string, trackingTargetId: string): Promise<void> {
+  /** Vincula um contêiner a um target (idempotente), guardando o contexto de origem. */
+  async linkContainer(
+    containerId: string,
+    trackingTargetId: string,
+    ctx: { referenceType?: ReferenceType; referenceRaw?: string } = {},
+  ): Promise<void> {
     await this.pool.query(
-      `INSERT INTO container_tracking_targets (container_id, tracking_target_id)
-       VALUES ($1, $2) ON CONFLICT (container_id, tracking_target_id) DO NOTHING`,
-      [containerId, trackingTargetId],
+      `INSERT INTO container_tracking_targets (container_id, tracking_target_id, reference_type, reference_raw)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (container_id, tracking_target_id) DO NOTHING`,
+      [containerId, trackingTargetId, ctx.referenceType ?? null, ctx.referenceRaw ?? null],
     );
   }
 
-  /** Contêineres (com organização) que este target alimenta. */
   async containersForTarget(trackingTargetId: string): Promise<ContainerVinculado[]> {
     const { rows } = await this.pool.query(
       `SELECT c.id, c.numero, c.organization_id

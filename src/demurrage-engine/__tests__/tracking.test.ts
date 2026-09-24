@@ -72,10 +72,10 @@ async function setup(pool: Pool) {
   const processo = await new ProcessoRepository(pool).create({ organizationId: org.id, numeroProcesso: 'IM11', clienteId: null });
   return { orgId: org.id, processoId: processo.id };
 }
-async function containerComTarget(pool: Pool, orgId: string, processoId: string, numero: string, ref: string) {
+async function containerComTarget(pool: Pool, orgId: string, processoId: string, numero: string, ref: string, carrier = 'maersk') {
   const container = await new ContainerRepository(pool).create(orgId, processoId, numero);
-  const target = await new TrackingTargetRepository(pool).upsert({ reference: ref, referenceType: 'mbl' });
-  await new TrackingTargetRepository(pool).linkContainer(container.id, target.id);
+  const { target } = await new TrackingTargetRepository(pool).upsert({ carrier, reference: ref });
+  await new TrackingTargetRepository(pool).linkContainer(container.id, target.id, { referenceType: 'mbl', referenceRaw: ref });
   return { container, target };
 }
 
@@ -158,7 +158,7 @@ test('ingestão: fetch falho / carrier bloqueado → não inventa evento, não p
   const pool = testPool();
   try {
     const { orgId, processoId } = await setup(pool);
-    const { container, target } = await containerComTarget(pool, orgId, processoId, 'BMOU1234567', 'CMAU1234567');
+    const { container, target } = await containerComTarget(pool, orgId, processoId, 'BMOU1234567', 'CMAU1234567', 'cmacgm');
     // CMA bloqueado (DataDome): ok=false, needsCaptcha, sem eventos.
     const r = resultado({ carrier: { id: 'cmacgm', name: 'CMA CGM' }, ok: false, needsCaptcha: true, message: 'Scraping bloqueado … integração via API oficial', events: [], containers: [] });
     const ing = await ingestTrackingResult({ pool, target, result: r });
@@ -177,7 +177,7 @@ test('ingestão: tipo divergente do tracking NÃO sobrescreve o Master (containe
   const pool = testPool();
   try {
     const { orgId, processoId } = await setup(pool);
-    const { container, target } = await containerComTarget(pool, orgId, processoId, 'MSMU7811290', 'MEDUY8275040');
+    const { container, target } = await containerComTarget(pool, orgId, processoId, 'MSMU7811290', 'MEDUY8275040', 'msc');
     // Master/MBL definiu o tipo (via container_types), autoritativo.
     await pool.query(`UPDATE containers SET container_type_id = (SELECT id FROM container_types WHERE codigo='40HC') WHERE id=$1`, [container.id]);
     const { rows: [ct] } = await pool.query(`SELECT container_type_id FROM containers WHERE id=$1`, [container.id]);
@@ -202,7 +202,7 @@ test('ingestão: um target compartilhado por vários contêineres — cada um pr
     const containers = new ContainerRepository(pool);
     const c1 = await containers.create(orgId, processoId, 'COSU1000001');
     const c2 = await containers.create(orgId, processoId, 'COSU1000002');
-    const target = await targets.upsert({ reference: 'COSU7788990', referenceType: 'mbl', armador: 'cosco' });
+    const { target } = await targets.upsert({ carrier: 'cosco', reference: 'COSU7788990' });
     await targets.linkContainer(c1.id, target.id);
     await targets.linkContainer(c2.id, target.id);
 
@@ -234,8 +234,8 @@ test('sincronizarReferencia: consome a porta (fake), cria target e ingere ponta-
     const { orgId, processoId } = await setup(pool);
     const container = await new ContainerRepository(pool).create(orgId, processoId, 'TRHU1477661');
     // Vincula ANTES para a promoção alcançar o contêiner.
-    const target = await new TrackingTargetRepository(pool).upsert({ reference: '274319835', referenceType: 'mbl' });
-    await new TrackingTargetRepository(pool).linkContainer(container.id, target.id);
+    const { target } = await new TrackingTargetRepository(pool).upsert({ carrier: 'maersk', reference: '274319835' });
+    await new TrackingTargetRepository(pool).linkContainer(container.id, target.id, { referenceType: 'mbl', referenceRaw: '274319835' });
 
     let chamadas = 0;
     const fakePort: ArmadorTrackingPort = {
@@ -246,11 +246,11 @@ test('sincronizarReferencia: consome a porta (fake), cria target e ingere ponta-
           events: [{ date: '2026-08-26', status: 'Discharge', location: 'Santos', type: 'discharge', container: 'TRHU1477661' }] });
       },
     };
-    const a = await sincronizarReferencia({ pool, port: fakePort, reference: '274319835', referenceType: 'mbl' });
+    const a = await sincronizarReferencia({ pool, port: fakePort, reference: '274319835', carrier: 'maersk' });
     assert.equal(a.cached, false);
     assert.equal((await new ContainerRepository(pool).findById(container.id))?.dischargeDate, '2026-08-26');
     // Segunda sincronização: a porta reporta cache; sem eventos novos.
-    const b = await sincronizarReferencia({ pool, port: fakePort, reference: '274319835', referenceType: 'mbl' });
+    const b = await sincronizarReferencia({ pool, port: fakePort, reference: '274319835', carrier: 'maersk' });
     assert.equal(b.cached, true);
     assert.equal(b.eventsInseridos, 0);
     assert.equal(b.eventsDuplicados, 1);

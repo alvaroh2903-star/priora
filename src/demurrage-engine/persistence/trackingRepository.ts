@@ -43,6 +43,8 @@ export interface InsertEventInput {
   dataEvento: string | null;
   statusDesc: string | null;
   location: string | null;
+  vessel?: string | null;
+  voyage?: string | null;
   dedupeHash: string;
   coletadoEm: Date;
 }
@@ -83,13 +85,14 @@ export class TrackingRepository {
     const { rows } = await this.pool.query(
       `INSERT INTO tracking_events
          (tracking_target_id, tracking_fetch_id, container_numero, tipo_evento, data_evento,
-          status_desc, location, external_event_id, raw_ref, dedupe_hash, coletado_em)
-       VALUES ($1,$2,$3,$4,$5,$6,$7, NULL, NULL, $8, $9)
+          status_desc, location, vessel, voyage, external_event_id, raw_ref, dedupe_hash, coletado_em)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, NULL, NULL, $10, $11)
        ON CONFLICT (dedupe_hash) DO NOTHING
        RETURNING id`,
       [
         input.trackingTargetId, input.trackingFetchId, input.containerNumero, input.tipoEvento,
-        input.dataEvento, input.statusDesc, input.location, input.dedupeHash, input.coletadoEm,
+        input.dataEvento, input.statusDesc, input.location, input.vessel ?? null, input.voyage ?? null,
+        input.dedupeHash, input.coletadoEm,
       ],
     );
     return rows.length ? { inserted: true, id: rows[0].id } : { inserted: false, id: null };

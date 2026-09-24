@@ -22,6 +22,7 @@ test('migrations: aplica todas as migrations pendentes em um banco novo e é ide
       '0009_tariffs.sql',
       '0010_tariff_vigencia_desconhecida.sql',
       '0011_tracking.sql',
+      '0012_tracking_target_identidade.sql',
     ];
 
     const first = await runMigrations(pool);
