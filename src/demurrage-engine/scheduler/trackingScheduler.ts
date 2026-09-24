@@ -24,10 +24,28 @@ import { deveAbrirIncidente, falhasConsecutivas, podeAtualizarManual, PapelRbac 
 export interface CicloContexto {
   memo: Map<string, Promise<TrackingEnrichResult>>;
   ingeridos: Set<string>;
+  /**
+   * Barreira de concorrência (worker real): reivindica o DIREITO de consultar
+   * um target nesta janela. Retorna true se ESTE worker venceu o claim (deve
+   * consultar), false se outro worker já o detém (não duplica a consulta ao
+   * armador). Ausente nos testes puros do orquestrador → sempre consulta.
+   */
+  reivindicar?: (trackingTargetId: string) => Promise<boolean>;
+  /** Memo do claim por target dentro do ciclo (um claim por target por ciclo). */
+  reivindicados?: Map<string, boolean>;
 }
 
-export function novoCiclo(): CicloContexto {
-  return { memo: new Map(), ingeridos: new Set() };
+export function novoCiclo(reivindicar?: (id: string) => Promise<boolean>): CicloContexto {
+  return { memo: new Map(), ingeridos: new Set(), reivindicar, reivindicados: new Map() };
+}
+
+/** Este ciclo pode consultar o target? (claim vencido → true; perdido → false). Memoizado. */
+async function podeConsultarTarget(ciclo: CicloContexto, targetId: string): Promise<boolean> {
+  if (!ciclo.reivindicar) return true; // sem barreira (testes puros): sempre consulta
+  if (ciclo.reivindicados!.has(targetId)) return ciclo.reivindicados!.get(targetId)!;
+  const venceu = await ciclo.reivindicar(targetId);
+  ciclo.reivindicados!.set(targetId, venceu);
+  return venceu;
 }
 
 /** Compat: memo simples (só de resultados). */
@@ -109,7 +127,10 @@ export async function sincronizarContainer(input: {
   const res: SincronizarContainerResultado = { containerId, usouMbl: false, consultouContainer: false, targetsConsultados: [] };
 
   // Consulta+ingere um target no máximo UMA vez por ciclo (um TrackingFetch).
-  const puxar = async (target: TrackingTarget) => {
+  // Respeita a barreira de concorrência: se outro worker já detém o claim do
+  // target nesta janela, NÃO consulta (retorna null) — sem consulta duplicada.
+  const puxar = async (target: TrackingTarget): Promise<TrackingEnrichResult | null> => {
+    if (!(await podeConsultarTarget(ciclo, target.id))) return null; // outro worker detém a janela
     const r = await enrichTarget(port, target, ciclo.memo);
     if (!ciclo.ingeridos.has(target.id)) {
       await ingestTrackingResult({ pool, target, result: r });
@@ -121,6 +142,7 @@ export async function sincronizarContainer(input: {
 
   if (mbl) {
     const r = await puxar(mbl.target);
+    if (r === null) return res; // claim do MBL perdido → o worker dono cobre o contêiner
     res.targetsConsultados.push('mbl');
     if (mblForneceContainer(r, numero)) {
       res.usouMbl = true;
@@ -128,9 +150,11 @@ export async function sincronizarContainer(input: {
     }
   }
   if (cont) {
-    await puxar(cont.target);
-    res.consultouContainer = true;
-    res.targetsConsultados.push('container');
+    const r = await puxar(cont.target);
+    if (r !== null) {
+      res.consultouContainer = true;
+      res.targetsConsultados.push('container');
+    }
   }
   return res;
 }
@@ -143,8 +167,10 @@ export async function sincronizarCiclo(input: {
   pool: Pool;
   port: ArmadorTrackingPort;
   containerIds: string[];
+  /** Barreira de concorrência do worker (claim por target/janela). */
+  reivindicar?: (trackingTargetId: string) => Promise<boolean>;
 }): Promise<SincronizarContainerResultado[]> {
-  const ciclo = novoCiclo();
+  const ciclo = novoCiclo(input.reivindicar);
   const out: SincronizarContainerResultado[] = [];
   for (const id of input.containerIds) {
     out.push(await sincronizarContainer({ pool: input.pool, port: input.port, containerId: id, ciclo }));

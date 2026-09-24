@@ -8,9 +8,11 @@ import { ProcessoRepository } from '../persistence/processoRepository';
 import { ContainerRepository } from '../persistence/containerRepository';
 import { TrackingTargetRepository } from '../persistence/trackingTargetRepository';
 import { TrackingIncidentRepository } from '../persistence/trackingIncidentRepository';
-import { avaliarCadencia, proximaConsulta, deveConsultarAgora } from '../scheduler/cadencePolicy';
+import { avaliarCadencia, proximaConsulta, deveConsultarAgora, diasEmDemurrage, LIMITE_DIAS_DEMURRAGE } from '../scheduler/cadencePolicy';
 import { falhasConsecutivas, deveAbrirIncidente, podeAtualizarManual } from '../scheduler/failurePolicy';
-import { sincronizarContainer, sincronizarCiclo } from '../scheduler/trackingScheduler';
+import { sincronizarContainer, sincronizarCiclo, solicitarAtualizacaoManual } from '../scheduler/trackingScheduler';
+import { runSchedulerOnce } from '../scheduler/schedulerWorker';
+import { AlertOutboxRepository, processarEntregasPendentes, AlertTransport, EntregaPendente } from '../scheduler/alertOutbox';
 import { ArmadorTrackingPort, TrackingEnrichResult } from '../sources/armadorTrackingSource';
 
 const url = testDatabaseUrl();
@@ -52,6 +54,43 @@ test('falha: 3ª consecutiva abre incidente; sucesso reseta; manual só MANAGER/
   assert.equal(podeAtualizarManual('ADMIN', new Date('2026-09-24T09:30:00Z'), agora).permitido, true); // 2h30 > 2h
 });
 
+test('suspensão automática aos 30 dias sem Empty Return: dia 29 consulta; dia 30 suspende (relógios seguem)', () => {
+  // menor vencimento = 2026-08-01 (House). dias em demurrage = hoje − 2026-08-01.
+  const base = { dischargeDate: '2026-07-01', houseLastFreeDay: '2026-08-01', masterLastFreeDay: '2026-08-10', emptyReturn: null, algumEmDemurrage: true };
+  assert.equal(LIMITE_DIAS_DEMURRAGE, 30);
+
+  // Dia 29 (2026-08-30): ainda dentro da janela automática.
+  const dia29 = { ...base, hoje: '2026-08-30' };
+  assert.equal(diasEmDemurrage(dia29), 29);
+  assert.equal(avaliarCadencia(dia29).automaticTracking, 'ATIVO');
+  assert.notEqual(avaliarCadencia(dia29).fase, 'suspenso_30_dias');
+  assert.equal(deveConsultarAgora(dia29, '2026-08-28'), true); // a_cada_2_dias venceu
+
+  // Dia 30 (2026-08-31): suspende o tracking AUTOMÁTICO.
+  const dia30 = { ...base, hoje: '2026-08-31' };
+  assert.equal(diasEmDemurrage(dia30), 30);
+  const r30 = avaliarCadencia(dia30);
+  assert.equal(r30.fase, 'suspenso_30_dias');
+  assert.equal(r30.automaticTracking, 'SUSPENDED');
+  assert.equal(r30.motivoSuspensao, 'MAX_AUTOMATIC_TRACKING_WINDOW_REACHED');
+  assert.equal(r30.intervaloDias, null);
+  // NÃO consulta mais automaticamente...
+  assert.equal(proximaConsulta(dia30, '2026-08-29'), null);
+  assert.equal(deveConsultarAgora(dia30, '2026-08-29'), false);
+
+  // ...mas os relógios SEGUEM avançando (nada é zerado, nada é presumido).
+  const dia45 = { ...base, hoje: '2026-09-15' };
+  assert.ok(diasEmDemurrage(dia45) > 30, 'os dias de demurrage continuam a crescer após a suspensão');
+  assert.equal(avaliarCadencia(dia45).fase, 'suspenso_30_dias');
+  assert.notEqual(avaliarCadencia(dia45).inicioDiario, null, 'os relógios continuam definidos (processo aberto)');
+
+  // Atualização MANUAL continua possível (independe da cadência automática).
+  assert.equal(podeAtualizarManual('MANAGER', null, new Date('2026-08-31T12:00:00Z')).permitido, true);
+
+  // Empty Return posterior encerra normalmente, mesmo depois dos 30 dias.
+  assert.equal(avaliarCadencia({ ...dia45, emptyReturn: '2026-09-10' }).fase, 'encerrado');
+});
+
 /* ================================================================== *
  * PARTE B — orquestrador (banco + porta fake)
  * ================================================================== */
@@ -85,6 +124,25 @@ async function setup(pool: Pool) {
   const org = await new OrganizationRepository(pool).create('Rocket', 'rocket');
   const processo = await new ProcessoRepository(pool).create({ organizationId: org.id, numeroProcesso: 'IM13', clienteId: null });
   return { orgId: org.id, processoId: processo.id };
+}
+
+/** Semeia os fatos de cadência de um contêiner (descarga + free times House/Master). */
+async function seedCadencia(
+  pool: Pool,
+  containerId: string,
+  orgId: string,
+  f: { discharge: string; houseFT: number; masterFT: number },
+) {
+  const containers = new ContainerRepository(pool);
+  const obsEm = new Date(`${f.discharge}T00:00:00Z`);
+  await containers.applyObservation({ containerId, organizationId: orgId, campo: 'dischargeDate', valor: f.discharge, fonte: 'master_bl', observadoEm: obsEm });
+  await containers.applyObservation({ containerId, organizationId: orgId, campo: 'houseFreeTimeDays', valor: f.houseFT, fonte: 'house_document', observadoEm: obsEm });
+  await containers.applyObservation({ containerId, organizationId: orgId, campo: 'masterFreeTimeDays', valor: f.masterFT, fonte: 'master_bl', observadoEm: obsEm });
+}
+
+async function contarFetches(pool: Pool, targetId: string): Promise<number> {
+  const { rows } = await pool.query(`SELECT count(*)::int n FROM tracking_fetches WHERE tracking_target_id=$1`, [targetId]);
+  return rows[0].n;
 }
 
 test('HBL nunca é target executável: reference_type "hbl" é rejeitado pelo banco', { skip: !url }, async () => {
@@ -260,5 +318,213 @@ test('supressão: 4ª/5ª falha não geram novo alerta; sucesso reseta; nova seq
     const inc2 = await incidentes.incidenteAberto(target.id);
     assert.ok(inc2);
     assert.equal(inc2!.seq, 2, 'nova sequência de 3 falhas = novo incidente');
+  } finally { await pool.end(); }
+});
+
+/* ================================================================== *
+ * PARTE C — worker real (aceitação: janela → cache miss → fetch → eventos →
+ * próxima janela) + concorrência (dois workers = uma execução) + suspensão
+ * ================================================================== */
+
+test('aceitação: worker acha a janela → cache miss → Tracking Service → TrackingFetch → eventos → próxima janela', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    const { orgId, processoId } = await setup(pool);
+    const containers = new ContainerRepository(pool);
+    const targets = new TrackingTargetRepository(pool);
+    const c = await containers.create(orgId, processoId, 'HDMUW000001');
+    // LFD House 2026-09-20, Master 2026-09-25 → início diário 2026-09-16 (exemplo oficial).
+    await seedCadencia(pool, c.id, orgId, { discharge: '2026-09-01', houseFT: 20, masterFT: 25 });
+    const { target: mbl } = await targets.upsert({ carrier: 'hmm', reference: 'SZPMW0000001' });
+    await targets.linkContainer(c.id, mbl.id, { referenceType: 'mbl', referenceRaw: 'SZPMW0000001' });
+
+    const { port, calls } = fakePort({
+      SZPMW0000001: () => resultado({
+        cached: false, resolved: true, // cache MISS → foi ao serviço central
+        containers: [conteiner('HDMUW000001', '2026-09-01')],
+        events: [{ date: '2026-09-01', status: 'Discharge', location: 'Santos', type: 'discharge', container: 'HDMUW000001' }],
+      }),
+    });
+
+    const r1 = await runSchedulerOnce({ pool, port, hoje: '2026-09-16', workerId: 'w1' });
+    assert.equal(r1.contêineresNaJanela, 1, 'o worker achou a janela (diário) sem ninguém abrir tela');
+    assert.equal(r1.sincronizados, 1);
+    assert.equal(calls.SZPMW0000001, 1, 'consultou o Tracking Service uma vez');
+    assert.equal(await contarFetches(pool, mbl.id), 1, 'registrou um TrackingFetch');
+    // O fetch registrou cache MISS e os eventos foram ingeridos + descarga promovida.
+    const { rows: fr } = await pool.query(`SELECT cached, events_count FROM tracking_fetches WHERE tracking_target_id=$1`, [mbl.id]);
+    assert.equal(fr[0].cached, false);
+    assert.equal(fr[0].events_count, 1);
+    assert.equal((await containers.findById(c.id))?.dischargeDate, '2026-09-01');
+
+    // Próxima janela: já consultado hoje (diário) → um novo tick no MESMO dia não reconsulta.
+    const r2 = await runSchedulerOnce({ pool, port, hoje: '2026-09-16', workerId: 'w1' });
+    assert.equal(r2.contêineresNaJanela, 0, 'diário já satisfeito hoje → fora da janela');
+    assert.equal(calls.SZPMW0000001, 1, 'nenhuma consulta extra no mesmo dia');
+    // Amanhã volta à janela (cadência diária).
+    const r3 = await runSchedulerOnce({ pool, port, hoje: '2026-09-17', workerId: 'w1' });
+    assert.equal(r3.contêineresNaJanela, 1, 'no dia seguinte a janela diária reabre');
+    assert.equal(calls.SZPMW0000001, 2);
+    assert.equal(await contarFetches(pool, mbl.id), 2);
+  } finally { await pool.end(); }
+});
+
+test('concorrência: dois workers no mesmo tick → UMA execução real (claim em PostgreSQL)', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    const { orgId, processoId } = await setup(pool);
+    const containers = new ContainerRepository(pool);
+    const targets = new TrackingTargetRepository(pool);
+    const c = await containers.create(orgId, processoId, 'HDMUC000001');
+    await seedCadencia(pool, c.id, orgId, { discharge: '2026-09-01', houseFT: 20, masterFT: 25 });
+    const { target: mbl } = await targets.upsert({ carrier: 'hmm', reference: 'SZPMC0000001' });
+    await targets.linkContainer(c.id, mbl.id, { referenceType: 'mbl', referenceRaw: 'SZPMC0000001' });
+
+    let chamadas = 0;
+    const port: ArmadorTrackingPort = {
+      async enrich() {
+        chamadas++;
+        await new Promise((res) => setTimeout(res, 5)); // janela para interleaving
+        return resultado({ cached: false, resolved: true, containers: [conteiner('HDMUC000001', '2026-09-01')], events: [{ date: '2026-09-01', status: 'Discharge', location: 'S', type: 'discharge', container: 'HDMUC000001' }] });
+      },
+    };
+
+    // Dois workers disparam o MESMO tick simultaneamente.
+    const [a, b] = await Promise.all([
+      runSchedulerOnce({ pool, port, hoje: '2026-09-16', workerId: 'wA' }),
+      runSchedulerOnce({ pool, port, hoje: '2026-09-16', workerId: 'wB' }),
+    ]);
+    assert.equal(chamadas, 1, 'apenas um worker consultou o armador (claim venceu para um só)');
+    assert.equal(await contarFetches(pool, mbl.id), 1, 'um único TrackingFetch apesar de dois workers');
+    assert.equal(a.sincronizados + b.sincronizados, 1, 'só um worker executou de fato o contêiner');
+
+    // Reinício no mesmo dia: o claim 'done' impede reconsulta.
+    const r = await runSchedulerOnce({ pool, port, hoje: '2026-09-16', workerId: 'wA' });
+    assert.equal(chamadas, 1, 'reinício no mesmo dia não duplica a consulta');
+    assert.equal(r.contêineresNaJanela, 0);
+  } finally { await pool.end(); }
+});
+
+test('30 dias sem Empty Return → worker NÃO consulta; processo/relógios seguem; manual ainda funciona e um Empty Return manual encerra', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    const { orgId, processoId } = await setup(pool);
+    const containers = new ContainerRepository(pool);
+    const targets = new TrackingTargetRepository(pool);
+    const c = await containers.create(orgId, processoId, 'HDMUS000001');
+    // Descarga 2026-07-01, free time 5 → LFD 2026-07-05 → em 2026-09-24 são ~81 dias de demurrage (>30).
+    await seedCadencia(pool, c.id, orgId, { discharge: '2026-07-01', houseFT: 5, masterFT: 5 });
+    const { target: mbl } = await targets.upsert({ carrier: 'hmm', reference: 'SZPMS0000001' });
+    await targets.linkContainer(c.id, mbl.id, { referenceType: 'mbl', referenceRaw: 'SZPMS0000001' });
+
+    let chamadas = 0;
+    const port: ArmadorTrackingPort = {
+      async enrich() {
+        chamadas++;
+        // Consulta manual: retorna o Empty Return (devolução do vazio).
+        return resultado({ containers: [{ numero: 'HDMUS000001', tipo: null, dischargeDate: '2026-07-01', availableDate: null, gateOut: null, emptyReturn: '2026-09-20' }], events: [{ date: '2026-09-20', status: 'Empty Return', location: 'S', type: 'empty_return', container: 'HDMUS000001' }] });
+      },
+    };
+
+    // Worker automático: suspenso → NÃO consulta.
+    const r = await runSchedulerOnce({ pool, port, hoje: '2026-09-24', workerId: 'w1' });
+    assert.equal(r.suspensos, 1, 'contêiner suspenso (>30 dias sem Empty Return)');
+    assert.equal(r.contêineresNaJanela, 0, 'nenhuma janela automática');
+    assert.equal(chamadas, 0, 'nenhuma consulta automática ao armador');
+    assert.equal(await contarFetches(pool, mbl.id), 0);
+    // Processo/relógios seguem: o contêiner continua aberto, descarga preservada, sem devolução presumida.
+    const antes = await containers.findById(c.id);
+    assert.equal(antes?.dischargeDate, '2026-07-01');
+    assert.equal(antes?.trackingReturnDate, null, 'nada foi presumido: sem devolução');
+
+    // Atualização MANUAL (MANAGER) continua possível mesmo suspenso — e um Empty Return encerra normalmente.
+    const manual = await solicitarAtualizacaoManual({ pool, port, trackingTargetId: mbl.id, papel: 'MANAGER', agora: new Date('2026-09-24T12:00:00Z') });
+    assert.equal(manual.executada, true, 'manual funciona apesar da suspensão automática');
+    assert.equal(chamadas, 1, 'a consulta manual foi ao armador');
+    assert.equal(await contarFetches(pool, mbl.id), 1);
+    assert.equal((await containers.findById(c.id))?.trackingReturnDate, '2026-09-20', 'Empty Return manual processado normalmente');
+  } finally { await pool.end(); }
+});
+
+/* ================================================================== *
+ * PARTE D — outbox de alerta: PENDING até um transporte REAL confirmar
+ * ================================================================== */
+
+async function abrirIncidenteComEntregas(pool: Pool) {
+  const orgRepo = new OrganizationRepository(pool);
+  const orgA = await orgRepo.create('Org A', 'orga');
+  const orgB = await orgRepo.create('Org B', 'orgb');
+  const processos = new ProcessoRepository(pool);
+  const containers = new ContainerRepository(pool);
+  const targets = new TrackingTargetRepository(pool);
+  const incidentes = new TrackingIncidentRepository(pool);
+  const pA = await processos.create({ organizationId: orgA.id, numeroProcesso: 'A-1', clienteId: null });
+  const pB = await processos.create({ organizationId: orgB.id, numeroProcesso: 'B-1', clienteId: null });
+  const cA = await containers.create(orgA.id, pA.id, 'HDMUOA00001');
+  const cB = await containers.create(orgB.id, pB.id, 'HDMUOB00001');
+  const { target } = await targets.upsert({ carrier: 'hmm', reference: 'SZPMO0000001' });
+  await targets.linkContainer(cA.id, target.id, { referenceType: 'mbl', referenceRaw: 'SZPMO0000001' });
+  await targets.linkContainer(cB.id, target.id, { referenceType: 'mbl', referenceRaw: 'SZPMO0000001' });
+  const inc = await incidentes.abrir(target.id, '3 falhas');
+  await incidentes.registrarEntregaTecnica(inc.id);
+  await incidentes.registrarEntregaOrg(inc.id, orgA.id);
+  await incidentes.registrarEntregaOrg(inc.id, orgB.id);
+  return { inc, orgA, orgB, target };
+}
+
+test('outbox: entregas nascem PENDING; sem transporte real permanecem PENDING (linha criada ≠ enviada)', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await runMigrations(pool); await truncateAll(pool);
+    const { inc } = await abrirIncidenteComEntregas(pool);
+    const { rows } = await pool.query(`SELECT status, enviado_em FROM tracking_alert_deliveries WHERE incident_id=$1`, [inc.id]);
+    assert.equal(rows.length, 3, 'uma técnica global + duas operacionais');
+    assert.ok(rows.every((r) => r.status === 'PENDING' && r.enviado_em === null), 'toda entrega nasce PENDING, nenhuma enviada');
+    const pend = await new AlertOutboxRepository(pool).carregarPendentes();
+    assert.equal(pend.length, 3);
+  } finally { await pool.end(); }
+});
+
+test('outbox: transporte real bem-sucedido → SENT; segregação por organização preservada no conteúdo', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await runMigrations(pool); await truncateAll(pool);
+    const { inc, orgA, orgB } = await abrirIncidenteComEntregas(pool);
+
+    const vistos: EntregaPendente[] = [];
+    const transport: AlertTransport = { async enviar(e) { vistos.push(e); return { ok: true }; } };
+    const res = await processarEntregasPendentes({ pool, transport });
+    assert.equal(res.enviadas, 3);
+    assert.equal(res.falhadas, 0);
+
+    // Segregação: a entrega da Org A só carrega contêiner da Org A; a técnica carrega ambos.
+    const eA = vistos.find((e) => e.organizationId === orgA.id)!;
+    const eB = vistos.find((e) => e.organizationId === orgB.id)!;
+    const tec = vistos.find((e) => e.escopo === 'tecnico_global')!;
+    assert.deepEqual(eA.containers.map((c) => c.numero), ['HDMUOA00001']);
+    assert.deepEqual(eB.containers.map((c) => c.numero), ['HDMUOB00001']);
+    assert.deepEqual(tec.containers.map((c) => c.numero).sort(), ['HDMUOA00001', 'HDMUOB00001']);
+    assert.ok(!eA.containers.some((c) => c.organizationId === orgB.id), 'sem vazamento B→A');
+
+    const { rows } = await pool.query(`SELECT status FROM tracking_alert_deliveries WHERE incident_id=$1`, [inc.id]);
+    assert.ok(rows.every((r) => r.status === 'SENT'), 'todas marcadas SENT após transporte confirmar');
+  } finally { await pool.end(); }
+});
+
+test('outbox: transporte que falha → FAILED com erro (reprocessável), nunca SENT silencioso', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await runMigrations(pool); await truncateAll(pool);
+    const { inc } = await abrirIncidenteComEntregas(pool);
+    const transport: AlertTransport = { async enviar() { return { ok: false, erro: 'canal indisponível' }; } };
+    const res = await processarEntregasPendentes({ pool, transport });
+    assert.equal(res.falhadas, 3);
+    const { rows } = await pool.query(`SELECT status, erro, tentativas FROM tracking_alert_deliveries WHERE incident_id=$1`, [inc.id]);
+    assert.ok(rows.every((r) => r.status === 'FAILED' && r.erro === 'canal indisponível' && r.tentativas === 1));
+    // Reprocessável: um transporte bom depois marca SENT.
+    const bom: AlertTransport = { async enviar() { return { ok: true }; } };
+    await processarEntregasPendentes({ pool, transport: bom });
+    const { rows: rows2 } = await pool.query(`SELECT status FROM tracking_alert_deliveries WHERE incident_id=$1`, [inc.id]);
+    assert.ok(rows2.every((r) => r.status === 'SENT'), 'FAILED reprocessado vira SENT');
   } finally { await pool.end(); }
 });

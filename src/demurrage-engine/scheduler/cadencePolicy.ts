@@ -23,7 +23,11 @@ export type FaseCadencia =
   | 'a_cada_4_dias' // D+5 em diante, antes do início do diário
   | 'diario' // >= início diário, nenhum relógio ainda em demurrage
   | 'a_cada_2_dias' // >= início diário, algum relógio em demurrage
+  | 'suspenso_30_dias' // 30 dias de demurrage sem Empty Return: suspende só o tracking AUTOMÁTICO
   | 'encerrado'; // Empty Return: para o tracking automático
+
+/** Limite de janela de tracking automático (dias de demurrage sem Empty Return). */
+export const LIMITE_DIAS_DEMURRAGE = 30;
 
 export interface CadenciaInput {
   /** D0 (descarga). null = ainda não descarregou. */
@@ -39,10 +43,22 @@ export interface CadenciaInput {
 
 export interface CadenciaResultado {
   fase: FaseCadencia;
+  /** ATIVO: cadência automática segue; SUSPENDED: só o tracking AUTOMÁTICO parou
+   * (relógios, processo e valores continuam; atualização manual segue possível). */
+  automaticTracking: 'ATIVO' | 'SUSPENDED';
+  motivoSuspensao: 'MAX_AUTOMATIC_TRACKING_WINDOW_REACHED' | null;
   /** menor(House LFD, Master LFD) − 4 dias; null se nenhum LFD conhecido. */
   inicioDiario: CivilDate | null;
-  /** Intervalo recomendado agora, em dias; null quando encerrado. */
+  /** Intervalo recomendado agora, em dias; null quando encerrado/suspenso. */
   intervaloDias: number | null;
+}
+
+/** Dias de demurrage decorridos hoje (0 se ainda não entrou em demurrage). */
+export function diasEmDemurrage(input: CadenciaInput): number {
+  const menorVenc = menorData(input.houseLastFreeDay, input.masterLastFreeDay);
+  if (menorVenc === null) return 0;
+  const dias = toOrdinal(input.hoje) - toOrdinal(menorVenc);
+  return dias > 0 ? dias : 0;
 }
 
 const INTERVALO_TRANSITO_DIAS = 3;
@@ -61,23 +77,36 @@ function inicioDiarioDe(input: CadenciaInput): CivilDate | null {
 /** Fase e intervalo recomendado para HOJE. */
 export function avaliarCadencia(input: CadenciaInput): CadenciaResultado {
   const inicioDiario = inicioDiarioDe(input);
+  const ativo = { automaticTracking: 'ATIVO' as const, motivoSuspensao: null };
   if (input.emptyReturn !== null) {
-    return { fase: 'encerrado', inicioDiario, intervaloDias: null };
+    return { fase: 'encerrado', ...ativo, inicioDiario, intervaloDias: null };
+  }
+  // Suspensão automática aos 30 dias de demurrage SEM Empty Return: para só o
+  // tracking automático (economia de Scrapfly). NÃO fecha o processo, NÃO para
+  // os relógios, NÃO presume devolução. Atualização manual continua disponível.
+  if (diasEmDemurrage(input) >= LIMITE_DIAS_DEMURRAGE) {
+    return {
+      fase: 'suspenso_30_dias',
+      automaticTracking: 'SUSPENDED',
+      motivoSuspensao: 'MAX_AUTOMATIC_TRACKING_WINDOW_REACHED',
+      inicioDiario,
+      intervaloDias: null,
+    };
   }
   if (input.dischargeDate === null) {
-    return { fase: 'aguardando_descarga', inicioDiario, intervaloDias: INTERVALO_TRANSITO_DIAS };
+    return { fase: 'aguardando_descarga', ...ativo, inicioDiario, intervaloDias: INTERVALO_TRANSITO_DIAS };
   }
   const hoje = toOrdinal(input.hoje);
   if (inicioDiario !== null && hoje >= toOrdinal(inicioDiario)) {
     return input.algumEmDemurrage
-      ? { fase: 'a_cada_2_dias', inicioDiario, intervaloDias: 2 }
-      : { fase: 'diario', inicioDiario, intervaloDias: 1 };
+      ? { fase: 'a_cada_2_dias', ...ativo, inicioDiario, intervaloDias: 2 }
+      : { fase: 'diario', ...ativo, inicioDiario, intervaloDias: 1 };
   }
   const d5 = toOrdinal(input.dischargeDate) + 5;
   if (hoje < d5) {
-    return { fase: 'inicial', inicioDiario, intervaloDias: d5 - hoje };
+    return { fase: 'inicial', ...ativo, inicioDiario, intervaloDias: d5 - hoje };
   }
-  return { fase: 'a_cada_4_dias', inicioDiario, intervaloDias: 4 };
+  return { fase: 'a_cada_4_dias', ...ativo, inicioDiario, intervaloDias: 4 };
 }
 
 /**
@@ -87,7 +116,10 @@ export function avaliarCadencia(input: CadenciaInput): CadenciaResultado {
  */
 export function proximaConsulta(input: CadenciaInput, ultimaConsulta: CivilDate | null): CivilDate | null {
   const r = avaliarCadencia(input);
-  if (r.fase === 'encerrado') return null;
+  // Encerrado (Empty Return) e suspensão de 30 dias não têm próxima consulta
+  // AUTOMÁTICA. Na suspensão o processo/relógios seguem e a atualização manual
+  // continua disponível — só o tracking automático parou.
+  if (r.fase === 'encerrado' || r.automaticTracking === 'SUSPENDED') return null;
   const hoje = toOrdinal(input.hoje);
 
   if (r.fase === 'aguardando_descarga') {

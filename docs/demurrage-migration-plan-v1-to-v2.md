@@ -2,7 +2,7 @@
 
 **Data:** 24/09/2026 (revisão 8)
 **Base:** `docs/demurrage-blueprint-gap-analysis.md` (diagnóstico aprovado, com as 3 correções de premissa da revisão 1)
-**Status:** Fases 1–5 concluídas (migrations 0001–0012). Fase 6 — Scheduler e cadência **concluída** (migration 0013): cadência oficial (D0/D+5/a cada 4 dias/diário 4 dias antes do menor LFD/a cada 2 dias em demurrage/Empty Return encerra), seleção MBL→CONTAINER (HBL nunca dispara tracking), reuso do cache central, e o alerta de falha multiempresa (incidente único por target, entregas operacionais segregadas por organização). Fase 7 aguarda autorização. Ver "Relatório de entrega — revisão 11" no final deste documento.
+**Status:** Fases 1–5 concluídas (migrations 0001–0012). Fase 6 — Scheduler e cadência **concluída e revisada** (migrations 0013–0014): cadência oficial (D0/D+5/a cada 4 dias/diário 4 dias antes do menor LFD/a cada 2 dias em demurrage/Empty Return encerra), **suspensão automática aos 30 dias sem Empty Return (restaurada na revisão 12 — processo/relógios seguem, manual disponível)**, seleção MBL→CONTAINER (HBL nunca dispara tracking), reuso do cache central, alerta de falha multiempresa (incidente único por target, entregas operacionais segregadas por organização), **worker real com claim de janela em PostgreSQL (dois workers/reinício não duplicam a consulta)** e **outbox de alerta (PENDING/SENT/FAILED atrás de uma porta de transporte)**. Fase 7 aguarda autorização. Ver "Relatório de entrega — revisão 12" no final deste documento.
 
 **Decisões aprovadas na revisão 7:**
 1. **Seleção de versão do Termo Único:** a versão da tabela aplicada é a **vigente no 1º dia de demurrage do cliente** (fim do House Free Time). Não se cria um `fato_gerador_data` universal.
@@ -305,7 +305,7 @@ Cada motor produz um `ValorApurado` com um campo `motorComercial` identificando 
 
 **Objetivo:** implementar a cadência automática oficial (revisão 11) e o alerta de falha multiempresa. **Concluída** (migration 0013).
 
-**Cadência oficial (revisão 11):** Descarga = D0 → D+5 → a cada 4 dias enquanto nenhum vencimento estiver próximo (D+17 é só uma dessas janelas, consulta de controle) → **4 dias antes do MENOR último dia livre (House × Master): DIÁRIO** → qualquer relógio em demurrage: **a cada 2 dias** → **Empty Return: PARA** o tracking automático daquele contêiner. D+17 não determina o início do diário — se o menor vencimento exigir diário antes, começa antes (ex.: House LFD 20/09, Master 25/09 → menor 20/09 → início diário 16/09). Implementada em `scheduler/cadencePolicy.ts` (pura). **Sem suspensão aos 30 dias** — o Empty Return encerra.
+**Cadência oficial (revisão 11):** Descarga = D0 → D+5 → a cada 4 dias enquanto nenhum vencimento estiver próximo (D+17 é só uma dessas janelas, consulta de controle) → **4 dias antes do MENOR último dia livre (House × Master): DIÁRIO** → qualquer relógio em demurrage: **a cada 2 dias** → **Empty Return: PARA** o tracking automático daquele contêiner. D+17 não determina o início do diário — se o menor vencimento exigir diário antes, começa antes (ex.: House LFD 20/09, Master 25/09 → menor 20/09 → início diário 16/09). Implementada em `scheduler/cadencePolicy.ts` (pura). **Suspensão automática aos 30 dias de demurrage SEM Empty Return (revisão 12 — restaurada):** ao atingir 30 dias em demurrage sem devolução do vazio, o **tracking AUTOMÁTICO é suspenso** (`automaticTracking = SUSPENDED`, `motivoSuspensao = MAX_AUTOMATIC_TRACKING_WINDOW_REACHED`). Isto **não** é um estado de encerramento: o processo **continua aberto e sinalizado**, os relógios **seguem avançando**, nada é zerado, nenhuma devolução é presumida, e a **atualização manual pelo Gestor continua disponível**. Um Empty Return posterior (por consulta manual ou consulta válida) é processado normalmente e aí sim encerra o tracking daquele contêiner.
 
 **Seleção de target (revisão 11):** MBL → CONTAINER; **HBL nunca dispara tracking**. Havendo MBL válido/resolvido, usa o MBL e NÃO consulta o contêiner separadamente; se o MBL não resolver, cai para o número do contêiner. Um MBL que alimenta N contêineres/processos é consultado UMA vez (reuso do cache central; nunca uma consulta por processo/contêiner).
 
@@ -1523,3 +1523,70 @@ Nenhum ponto aberto. Um item de transparência (não bloqueia; nada foi alterado
 ### 9. Próximo passo
 
 Fase 6 concluída. **Não avanço para a Fase 7 sem nova autorização.**
+
+---
+
+## Relatório de entrega — revisão 12 (revisão da Fase 6: 30 dias, worker real e outbox de alerta)
+
+Esta revisão corrige uma regressão e fecha as duas lacunas de execução que a revisão 11 havia deixado como "camada de aplicação". **Nada da estrutura aprovada foi alterado** (MBL→CONTAINER, HBL fora do tracking, target global compartilhado, cache central, uma consulta por MBL compartilhado, D0→D+5→a cada 4 dias→diário→a cada 2 dias, Empty Return para as consultas automáticas daquele contêiner, cooldown manual ~2h, incidente técnico global, entregas operacionais segregadas, supressão da 4ª/5ª falha, reset no sucesso). Migration **0014** aditiva; 0001–0013 não reescritas.
+
+### 1. Suspensão automática aos 30 dias — RESTAURADA (era uma regressão minha)
+
+A revisão 11 dizia, erradamente, "Sem suspensão aos 30 dias". Restaurado em `scheduler/cadencePolicy.ts` (pura):
+
+- Ao atingir **30 dias em demurrage sem Empty Return** (`diasEmDemurrage(input) >= LIMITE_DIAS_DEMURRAGE`, com `LIMITE_DIAS_DEMURRAGE = 30`), a cadência retorna `fase = 'suspenso_30_dias'`, `automaticTracking = 'SUSPENDED'`, `motivoSuspensao = 'MAX_AUTOMATIC_TRACKING_WINDOW_REACHED'`, `intervaloDias = null`.
+- **Não é encerramento:** o processo continua aberto e sinalizado, os relógios seguem avançando (`diasEmDemurrage` continua crescendo; `inicioDiario` continua definido), nada é zerado, nenhuma devolução é presumida.
+- `proximaConsulta`/`deveConsultarAgora` retornam `null`/`false` quando suspenso → o worker **não** consulta automaticamente.
+- A **atualização manual** (MANAGER/ADMIN) independe da suspensão e continua disponível; um Empty Return obtido por consulta manual/válida é processado normalmente e encerra o tracking daquele contêiner.
+- O Empty Return é checado **antes** da regra dos 30 dias, então uma devolução tardia sempre resulta em `encerrado`, não em `suspenso`.
+
+Testes puros: dia 29 ainda consulta; dia 30 suspende; após a suspensão os relógios seguem; `inicioDiario` presente; sem devolução presumida; manual continua possível; Empty Return posterior encerra.
+
+### 2. Worker REAL (in-process, sem novo serviço) — com claim/idempotência em PostgreSQL
+
+**Investigação primeiro:** não há mecanismo de job/fila pré-existente no repositório (nem `node-cron`, nem BullMQ, nem worker dedicado). Optei pelo **menor custo compatível com a infra atual**: um tick puro e testável (`scheduler/schedulerWorker.ts::runSchedulerOnce`) que **não cria um serviço separado** — roda no mesmo processo Node, disparado pela camada de aplicação (um `setInterval`/cron simples, ou um endpoint acionado por um cron externo). O tick:
+
+1. Carrega os contêineres rastreáveis (`persistence/schedulerRepository.ts::carregarContainersRastreaveis`) com os fatos de cadência e a **última consulta automática** (ancorada na maior **janela concluída**, não no timestamp do armador).
+2. Aplica a cadência pura por contêiner; **respeita a suspensão de 30 dias** (contêiner suspenso não entra na janela).
+3. Reivindica um **claim por `(tracking_target_id, janela=data civil do tick)`** em `tracking_schedule_claims` (`UNIQUE`, `INSERT … ON CONFLICT DO UPDATE … WHERE stale/failed`): só **um** worker vence; um claim de worker morto (`claimed` mais velho que a janela stale, default 30 min) ou `failed` é reaproveitável.
+4. Executa `sincronizarCiclo` com a barreira de claim injetada → o `puxar` do orquestrador só consulta o armador se o claim foi vencido; **MBL→CONTAINER, reuso do cache central e uma consulta por MBL compartilhado** seguem intactos.
+5. Ao concluir, marca as janelas vencidas como `done` (a cadência avança); exceção marca `failed` (reprocessável).
+
+**Resultado:** dois workers no mesmo tick, ou um reinício no meio da janela, produzem **uma única** consulta ao armador e **um único** `TrackingFetch` (comprovado por teste concorrente com `Promise.all`). O worker roda sem ninguém abrir tela.
+
+### 3. Transporte de alerta — outbox com estado (sem inventar canal)
+
+`scheduler/alertOutbox.ts`: uma **porta** `AlertTransport` (o canal concreto — e-mail/webhook/Slack — é injetado, como a porta do armador) + persistência de estado por entrega (migration 0014 adiciona `status` PENDING/SENT/FAILED, `tentativas`, `enviado_em`, `erro` a `tracking_alert_deliveries`). Regras:
+
+- Toda entrega **nasce PENDING**. Uma linha criada **≠ enviada**.
+- `processarEntregasPendentes({ pool, transport })` processa a fila: sucesso → `SENT` (com `enviado_em`); erro → `FAILED` (com `erro`), **reprocessável**. Nada é descartado em silêncio.
+- **Enquanto nenhum transporte real for injetado/aprovado, as entregas permanecem PENDING** — estado honesto, alertas não se perdem.
+- Segregação multiempresa preservada no conteúdo montado: a entrega técnica global carrega todos os contêineres do target; cada entrega operacional carrega **apenas os contêineres da sua organização** (sem vazamento A→B).
+
+### 4. Migration 0014 (aditiva)
+
+- `tracking_schedule_claims` (`UNIQUE(tracking_target_id, janela)`, sem `organization_id` — o target/consulta é global; fora da DECISÃO 1).
+- `tracking_alert_deliveries` ganha `status`/`tentativas`/`enviado_em`/`erro` + índice parcial de fila (`status <> 'SENT'`).
+
+### 5. Testes (condição de aceite da revisão)
+
+`__tests__/scheduler.test.ts` — 16/16 verdes. Além dos 10 anteriores:
+
+- **Suspensão 30 dias (pura):** dia 29 consulta, dia 30 suspende, relógios seguem, manual possível, Empty Return posterior encerra.
+- **Aceitação (integração):** processo aberto → worker acha a janela (diário, sem tela) → cache miss → Tracking Service (porta fake) → `TrackingFetch` (cache miss) → eventos ingeridos + descarga promovida → **próxima janela** reabre só no dia seguinte.
+- **Concorrência:** dois workers no mesmo tick → **uma** execução real; reinício no mesmo dia não duplica.
+- **30 dias sem Empty Return (integração):** worker **não** consulta; processo/relógios ativos, descarga preservada, sem devolução presumida; **manual** funciona e um Empty Return manual encerra normalmente.
+- **Outbox:** entregas nascem PENDING e permanecem PENDING sem transporte; transporte bom → SENT (segregação por organização preservada); transporte que falha → FAILED com erro, reprocessável para SENT.
+
+Suíte completa do motor: **187/187**. V1: **25/25**. `tsc --noEmit` limpo. `npm run build` limpo. Arquivos da V1 (`demurrageParser.ts`, `demurrageFilters.ts`, `demurrageRoutes.ts`, `Demurrage.dc.html`, `PortalCliente.dc.html`) **intactos** (git status confirma).
+
+### 6. PRECISA DE SUA VALIDAÇÃO (dois pontos — nada externo foi ligado sem autorização)
+
+Não escolhi deploy nem canal externo por conta própria — ambos ficam prontos atrás de uma decisão sua:
+
+1. **Acionamento do worker em produção.** O tick (`runSchedulerOnce`) é in-process e não cria serviço novo. Falta decidir **quem o dispara periodicamente** na infra atual (Render): (a) um `setInterval` no processo web já existente — grátis, porém o plano free do Render **hiberna por inatividade** e pode não acordar sozinho para rodar o ciclo; (b) um **Cron Job do Render** (ou GitHub Actions agendado) batendo num endpoint que chama `runSchedulerOnce` — confiável, custo baixo/nulo; (c) um **Background Worker** dedicado do Render — mais robusto, porém é um serviço pago adicional. O claim em PostgreSQL já torna qualquer uma delas segura contra duplicação. **Recomendo (b)** por confiabilidade sem custo de serviço novo, mas é sua decisão de infra.
+2. **Canal de transporte do alerta.** A porta `AlertTransport` está pronta; **não escolhi** e-mail/webhook/Slack. Enquanto não houver transporte aprovado, as entregas ficam PENDING (nada se perde). Ao aprovar um canal, implemento um adaptador da porta e ligo `processarEntregasPendentes` no mesmo tick do worker.
+
+### 7. Próximo passo
+
+Revisão da Fase 6 concluída. **Não avanço para a Fase 7 sem nova autorização.**

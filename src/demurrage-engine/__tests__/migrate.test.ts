@@ -24,6 +24,7 @@ test('migrations: aplica todas as migrations pendentes em um banco novo e é ide
       '0011_tracking.sql',
       '0012_tracking_target_identidade.sql',
       '0013_scheduler_incidentes.sql',
+      '0014_scheduler_worker_outbox.sql',
     ];
 
     const first = await runMigrations(pool);
@@ -63,6 +64,7 @@ test('migrations: aplica todas as migrations pendentes em um banco novo e é ide
       'tracking_events',
       'tracking_incidents',
       'tracking_alert_deliveries',
+      'tracking_schedule_claims',
     ]) {
       assert.ok(tables.includes(expected), `tabela ${expected} deveria existir após a Fase 1`);
     }
