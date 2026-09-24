@@ -11,7 +11,9 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
-    "test": "node -r ts-node/register --test src/auditoria/preAlerta/*.test.ts"
+    "test": "node -r ts-node/register --test src/auditoria/preAlerta/*.test.ts",
+    "db:migrate:demurrage": "ts-node src/demurrage-engine/db/migrate.ts",
+    "test:demurrage-engine": "node --test-concurrency=1 -r ts-node/register --test src/demurrage-engine/__tests__/*.test.ts"
   },
   "keywords": [
     "outlook",
@@ -27,12 +29,14 @@
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "express-session": "^1.18.0",
+    "pg": "^8.23.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",
     "@types/express-session": "^1.18.0",
     "@types/node": "^20.14.0",
+    "@types/pg": "^8.23.1",
     "ts-node": "^10.9.2",
     "typescript": "^5.5.3"
   }
