@@ -87,11 +87,26 @@ test('responsável operacional via OrganizationMembership (migration 0006)', { s
   });
 
   await t.test('sentido inverso: mover para outra organização um membership que é responsável → rejeitado', async () => {
-    // Um trigger só no lado do processo não pegaria isto; a FK composta pega.
+    // Desde a 0007 a organização do membership é imutável: o trigger de
+    // imutabilidade é a guarda mais externa e barra a troca antes de tudo.
     await assert.rejects(
       () => pool.query(`UPDATE organization_memberships SET organization_id = $2 WHERE id = $1`, [membershipAnaA.id, orgB.id]),
-      FK,
+      /organization_memberships\.organization_id e imutavel/,
     );
+    // Defesa em profundidade: mesmo sem a imutabilidade (desligada numa
+    // transação desfeita), a FK composta ainda barra o vínculo entre organizações.
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('ALTER TABLE organization_memberships DISABLE TRIGGER organization_id_immutable');
+      await assert.rejects(
+        () => client.query(`UPDATE organization_memberships SET organization_id = $2 WHERE id = $1`, [membershipAnaA.id, orgB.id]),
+        FK,
+      );
+    } finally {
+      await client.query('ROLLBACK');
+      client.release();
+    }
   });
 
   await t.test('excluir um membership que é responsável por processo → bloqueado (sem reatribuição inventada)', async () => {
@@ -136,7 +151,11 @@ test('migration 0006: compatibilidade com registros existentes do vínculo antig
     );
 
     const result = await runMigrations(pool);
-    assert.deepEqual(result.applied, ['0006_responsavel_operacional_membership.sql']);
+    assert.deepEqual(result.applied, [
+      '0006_responsavel_operacional_membership.sql',
+      '0007_org_imutavel_e_responsavel_interno.sql',
+      '0008_relogios.sql',
+    ]);
 
     const processos = new ProcessoRepository(pool);
     assert.equal((await processos.findById(comResponsavel.id))?.responsavelOperacionalMembershipId, membership.id);

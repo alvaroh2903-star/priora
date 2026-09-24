@@ -211,6 +211,19 @@ export const CASOS_MOTOR_TEMPORAL: readonly CasoMotorTemporal[] = [
     entrada: { descarga: '2026-09-10', freeTimeDias: 14, dataFinal: '2026-09-10' },
     esperado: { status: 'OK', ultimoDiaLivre: '2026-09-23', primeiroDiaDemurrage: '2026-09-24', diasDemurrage: 0 },
   },
+  {
+    // Decisão aprovada (revisão 6, DECISÃO 2): a inconsistência de datas
+    // prevalece sobre a falta de free time. Com descarga conhecida e data final
+    // anterior a ela, o resultado é INVALID mesmo sem FT — e a pendência de FT
+    // segue listada, porque o dado continua faltando. Nunca vira PENDING nem
+    // esconde a inconsistência atrás de um "pendente".
+    id: 'T20',
+    categoria: 'data-final-anterior-a-descarga',
+    descricao: 'Data final antes da descarga E FT ausente: INVALID com a pendência de FT listada',
+    referencia: 'Plano de migração, revisão 6, DECISÃO 2',
+    entrada: { descarga: '2026-09-10', freeTimeDias: null, dataFinal: '2026-09-05' },
+    esperado: { status: 'INVALID', motivo: 'DATA_FINAL_ANTERIOR_A_DESCARGA', pendencias: ['FREE_TIME_AUSENTE'] },
+  },
 
   // Devolução — "A devolução em 14/09 não gera diária; a devolução em 15/09
   // gera uma diária" (Cap. 6), aplicado a um cenário diferente do T01/T02.
@@ -233,16 +246,255 @@ export const CASOS_MOTOR_TEMPORAL: readonly CasoMotorTemporal[] = [
 ];
 
 /* ------------------------------------------------------------------ *
- * Fases 3 e 4 — reservado (itens 2–7 da seção "Fixtures oficiais" do
- * plano de migração). Vazio até a fase correspondente ser autorizada; o
- * formato de cada caso é definido junto com o motor daquela fase.
+ * Fase 3 — Dois relógios House × Master (preenchido)
+ *
+ * Um contêiner tem dois relógios independentes, calculados pelo MESMO motor
+ * temporal (freeTimeClock), uma vez cada:
+ *   - relógio do Cliente  ← free time do documento House;
+ *   - relógio Rocket      ← free time do Master BL.
+ * A descarga e a data final de apuração são as mesmas para os dois; só o free
+ * time difere. Um relógio PENDING ou INVALID nunca contamina o outro: cada um
+ * carrega seu próprio status. Não há "status geral" que substitua os dois.
+ *
+ * Valores conferidos contra a aritmética de DATE do PostgreSQL (mesmo oráculo
+ * das fixtures do motor temporal) antes de gravados.
  * ------------------------------------------------------------------ */
 
-/** Fase 3 — House × Master divergentes (item 2). */
-export const CASOS_DOIS_RELOGIOS: readonly never[] = [];
+export type TipoRelogio = 'cliente' | 'rocket';
 
-/** Fase 3 — múltiplos contêineres por processo em estados diferentes (item 3). */
-export const CASOS_MULTIPLOS_CONTEINERES: readonly never[] = [];
+export interface EntradaDoisRelogios {
+  descarga: DataCivil | null;
+  /** Free time do documento House → relógio do Cliente. null = ausente. */
+  houseFreeTimeDias: number | null;
+  /** Free time do Master BL → relógio Rocket. null = ausente. */
+  masterFreeTimeDias: number | null;
+  dataFinal: DataCivil;
+}
+
+export interface CasoDoisRelogios {
+  id: string;
+  /** Letra do caso obrigatório (A–K) da autorização da Fase 3. */
+  grupo: string;
+  descricao: string;
+  referencia: string;
+  entrada: EntradaDoisRelogios;
+  esperado: { cliente: EsperadoMotorTemporal; rocket: EsperadoMotorTemporal };
+}
+
+const PENDING_FT: EsperadoMotorTemporal = { status: 'PENDING', pendencias: ['FREE_TIME_AUSENTE'] };
+const PENDING_DESCARGA: EsperadoMotorTemporal = { status: 'PENDING', pendencias: ['DESCARGA_AUSENTE'] };
+
+export const CASOS_DOIS_RELOGIOS: readonly CasoDoisRelogios[] = [
+  // A — House menor que Master (Cliente entra em demurrage antes da Rocket).
+  {
+    id: 'R-A1', grupo: 'A', descricao: 'H14 × M21, final no 1º dia de demurrage do Cliente: cliente 1, rocket ainda 0',
+    referencia: 'Blueprint Cap. 7 e 23; Fase 3',
+    entrada: { descarga: '2026-09-01', houseFreeTimeDias: 14, masterFreeTimeDias: 21, dataFinal: '2026-09-15' },
+    esperado: {
+      cliente: { status: 'OK', ultimoDiaLivre: '2026-09-14', primeiroDiaDemurrage: '2026-09-15', diasDemurrage: 1 },
+      rocket: { status: 'OK', ultimoDiaLivre: '2026-09-21', primeiroDiaDemurrage: '2026-09-22', diasDemurrage: 0 },
+    },
+  },
+  {
+    id: 'R-A2', grupo: 'A', descricao: 'H14 × M21, final no último dia livre da Rocket: cliente 7, rocket 0',
+    referencia: 'Blueprint Cap. 7 e 23; Fase 3',
+    entrada: { descarga: '2026-09-01', houseFreeTimeDias: 14, masterFreeTimeDias: 21, dataFinal: '2026-09-21' },
+    esperado: {
+      cliente: { status: 'OK', ultimoDiaLivre: '2026-09-14', primeiroDiaDemurrage: '2026-09-15', diasDemurrage: 7 },
+      rocket: { status: 'OK', ultimoDiaLivre: '2026-09-21', primeiroDiaDemurrage: '2026-09-22', diasDemurrage: 0 },
+    },
+  },
+  {
+    id: 'R-A3', grupo: 'A', descricao: 'H14 × M21, final no 1º dia de demurrage da Rocket: cliente 8, rocket 1',
+    referencia: 'Blueprint Cap. 7 e 23; Fase 3',
+    entrada: { descarga: '2026-09-01', houseFreeTimeDias: 14, masterFreeTimeDias: 21, dataFinal: '2026-09-22' },
+    esperado: {
+      cliente: { status: 'OK', ultimoDiaLivre: '2026-09-14', primeiroDiaDemurrage: '2026-09-15', diasDemurrage: 8 },
+      rocket: { status: 'OK', ultimoDiaLivre: '2026-09-21', primeiroDiaDemurrage: '2026-09-22', diasDemurrage: 1 },
+    },
+  },
+
+  // B — Master menor que House (espelho de A: a Rocket entra antes).
+  {
+    id: 'R-B1', grupo: 'B', descricao: 'H21 × M14, final 15/09: cliente 0, rocket 1',
+    referencia: 'Blueprint Cap. 7; Fase 3',
+    entrada: { descarga: '2026-09-01', houseFreeTimeDias: 21, masterFreeTimeDias: 14, dataFinal: '2026-09-15' },
+    esperado: {
+      cliente: { status: 'OK', ultimoDiaLivre: '2026-09-21', primeiroDiaDemurrage: '2026-09-22', diasDemurrage: 0 },
+      rocket: { status: 'OK', ultimoDiaLivre: '2026-09-14', primeiroDiaDemurrage: '2026-09-15', diasDemurrage: 1 },
+    },
+  },
+  {
+    id: 'R-B2', grupo: 'B', descricao: 'H21 × M14, final 21/09: cliente 0, rocket 7',
+    referencia: 'Blueprint Cap. 7; Fase 3',
+    entrada: { descarga: '2026-09-01', houseFreeTimeDias: 21, masterFreeTimeDias: 14, dataFinal: '2026-09-21' },
+    esperado: {
+      cliente: { status: 'OK', ultimoDiaLivre: '2026-09-21', primeiroDiaDemurrage: '2026-09-22', diasDemurrage: 0 },
+      rocket: { status: 'OK', ultimoDiaLivre: '2026-09-14', primeiroDiaDemurrage: '2026-09-15', diasDemurrage: 7 },
+    },
+  },
+  {
+    id: 'R-B3', grupo: 'B', descricao: 'H21 × M14, final 22/09: cliente 1, rocket 8',
+    referencia: 'Blueprint Cap. 7; Fase 3',
+    entrada: { descarga: '2026-09-01', houseFreeTimeDias: 21, masterFreeTimeDias: 14, dataFinal: '2026-09-22' },
+    esperado: {
+      cliente: { status: 'OK', ultimoDiaLivre: '2026-09-21', primeiroDiaDemurrage: '2026-09-22', diasDemurrage: 1 },
+      rocket: { status: 'OK', ultimoDiaLivre: '2026-09-14', primeiroDiaDemurrage: '2026-09-15', diasDemurrage: 8 },
+    },
+  },
+
+  // C — Free times iguais: os dois relógios coincidem.
+  {
+    id: 'R-C1', grupo: 'C', descricao: 'H14 × M14: os dois relógios dão o mesmo resultado',
+    referencia: 'Blueprint Cap. 7; Fase 3',
+    entrada: { descarga: '2026-09-01', houseFreeTimeDias: 14, masterFreeTimeDias: 14, dataFinal: '2026-09-15' },
+    esperado: {
+      cliente: { status: 'OK', ultimoDiaLivre: '2026-09-14', primeiroDiaDemurrage: '2026-09-15', diasDemurrage: 1 },
+      rocket: { status: 'OK', ultimoDiaLivre: '2026-09-14', primeiroDiaDemurrage: '2026-09-15', diasDemurrage: 1 },
+    },
+  },
+
+  // D — House FT ausente: cliente PENDING, rocket calcula normalmente.
+  {
+    id: 'R-D1', grupo: 'D', descricao: 'House FT ausente: cliente PENDING (FT), rocket calcula (não é bloqueado)',
+    referencia: 'Blueprint Cap. 31.4; Fase 3 (independência dos relógios)',
+    entrada: { descarga: '2026-09-01', houseFreeTimeDias: null, masterFreeTimeDias: 21, dataFinal: '2026-09-25' },
+    esperado: {
+      cliente: PENDING_FT,
+      rocket: { status: 'OK', ultimoDiaLivre: '2026-09-21', primeiroDiaDemurrage: '2026-09-22', diasDemurrage: 4 },
+    },
+  },
+
+  // E — Master FT ausente: rocket PENDING, cliente calcula normalmente.
+  {
+    id: 'R-E1', grupo: 'E', descricao: 'Master FT ausente: rocket PENDING (FT), cliente calcula (não é bloqueado)',
+    referencia: 'Blueprint Cap. 31.4; Fase 3 (independência dos relógios)',
+    entrada: { descarga: '2026-09-01', houseFreeTimeDias: 14, masterFreeTimeDias: null, dataFinal: '2026-09-25' },
+    esperado: {
+      cliente: { status: 'OK', ultimoDiaLivre: '2026-09-14', primeiroDiaDemurrage: '2026-09-15', diasDemurrage: 11 },
+      rocket: PENDING_FT,
+    },
+  },
+
+  // F — Os dois FT ausentes: os dois relógios PENDING, cada um com sua pendência.
+  {
+    id: 'R-F1', grupo: 'F', descricao: 'House e Master FT ausentes: os dois relógios PENDING por FT',
+    referencia: 'Blueprint Cap. 31.4; Fase 3',
+    entrada: { descarga: '2026-09-01', houseFreeTimeDias: null, masterFreeTimeDias: null, dataFinal: '2026-09-20' },
+    esperado: { cliente: PENDING_FT, rocket: PENDING_FT },
+  },
+
+  // G — House FT zero (cobrança do Cliente começa na descarga); Master 14.
+  {
+    id: 'R-G1', grupo: 'G', descricao: 'House FT 0 × Master 14, final 10/09: cliente 10, rocket 0',
+    referencia: 'Blueprint Cap. 31.3; Fase 3',
+    entrada: { descarga: '2026-09-01', houseFreeTimeDias: 0, masterFreeTimeDias: 14, dataFinal: '2026-09-10' },
+    esperado: {
+      cliente: { status: 'OK', ultimoDiaLivre: '2026-08-31', primeiroDiaDemurrage: '2026-09-01', diasDemurrage: 10 },
+      rocket: { status: 'OK', ultimoDiaLivre: '2026-09-14', primeiroDiaDemurrage: '2026-09-15', diasDemurrage: 0 },
+    },
+  },
+  {
+    id: 'R-G2', grupo: 'G', descricao: 'House FT 0 × Master 14, final na própria descarga: cliente 1, rocket 0',
+    referencia: 'Blueprint Cap. 31.3; Fase 3',
+    entrada: { descarga: '2026-09-01', houseFreeTimeDias: 0, masterFreeTimeDias: 14, dataFinal: '2026-09-01' },
+    esperado: {
+      cliente: { status: 'OK', ultimoDiaLivre: '2026-08-31', primeiroDiaDemurrage: '2026-09-01', diasDemurrage: 1 },
+      rocket: { status: 'OK', ultimoDiaLivre: '2026-09-14', primeiroDiaDemurrage: '2026-09-15', diasDemurrage: 0 },
+    },
+  },
+
+  // H — Master FT zero; House 14 (espelho de G).
+  {
+    id: 'R-H1', grupo: 'H', descricao: 'House 14 × Master FT 0, final 10/09: cliente 0, rocket 10',
+    referencia: 'Blueprint Cap. 31.3; Fase 3',
+    entrada: { descarga: '2026-09-01', houseFreeTimeDias: 14, masterFreeTimeDias: 0, dataFinal: '2026-09-10' },
+    esperado: {
+      cliente: { status: 'OK', ultimoDiaLivre: '2026-09-14', primeiroDiaDemurrage: '2026-09-15', diasDemurrage: 0 },
+      rocket: { status: 'OK', ultimoDiaLivre: '2026-08-31', primeiroDiaDemurrage: '2026-09-01', diasDemurrage: 10 },
+    },
+  },
+
+  // J — Data final anterior à descarga: os dois relógios INVALID (DECISÃO 2),
+  // e a pendência de FT do relógio sem free time segue listada, sem bloquear
+  // nem "contaminar" o relógio que tem FT.
+  {
+    id: 'R-J1', grupo: 'J', descricao: 'Final antes da descarga: cliente INVALID (com pendência de FT), rocket INVALID (sem pendência)',
+    referencia: 'Plano rev. 6, DECISÃO 2; Fase 3',
+    entrada: { descarga: '2026-09-10', houseFreeTimeDias: null, masterFreeTimeDias: 14, dataFinal: '2026-09-05' },
+    esperado: {
+      cliente: { status: 'INVALID', motivo: 'DATA_FINAL_ANTERIOR_A_DESCARGA', pendencias: ['FREE_TIME_AUSENTE'] },
+      rocket: { status: 'INVALID', motivo: 'DATA_FINAL_ANTERIOR_A_DESCARGA', pendencias: [] },
+    },
+  },
+
+  // K — Descarga ausente: nenhum relógio inicia; os dois PENDING por descarga.
+  {
+    id: 'R-K1', grupo: 'K', descricao: 'Descarga ausente: os dois relógios PENDING por descarga (FT presente não inicia nada)',
+    referencia: 'Blueprint Cap. 31.1; Fase 3',
+    entrada: { descarga: null, houseFreeTimeDias: 14, masterFreeTimeDias: 21, dataFinal: '2026-09-20' },
+    esperado: { cliente: PENDING_DESCARGA, rocket: PENDING_DESCARGA },
+  },
+];
+
+/* ------------------------------------------------------------------ *
+ * Fase 3 — múltiplos contêineres do mesmo processo, em estados diferentes.
+ *
+ * Cada contêiner tem descarga e free times próprios: os relógios de um não
+ * influenciam os de outro. A data final de apuração é a mesma do processo.
+ * ------------------------------------------------------------------ */
+
+export interface ConteinerDoProcesso {
+  numero: string;
+  descarga: DataCivil | null;
+  houseFreeTimeDias: number | null;
+  masterFreeTimeDias: number | null;
+  esperado: { cliente: EsperadoMotorTemporal; rocket: EsperadoMotorTemporal };
+}
+
+export interface CasoMultiplosConteineres {
+  id: string;
+  descricao: string;
+  referencia: string;
+  dataFinal: DataCivil;
+  conteineres: readonly ConteinerDoProcesso[];
+}
+
+export const CASOS_MULTIPLOS_CONTEINERES: readonly CasoMultiplosConteineres[] = [
+  {
+    id: 'I-processo-misto',
+    descricao: 'Quatro contêineres do mesmo processo em estados distintos, apurados na mesma data',
+    referencia: 'Blueprint Cap. 7 e 31; Fase 3 (independência entre contêineres)',
+    dataFinal: '2026-09-22',
+    conteineres: [
+      {
+        numero: 'MSKU0000001', descarga: '2026-09-01', houseFreeTimeDias: 14, masterFreeTimeDias: 21,
+        esperado: {
+          cliente: { status: 'OK', ultimoDiaLivre: '2026-09-14', primeiroDiaDemurrage: '2026-09-15', diasDemurrage: 8 },
+          rocket: { status: 'OK', ultimoDiaLivre: '2026-09-21', primeiroDiaDemurrage: '2026-09-22', diasDemurrage: 1 },
+        },
+      },
+      {
+        numero: 'MSKU0000002', descarga: '2026-09-05', houseFreeTimeDias: 14, masterFreeTimeDias: 21,
+        esperado: {
+          cliente: { status: 'OK', ultimoDiaLivre: '2026-09-18', primeiroDiaDemurrage: '2026-09-19', diasDemurrage: 4 },
+          rocket: { status: 'OK', ultimoDiaLivre: '2026-09-25', primeiroDiaDemurrage: '2026-09-26', diasDemurrage: 0 },
+        },
+      },
+      {
+        numero: 'MSKU0000003', descarga: '2026-09-10', houseFreeTimeDias: null, masterFreeTimeDias: 7,
+        esperado: {
+          cliente: PENDING_FT,
+          rocket: { status: 'OK', ultimoDiaLivre: '2026-09-16', primeiroDiaDemurrage: '2026-09-17', diasDemurrage: 6 },
+        },
+      },
+      {
+        numero: 'MSKU0000004', descarga: null, houseFreeTimeDias: 14, masterFreeTimeDias: 21,
+        esperado: { cliente: PENDING_DESCARGA, rocket: PENDING_DESCARGA },
+      },
+    ],
+  },
+];
 
 /** Fase 4 — mudança de faixa tarifária, Termo Único e armador (item 4). */
 export const CASOS_FAIXA_TARIFARIA: readonly never[] = [];

@@ -17,10 +17,12 @@ test('migrations: aplica todas as migrations pendentes em um banco novo e é ide
       '0004_containers_and_observations.sql',
       '0005_backfill.sql',
       '0006_responsavel_operacional_membership.sql',
+      '0007_org_imutavel_e_responsavel_interno.sql',
+      '0008_relogios.sql',
     ];
 
     const first = await runMigrations(pool);
-    assert.deepEqual(first.applied, expected, 'todas as migrations da Fase 1 (incluindo a corretiva 0006) devem ser aplicadas em ordem num banco novo');
+    assert.deepEqual(first.applied, expected, 'todas as migrations aplicadas (Fase 1 + corretivas 0006/0007 + relógios 0008) devem ser aplicadas em ordem num banco novo');
     assert.deepEqual(first.alreadyApplied, []);
 
     const second = await runMigrations(pool);
@@ -46,6 +48,7 @@ test('migrations: aplica todas as migrations pendentes em um banco novo e é ide
       'snapshots',
       'backfill_runs',
       'backfill_items',
+      'relogios',
     ]) {
       assert.ok(tables.includes(expected), `tabela ${expected} deveria existir após a Fase 1`);
     }

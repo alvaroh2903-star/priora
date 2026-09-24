@@ -27,6 +27,7 @@ export function testPool(): Pool {
 export async function truncateAll(pool: Pool): Promise<void> {
   await pool.query(`
     TRUNCATE TABLE
+      relogios,
       backfill_items, backfill_runs,
       snapshots, field_observations,
       containers, processos, condicoes_comerciais, clientes,

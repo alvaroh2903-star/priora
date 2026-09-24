@@ -176,18 +176,3 @@ test('pureza: o código do motor temporal só importa módulos vizinhos e não u
     assert.doesNotMatch(codigo, /new Date\b|Date\.(now|UTC|parse)\b|getTimezoneOffset|toISOString/, `${arquivo} usa Date/relógio`);
   }
 });
-
-/* ------------------------------------------------------------------ *
- * Comportamento provisório — NÃO faz parte das fixtures oficiais.
- * PRECISA DE SUA VALIDAÇÃO: quando FT está ausente E a data final é
- * anterior à descarga, o motor devolve INVALID (a inconsistência de datas
- * não fica escondida atrás de um "pendente") e lista a pendência de FT.
- * ------------------------------------------------------------------ */
-
-test('PROVISÓRIO (aguardando validação): FT ausente + data final antes da descarga → INVALID com a pendência listada', () => {
-  assert.deepEqual(freeTimeClock({ dischargeDate: '2026-09-10', freeTimeDays: null, finalDate: '2026-09-05' }), {
-    status: 'INVALID',
-    motivo: 'DATA_FINAL_ANTERIOR_A_DESCARGA',
-    pendencias: ['FREE_TIME_AUSENTE'],
-  });
-});

@@ -1,8 +1,8 @@
 # Plano de Migração — Demurrage V1 → Demurrage Engine V2
 
-**Data:** 24/09/2026 (revisão 5)
+**Data:** 24/09/2026 (revisão 6)
 **Base:** `docs/demurrage-blueprint-gap-analysis.md` (diagnóstico aprovado, com as 3 correções de premissa da revisão 1)
-**Status:** Fase 1 concluída (com a migration corretiva 0006 da revisão 5) e Fase 2 — Motor temporal concluída. Fase 3 aguarda autorização. Ver "Relatório de entrega — revisão 5" no final deste documento.
+**Status:** Fase 1 concluída (migrations corretivas 0006 e 0007), Fase 2 — Motor temporal concluída, e Fase 3 — Dois relógios House × Master concluída (migration aditiva 0008 do cache `relogios`). Fase 4 aguarda autorização. Ver "Relatório de entrega — revisão 6" no final deste documento.
 
 ## Aprovações e decisões da revisão 5
 
@@ -124,7 +124,7 @@ Antes de escrever qualquer código das Fases 2, 3 e 4, um conjunto único de fix
 6. **Minuta:** minuta com data igual ao Empty Return (caso trivial), minuta com data divergente (preserva as duas evidências, usa a da minuta), e minuta chegando depois de um fechamento sem custo, criando custo (vai para reabertura).
 7. **Tabelas provisórias/incompletas:** um cálculo com a tabela da PIL (estimativa por ponto médio, sempre `ESTIMATED_PROVISIONAL`) e um com uma tabela incompleta (Yang Ming/COSCO/ZIM) caindo numa faixa sem dado (`UNAVAILABLE`, nunca aproximação por semelhança).
 
-Essas fixtures vivem em um único arquivo compartilhado, `src/demurrage-engine/__fixtures__/casosOficiais.ts`, referenciado pelos testes das Fases 2, 3 e 4 — nunca duplicadas em cada fase. **Estado (revisão 5):** o arquivo foi criado como primeiro entregável da Fase 2, antes do `freeTimeClock`, com os casos do motor temporal (off-by-one, FT 0, FT ausente, virada de mês, virada de ano, fevereiro/ano bissexto, data final anterior à descarga, devolução no último dia livre e no primeiro dia de demurrage). As seções dos casos 2–7 acima (dois relógios, múltiplos contêineres, faixas, Empty Return, minuta, tabelas provisórias) já existem no arquivo, vazias, e são preenchidas quando as Fases 3 e 4 forem autorizadas.
+Essas fixtures vivem em um único arquivo compartilhado, `src/demurrage-engine/__fixtures__/casosOficiais.ts`, referenciado pelos testes das Fases 2, 3 e 4 — nunca duplicadas em cada fase. **Estado (revisão 5):** o arquivo foi criado como primeiro entregável da Fase 2, antes do `freeTimeClock`, com os casos do motor temporal (off-by-one, FT 0, FT ausente, virada de mês, virada de ano, fevereiro/ano bissexto, data final anterior à descarga, devolução no último dia livre e no primeiro dia de demurrage). Os casos 2 e 3 (dois relógios House × Master e múltiplos contêineres por processo) foram preenchidos na revisão 6, como primeiro entregável da Fase 3, antes do `dualClockCalculator` — grupos A–K de `CASOS_DOIS_RELOGIOS` e o processo misto de `CASOS_MULTIPLOS_CONTEINERES`, todos conferidos contra o oráculo de `DATE` do PostgreSQL. As seções dos casos 4–7 (faixas, Empty Return, minuta, tabelas provisórias) seguem vazias até a Fase 4 ser autorizada.
 
 ---
 
@@ -178,7 +178,7 @@ Essas fixtures vivem em um único arquivo compartilhado, `src/demurrage-engine/_
 
 **Arquivos existentes afetados:** nenhum arquivo da V1.
 
-**Migrations:** nenhuma nova entidade — usa `master_free_time_days` (já tipado em `Contêiner`) e a entidade `Relogio` (uma linha por `tipo` — `cliente`/`rocket` — por contêiner), ambas definidas em "Schema — Fase 1".
+**Migrations:** aditiva `0008_relogios.sql` (revisão 6) — cria a tabela `relogios` (cache/projeção pura, uma linha por `tipo` `cliente`/`rocket` por contêiner) com `UNIQUE(container_id, tipo)`, a constraint de forma por estado, e o trigger `relogios_somente_recalculador` que só deixa o recalculador escrever. Usa `master_free_time_days`/`house_free_time_days`/`discharge_date` (já tipados em `Contêiner` desde a Fase 1). Nenhuma reescrita de 0001–0007.
 
 **Dependências:** Fase 2 (motor temporal pronto e testado). Não depende de Fase 4/5 — Master Free Time pode vir inicialmente como `null`/pendente (fonte ainda não conectada) sem travar o desenvolvimento desta fase; o relógio do cliente já fica funcional isoladamente.
 
@@ -520,7 +520,7 @@ Fases 2, 3 e 4 são motores puros e podem ser desenvolvidas e 100% testadas por 
 - **DATE** (data civil, sem hora) é usado em todo campo que participa da contagem de dias de demurrage (ponto 10) — nunca TIMESTAMP. O motor temporal trabalha só com datas civis: não há hora, não há fuso e não há conversão UTC em nenhuma etapa da contagem. A data civil de um evento é a data do evento como informada pela fonte; como um evento vindo do Tracking Service vira data civil é parte do contrato da Fase 5, nunca uma conversão feita pelo motor.
 - **TIMESTAMP** (`TIMESTAMPTZ` no Postgres) é reservado para coleta/auditoria/execução (quando algo foi registrado pela Priora), nunca para contagem de dias.
 - Toda entidade marcada **append-only** não sofre `UPDATE` de conteúdo — só `INSERT`, e isso é aplicado por *trigger* no Postgres, não só por convenção de código (ver Fase 1 implementada); quando uma transição de status é necessária (ex.: `ValorApurado.calculation_status`), é a única exceção documentada por entidade.
-- **Multiempresa:** toda entidade de tenant carrega `organization_id` — direto quando é uma entidade "de primeira classe" (Cliente, Processo, CondicaoComercial, FieldObservation, Snapshot, BackfillRun, Contêiner), ou por relacionamento inequívoco quando é claramente subordinada a uma entidade que já o carrega (ex.: `BackfillItem` via `backfill_run_id`). Entidades de **dado de referência compartilhado** entre todas as organizações (Armador, ContainerType, ContainerTypeMapping) não carregam `organization_id` — MSC é o mesmo MSC para qualquer tenant da Priora. **`TrackingTarget` também é global** (revisão 5), assim como as entidades operacionais penduradas nele (`TrackingFetch`, `TrackingEvent`, `FalhaTracking`, `AgendamentoConsulta`): um mesmo MBL é a mesma consulta para qualquer consumidor. O isolamento multiempresa do tracking é feito pelo acesso via `Processo`/`Contêiner` (tabela de vínculo `ContainerTrackingTarget`) — compartilhar internamente o resultado bruto de um target não autoriza exposição entre organizações. `TabelaTarifaria` é o caso misto: `organization_id` **nullable** — `NULL` = tabela de referência pública/compartilhada (ex.: as tabelas de armador do Blueprint), preenchido = tabela privada negociada por uma organização (ex.: uma tabela Rocket×cliente específica). Toda constraint de unicidade que antes era global passa a ser escopada por organização (ex.: `UNIQUE(organization_id, numero_processo)`). A consistência de organização das referências é garantida no Postgres: por *trigger* no lado filho em `cliente_id`, `processo_id`, `condicao_comercial_id` e `entidade_id` polimórfico (migrations 0003/0004), e por **FK composta** em `responsavel_operacional_membership_id` (migration 0006). **Limitação conhecida (revisão 5):** os triggers só validam a escrita da linha filha — alterar o `organization_id` de uma linha *pai* já referenciada (ex.: mover um `Cliente` para outra organização) ainda não é bloqueado. Correção proposta aguardando validação — ver "Relatório de entrega — revisão 5", item `PRECISA DE SUA VALIDAÇÃO`.
+- **Multiempresa:** toda entidade de tenant carrega `organization_id` — direto quando é uma entidade "de primeira classe" (Cliente, Processo, CondicaoComercial, FieldObservation, Snapshot, BackfillRun, Contêiner), ou por relacionamento inequívoco quando é claramente subordinada a uma entidade que já o carrega (ex.: `BackfillItem` via `backfill_run_id`). Entidades de **dado de referência compartilhado** entre todas as organizações (Armador, ContainerType, ContainerTypeMapping) não carregam `organization_id` — MSC é o mesmo MSC para qualquer tenant da Priora. **`TrackingTarget` também é global** (revisão 5), assim como as entidades operacionais penduradas nele (`TrackingFetch`, `TrackingEvent`, `FalhaTracking`, `AgendamentoConsulta`): um mesmo MBL é a mesma consulta para qualquer consumidor. O isolamento multiempresa do tracking é feito pelo acesso via `Processo`/`Contêiner` (tabela de vínculo `ContainerTrackingTarget`) — compartilhar internamente o resultado bruto de um target não autoriza exposição entre organizações. `TabelaTarifaria` é o caso misto: `organization_id` **nullable** — `NULL` = tabela de referência pública/compartilhada (ex.: as tabelas de armador do Blueprint), preenchido = tabela privada negociada por uma organização (ex.: uma tabela Rocket×cliente específica). Toda constraint de unicidade que antes era global passa a ser escopada por organização (ex.: `UNIQUE(organization_id, numero_processo)`). A consistência de organização das referências é garantida no Postgres: por *trigger* no lado filho em `cliente_id`, `processo_id`, `condicao_comercial_id` e `entidade_id` polimórfico (migrations 0003/0004), e por **FK composta** em `responsavel_operacional_membership_id` (migration 0006). **Resolvido na revisão 6 (DECISÃO 1, migration 0007):** o `organization_id` de toda tabela de tenant é agora **imutável** — um único trigger `organization_id_immutable` (`BEFORE UPDATE`, disparado só quando `OLD.organization_id IS DISTINCT FROM NEW.organization_id`) rejeita mover qualquer registro para outra organização, fechando também o caminho da linha *pai*. UPDATEs que não mudam a organização seguem livres. **Convenção padrão:** toda tabela de tenant futura com `organization_id` nasce com esse trigger, salvo decisão funcional explícita — um teste de catálogo (`migration0007.test.ts`) falha se alguma tabela com `organization_id` ficar sem ele.
 
 ## Entidades
 
@@ -562,7 +562,7 @@ Fases 2, 3 e 4 são motores puros e podem ser desenvolvidas e 100% testadas por 
 
 | Entidade | Campos principais | Constraints / unique keys |
 |---|---|---|
-| **Relogio** *(projeção/cache — descartável, nunca fonte de verdade)* | id, container_id → Contêiner, tipo (`cliente`\|`rocket`), ultimo_dia_livre (DATE), primeiro_dia_demurrage (DATE), data_final_apuracao (DATE), dias_demurrage (INTEGER), estado (`aberto`\|`fechado`\|`pendente`), **calculated_at** (TIMESTAMP), **engine_version** (TEXT), **input_hash** (TEXT) | UNIQUE(container_id, tipo). `organization_id` não é coluna própria — herdado via `container_id` (é puro cache, recalculável; não há risco de vazamento entre organizações que sobreviva a um recomputo). |
+| **Relogio** *(projeção/cache — descartável, nunca fonte de verdade)* | id, container_id → Contêiner, tipo (`cliente`\|`rocket`), ultimo_dia_livre (DATE), primeiro_dia_demurrage (DATE), data_final_apuracao (DATE), dias_demurrage (INTEGER), estado (`OK`\|`PENDING`\|`INVALID`), pendencias (TEXT[]), motivo (TEXT, nullable), **calculated_at** (TIMESTAMP), **engine_version** (TEXT), **input_hash** (TEXT) | UNIQUE(container_id, tipo). `organization_id` não é coluna própria — herdado via `container_id` (é puro cache, recalculável; não há risco de vazamento entre organizações que sobreviva a um recomputo). Escrita só pelo recalculador (trigger `relogios_somente_recalculador`); `DELETE` livre. **Revisão 6:** `estado` passou de `aberto`\|`fechado`\|`pendente` (revisão 3) para `OK`\|`PENDING`\|`INVALID`, espelhando 1-para-1 o `FreeTimeClockResult` do motor — ver PRECISA DE SUA VALIDAÇÃO no relatório da revisão 6. |
 
 ### Tarifas — três motores comerciais explícitos — Fase 4, não construído na Fase 1
 
@@ -1027,3 +1027,110 @@ Hoje o banco aceita como responsável qualquer membership da mesma organização
 ### 9. Próximo passo
 
 Fase 2 concluída. **Não avanço para a Fase 3 sem autorização.**
+
+---
+
+## Relatório de entrega — revisão 6 (migrations 0007/0008 + Fase 3: dois relógios)
+
+**Escopo autorizado:** DECISÕES 1–3 (migration `0007`) e a Fase 3 — Dois relógios House × Master, com o cache `relogios` (migration `0008`). Nada de tarifa, valor financeiro, Tracking Service, scheduler, estados/prioridade operacional, Empty Return, minuta ou frontend foi tocado. V1 intacta.
+
+### 1. Migration `0007_org_imutavel_e_responsavel_interno.sql` (DECISÕES 1 e 3)
+
+Aditiva; 0001–0006 não foram reescritas.
+
+- **DECISÃO 1 — `organization_id` imutável.** Uma única função `forbid_organization_change()` é reutilizada por um trigger `organization_id_immutable` em cada uma das 8 tabelas de tenant (`organization_memberships`, `clientes`, `condicoes_comerciais`, `processos`, `containers`, `field_observations`, `snapshots`, `backfill_runs`). O trigger é `BEFORE UPDATE ... WHEN (OLD.organization_id IS DISTINCT FROM NEW.organization_id)` — dispara só quando a organização muda, então UPDATEs comuns na mesma organização não pagam nada. Fecha o buraco da linha pai relatado na revisão 5 (alternativa **A**, recomendada e aprovada). **Convenção padrão:** toda tabela de tenant futura com `organization_id` recebe o mesmo trigger, salvo decisão funcional explícita; um teste de catálogo verifica isso.
+- **DECISÃO 3 — responsável operacional só com papel interno.** Garantido nos dois sentidos: (1) `check_processo_responsavel_interno()` (`BEFORE INSERT OR UPDATE OF responsavel_operacional_membership_id`) rejeita atribuir um membership `CLIENT`; (2) `check_membership_responsavel_nao_vira_client()` (`BEFORE UPDATE OF papel`, `WHEN NEW.papel = 'CLIENT'`) rejeita rebaixar a `CLIENT` um membership que é responsável por algum processo enquanto estiver atribuído. Responsável `NULL` continua válido; não há reatribuição automática. A leitura do papel no trigger do processo usa `FOR SHARE`, serializando com o UPDATE do membership (a segunda operação sempre enxerga a primeira). A migration **aborta** se já existir processo com responsável `CLIENT` (não reclassifica em silêncio).
+
+### 2. Migration `0008_relogios.sql` (cache dos dois relógios)
+
+Aditiva. Cria `relogios` como **projeção/cache puro**, nunca fonte de verdade:
+
+- Colunas: `id`, `container_id` (FK `ON DELETE CASCADE`), `tipo` (`cliente`\|`rocket`), `estado` (`OK`\|`PENDING`\|`INVALID`), `ultimo_dia_livre`, `primeiro_dia_demurrage`, `data_final_apuracao` (NOT NULL — é entrada, não resultado), `dias_demurrage` (`>= 0`), `pendencias` (TEXT[]), `motivo`, `calculated_at`, `engine_version`, `input_hash`. `UNIQUE(container_id, tipo)`.
+- `CONSTRAINT relogios_forma_por_estado`: a forma da linha tem que ser coerente com o estado (OK exige as três datas/o número e nenhuma pendência/motivo; PENDING exige pendência e nenhuma data; INVALID exige motivo e nenhuma data). O cache não consegue guardar um "OK sem dias" nem um "PENDING com data de demurrage".
+- **Regenerável por definição:** cada linha sai de (descarga do contêiner, free time do relógio, data final, versão do motor). O `input_hash` (SHA-256 de `[engineVersion, tipo, dischargeDate, freeTimeDays, finalDate]`, em `domain/clock.ts`) resume todas essas entradas; hash gravado ≠ hash recalculado das entradas atuais ⇒ cache obsoleto.
+- **Sem edição manual:** trigger `relogios_somente_recalculador` (`BEFORE INSERT OR UPDATE`) exige `current_setting('demurrage.relogio_writer', true) = 'dualClockCalculator'`. Só o `RelogioRepository.recalcular` liga esse `SET LOCAL` (dentro de transação). `DELETE` é livre — apagar só força a regeneração.
+
+### 3. Resultado dos testes
+
+Suíte da engine (Postgres real): **117/117 verde** (era 87 antes da Fase 3; +3 do `migration0007`, +~17 do `dualClockCalculator`, +7 do `relogios`, +1 fixture T20). `tsc --noEmit` limpo; `npm run build` limpo. Suíte original da V1 (`npm test`): **25/25 verde**. Comando: `DEMURRAGE_TEST_DATABASE_URL=... npm run test:demurrage-engine`.
+
+- `migration0007.test.ts`: imutabilidade de organização nas 8 tabelas (rejeição na configuração real **e** provada isoladamente pelo próprio trigger, com os demais desligados numa transação desfeita); catálogo garantindo que toda tabela com `organization_id` tem o trigger; updates comuns na mesma organização continuam permitidos; responsável interno nos dois sentidos; abort se já houver responsável `CLIENT`.
+- `dualClockCalculator.test.ts`: um teste por caso das fixtures A–K e do processo misto; equivalência relógio-a-relógio com `freeTimeClock` (nenhuma fórmula duplicada); independência entre relógios e entre contêineres; contrato de entrada.
+- `relogios.test.ts`: projeção bate com a fixture; `input_hash` muda com o FT (e com a data final) ⇒ `OBSOLETO` até recalcular; escrita manual barrada; `DELETE`+regeneração; `UNIQUE(container_id,tipo)`; independência no cache.
+
+### 4. Fixtures oficiais da Fase 3
+
+Preenchidas **antes** do motor, em `src/demurrage-engine/__fixtures__/casosOficiais.ts`, conferidas contra a aritmética de `DATE` do PostgreSQL:
+
+- `CASOS_DOIS_RELOGIOS` — grupos **A** (House < Master), **B** (House > Master), **C** (iguais), **D** (House FT ausente), **E** (Master FT ausente), **F** (os dois ausentes), **G** (House FT 0), **H** (Master FT 0), **J** (data final antes da descarga → os dois `INVALID`, DECISÃO 2), **K** (descarga ausente → os dois `PENDING` por descarga).
+- `CASOS_MULTIPLOS_CONTEINERES` — um processo com 4 contêineres em estados distintos, apurados na mesma data (`2026-09-22`).
+- Fixture **T20** (motor temporal): DECISÃO 2 promovida de teste provisório a fixture oficial (categoria `data-final-anterior-a-descarga`): `descarga 2026-09-10, FT null, final 2026-09-05` → `INVALID` com `pendencias: ['FREE_TIME_AUSENTE']`. O teste "PROVISÓRIO" foi removido.
+
+### 5. Tabela House × Master (esperado × real)
+
+Descarga `2026-09-01` salvo indicado. "Real" = saída do `dualClockCalculator` verificada pelos testes; bate com "esperado" em 100% dos casos.
+
+| Caso | House FT | Master FT | Data final | Cliente (House) esperado=real | Rocket (Master) esperado=real |
+|---|---|---|---|---|---|
+| R-A1 | 14 | 21 | 15/09 | OK, 1 dia (últ. livre 14/09) | OK, 0 dia (últ. livre 21/09) |
+| R-A2 | 14 | 21 | 21/09 | OK, 7 dias | OK, 0 dia |
+| R-A3 | 14 | 21 | 22/09 | OK, 8 dias | OK, 1 dia |
+| R-B1 | 21 | 14 | 15/09 | OK, 0 dia | OK, 1 dia |
+| R-B3 | 21 | 14 | 22/09 | OK, 1 dia | OK, 8 dias |
+| R-C1 | 14 | 14 | 15/09 | OK, 1 dia | OK, 1 dia |
+| R-D1 | ausente | 21 | 25/09 | **PENDING** [FREE_TIME_AUSENTE] | OK, 4 dias |
+| R-E1 | 14 | ausente | 25/09 | OK, 11 dias | **PENDING** [FREE_TIME_AUSENTE] |
+| R-F1 | ausente | ausente | 20/09 | PENDING [FREE_TIME_AUSENTE] | PENDING [FREE_TIME_AUSENTE] |
+| R-G1 | 0 | 14 | 10/09 | OK, 10 dias (1º dem. 01/09) | OK, 0 dia |
+| R-H1 | 14 | 0 | 10/09 | OK, 0 dia | OK, 10 dias (1º dem. 01/09) |
+| R-J1 | ausente | 14 | 05/09 (desc. 10/09) | **INVALID** [FREE_TIME_AUSENTE] | **INVALID** [] |
+| R-K1 | 14 | 21 | 20/09 (desc. ausente) | PENDING [DESCARGA_AUSENTE] | PENDING [DESCARGA_AUSENTE] |
+
+### 6. `input_hash` antes/depois de uma mudança de free time
+
+Relógio do Cliente, descarga `2026-09-01`, data final `2026-09-22`, `engine_version = temporal-1.0.0`:
+
+```
+FT House = 14  →  69fa32521a7c649867263ec568040e59b4143af3f7374dd94bd96c94b13aec63
+FT House =  7  →  36b6e764d5375f43a519568602cc62e0cb691564948b201d7e0393d74332c6ec   (FT mudou → hash muda → cache OBSOLETO)
+final 23/09    →  9a1ba6963d68f9fc5dfc928639dad0660eaf369833363c8265890bc25efefbdd   (data final mudou → hash muda)
+tipo = rocket  →  a331df2fba4a4bfd1115b6e3499890a324f0dce8e90f5ff02b30fc76dd9feddb   (mesmo FT/datas, outro relógio → hash distinto)
+```
+
+O `relogios.test.ts` prova o efeito ponta a ponta: gravado o cache com FT 14, uma observação nova baixa o FT House para 7; `buscarValido(...,'cliente',...)` passa a devolver `OBSOLETO` (o relógio Rocket, cujo Master não mudou, segue `VALIDO` — os hashes são por relógio); `recalcular` reconcilia com um `input_hash` novo, na **mesma** linha `(container, tipo)` (upsert).
+
+### 7. Prova de que um relógio pendente/inválido não bloqueia o outro
+
+- **R-D1 / R-E1:** com um dos free times ausente, aquele relógio é `PENDING` e o outro calcula normalmente (4 e 11 dias, respectivamente). Sem "status geral" — o resultado é sempre o par `{cliente, rocket}`, cada um com seu status.
+- **R-J1:** data final antes da descarga com House ausente → os dois `INVALID`, mas cada um preserva a **sua** pendência (cliente lista `FREE_TIME_AUSENTE`, rocket lista `[]`). O `dualClockCalculator` chama o `freeTimeClock` duas vezes de forma independente; um lado nunca contamina o outro. Teste dedicado: `dualClockCalculator.test.ts` → "um relógio INVALID não bloqueia o outro, e não há 'status geral'".
+
+### 8. Prova de independência entre contêineres
+
+Fixture `I-processo-misto` (4 contêineres, data final `2026-09-22`), esperado = real:
+
+| Contêiner | Descarga | House | Master | Cliente | Rocket |
+|---|---|---|---|---|---|
+| MSKU0000001 | 01/09 | 14 | 21 | OK, 8 dias | OK, 1 dia |
+| MSKU0000002 | 05/09 | 14 | 21 | OK, 4 dias | OK, 0 dia |
+| MSKU0000003 | 10/09 | ausente | 7 | PENDING [FREE_TIME_AUSENTE] | OK, 6 dias |
+| MSKU0000004 | ausente | 14 | 21 | PENDING [DESCARGA_AUSENTE] | PENDING [DESCARGA_AUSENTE] |
+
+Um contêiner devolvido/pendente não altera os demais. Dois testes fixam isso: no motor puro, permutar a ordem de cálculo não muda nenhum resultado; no cache, recalcular um contêiner não toca a linha de outro (contêiner com descarga ausente fica `PENDING` enquanto o vizinho segue `OK, 8 dias`).
+
+### 9. V1 intacta
+
+`git diff` de `src/demurrage/`, `src/routes/demurrageRoutes.ts`, `public/Demurrage.dc.html` e `public/PortalCliente.dc.html` contra o commit-base `48ba7c1`: **vazio**. Rota `GET /api/demurrage` e portais não tocados. Toda a Fase 3 vive em `src/demurrage-engine/` (mais o cache 0008), fora do caminho da V1.
+
+### 10. PRECISA DE SUA VALIDAÇÃO
+
+**Valores de `estado` do `Relogio`: `OK`\|`PENDING`\|`INVALID` (implementado) × `aberto`\|`fechado`\|`pendente` (revisão 3).**
+1. *O que foi encontrado:* a revisão 3 registrou o enum de `Relogio.estado` como `aberto`\|`fechado`\|`pendente`. Mas o `Relogio` é cache puro do `FreeTimeClockResult`, cujo status é `OK`\|`PENDING`\|`INVALID`. Em particular, `INVALID` (data final anterior à descarga, DECISÃO 2) não cabe em nenhum dos três antigos, e `aberto`/`fechado` (relógio em curso × encerrado) é uma noção **operacional de ciclo de vida**, não uma noção do motor temporal — e o ciclo de vida do contêiner é a Fase 7/8, fora deste escopo.
+2. *Por que decidi assim:* como o cache tem que espelhar 1-para-1 o resultado do motor (para ser regenerável e comparável por hash), usei os três status do motor. `aberto`/`fechado` seriam derivados depois, na camada de estados (Fase 7), a partir de `effective_return_date` — não do relógio.
+3. *Alternativas:* (A) manter `OK`\|`PENDING`\|`INVALID` no cache, como está, e deixar `aberto`/`fechado` para a máquina de estados da Fase 7; (B) renomear para um terceiro vocabulário; (C) voltar a `aberto`\|`fechado`\|`pendente` — mas então `INVALID` não teria representação e o cache deixaria de espelhar o motor.
+4. *Impacto:* recomendo **(A)**. É a única que preserva a DECISÃO 2 e a regenerabilidade por hash sem misturar ciclo de vida operacional no cache do motor. Se preferir outro vocabulário, é uma migration aditiva simples (novo `CHECK`), sem perda de dado (o cache é descartável). Não bloqueia a Fase 4.
+
+Nenhum outro ponto exigiu decisão nova: DECISÕES 1–3 e a Fase 3 couberam no que já estava aprovado. As regras não definidas pelo Blueprint viraram pendência/`INVALID` explícito, nunca um valor inventado.
+
+### 11. Próximo passo
+
+Fase 3 concluída. **Não avanço para a Fase 4 sem nova autorização.**
