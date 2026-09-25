@@ -7,7 +7,9 @@ import { avaliarCadencia, deveConsultarAgora, CadenciaInput } from '../scheduler
 import { derivarEstadoContainer, derivarApuracaoDemurrageStatus } from '../lifecycle/containerState';
 import { derivarPrioridadeContainer } from '../lifecycle/priorityEngine';
 import { consolidarProcesso } from '../lifecycle/processConsolidation';
-import { ClockFact, ContainerLifecycle, ContainerLifecycleFacts, ProcessoLifecycleResult, ValorFact } from '../lifecycle/types';
+import { derivarResponsabilidade } from '../lifecycle/responsabilidade';
+import { ClockFact, ContainerLifecycle, ContainerLifecycleFacts, ProcessoLifecycleResult, Responsabilidade, ValorFact } from '../lifecycle/types';
+import { MinutaRepository } from './minutaRepository';
 
 /**
  * Fase 7 — montagem dos fatos do ciclo operacional a partir do banco e
@@ -52,7 +54,7 @@ export class LifecycleRepository {
   async montarFatos(containerId: string, config: LifecycleConfig): Promise<ContainerLifecycleFacts> {
     const { rows: cr } = await this.pool.query(
       `SELECT discharge_date, house_free_time_days, master_free_time_days,
-              tracking_return_date, effective_return_date
+              tracking_return_date, effective_return_date, responsabilidade
          FROM containers WHERE id = $1`,
       [containerId],
     );
@@ -123,17 +125,30 @@ export class LifecycleRepository {
 
     const clienteClock = clockFact(clocks.cliente);
     const rocketClock = clockFact(clocks.rocket);
+    // Existência da demurrage vem dos RELÓGIOS (v4.1), nunca de valores_apurados.
+    const apuracaoDemurrageStatus = derivarApuracaoDemurrageStatus(clienteClock, rocketClock);
+
+    // Derivação aprovada (Fase 8, validação 1): o badge da Fase 7 reflete o fato
+    // real da dimensão responsabilidade (stored da Fase 11, senão derivado).
+    const responsabilidade = derivarResponsabilidade(apuracaoDemurrageStatus, c.responsabilidade ?? null);
+
+    // Derivação aprovada (Fase 8, decisão 6): documentaryStatus vem da minuta.
+    let documentaryStatus: ContainerLifecycleFacts['documentaryStatus'] = 'NAO_APLICAVEL';
+    if (emptyReturn) {
+      const temMinuta = await new MinutaRepository(this.pool).temRecebidaOuValidada(containerId);
+      documentaryStatus = temMinuta ? 'MINUTA_RECEBIDA' : 'MINUTA_PENDENTE';
+    }
+
     return {
       containerId,
       hoje: config.hoje,
       clienteClock,
       rocketClock,
       emptyReturn,
-      // Existência da demurrage vem dos RELÓGIOS (v4.1), nunca de valores_apurados.
-      apuracaoDemurrageStatus: derivarApuracaoDemurrageStatus(clienteClock, rocketClock),
-      responsabilidadeEmAnalise: false,
+      apuracaoDemurrageStatus,
+      responsabilidadeEmAnalise: responsabilidade === 'EM_ANALISE',
       divergenciaValor: false,
-      documentaryStatus: emptyReturn ? 'MINUTA_PENDENTE' : 'NAO_APLICAVEL',
+      documentaryStatus,
       cadenciaVencida,
       ultimaConsultaValida,
       falhaTrackingAtiva,
@@ -141,6 +156,17 @@ export class LifecycleRepository {
       exposicaoRocket: melhorValor('rocket'),
       prazoProximoThresholdDias: config.prazoProximoThresholdDias ?? null,
     };
+  }
+
+  /**
+   * Responsabilidade derivada de um contêiner (gate de FINAL da Fase 8). Fonte
+   * de verdade é o contêiner: decisão da Fase 11 (stored) senão derivada da
+   * existência da demurrage.
+   */
+  async responsabilidadeDoContainer(containerId: string, config: LifecycleConfig): Promise<Responsabilidade> {
+    const facts = await this.montarFatos(containerId, config);
+    const { rows } = await this.pool.query(`SELECT responsabilidade FROM containers WHERE id = $1`, [containerId]);
+    return derivarResponsabilidade(facts.apuracaoDemurrageStatus, rows[0]?.responsabilidade ?? null);
   }
 
   /** Deriva estado + prioridade de um contêiner e persiste (cache). */

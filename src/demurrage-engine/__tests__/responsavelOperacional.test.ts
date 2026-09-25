@@ -162,6 +162,7 @@ test('migration 0006: compatibilidade com registros existentes do vínculo antig
       '0013_scheduler_incidentes.sql',
       '0014_scheduler_worker_outbox.sql',
       '0015_lifecycle_estado_prioridade.sql',
+      '0016_fase8_minuta_fechamento.sql',
     ]);
 
     const processos = new ProcessoRepository(pool);

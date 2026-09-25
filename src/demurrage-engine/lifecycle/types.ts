@@ -59,6 +59,21 @@ export type DocumentaryStatus = 'MINUTA_PENDENTE' | 'MINUTA_RECEBIDA' | 'NAO_APL
  */
 export type ApuracaoDemurrageStatus = 'ZERO_CONFIRMADO' | 'DEMURRAGE_CONFIRMADA' | 'INDETERMINADA';
 
+/**
+ * Responsabilidade pelo custo de demurrage por contêiner (Fase 8 cria a dimensão
+ * como gate de FINAL; a Fase 11 resolve). Fonte de verdade é o contêiner; um
+ * estado agregado no processo é apenas derivado/cache.
+ *  - NAO_APLICAVEL: sem demurrage;
+ *  - EM_ANALISE: com demurrage confirmada e ainda sem decisão da Fase 11;
+ *  - CONFIRMADA_ROCKET | CONFIRMADA_CLIENTE | DIVIDIDA: decisão da Fase 11.
+ */
+export type Responsabilidade =
+  | 'NAO_APLICAVEL'
+  | 'EM_ANALISE'
+  | 'CONFIRMADA_ROCKET'
+  | 'CONFIRMADA_CLIENTE'
+  | 'DIVIDIDA';
+
 /** Balde de prioridade — Cap. 22 (6 baldes; 1 = mais urgente). */
 export type PrioridadeBalde =
   | 'CRITICA_15' // 22.1
