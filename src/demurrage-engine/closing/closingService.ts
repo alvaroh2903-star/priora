@@ -7,19 +7,22 @@ import { MinutaRepository, Minuta } from '../persistence/minutaRepository';
 import { ClosingEventRepository } from '../persistence/closingEventRepository';
 import { ReaberturaRepository } from '../persistence/reaberturaRepository';
 import { LifecycleRepository } from '../persistence/lifecycleRepository';
+import { ValorApuradoRepository } from '../persistence/valorApuradoRepository';
+import { recalcularApuracaoContainer, recalcularApuracaoProcesso } from '../apuracao/recalcularApuracao';
 
 /**
- * Fase 8 — orquestração do fechamento: minuta (upload → validação/rejeição),
- * effective_return_date (só de minuta VALIDADA), recálculo (relógios + Fase 7),
- * fechamento FINAL (gate de responsabilidade) e reabertura. RBAC: validar/
- * rejeitar/FINAL/reabrir exigem MANAGER/ADMIN. tracking_return_date nunca é
- * apagado. Upload nunca recalcula. Multi-contêiner: cada minuta é de um contêiner.
+ * Fase 8 v1.1 — orquestração do fechamento: minuta (upload → validação/rejeição),
+ * effective_return_date (só de minuta VALIDADA), recálculo (pipeline ÚNICO
+ * transacional fatos→relógios→valores→lifecycle, via recalcularApuracao),
+ * fechamento FINAL (gate de comprovação/responsabilidade/confirmação) e
+ * reabertura. RBAC: validar/rejeitar/FINAL/reabrir exigem MANAGER/ADMIN.
+ * tracking_return_date nunca é apagado. Upload nunca recalcula. Multi-contêiner:
+ * cada minuta é de um contêiner; o recálculo atinge só o contêiner afetado.
  *
- * NOTA de escopo (assunção técnica): "recálculo" aqui re-deriva os RELÓGIOS e o
- * ciclo da Fase 7 com a nova data final (via LifecycleRepository). O recálculo
- * MONETÁRIO de `valores_apurados` depende do orquestrador tarifário (Fase 4/9),
- * inexistente como caminho de produção; a existência de custo (que dirige o gate
- * e a responsabilidade) vem dos relógios (v4.1), não de valores_apurados.
+ * FINAL protegido em profundidade (item 4): guard de aplicação (o orquestrador é
+ * NO-OP em processo FINAL) + guard de banco (migration 0017). No fechamento os
+ * valores ATIVOS transitam OPEN → FINAL (congelados) ANTES de o processo virar
+ * FINAL; a reabertura volta o processo a OPEN e o pipeline recomputa.
  */
 
 export function ehGestor(papel: PapelRbac): boolean {
@@ -37,12 +40,14 @@ export class ClosingService {
   private eventos: ClosingEventRepository;
   private reaberturas: ReaberturaRepository;
   private lifecycle: LifecycleRepository;
+  private valores: ValorApuradoRepository;
 
   constructor(private pool: Pool = getPool()) {
     this.minutas = new MinutaRepository(pool);
     this.eventos = new ClosingEventRepository(pool);
     this.reaberturas = new ReaberturaRepository(pool);
     this.lifecycle = new LifecycleRepository(pool);
+    this.valores = new ValorApuradoRepository(pool);
   }
 
   private async containerInfo(containerId: string) {
@@ -171,16 +176,27 @@ export class ClosingService {
   }
 
   private async recalcular(processoId: string, containerId: string, config: ClosingConfig): Promise<void> {
-    await this.lifecycle.derivarEPersistirProcesso(processoId, config);
+    // Pipeline ÚNICO e transacional: fatos → relógios → valores → lifecycle, com a
+    // MESMA data final. Atinge só o contêiner afetado (a consolidação do processo
+    // é re-derivada dentro do orquestrador).
+    await recalcularApuracaoContainer(this.pool, containerId, { dataReferencia: config.hoje });
     await this.eventos.registrar({
       processoId, containerId, tipoEvento: 'RECALCULO', origem: 'automatico', payload: {},
     });
   }
 
   /**
-   * Fechamento FINAL (MANAGER/ADMIN). Gate (Blueprint 20.1/21.9 + decisão 8):
-   * todos os contêineres devolvidos e nenhum com responsabilidade EM_ANALISE.
-   * Zero demurrage → FINAL; com demurrage → bloqueado enquanto EM_ANALISE.
+   * Fechamento FINAL (MANAGER/ADMIN). Gate (Blueprint 20.1/21.9 + decisão 8 +
+   * clarificações A e item 6), por contêiner:
+   *  - devolvido (effective/tracking return date) senão bloqueia;
+   *  - INDETERMINADA bloqueia (não dá para afirmar zero com segurança);
+   *  - ZERO_CONFIRMADO fecha SEM tarifa e SEM minuta (sem demurrage, sem comprovação);
+   *  - DEMURRAGE_CONFIRMADA exige: responsabilidade != EM_ANALISE; minuta VALIDADA
+   *    do contêiner (comprovação, clarificação A); e cada relógio em demurrage com
+   *    valor ATIVO confirmado ESTIMATED|CONFIRMED (UNAVAILABLE/ESTIMATED_PROVISIONAL
+   *    bloqueiam — item 6).
+   * Os valores ATIVOS transitam OPEN → FINAL ANTES de o processo virar FINAL,
+   * numa transação (atomicidade); depois o guard de banco congela tudo.
    */
   async finalizarProcesso(input: {
     processoId: string; papel: PapelRbac; realizadoPor?: string | null; justificativa?: string | null; config: ClosingConfig;
@@ -192,24 +208,48 @@ export class ClosingService {
 
     const { rows: conts } = await this.pool.query(
       `SELECT id, (effective_return_date IS NOT NULL OR tracking_return_date IS NOT NULL) AS devolvido
-         FROM containers WHERE processo_id = $1`,
+         FROM containers WHERE processo_id = $1 ORDER BY id`,
       [input.processoId],
     );
     if (conts.length === 0) return { ok: false, motivo: 'sem_conteineres' };
     if (conts.some((c) => !c.devolvido)) return { ok: false, motivo: 'conteiner_nao_devolvido' };
+
     for (const c of conts) {
-      const resp = await this.lifecycle.responsabilidadeDoContainer(c.id, input.config);
-      if (resp === 'EM_ANALISE') return { ok: false, motivo: 'responsabilidade_em_analise' };
+      const { facts, responsabilidade } = await this.lifecycle.gateFechamento(c.id, input.config);
+      if (facts.apuracaoDemurrageStatus === 'INDETERMINADA') return { ok: false, motivo: 'apuracao_indeterminada' };
+      if (facts.apuracaoDemurrageStatus === 'ZERO_CONFIRMADO') continue; // fecha sem tarifa/minuta.
+      // DEMURRAGE_CONFIRMADA a partir daqui.
+      if (responsabilidade === 'EM_ANALISE') return { ok: false, motivo: 'responsabilidade_em_analise' };
+      if (!(await this.minutas.temValidada(c.id))) return { ok: false, motivo: 'comprovacao_pendente' };
+      const ativos = await this.valores.ativosDoContainer(c.id);
+      const confirmado = (tipo: 'cliente' | 'rocket'): boolean =>
+        ativos.some((v) => v.relogioTipo === tipo && (v.confirmationStatus === 'ESTIMATED' || v.confirmationStatus === 'CONFIRMED'));
+      const relogioEmDemurrage = (clock: { status: string; diasDemurrage: number }) => clock.status === 'OK' && clock.diasDemurrage >= 1;
+      if (relogioEmDemurrage(facts.clienteClock) && !confirmado('cliente')) return { ok: false, motivo: 'valor_cliente_nao_confirmado' };
+      if (relogioEmDemurrage(facts.rocketClock) && !confirmado('rocket')) return { ok: false, motivo: 'valor_rocket_nao_confirmado' };
     }
 
-    await this.pool.query(
-      `UPDATE processos SET apuracao_status = 'FINAL', fechado_em = now(), fechado_por = $2 WHERE id = $1`,
-      [input.processoId, input.realizadoPor ?? null],
-    );
-    await this.pool.query(
-      `INSERT INTO fechamentos (processo_id, realizado_por, justificativa) VALUES ($1, $2, $3)`,
-      [input.processoId, input.realizadoPor ?? null, input.justificativa ?? null],
-    );
+    // Transição atômica: valores ATIVOS OPEN → FINAL (processo ainda OPEN, guard
+    // permite) e SÓ ENTÃO processo FINAL. Se algo falhar, rollback total.
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      for (const c of conts) await this.valores.finalizarAtivos(client, c.id);
+      await client.query(
+        `UPDATE processos SET apuracao_status = 'FINAL', fechado_em = now(), fechado_por = $2 WHERE id = $1`,
+        [input.processoId, input.realizadoPor ?? null],
+      );
+      await client.query(
+        `INSERT INTO fechamentos (processo_id, realizado_por, justificativa) VALUES ($1, $2, $3)`,
+        [input.processoId, input.realizadoPor ?? null, input.justificativa ?? null],
+      );
+      await client.query('COMMIT');
+    } catch (erro) {
+      await client.query('ROLLBACK');
+      throw erro;
+    } finally {
+      client.release();
+    }
     const reab = await this.reaberturas.abertaDoProcesso(input.processoId);
     await this.eventos.registrar({
       processoId: input.processoId, tipoEvento: reab ? 'REFECHAMENTO' : 'FECHAMENTO_FINAL',
@@ -256,7 +296,11 @@ export class ClosingService {
       payload: { reaberturaId: input.reaberturaId },
     });
     await this.eventos.registrar({ processoId, tipoEvento: 'REABERTURA', origem: 'humano', atorUsuarioId: input.autorizadaPor ?? null, payload: {} });
-    await this.lifecycle.derivarEPersistirProcesso(processoId, input.config);
+    // Processo agora OPEN: o pipeline recomputa relógios + valores + lifecycle. Se
+    // o input não mudou (mesmo input_hash), a idempotência preserva a versão
+    // anterior (clarificação C); se mudou, nasce nova versão OPEN e a anterior fica
+    // SUPERSEDED no histórico.
+    await recalcularApuracaoProcesso(this.pool, processoId, { dataReferencia: input.config.hoje });
     await this.reaberturas.marcarEstado(input.reaberturaId, 'RECALCULADA');
     return { ok: true };
   }

@@ -71,6 +71,19 @@ export class MinutaRepository {
     return rows[0]?.tem === true;
   }
 
+  /**
+   * Existe minuta VALIDADA do contêiner (clarificação A: "comprovação concluída"
+   * no gate de FINAL = minuta VALIDADA do contêiner relevante). Não cria nova
+   * entidade/estado de comprovação — reusa o próprio fluxo da minuta.
+   */
+  async temValidada(containerId: string): Promise<boolean> {
+    const { rows } = await this.pool.query(
+      `SELECT bool_or(estado_minuta = 'VALIDADA') AS tem FROM minutas WHERE container_id = $1`,
+      [containerId],
+    );
+    return rows[0]?.tem === true;
+  }
+
   async marcarValidada(id: string, dataValidada: CivilDate, divergente: boolean, validadaPor: string | null): Promise<void> {
     await this.pool.query(
       `UPDATE minutas SET estado_minuta = 'VALIDADA', data_validada = $2, divergente_do_tracking = $3,

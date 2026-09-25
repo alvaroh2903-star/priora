@@ -71,6 +71,47 @@ export class RelogioRepository {
    * Idempotente: reexecutar com as mesmas entradas reescreve a mesma projeção
    * (mesmo input_hash). Toda a operação roda numa transação com o guard ligado.
    */
+  /**
+   * Núcleo transacional: recalcula sob um client de transação EXTERNA (pipeline).
+   * Pressupõe que o chamador já executou BEGIN e
+   * `SET LOCAL demurrage.relogio_writer = 'dualClockCalculator'` no mesmo client.
+   */
+  async recalcularComClient(client: PoolClient, containerId: string, dataFinal: CivilDate): Promise<RelogioCache[]> {
+    const entradas = await this.lerEntradas(client, containerId);
+    const resultado = calcularDoisRelogios({
+      dischargeDate: entradas.dischargeDate,
+      houseFreeTimeDays: entradas.houseFreeTimeDays,
+      masterFreeTimeDays: entradas.masterFreeTimeDays,
+      finalDate: dataFinal,
+    });
+    const gravados: RelogioCache[] = [];
+    for (const tipo of ['cliente', 'rocket'] as TipoRelogio[]) {
+      const projecao = projetarParaCache(tipo === 'cliente' ? resultado.cliente : resultado.rocket);
+      const inputHash = calcularInputHash({
+        tipo, dischargeDate: entradas.dischargeDate, freeTimeDays: this.freeTimeDoTipo(entradas, tipo), finalDate: dataFinal,
+      });
+      const { rows } = await client.query(
+        `INSERT INTO relogios
+           (container_id, tipo, estado, ultimo_dia_livre, primeiro_dia_demurrage,
+            data_final_apuracao, dias_demurrage, pendencias, motivo,
+            calculated_at, engine_version, input_hash)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, now(), $10, $11)
+         ON CONFLICT (container_id, tipo) DO UPDATE SET
+           estado = EXCLUDED.estado, ultimo_dia_livre = EXCLUDED.ultimo_dia_livre,
+           primeiro_dia_demurrage = EXCLUDED.primeiro_dia_demurrage, data_final_apuracao = EXCLUDED.data_final_apuracao,
+           dias_demurrage = EXCLUDED.dias_demurrage, pendencias = EXCLUDED.pendencias, motivo = EXCLUDED.motivo,
+           calculated_at = now(), engine_version = EXCLUDED.engine_version, input_hash = EXCLUDED.input_hash
+         RETURNING *`,
+        [
+          containerId, tipo, projecao.estado, projecao.ultimoDiaLivre, projecao.primeiroDiaDemurrage,
+          dataFinal, projecao.diasDemurrage, projecao.pendencias, projecao.motivo, TEMPORAL_ENGINE_VERSION, inputHash,
+        ],
+      );
+      gravados.push(mapRow(rows[0]));
+    }
+    return gravados;
+  }
+
   async recalcular(containerId: string, dataFinal: CivilDate): Promise<RelogioCache[]> {
     const client = await this.pool.connect();
     try {

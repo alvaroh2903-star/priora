@@ -71,16 +71,29 @@ export class LifecycleRepository {
       finalDate,
     });
 
-    // Valores (Fase 4): custo + valorCliente + exposicaoRocket.
+    // Valores (Fase 4): valorCliente + exposicaoRocket. Clarificação B: só o motor
+    // do modelo comercial ATUAL do processo é elegível para o cliente — um cálculo
+    // histórico do outro modelo (superseded) nunca é ativo, mas filtramos por
+    // segurança para que jamais concorra no lifecycle/consolidação/desempate.
     const { rows: vr } = await this.pool.query(
-      `SELECT relogio_tipo, total, moeda, confirmation_status, dias_cobrados
+      `SELECT relogio_tipo, motor_comercial, total, moeda, confirmation_status, dias_cobrados
          FROM valores_apurados
         WHERE container_id = $1 AND calculation_status IN ('OPEN', 'FINAL')`,
       [containerId],
     );
-    const melhorValor = (tipo: string): ValorFact => {
+    const { rows: cond } = await this.pool.query(
+      `SELECT cc.termo_tipo FROM processos p
+         JOIN containers c ON c.processo_id = p.id
+         LEFT JOIN condicoes_comerciais cc ON cc.id = p.condicao_comercial_id
+        WHERE c.id = $1`,
+      [containerId],
+    );
+    const motorClienteAplicavel = cond[0]?.termo_tipo === 'embarque' ? 'termo_embarque'
+      : cond[0]?.termo_tipo === 'unico' ? 'termo_unico' : null;
+    const melhorValor = (tipo: 'cliente' | 'rocket'): ValorFact => {
       const candidatos = vr
-        .filter((v) => v.relogio_tipo === tipo && v.total !== null && v.confirmation_status !== 'UNAVAILABLE')
+        .filter((v) => v.relogio_tipo === tipo && v.total !== null && v.confirmation_status !== 'UNAVAILABLE'
+          && (tipo !== 'cliente' || motorClienteAplicavel === null || v.motor_comercial === motorClienteAplicavel))
         .map((v) => ({ total: parseFloat(v.total), moeda: v.moeda as string | null }));
       if (!candidatos.length) return { total: null, moeda: null, disponivel: false };
       const best = candidatos.reduce((a, b) => (b.total > a.total ? b : a));
@@ -167,6 +180,21 @@ export class LifecycleRepository {
     const facts = await this.montarFatos(containerId, config);
     const { rows } = await this.pool.query(`SELECT responsabilidade FROM containers WHERE id = $1`, [containerId]);
     return derivarResponsabilidade(facts.apuracaoDemurrageStatus, rows[0]?.responsabilidade ?? null);
+  }
+
+  /**
+   * Fatos do gate de FINAL (Fase 8 v1.1): existência da demurrage (relógios) +
+   * responsabilidade derivada (stored da Fase 11 senão da existência). Uma única
+   * montagem de fatos por contêiner (sem recomputar duas vezes).
+   */
+  async gateFechamento(
+    containerId: string,
+    config: LifecycleConfig,
+  ): Promise<{ facts: ContainerLifecycleFacts; responsabilidade: Responsabilidade }> {
+    const facts = await this.montarFatos(containerId, config);
+    const { rows } = await this.pool.query(`SELECT responsabilidade FROM containers WHERE id = $1`, [containerId]);
+    const responsabilidade = derivarResponsabilidade(facts.apuracaoDemurrageStatus, rows[0]?.responsabilidade ?? null);
+    return { facts, responsabilidade };
   }
 
   /** Deriva estado + prioridade de um contêiner e persiste (cache). */
