@@ -343,26 +343,56 @@ Cada motor produz um `ValorApurado` com um campo `motorComercial` identificando 
 
 ---
 
-## Fase 7 — Estados/prioridade
+## Fase 7 — Estados e Prioridades (especificação oficial v4, travada)
 
-**Objetivo:** implementar a máquina de estados por contêiner do Cap. 21 (~10 estados, incluindo as faixas de dias 1–6/7–14/15+) e a fila de prioridade de 5 níveis com desempate de 5 critérios do Cap. 22, substituindo a classificação simplificada (`custo_ativo`/`risco`/`pendencia`/`encerrado`/`indefinido`) da V1 **apenas no motor V2** — a V1 continua com sua própria classificação até o corte (ver seção de coexistência).
+**Fonte de verdade:** Blueprint original (`.docx`), Cap. 19, 20, 21, 22, 23, 25, 28. Esta seção é a especificação aprovada e travada (v4). Distingue explicitamente **regra literal do Blueprint** × **regra determinística de implementação**. `prazoProximoThresholdDias` fica **TBD configurável** (nenhum valor arbitrário hardcodado).
 
-**Arquivos/modelos novos:**
-- `src/demurrage-engine/lifecycle/containerState.ts` (máquina de estados do Cap. 21).
-- `src/demurrage-engine/lifecycle/priorityEngine.ts` (5 níveis + 5 critérios de desempate do Cap. 22).
+**Objetivo:** derivar, de forma PURA sobre fatos já persistidos (Fases 1–6), o estado operacional por contêiner (Cap. 21), a prioridade da fila (Cap. 22) e a consolidação por processo (21.10/28.3), substituindo a classificação simplificada da V1 **apenas no motor V2** (V1 intacta).
 
-**Arquivos existentes afetados:** nenhum arquivo da V1.
+### Princípios
+- Camada pura de derivação; não consulta nada externo; não altera a V1. Dois relógios (cliente=House, Rocket=Master) **sempre separados**, nunca agregados. Três dimensões por contêiner: (A) estado operacional, (B) condições concorrentes/badges, (C) estado documental da minuta. Financeiro (HeadCargo, Cap. 27) fora de escopo.
 
-**Migrations:** campo `estado` (enum ampliado) e `prioridade` + `motivoPrioridade` (texto, Cap. 28.5 — "cada card explica por que está na fila... em texto") na entidade Contêiner/Processo.
+### 1. Estados operacionais do contêiner (Cap. 21) — enum de 8
+`MONITORAMENTO_SILENCIOSO` (21.1); `PRAZO_PROXIMO` (21.2, informativo — nunca “Atenção/Crítico”; limiar = parâmetro TBD); `EM_DEMURRAGE_ATENCAO` (21.3, 1–6 dias); `EM_DEMURRAGE_CRITICO` (21.4/21.5, ≥7 dias; `escalationRequired = severidadeDias ≥ 15`, flag e não estado novo); `PENDENCIA_DE_DADOS` (21.6, só quando nenhum relógio válido está vencido); `TRACKING_DESATUALIZADO` (21.7, cadência vencida e nenhum estado mais relevante; nunca congela relógios); `DEVOLVIDO_AGUARDANDO_TRATAMENTO` (21.8, Empty Return com custo ou responsabilidade em análise); `CONCLUIDO_PARA_ROCKET` (21.9, Empty Return sem custo e sem ação restante; minuta pendente só em `documentaryStatus`). **Não** existem `CRITICO_ESCALADA_15` nem `DEVOLVIDO_AGUARDANDO_COMPROVACAO`.
 
-**Dependências:** Fases 3 (dois relógios), 6 (tracking desatualizado como um dos estados depende de saber a cadência esperada).
+### 2. Condições concorrentes (badges, não exclusivas)
+`clienteEmDemurrage`, `rocketExposta`, `trackingDesatualizado`, `pendenciaDadosCliente`/`pendenciaDadosRocket`, `escalationRequired`, `divergenciaValor`, `responsabilidadeEmAnalise`. Badges não trocam o estado principal; reforçam prioridade e aparecem no card.
 
-**Testes obrigatórios:**
-- Transições de estado cobrindo os ~10 estados do Cap. 21, incluindo os limiares exatos (dia 6→7 crítico, dia 14→15 escalada).
-- Ordenação da fila reproduzindo o exemplo de desempate do Cap. 22.7 (dias de demurrage > exposição Rocket existente > maior valor > tracking mais antigo/falha > menor tempo até vencimento).
-- "Prazo próximo" nunca é rotulado como "Atenção"/"Crítico" (distinção explícita exigida pelo Cap. 21.2).
+### 3. Dimensão documental (Cap. 19/20.3)
+`documentaryStatus ∈ { MINUTA_PENDENTE, MINUTA_RECEBIDA, NAO_APLICAVEL }`, ortogonal ao estado. `MINUTA_PENDENTE` sozinha **nunca** mantém processo sem custo em `DEVOLVIDO_AGUARDANDO_TRATAMENTO`: Empty Return + sem custo + sem outra ação = `CONCLUIDO_PARA_ROCKET`. Validação da minuta / `effective_return_date` são da Fase 8.
 
-**Condição de aceite:** fixture com processos variados produz a mesma ordenação e os mesmos rótulos de prioridade que os exemplos do Cap. 22 do Blueprint.
+### 4. Condição → estado principal (determinístico)
+1. **Empty Return** encerra o acúmulo dos dois relógios. Então: custo>0 **ou** responsabilidade em análise → `DEVOLVIDO_AGUARDANDO_TRATAMENTO`; senão → `CONCLUIDO_PARA_ROCKET`.
+2. **Sem Empty Return**: relógio válido (`OK`) já vencido ⇒ existe demurrage. `severidadeDias = max(diasCliente, diasRocket)` entre relógios OK vencidos. ≥7 → `EM_DEMURRAGE_CRITICO` (escalation ≥15); 1–6 → `EM_DEMURRAGE_ATENCAO` (outro relógio `PENDING`/`INVALID` → badge de pendência, não troca o principal). `severidadeDias=0` (nenhum relógio válido vencido): relógio necessário `PENDING`/`INVALID` → `PENDENCIA_DE_DADOS`; dentro do FT e dentro do limiar (§7) → `PRAZO_PROXIMO`; cadência vencida (§9) e nada acima → `TRACKING_DESATUALIZADO`; senão → `MONITORAMENTO_SILENCIOSO`. `PENDENCIA_DE_DADOS` é principal **só** sem relógio vencido.
+
+### 5. Prioridade da fila (Cap. 22) — 6 baldes (ordem = ordem do Blueprint)
+1 Crítica 15+ (22.1); 2 Crítica 7–14 (22.2); 3 Atenção 1–6 (22.3); 4 Devolvido c/ tratamento pendente (22.4); 5 Prazo próximo/preventivo (22.5) — inclui `PENDENCIA_DE_DADOS` principal e `TRACKING_DESATUALIZADO` principal; 6 Monitoramento silencioso (22.6, fora da fila; `CONCLUIDO_PARA_ROCKET` também sai). Baldes 1 e 2 compartilham o rótulo visual “Crítico”, mas são faixas distintas. **Promoção intra-balde — apenas literal (22.1):** só em 15+, `trackingDesatualizado` **ou** `dado crítico ausente` sobe ao topo do balde, antes dos desempates. Sem promoção em 7–14 e sem toggle nesta V1.
+
+### 6. Desempate (Cap. 22.7) — 5 critérios, ordem literal (dentro do balde, após a promoção 15+)
+1. maior quantidade de dias de demurrage; 2. existência de exposição da Rocket; 3. **maior valor acumulado / exposição — contextual, condicionado ao #2** (ambos com exposição → compara `exposicaoRocket`; nenhum com exposição → compara `valorCliente`; nunca cruza `exposicaoRocket`×`valorCliente`; só mesma moeda; moedas diferentes sem conversão oficial com taxa/data/fonte → empate → #4; `null`/`UNAVAILABLE`/não confiável → empate → #4; nunca tratar indisponível como zero); 4. tracking mais antigo ou falha técnica ativa; 5. menor tempo até o próximo vencimento, quando ainda dentro do prazo. **Regra determinística de implementação (não literal):** valores não aplicáveis não alteram a ordem (não em demurrage=0 dias; sem exposição ranqueia abaixo; nunca consultado = “mais antigo”, falha ativa vence “apenas antigo”; já vencido não participa do #5); empate final → ordenação estável por identificador do contêiner (reprodutibilidade dos testes).
+
+### 7. Limiar de `PRAZO_PROXIMO` — parâmetro TBD
+`prazoProximoThresholdDias` é parâmetro nomeado, **sem default arbitrário**, não derivado dos “4 dias” (lembrete pós-Gate Out) nem de D+5/D+9/D+13/D+17. Enquanto indefinido, `PRAZO_PROXIMO` não é emitido; dentro do FT o contêiner fica `MONITORAMENTO_SILENCIOSO` (ou `TRACKING_DESATUALIZADO` se a cadência estiver vencida).
+
+### 8. Dois relógios / severidade
+Preservados individualmente (`diasCliente`, `diasRocket`, `valorCliente`, `exposicaoRocket`, `ultimoDiaLivreCliente`, `ultimoDiaLivreRocket`, `clienteEmDemurrage`, `rocketExposta`). A severidade do card (faixa) usa o relógio mais avançado (`max` de dias vencidos), sem relógio agregado; um relógio nunca contamina o outro.
+
+### 9. Tracking desatualizado — operacional × técnico
+Técnico (Fase 6): `ATIVO`/`SUSPENSO_30_DIAS`/incidente/última resposta. Operacional `TRACKING_DESATUALIZADO` = consulta esperada pela `cadencePolicy` (janela devida) não atendida; nunca congela relógios. `SUSPENSO_30_DIAS` **não** implica desatualizado (na suspensão `proximaConsulta = null`, sem expectativa não atendida).
+
+### 10. Contêiner → processo (Cap. 21.10 / 28.3)
+Contêiner-líder = o de maior prioridade do processo. `estadoProcesso` = estado do líder (concluído nunca mascara ativo); `prioridadeProcesso` = prioridade do líder; `motivoProcesso` (texto, 28.5) + referência ao contêiner/fato causador; card mostra a composição e abre para o detalhe por contêiner.
+
+### 11. Motivo da prioridade (Cap. 28.5)
+Texto determinístico (ex.: “Rocket já exposta”, “Cliente em demurrage (N dias)”, “Vencimento próximo”, “Tracking desatualizado”, “House Free Time ausente”, “Responsabilidade em análise”). **Sem “Aguardando pagamento”** (financeiro fora do escopo). A cor é só reforço; o significado sempre em texto.
+
+**Arquivos/modelos novos:** `lifecycle/types.ts`, `lifecycle/containerState.ts`, `lifecycle/priorityEngine.ts`, `lifecycle/processConsolidation.ts` (todos puros) + `persistence/lifecycleRepository.ts` (monta fatos e persiste os derivados). **Arquivos da V1 afetados:** nenhum.
+
+**Migration:** aditiva `0015` — em `containers`: `estado`, `estado_badges`, `documentary_status`, `escalation_required`, `severidade_dias`, `prioridade_balde`, `prioridade_motivo` (todos nullable, CHECK nos enums); em `processos`: `estado_mais_relevante`, `prioridade_balde`, `prioridade_motivo`, `container_lider_id`. `prazoProximoThresholdDias` é configuração da engine (não coluna, não hardcode).
+
+**Testes-gabarito:** todos os exemplos do §12 da especificação; limiares 6→7 e 15 (escalation); “prazo próximo nunca é Atenção”; relógio válido vencido ⇒ `EM_DEMURRAGE_*` + badge de pendência; `PENDENCIA_DE_DADOS` principal só sem relógio vencido; `TRACKING_DESATUALIZADO` só com cadência vencida e nunca sob suspensão; promoção literal 15+; desempate #3 contextual; consolidação de processo misto; V1 intacta.
+
+**Condição de aceite:** fixtures produzem os estados, baldes e a ordenação previstos na especificação v4.
 
 **Risco de regressão:** nulo para a V1.
 
