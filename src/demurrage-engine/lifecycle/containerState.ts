@@ -1,5 +1,22 @@
 import { toOrdinal } from '../temporal/civilDate';
-import { Badge, ContainerLifecycleFacts, ContainerStateResult, EstadoOperacional } from './types';
+import { ApuracaoDemurrageStatus, Badge, ClockFact, ContainerLifecycleFacts, ContainerStateResult, EstadoOperacional } from './types';
+
+/**
+ * Existência da demurrage a partir dos DOIS relógios (v4.1), função PURA.
+ * Os relógios determinam se houve demurrage; `valores_apurados` determina só o
+ * valor/estado financeiro (nunca a existência). Regras da especificação v4.1:
+ *  - algum relógio válido (OK) com diasDemurrage>0 → DEMURRAGE_CONFIRMADA;
+ *  - nenhum relógio vencido, mas algum relógio necessário PENDING/INVALID → INDETERMINADA;
+ *  - todos os relógios OK e nenhum com dias>0 → ZERO_CONFIRMADO.
+ */
+export function derivarApuracaoDemurrageStatus(cliente: ClockFact, rocket: ClockFact): ApuracaoDemurrageStatus {
+  const algumVencido =
+    (cliente.status === 'OK' && cliente.diasDemurrage >= 1) ||
+    (rocket.status === 'OK' && rocket.diasDemurrage >= 1);
+  if (algumVencido) return 'DEMURRAGE_CONFIRMADA';
+  const algumIndeterminado = cliente.status !== 'OK' || rocket.status !== 'OK';
+  return algumIndeterminado ? 'INDETERMINADA' : 'ZERO_CONFIRMADO';
+}
 
 /**
  * Fase 7 — estado operacional do contêiner (Cap. 21), função PURA.
@@ -54,6 +71,7 @@ function motivoDe(estado: EstadoOperacional, facts: ContainerLifecycleFacts, bad
       break;
     case 'DEVOLVIDO_AGUARDANDO_TRATAMENTO':
       partes.push('Devolvido — tratamento pendente');
+      if (facts.apuracaoDemurrageStatus === 'INDETERMINADA') partes.push('apuração incompleta');
       break;
     case 'CONCLUIDO_PARA_ROCKET':
       partes.push('Concluído para a Rocket');
@@ -88,11 +106,14 @@ export function derivarEstadoContainer(facts: ContainerLifecycleFacts): Containe
   let escalationRequired = false;
 
   if (facts.emptyReturn) {
-    // Empty Return encerra o acúmulo (Cap. 19/23). Minuta pendente sozinha NÃO
-    // segura em tratamento (§3): só custo ou responsabilidade em análise.
-    estado = facts.custo || facts.responsabilidadeEmAnalise
-      ? 'DEVOLVIDO_AGUARDANDO_TRATAMENTO'
-      : 'CONCLUIDO_PARA_ROCKET';
+    // Empty Return encerra o acúmulo (Cap. 19/23). v4.1: só CONCLUI para a Rocket
+    // com demurrage ZERO **confirmada** e sem responsabilidade em análise. Demurrage
+    // confirmada OU apuração indeterminada (dado necessário PENDING/INVALID) permanece
+    // em tratamento — nunca concluir com apuração incompleta. Minuta pendente sozinha
+    // (documentaryStatus) continua sem impedir a conclusão (ortogonal).
+    const concluivel =
+      facts.apuracaoDemurrageStatus === 'ZERO_CONFIRMADO' && !facts.responsabilidadeEmAnalise;
+    estado = concluivel ? 'CONCLUIDO_PARA_ROCKET' : 'DEVOLVIDO_AGUARDANDO_TRATAMENTO';
   } else if (severidadeDias >= 1) {
     // Relógio válido vencido ⇒ existe demurrage; o outro relógio ausente vira badge.
     estado = severidadeDias >= 7 ? 'EM_DEMURRAGE_CRITICO' : 'EM_DEMURRAGE_ATENCAO';
@@ -125,6 +146,7 @@ export function derivarEstadoContainer(facts: ContainerLifecycleFacts): Containe
     severidadeDias,
     clienteEmDemurrage,
     rocketExposta,
+    apuracaoDemurrageStatus: facts.apuracaoDemurrageStatus,
     badges,
     documentaryStatus: facts.documentaryStatus,
     motivo: motivoDe(estado, facts, badges, severidadeDias),

@@ -46,6 +46,19 @@ export type Badge =
 /** Estado documental do cliente (Cap. 19/20.3), ortogonal ao operacional. */
 export type DocumentaryStatus = 'MINUTA_PENDENTE' | 'MINUTA_RECEBIDA' | 'NAO_APLICAVEL';
 
+/**
+ * Existência da demurrage por contêiner (v4.1) — substitui o antigo booleano
+ * `custo`. Os RELÓGIOS determinam se a demurrage existiu; `valores_apurados`
+ * determina só o VALOR/estado de confirmação financeira, nunca a existência.
+ *  - ZERO_CONFIRMADO: todos os relógios necessários OK e nenhum com diasDemurrage>0.
+ *  - DEMURRAGE_CONFIRMADA: ao menos um relógio válido com diasDemurrage>0
+ *    (tarifa UNAVAILABLE, tipo sem tarifa ou ausência de valores_apurados NÃO
+ *    apagam a existência dos dias).
+ *  - INDETERMINADA: nenhum relógio válido confirma demurrage, porém algum dado
+ *    necessário está PENDING/INVALID — não dá para afirmar com segurança que foi zero.
+ */
+export type ApuracaoDemurrageStatus = 'ZERO_CONFIRMADO' | 'DEMURRAGE_CONFIRMADA' | 'INDETERMINADA';
+
 /** Balde de prioridade — Cap. 22 (6 baldes; 1 = mais urgente). */
 export type PrioridadeBalde =
   | 'CRITICA_15' // 22.1
@@ -93,8 +106,8 @@ export interface ContainerLifecycleFacts {
   rocketClock: ClockFact;
   /** Empty Return detectado (tracking_return_date ou effective_return_date). */
   emptyReturn: boolean;
-  /** Existe custo de demurrage acumulado (dias cobrados/total > 0). */
-  custo: boolean;
+  /** Existência da demurrage (v4.1), derivada dos relógios — ver ApuracaoDemurrageStatus. */
+  apuracaoDemurrageStatus: ApuracaoDemurrageStatus;
   responsabilidadeEmAnalise: boolean;
   divergenciaValor: boolean;
   documentaryStatus: DocumentaryStatus;
@@ -117,6 +130,7 @@ export interface ContainerStateResult {
   severidadeDias: number;
   clienteEmDemurrage: boolean;
   rocketExposta: boolean;
+  apuracaoDemurrageStatus: ApuracaoDemurrageStatus;
   badges: Badge[];
   documentaryStatus: DocumentaryStatus;
   motivo: string;

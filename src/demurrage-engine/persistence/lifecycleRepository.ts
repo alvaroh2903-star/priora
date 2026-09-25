@@ -4,7 +4,7 @@ import { CivilDate } from '../temporal/civilDate';
 import { calcularDoisRelogios } from '../temporal/dualClockCalculator';
 import { FreeTimeClockResult } from '../temporal/freeTimeClock';
 import { avaliarCadencia, deveConsultarAgora, CadenciaInput } from '../scheduler/cadencePolicy';
-import { derivarEstadoContainer } from '../lifecycle/containerState';
+import { derivarEstadoContainer, derivarApuracaoDemurrageStatus } from '../lifecycle/containerState';
 import { derivarPrioridadeContainer } from '../lifecycle/priorityEngine';
 import { consolidarProcesso } from '../lifecycle/processConsolidation';
 import { ClockFact, ContainerLifecycle, ContainerLifecycleFacts, ProcessoLifecycleResult, ValorFact } from '../lifecycle/types';
@@ -14,8 +14,9 @@ import { ClockFact, ContainerLifecycle, ContainerLifecycleFacts, ProcessoLifecyc
  * persistência dos derivados (cache regenerável). As DECISÕES ficam nas engines
  * puras; aqui só se lê fato e se grava resultado.
  *
- * Suposições técnicas (não alteram regra funcional da v4; documentadas):
- *  - `custo` = existe `valores_apurados` ativo (OPEN/FINAL) com dias_cobrados > 0.
+ * Suposições técnicas (não alteram regra funcional da v4.1; documentadas):
+ *  - `apuracaoDemurrageStatus` (v4.1) é derivado dos RELÓGIOS (não de valores_apurados):
+ *    ver `derivarApuracaoDemurrageStatus`. valores_apurados NÃO decide se houve demurrage.
  *  - `valorCliente`/`exposicaoRocket` = o valor ativo de maior total por relógio,
  *    com `disponivel=false` quando total é NULL ou confirmation_status='UNAVAILABLE'.
  *  - `responsabilidadeEmAnalise` e `divergenciaValor` = false (sem fonte na Fase 7;
@@ -75,7 +76,6 @@ export class LifecycleRepository {
         WHERE container_id = $1 AND calculation_status IN ('OPEN', 'FINAL')`,
       [containerId],
     );
-    const custo = vr.some((v) => Number(v.dias_cobrados) > 0);
     const melhorValor = (tipo: string): ValorFact => {
       const candidatos = vr
         .filter((v) => v.relogio_tipo === tipo && v.total !== null && v.confirmation_status !== 'UNAVAILABLE')
@@ -121,13 +121,16 @@ export class LifecycleRepository {
     // foi atendida. Suspensão (30d) não conta: nela a cadência não prevê consulta.
     const cadenciaVencida = !suspenso && ultimaConsultaValida !== null && deveConsultarAgora(cadInput, ultimaConsultaValida);
 
+    const clienteClock = clockFact(clocks.cliente);
+    const rocketClock = clockFact(clocks.rocket);
     return {
       containerId,
       hoje: config.hoje,
-      clienteClock: clockFact(clocks.cliente),
-      rocketClock: clockFact(clocks.rocket),
+      clienteClock,
+      rocketClock,
       emptyReturn,
-      custo,
+      // Existência da demurrage vem dos RELÓGIOS (v4.1), nunca de valores_apurados.
+      apuracaoDemurrageStatus: derivarApuracaoDemurrageStatus(clienteClock, rocketClock),
       responsabilidadeEmAnalise: false,
       divergenciaValor: false,
       documentaryStatus: emptyReturn ? 'MINUTA_PENDENTE' : 'NAO_APLICAVEL',

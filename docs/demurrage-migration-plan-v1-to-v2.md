@@ -343,9 +343,16 @@ Cada motor produz um `ValorApurado` com um campo `motorComercial` identificando 
 
 ---
 
-## Fase 7 — Estados e Prioridades (especificação oficial v4, travada)
+## Fase 7 — Estados e Prioridades (especificação oficial v4.1, travada)
 
-**Fonte de verdade:** Blueprint original (`.docx`), Cap. 19, 20, 21, 22, 23, 25, 28. Esta seção é a especificação aprovada e travada (v4). Distingue explicitamente **regra literal do Blueprint** × **regra determinística de implementação**. `prazoProximoThresholdDias` fica **TBD configurável** (nenhum valor arbitrário hardcodado).
+**Fonte de verdade:** Blueprint original (`.docx`), Cap. 19, 20, 21, 22, 23, 25, 28. Esta seção é a especificação aprovada e travada (v4.1). Distingue explicitamente **regra literal do Blueprint** × **regra determinística de implementação**. `prazoProximoThresholdDias` fica **TBD configurável** (nenhum valor arbitrário hardcodado).
+
+**Correção v4.1 (apuração de demurrage após Empty Return):** o antigo booleano `custo` conflacionava “custo zero **confirmado**” com “custo **indeterminado**” (apuração incompleta) — ambos resultavam em `custo=false` e concluíam para a Rocket. Substituído por **`apuracaoDemurrageStatus = ZERO_CONFIRMADO | DEMURRAGE_CONFIRMADA | INDETERMINADA`**, derivado dos **relógios** (nunca de `valores_apurados`):
+- `ZERO_CONFIRMADO`: todos os relógios necessários OK e nenhum com `diasDemurrage > 0`.
+- `DEMURRAGE_CONFIRMADA`: ao menos um relógio válido com `diasDemurrage > 0` — **independentemente** de haver valor monetário calculável (tarifa `UNAVAILABLE`, tipo sem tarifa ou ausência de `valores_apurados` **não** apagam a existência dos dias).
+- `INDETERMINADA`: nenhum relógio válido confirma demurrage, porém algum dado necessário está `PENDING`/`INVALID` — não dá para afirmar com segurança que foi zero.
+
+Ramo Empty Return (v4.1): `DEMURRAGE_CONFIRMADA` → `DEVOLVIDO_AGUARDANDO_TRATAMENTO`; `INDETERMINADA` → `DEVOLVIDO_AGUARDANDO_TRATAMENTO` (nunca concluir com apuração incompleta); `ZERO_CONFIRMADO` sem outra ação → `CONCLUIDO_PARA_ROCKET`; `responsabilidadeEmAnalise = true` → `DEVOLVIDO_AGUARDANDO_TRATAMENTO` independentemente do anterior. `documentaryStatus` permanece ortogonal; `MINUTA_PENDENTE` sozinha continua **sem** impedir `CONCLUIDO_PARA_ROCKET`. **Princípio:** os relógios determinam a existência da demurrage; `valores_apurados` determina o valor/estado de confirmação financeira, não se a demurrage existiu.
 
 **Objetivo:** derivar, de forma PURA sobre fatos já persistidos (Fases 1–6), o estado operacional por contêiner (Cap. 21), a prioridade da fila (Cap. 22) e a consolidação por processo (21.10/28.3), substituindo a classificação simplificada da V1 **apenas no motor V2** (V1 intacta).
 
@@ -362,7 +369,7 @@ Cada motor produz um `ValorApurado` com um campo `motorComercial` identificando 
 `documentaryStatus ∈ { MINUTA_PENDENTE, MINUTA_RECEBIDA, NAO_APLICAVEL }`, ortogonal ao estado. `MINUTA_PENDENTE` sozinha **nunca** mantém processo sem custo em `DEVOLVIDO_AGUARDANDO_TRATAMENTO`: Empty Return + sem custo + sem outra ação = `CONCLUIDO_PARA_ROCKET`. Validação da minuta / `effective_return_date` são da Fase 8.
 
 ### 4. Condição → estado principal (determinístico)
-1. **Empty Return** encerra o acúmulo dos dois relógios. Então: custo>0 **ou** responsabilidade em análise → `DEVOLVIDO_AGUARDANDO_TRATAMENTO`; senão → `CONCLUIDO_PARA_ROCKET`.
+1. **Empty Return** encerra o acúmulo dos dois relógios. Então (v4.1): `ZERO_CONFIRMADO` **e** sem responsabilidade em análise → `CONCLUIDO_PARA_ROCKET`; `DEMURRAGE_CONFIRMADA`, `INDETERMINADA` **ou** responsabilidade em análise → `DEVOLVIDO_AGUARDANDO_TRATAMENTO` (nunca concluir com apuração incompleta).
 2. **Sem Empty Return**: relógio válido (`OK`) já vencido ⇒ existe demurrage. `severidadeDias = max(diasCliente, diasRocket)` entre relógios OK vencidos. ≥7 → `EM_DEMURRAGE_CRITICO` (escalation ≥15); 1–6 → `EM_DEMURRAGE_ATENCAO` (outro relógio `PENDING`/`INVALID` → badge de pendência, não troca o principal). `severidadeDias=0` (nenhum relógio válido vencido): relógio necessário `PENDING`/`INVALID` → `PENDENCIA_DE_DADOS`; dentro do FT e dentro do limiar (§7) → `PRAZO_PROXIMO`; cadência vencida (§9) e nada acima → `TRACKING_DESATUALIZADO`; senão → `MONITORAMENTO_SILENCIOSO`. `PENDENCIA_DE_DADOS` é principal **só** sem relógio vencido.
 
 ### 5. Prioridade da fila (Cap. 22) — 6 baldes (ordem = ordem do Blueprint)
