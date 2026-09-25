@@ -42,6 +42,17 @@ function diasDoRelogio(r: { status: string; diasDemurrage?: number }): number {
   return r.status === 'OK' ? (r as any).diasDemurrage : 0;
 }
 
+/**
+ * Resultado UNAVAILABLE quando NÃO há tabela aplicável (gap 5): sem tabelaId/versao
+ * fabricados (''/0). tabelaId=null, versaoTabela=null e o motivo real da ausência.
+ */
+function unavailable(motor: MotorComercial, motivo: string): MotorResult {
+  return {
+    motorComercial: motor, confirmationStatus: 'UNAVAILABLE', total: null, moeda: null,
+    diasCobrados: null, faixasAplicadas: [], dayCountBasisAplicada: null, tabelaId: null, versaoTabela: null, motivo,
+  };
+}
+
 export async function recalcularApuracaoContainer(
   poolOrClient: Pool,
   containerId: string,
@@ -91,26 +102,31 @@ export async function recalcularApuracaoContainer(
     const equipamento: string | null = c.equipamento ?? null;
 
     // 2a) Cliente — modelo único conforme a condição comercial.
-    if (clocks.cliente.status === 'OK' && clocks.cliente.diasDemurrage >= 1) {
-      const diasCliente = clocks.cliente.diasDemurrage;
-      const primeiroDia = clocks.cliente.primeiroDiaDemurrage;
+    const clocksCliente = clocks.cliente;
+    if (clocksCliente.status === 'OK' && clocksCliente.diasDemurrage >= 1) {
+      const diasCliente = clocksCliente.diasDemurrage;
+      const primeiroDia = clocksCliente.primeiroDiaDemurrage;
       let res: MotorResult | null = null;
       if (c.termo_tipo === 'embarque') {
         const tabela = c.condicao_tabela_id ? await tariffs.buscarPorId(c.condicao_tabela_id) : null;
-        res = calcularTermoPorEmbarque({
-          equipamentoNormalizado: equipamento, diasDemurrageCliente: diasCliente,
-          faixas: tabela?.faixas ?? [], tabelaId: tabela?.id ?? '', versaoTabela: tabela?.versao ?? 0,
-        });
+        // Gap 5: sem tabela aplicável → UNAVAILABLE com tabelaId/versao NULL e motivo real (nunca ''/0).
+        res = tabela
+          ? calcularTermoPorEmbarque({
+              equipamentoNormalizado: equipamento, diasDemurrageCliente: diasCliente,
+              faixas: tabela.faixas, tabelaId: tabela.id, versaoTabela: tabela.versao,
+            })
+          : unavailable('termo_embarque', 'TARIFF_TABLE_NOT_FOUND');
       } else if (c.termo_tipo === 'unico') {
         const sel = await tariffs.selecionarVigente({
           tipo: 'rocket_cliente', organizationId: c.organization_id, termoComercial: 'unico', referenceDate: primeiroDia,
         });
         const t: TabelaResolvida | null = sel.tabela;
-        res = calcularTermoUnico({
-          equipamentoNormalizado: equipamento, freeTimeDaysCliente: c.house_free_time_days ?? 0, diasDemurrageCliente: diasCliente,
-          faixas: t?.faixas ?? [], dayCountBasis: t?.dayCountBasis ?? 'since_discharge_absolute',
-          qualidadeFonte: t?.qualidadeFonte ?? 'OFICIAL_VALIDADA', tabelaId: t?.id ?? '', versaoTabela: t?.versao ?? 0,
-        });
+        res = t
+          ? calcularTermoUnico({
+              equipamentoNormalizado: equipamento, freeTimeDaysCliente: c.house_free_time_days ?? 0, diasDemurrageCliente: diasCliente,
+              faixas: t.faixas, dayCountBasis: t.dayCountBasis, qualidadeFonte: t.qualidadeFonte, tabelaId: t.id, versaoTabela: t.versao,
+            })
+          : unavailable('termo_unico', sel.motivo ?? 'TARIFF_VERSION_NOT_PROVEN');
       }
       if (res) {
         await persistir(client, valores, containerId, 'cliente', res, {
@@ -119,6 +135,9 @@ export async function recalcularApuracaoContainer(
         // Clarificação B: só o motor atual do cliente fica ativo.
         await valores.supersederClienteDeOutroModelo(client, containerId, res.motorComercial);
       }
+    } else {
+      // Gap 4: relógio do cliente sem demurrage → nenhum valor positivo continua ativo.
+      await valores.supersederRelogio(client, containerId, 'cliente');
     }
 
     // 2b) Exposição Rocket — regra da Fase 4 (inalterada): tabela do armador por descarga.
@@ -127,19 +146,28 @@ export async function recalcularApuracaoContainer(
         tipo: 'armador', armadorId: c.armador_id, referenceDate: c.discharge_date ?? finalDate,
       });
       const t: TabelaResolvida | null = sel.tabela;
-      const res = calcularExposicaoRocket({
-        equipamentoNormalizado: equipamento, freeTimeDaysMaster: c.master_free_time_days ?? 0,
-        diasDemurrageRocket: clocks.rocket.diasDemurrage, faixas: t?.faixas ?? [],
-        dayCountBasis: t?.dayCountBasis ?? 'since_discharge_absolute', qualidadeFonte: t?.qualidadeFonte ?? 'OFICIAL_VALIDADA',
-        tabelaId: t?.id ?? '', versaoTabela: t?.versao ?? 0,
-      });
+      // Gap 5: sem tabela do armador → UNAVAILABLE com tabelaId/versao NULL e motivo real.
+      const res = t
+        ? calcularExposicaoRocket({
+            equipamentoNormalizado: equipamento, freeTimeDaysMaster: c.master_free_time_days ?? 0,
+            diasDemurrageRocket: clocks.rocket.diasDemurrage, faixas: t.faixas,
+            dayCountBasis: t.dayCountBasis, qualidadeFonte: t.qualidadeFonte, tabelaId: t.id, versaoTabela: t.versao,
+          })
+        : unavailable('exposicao_armador', sel.motivo ?? 'TARIFF_TABLE_NOT_FOUND');
       await persistir(client, valores, containerId, 'rocket', res, {
         equipamento, freeTimeDays: c.master_free_time_days ?? null, diasDemurrage: clocks.rocket.diasDemurrage, finalDate,
       });
+    } else {
+      // Gap 4: relógio Rocket sem exposição → nenhum valor positivo continua ativo.
+      await valores.supersederRelogio(client, containerId, 'rocket');
     }
 
-    // 3) Lifecycle/prioridade (consolidação do processo) — mesma transação/data.
-    await new LifecycleRepository(client as unknown as Pool).derivarEPersistirProcesso(c.processo_id, { hoje: config.dataReferencia });
+    // 3) Lifecycle/prioridade — deriva SÓ o contêiner afetado (relógios já
+    // projetados nesta transação) e consolida o processo a partir dos estados JÁ
+    // derivados dos demais (não recalcula relógios/lifecycle de B).
+    await new LifecycleRepository(client as unknown as Pool).derivarContainerEConsolidar(
+      containerId, c.processo_id, { hoje: config.dataReferencia },
+    );
 
     await client.query('COMMIT');
     return { skipped: null, containerId };

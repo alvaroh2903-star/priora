@@ -131,8 +131,9 @@ export class ClosingService {
         origem: 'humano', atorUsuarioId: input.validadaPor ?? null,
         payload: { minutaId: m.id, dataValidada: r.dataValidada, documentalApenas: true },
       });
-      // Só re-deriva o documentaryStatus (sem mudar datas/valores da apuração fechada).
-      await this.lifecycle.derivarEPersistirProcesso(ci.processo_id, input.config);
+      // Só re-deriva o documentaryStatus do contêiner (cache-only: relógios/valores
+      // da apuração FINAL permanecem congelados; nada é recalculado).
+      await this.lifecycle.derivarContainerEConsolidar(m.containerId, ci.processo_id, input.config);
       return { ok: true, resultado: 'validada', dataValidada: r.dataValidada, divergente };
     }
 
@@ -213,6 +214,14 @@ export class ClosingService {
     );
     if (conts.length === 0) return { ok: false, motivo: 'sem_conteineres' };
     if (conts.some((c) => !c.devolvido)) return { ok: false, motivo: 'conteiner_nao_devolvido' };
+
+    // Projeta a apuração corrente de cada contêiner (relógios + valores + lifecycle)
+    // ANTES do gate: o gate consome os relógios/valores persistidos (v1.2), então o
+    // que for congelado no FINAL é exatamente o estado atual. Processo OPEN → não é
+    // no-op; idempotente por input_hash.
+    for (const c of conts) {
+      await recalcularApuracaoContainer(this.pool, c.id, { dataReferencia: input.config.hoje });
+    }
 
     for (const c of conts) {
       const { facts, responsabilidade } = await this.lifecycle.gateFechamento(c.id, input.config);

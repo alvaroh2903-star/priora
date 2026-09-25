@@ -5,6 +5,7 @@ import { TrackingRepository, TipoEvento, FetchStatus } from '../persistence/trac
 import { TrackingTargetRepository, TrackingTarget } from '../persistence/trackingTargetRepository';
 import { dedupeHash } from './dedupe';
 import { TrackingContainerLike, TrackingEnrichResult } from '../sources/armadorTrackingSource';
+import { recalcularApuracaoContainer } from '../apuracao/recalcularApuracao';
 
 /**
  * Ingestão do resultado da API central de tracking (Fase 5).
@@ -140,6 +141,10 @@ export async function ingestTrackingResult(input: IngestInput): Promise<IngestRe
 
   // 2) Matriz de promoção por campo — só para os contêineres vinculados ao target.
   const promocoes: PromocaoAplicada[] = [];
+  // Contêineres cujo FATO de cálculo foi efetivamente promovido → precisam passar
+  // pelo pipeline (relógios + valores + lifecycle). Só descarga (âncora) e Empty
+  // Return (data final) mudam o cálculo; Gate Out não entra na fórmula temporal.
+  const afetadosCalculo = new Set<string>();
   const vinculados = await targets.containersForTarget(target.id);
   for (const { containerId, organizationId, rc } of casarContainers(result, vinculados)) {
     // Descarga → fonte de verdade → promove.
@@ -151,6 +156,7 @@ export async function ingestTrackingResult(input: IngestInput): Promise<IngestRe
         }),
       );
       promocoes.push({ containerId, campo: 'dischargeDate', valor: rc.dischargeDate, outcome: out ? out.outcome : 'ignorada' });
+      if (out?.outcome === 'promovida') afetadosCalculo.add(containerId);
     }
     // Gate Out (retirada do cheio) → promove quando o evento é inequívoco (já filtrado ≥ descarga).
     if (rc.gateOut) {
@@ -171,6 +177,7 @@ export async function ingestTrackingResult(input: IngestInput): Promise<IngestRe
         }),
       );
       promocoes.push({ containerId, campo: 'trackingReturnDate', valor: rc.emptyReturn, outcome: out ? out.outcome : 'ignorada' });
+      if (out?.outcome === 'promovida') afetadosCalculo.add(containerId);
     }
     // Tipo de equipamento → EVIDÊNCIA, nunca sobrescreve o Master/MBL.
     if (rc.tipo) {
@@ -185,6 +192,15 @@ export async function ingestTrackingResult(input: IngestInput): Promise<IngestRe
     }
     // availableDate: preservado só como tracking_event (available). Sem promoção,
     // sem equivalência funcional nova — até existir regra (fora da Fase 5).
+  }
+
+  // 3) Pipeline (Fase 8 v1.2): todo contêiner cujo fato de cálculo foi promovido
+  // passa pela apuração (relógios + valores + lifecycle) com a MESMA data final.
+  // Ex.: valor provisório até D14 → Empty Return real D12 promovido → relógios e
+  // valores recalculam para D12. FINAL é NO-OP no orquestrador (congelado).
+  const hoje = coletadoEm.toISOString().slice(0, 10);
+  for (const containerId of afetadosCalculo) {
+    await recalcularApuracaoContainer(pool, containerId, { dataReferencia: hoje });
   }
 
   return {

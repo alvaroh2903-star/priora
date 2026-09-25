@@ -3,6 +3,7 @@ import { realArmadorTrackingPort } from '../demurrage-engine/sources/armadorTrac
 import { runSchedulerOnce } from '../demurrage-engine/scheduler/schedulerWorker';
 import { processarEntregasPendentes } from '../demurrage-engine/scheduler/alertOutbox';
 import { startSchedulerLoop, SchedulerLoopHandle, INTERVALO_PADRAO_MS } from '../demurrage-engine/scheduler/schedulerLoop';
+import { passagemDoCalendario } from '../demurrage-engine/apuracao/passagemCalendario';
 import { criarGraphAlertTransport, resolverDestinatariosPorEnv } from './alertTransportGraph';
 
 /**
@@ -30,12 +31,18 @@ export function iniciarSchedulerDemurrage(opts: { intervalMs?: number } = {}): S
   const transport = criarGraphAlertTransport({ resolverDestinatarios: resolverDestinatariosPorEnv() });
 
   const tick = async (): Promise<void> => {
-    // 1) Ciclo de tracking (idempotente por claim; consulta só o que a cadência exige).
+    // 1) Passagem do calendário (tick interno barato): o demurrage cresce com a
+    // data civil, independente da cadência de tracking. Roda SEMPRE — mesmo quando
+    // nenhuma consulta ao armador é devida ou o tracking está suspenso (30d) —, e é
+    // ≤1×/data civil (chaveado pela data já apurada no relógio).
+    const hoje = new Date().toISOString().slice(0, 10);
+    const cal = await passagemDoCalendario(pool, hoje);
+    // 2) Ciclo de tracking (idempotente por claim; consulta só o que a cadência exige).
     const r = await runSchedulerOnce({ pool, port });
-    // 2) Transporte dos alertas pendentes (desacoplado do tracking).
+    // 3) Transporte dos alertas pendentes (desacoplado do tracking).
     const entregas = await processarEntregasPendentes({ pool, transport });
     console.log(
-      `[demurrage-scheduler] tick ${r.janela}: avaliados=${r.contêineresAvaliados} janela=${r.contêineresNaJanela} ` +
+      `[demurrage-scheduler] tick ${r.janela}: calendário=${cal.processados.length} avaliados=${r.contêineresAvaliados} janela=${r.contêineresNaJanela} ` +
         `sincronizados=${r.sincronizados} suspensos=${r.suspensos} | entregas: enviadas=${entregas.enviadas} falhadas=${entregas.falhadas}`,
     );
   };

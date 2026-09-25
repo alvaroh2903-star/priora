@@ -1,15 +1,14 @@
 import { Pool } from 'pg';
 import { getPool } from '../db/pool';
 import { CivilDate } from '../temporal/civilDate';
-import { calcularDoisRelogios } from '../temporal/dualClockCalculator';
-import { FreeTimeClockResult } from '../temporal/freeTimeClock';
 import { avaliarCadencia, deveConsultarAgora, CadenciaInput } from '../scheduler/cadencePolicy';
 import { derivarEstadoContainer, derivarApuracaoDemurrageStatus } from '../lifecycle/containerState';
 import { derivarPrioridadeContainer } from '../lifecycle/priorityEngine';
 import { consolidarProcesso } from '../lifecycle/processConsolidation';
 import { derivarResponsabilidade } from '../lifecycle/responsabilidade';
-import { ClockFact, ContainerLifecycle, ContainerLifecycleFacts, ProcessoLifecycleResult, Responsabilidade, ValorFact } from '../lifecycle/types';
+import { Badge, ClockFact, ContainerLifecycle, ContainerLifecycleFacts, ContainerStateResult, DocumentaryStatus, ProcessoLifecycleResult, Responsabilidade, ValorFact } from '../lifecycle/types';
 import { MinutaRepository } from './minutaRepository';
+import { RelogioRepository } from './relogioRepository';
 
 /**
  * Fase 7 — montagem dos fatos do ciclo operacional a partir do banco e
@@ -17,6 +16,10 @@ import { MinutaRepository } from './minutaRepository';
  * puras; aqui só se lê fato e se grava resultado.
  *
  * Suposições técnicas (não alteram regra funcional da v4.1; documentadas):
+ *  - Os RELÓGIOS são a ÚNICA projeção/cache (Fase 8 v1.2): a montagem de fatos LÊ
+ *    `relogios` persistidos e NUNCA recalcula por conta própria (nada de
+ *    `calcularDoisRelogios` aqui). O pipeline (orquestrador) e o caminho
+ *    standalone/batch garantem a projeção via `RelogioRepository` antes de derivar.
  *  - `apuracaoDemurrageStatus` (v4.1) é derivado dos RELÓGIOS (não de valores_apurados):
  *    ver `derivarApuracaoDemurrageStatus`. valores_apurados NÃO decide se houve demurrage.
  *  - `valorCliente`/`exposicaoRocket` = o valor ativo de maior total por relógio,
@@ -33,9 +36,11 @@ export interface LifecycleConfig {
   prazoProximoThresholdDias?: number | null;
 }
 
-function clockFact(r: FreeTimeClockResult): ClockFact {
-  if (r.status === 'OK') return { status: 'OK', diasDemurrage: r.diasDemurrage, ultimoDiaLivre: r.ultimoDiaLivre };
-  return { status: r.status, diasDemurrage: 0, ultimoDiaLivre: null };
+/** ClockFact a partir de uma linha do cache `relogios` (AUSENTE → PENDING). */
+function clockFactDoCache(row: { estado: string; dias_demurrage: number | null; ultimo_dia_livre: CivilDate | null } | undefined): ClockFact {
+  if (!row) return { status: 'PENDING', diasDemurrage: 0, ultimoDiaLivre: null };
+  if (row.estado === 'OK') return { status: 'OK', diasDemurrage: row.dias_demurrage ?? 0, ultimoDiaLivre: row.ultimo_dia_livre };
+  return { status: row.estado as ClockFact['status'], diasDemurrage: 0, ultimoDiaLivre: null };
 }
 
 function lastFreeDay(discharge: CivilDate | null, ft: number | null): CivilDate | null {
@@ -62,14 +67,15 @@ export class LifecycleRepository {
     const c = cr[0];
     const emptyReturnDate: CivilDate | null = c.effective_return_date ?? c.tracking_return_date ?? null;
     const emptyReturn = emptyReturnDate !== null;
-    const finalDate: CivilDate = emptyReturnDate ?? config.hoje;
 
-    const clocks = calcularDoisRelogios({
-      dischargeDate: c.discharge_date,
-      houseFreeTimeDays: c.house_free_time_days,
-      masterFreeTimeDays: c.master_free_time_days,
-      finalDate,
-    });
+    // Relógios = ÚNICA projeção: LEMOS o cache persistido (não recalculamos aqui).
+    const { rows: relRows } = await this.pool.query(
+      `SELECT tipo, estado, dias_demurrage, ultimo_dia_livre FROM relogios WHERE container_id = $1`,
+      [containerId],
+    );
+    const relCliente = relRows.find((r) => r.tipo === 'cliente');
+    const relRocket = relRows.find((r) => r.tipo === 'rocket');
+    const clocks = { cliente: clockFactDoCache(relCliente), rocket: clockFactDoCache(relRocket) };
 
     // Valores (Fase 4): valorCliente + exposicaoRocket. Clarificação B: só o motor
     // do modelo comercial ATUAL do processo é elegível para o cliente — um cálculo
@@ -136,8 +142,8 @@ export class LifecycleRepository {
     // foi atendida. Suspensão (30d) não conta: nela a cadência não prevê consulta.
     const cadenciaVencida = !suspenso && ultimaConsultaValida !== null && deveConsultarAgora(cadInput, ultimaConsultaValida);
 
-    const clienteClock = clockFact(clocks.cliente);
-    const rocketClock = clockFact(clocks.rocket);
+    const clienteClock = clocks.cliente;
+    const rocketClock = clocks.rocket;
     // Existência da demurrage vem dos RELÓGIOS (v4.1), nunca de valores_apurados.
     const apuracaoDemurrageStatus = derivarApuracaoDemurrageStatus(clienteClock, rocketClock);
 
@@ -197,8 +203,12 @@ export class LifecycleRepository {
     return { facts, responsabilidade };
   }
 
-  /** Deriva estado + prioridade de um contêiner e persiste (cache). */
-  async derivarEPersistirContainer(containerId: string, config: LifecycleConfig): Promise<ContainerLifecycle> {
+  /**
+   * Deriva estado + prioridade a partir dos RELÓGIOS JÁ PERSISTIDOS (cache-only) e
+   * persiste no contêiner. NÃO recalcula relógios — usado pelo pipeline, cujos
+   * relógios já foram projetados na mesma transação, e pela via documental FINAL.
+   */
+  async derivarEstadoEPersistir(containerId: string, config: LifecycleConfig): Promise<ContainerLifecycle> {
     const facts = await this.montarFatos(containerId, config);
     const state = derivarEstadoContainer(facts);
     const priority = derivarPrioridadeContainer(state);
@@ -216,11 +226,58 @@ export class LifecycleRepository {
     return { facts, state, priority };
   }
 
-  /** Deriva todos os contêineres de um processo, consolida e persiste. */
-  async derivarEPersistirProcesso(processoId: string, config: LifecycleConfig): Promise<ProcessoLifecycleResult | null> {
-    const { rows } = await this.pool.query(`SELECT id FROM containers WHERE processo_id = $1 ORDER BY id`, [processoId]);
+  /**
+   * Deriva estado + prioridade de um contêiner e persiste. Caminho STANDALONE/BATCH
+   * (Fase 7): garante a projeção dos relógios pela ÚNICA fonte (RelogioRepository)
+   * para a data final DESTE contêiner (emptyReturn ?? hoje) e então deriva do cache.
+   */
+  async derivarEPersistirContainer(containerId: string, config: LifecycleConfig): Promise<ContainerLifecycle> {
+    const { rows } = await this.pool.query(
+      `SELECT effective_return_date, tracking_return_date FROM containers WHERE id = $1`,
+      [containerId],
+    );
+    const finalDate: CivilDate = rows[0]?.effective_return_date ?? rows[0]?.tracking_return_date ?? config.hoje;
+    await new RelogioRepository(this.pool).recalcular(containerId, finalDate);
+    return this.derivarEstadoEPersistir(containerId, config);
+  }
+
+  /**
+   * Reconstrói o pacote de ciclo de um contêiner SEM recalcular relógios: estado,
+   * severidade, badges e balde vêm das colunas JÁ DERIVADAS/persistidas; os fatos
+   * de desempate (relógios/valores/tracking) são LIDOS dos caches. Serve à
+   * consolidação — nunca re-deriva o estado dos demais contêineres.
+   */
+  private async reconstruirLifecyclePersistido(row: any, config: LifecycleConfig): Promise<ContainerLifecycle> {
+    const facts = await this.montarFatos(row.id, config);
+    const badges = (row.estado_badges ?? []) as Badge[];
+    const state: ContainerStateResult = {
+      estado: row.estado,
+      escalationRequired: row.escalation_required === true,
+      severidadeDias: row.severidade_dias ?? 0,
+      clienteEmDemurrage: badges.includes('clienteEmDemurrage'),
+      rocketExposta: badges.includes('rocketExposta'),
+      apuracaoDemurrageStatus: facts.apuracaoDemurrageStatus,
+      badges,
+      documentaryStatus: (row.documentary_status ?? 'NAO_APLICAVEL') as DocumentaryStatus,
+      motivo: row.prioridade_motivo ?? '',
+    };
+    const priority = { balde: row.prioridade_balde, promocaoTopo: derivarPrioridadeContainer(state).promocaoTopo };
+    return { facts, state, priority };
+  }
+
+  /**
+   * Consolida o processo a partir dos ESTADOS JÁ DERIVADOS dos contêineres (colunas
+   * persistidas) + caches, SEM recalcular relógios dos demais. Persiste só o processo.
+   */
+  async consolidarProcessoDeCache(processoId: string, config: LifecycleConfig): Promise<ProcessoLifecycleResult | null> {
+    const { rows } = await this.pool.query(
+      `SELECT id, estado, estado_badges, documentary_status, escalation_required,
+              severidade_dias, prioridade_balde, prioridade_motivo
+         FROM containers WHERE processo_id = $1 ORDER BY id`,
+      [processoId],
+    );
     const containers: ContainerLifecycle[] = [];
-    for (const r of rows) containers.push(await this.derivarEPersistirContainer(r.id, config));
+    for (const r of rows) containers.push(await this.reconstruirLifecyclePersistido(r, config));
     const consolidado = consolidarProcesso(containers);
     if (consolidado) {
       await this.pool.query(
@@ -232,5 +289,26 @@ export class LifecycleRepository {
       );
     }
     return consolidado;
+  }
+
+  /**
+   * Pipeline/documental: deriva o estado de UM contêiner (relógios já projetados,
+   * cache-only) e consolida o processo a partir dos estados persistidos — não
+   * re-deriva os demais contêineres nem recalcula seus relógios.
+   */
+  async derivarContainerEConsolidar(containerId: string, processoId: string, config: LifecycleConfig): Promise<ProcessoLifecycleResult | null> {
+    await this.derivarEstadoEPersistir(containerId, config);
+    return this.consolidarProcessoDeCache(processoId, config);
+  }
+
+  /**
+   * Caminho STANDALONE/BATCH (Fase 7): deriva TODOS os contêineres (cada um com a
+   * projeção da sua própria data final) e consolida. Usado fora do pipeline
+   * monetário — nunca pelo recálculo de um único contêiner.
+   */
+  async derivarEPersistirProcesso(processoId: string, config: LifecycleConfig): Promise<ProcessoLifecycleResult | null> {
+    const { rows } = await this.pool.query(`SELECT id FROM containers WHERE processo_id = $1 ORDER BY id`, [processoId]);
+    for (const r of rows) await this.derivarEPersistirContainer(r.id, config);
+    return this.consolidarProcessoDeCache(processoId, config);
   }
 }

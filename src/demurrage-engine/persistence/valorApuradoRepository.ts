@@ -184,6 +184,20 @@ export class ValorApuradoRepository {
     }));
   }
 
+  /**
+   * Transição demurrage → zero (v1.2): quando o relógio deixa de ter demurrage
+   * (dias 0 ou não-OK), nenhum valor POSITIVO daquele relógio pode continuar
+   * ativo. Supersede os OPEN daquele relógio — preservando o histórico (nunca
+   * apaga). FINAL nunca é tocado (processo em FINAL sequer chega aqui).
+   */
+  async supersederRelogio(client: Executor, containerId: string, relogioTipo: RelogioTipo): Promise<void> {
+    await client.query(
+      `UPDATE valores_apurados SET calculation_status = 'SUPERSEDED'
+        WHERE container_id = $1 AND relogio_tipo = $2 AND calculation_status = 'OPEN'`,
+      [containerId, relogioTipo],
+    );
+  }
+
   /** Fechamento: transiciona os valores ATIVOS do contêiner OPEN → FINAL (congela). */
   async finalizarAtivos(client: Executor, containerId: string): Promise<void> {
     await client.query(
