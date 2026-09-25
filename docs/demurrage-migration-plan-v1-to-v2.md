@@ -481,6 +481,42 @@ Sem mudança de contrato/tipo/enum/prioridade. `effective_return_date` já é co
 
 **Risco de regressão:** nulo para a V1.
 
+### Fase 8 v1.1 — Orquestração da apuração monetária (spec, aguardando implementação)
+
+**Motivo:** o diagnóstico mostrou que `valorApuradoRepository.registrar` não tem chamador de produção; `valores_apurados` nunca é recalculado/superseded quando a data final muda. Além disso, o recálculo de relógios (cache `relogios`, via `relogioRepository`) e a derivação em memória do `lifecycleRepository` são caminhos independentes, e o scheduler ingere fatos sem recomputar nada a jusante. Corrige-se a integração da camada monetária **como um todo**, com um pipeline único.
+
+**1. Orquestrador central `recalcularApuracaoContainer(containerId, { dataReferencia })`** (não dentro do `closingService`):
+- lê os fatos atuais do contêiner (descarga, House/Master FT, tipo, devolução);
+- calcula os dois relógios UMA vez (`calcularDoisRelogios`) com **`data_final_apuracao` = `effective_return_date ?? tracking_return_date ?? hoje`** — a MESMA data usada por relógios, valores e lifecycle;
+- Cliente: escolhe o modelo comercial pelo `condicoes_comerciais.termo_tipo` do processo — **Termo Único** ou **Termo por Embarque** — seleciona tabela/versão (`tariffTableRepository.selecionarVigente`, referência = 1º dia de demurrage do cliente, regra da Fase 4) e faixas, e chama a engine correspondente;
+- Rocket: `calcularExposicaoRocket` com Master FT + dias Rocket + tabela do armador;
+- persiste via `valorApuradoRepository.registrar` (que já faz supersede OPEN→SUPERSEDED + novo OPEN, append-only, sem apagar histórico);
+- **nunca** trata indisponível como zero; preserva `UNAVAILABLE`/`ESTIMATED_PROVISIONAL` conforme as engines; `equipamentoNormalizado` vem do `container_type_id`.
+
+**2. Pipeline único** `fatos → relógios → valores_apurados → lifecycle/prioridade`, com um só ponto de entrada por contêiner e a MESMA data final. O `lifecycleRepository` passa a consumir os relógios computados pelo pipeline (não recomputa por conta própria) — refatoração que preserva o cálculo (mesmo `dualClockCalculator`/`finalDate`), sem alterar enum/estado/prioridade/precedência da Fase 7 v4.1. Não podem existir dois caminhos que deixem relógios e valores fora de sincronia.
+
+**3. Mapa de gatilhos (onde acionar o pipeline; levantado do código atual):**
+| Gatilho (Blueprint/§3) | Onde ocorre hoje no código | Recompute hoje |
+|---|---|---|
+| avanço normal da demurrage/cadência | `schedulerWorker.runSchedulerOnce` (tick) | **ausente** |
+| Empty Return | `eventIngestion` promove `trackingReturnDate` (Fase 5) | **ausente** |
+| tracking retroativo | `eventIngestion` re-promove descarga/datas | **ausente** |
+| effective_return_date após minuta | `closingService.validarMinuta` | só lifecycle (sem valores) |
+| aceitação de divergência da minuta | `closingService.validarMinuta` (`aceitarDivergencia`) | só lifecycle |
+| alteração de Free Time | `containerRepository.applyObservation` (via ingestion/backfill/manual) | **ausente** |
+| alteração de tarifa/versão | tabela `tariff_tables`/seed | **ausente** (afeta contêineres que a usam) |
+| novo mapeamento de equipamento | promoção de `containerType` / `container_type_mappings` | **ausente** |
+| reabertura | `closingService.autorizarReabertura` | só lifecycle |
+| outros fatos de contêiner | choke point `containerRepository.applyObservation` | **ausente** |
+
+Ponto único natural de contêiner: **`applyObservation`** concentra as mudanças de descarga/FT/gate out/devolução/tipo; o pipeline é acionado **uma vez por contêiner** ao fim de cada operação que alterou fatos (após `eventIngestion` de um contêiner; após efetivar/reabrir no `closingService`; após correção manual — Fase 10; e, para tarifa/mapeamento, em lote sobre os contêineres afetados). O scheduler passa a acionar o pipeline após ingerir.
+
+**4. FINAL congela a memória monetária.** O orquestrador checa `processos.apuracao_status`: se `FINAL`, é **no-op** (não recomputa relógios, valores nem lifecycle) — a memória permanece congelada. Só a **reabertura** (MANAGER/ADMIN + justificativa) volta a `OPEN` e habilita nova versão; os valores anteriores permanecem preservados (append-only + snapshot da reabertura). Como o pipeline passa a ser o ÚNICO caminho de recálculo, a guarda no orquestrador é a proteção efetiva.
+
+**5. Testes-gabarito:** N→N+1 dias aumenta valor; minuta aumenta dias/valor; minuta reduz dias/valor; zero→demurrage cria apuração monetária; tarifa `UNAVAILABLE` mantém dias e valor indisponível (nunca zero); mudança de `effective_return_date` supersede a versão anterior (histórico preservado); FINAL impede recálculo; reabertura preserva a versão anterior e cria nova; relógios e valores usam exatamente a mesma data final; multi-contêiner recalcula só o equipamento afetado. V1 intacta.
+
+**Arquivos prováveis (a implementar quando aprovado):** `apuracao/recalcularApuracao.ts` (orquestrador) + seleção de tabela/faixa/modelo; refis de `lifecycleRepository` para consumir relógios do pipeline; ganchos em `eventIngestion`/`schedulerWorker`/`closingService`. Migration nova só se necessária (a princípio nenhuma — reusa `valores_apurados`). **Nenhuma alteração de regra além desta correção; qualquer outra → PRECISA DE SUA VALIDAÇÃO.**
+
 ---
 
 ## Fase 9 — UI operacional
