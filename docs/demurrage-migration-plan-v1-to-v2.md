@@ -1634,10 +1634,15 @@ Duas camadas: (a) **guarda local** barata (`criarExecutorSemOverlap`): se um tic
 
 Mapa dos 18 itens de teste pedidos: 1 startup (loop 1) ✓; 2 periódico ~1h (loop 2) ✓; 3 dois ticks sobrepostos (loop 3) ✓; 4 duas instâncias/claim (scheduler "concorrência") ✓; 5 restart recupera janela (runOnStart + aceitação) ✓; 6 tick sem janela = zero consulta (aceitação r2) ✓; 7 cache hit = zero consulta nova (Fase 5 + claim; a `enrich` da porta usa o cache central) ✓; 8 MBL compartilhado = uma consulta (scheduler) ✓; 9 suspensão 30d = zero fetch (scheduler) ✓; 10 Graph SENT ✓; 11 Graph FAILED ✓; 12 retry FAILED ✓; 13 falha Graph não altera FalhaTracking ✓; 14 segregação multiempresa ✓; 15 V1 intacta ✓; 16 engine ✓; 17 tsc ✓; 18 build ✓.
 
-### 8. PRECISA DE SUA VALIDAÇÃO (um item de dado, não de estrutura)
+### 8. Destinatários — DECISÃO APROVADA (ENV, sem tabela nova)
 
-**Destinatários dos alertas.** O canal (Graph/e-mail) está pronto; falta o **mapeamento de destinatários**, que é dado operacional que não existe no repositório: (a) e-mail(s) do responsável técnico (alerta técnico global) e (b) e-mail(s) por organização (entrega operacional). O resolver padrão lê de ambiente: `DEMURRAGE_ALERT_TECH_EMAILS` (lista) e `DEMURRAGE_ALERT_ORG_EMAILS` (JSON `{ "<organization_id>": ["email"] }`). Enquanto não forem preenchidos, essas entregas ficam `FAILED`/reprocessáveis (nada se perde; o tracking não é afetado) — assim que você fornecer os endereços (via env ou uma tabela, se preferir persistir), elas passam a enviar. Diga se prefere env ou uma tabela de destinatários no banco, e quais endereços usar.
+**Aprovado para o MVP/piloto: configuração por variáveis de ambiente, sem criar tabela de destinatários.** O resolver `resolverDestinatariosPorEnv` já implementa exatamente isto e **nenhum endereço é hardcodado** — os valores reais são configurados no ambiente do Render:
 
-### 9. Próximo passo
+- `DEMURRAGE_ALERT_TECH_EMAILS` = lista (separada por vírgula) dos responsáveis técnicos que recebem falhas de conector/tracking (alerta técnico global).
+- `DEMURRAGE_ALERT_ORG_EMAILS` = JSON por `organization_id` com os e-mails dos Gestores que recebem o alerta operacional daquela organização (ex.: `{"organization_uuid":["gestor@empresa.com"]}`).
 
-Acionamento e canal implementados conforme aprovado; tudo verde; nenhuma mudança estrutural nova. **Fase 6 pode ser considerada CONCLUÍDA.** **Não avanço para a Fase 7 sem autorização.**
+Preservados e verdes: alerta técnico global; alerta operacional segregado por organização; PENDING/SENT/FAILED; retry; nenhum vazamento entre organizações; ausência de destinatário não afeta o tracking; nenhuma falha de Graph incrementa FalhaTracking. Quando a Priora operar com múltiplas empresas reais e administração de usuários/contatos pelo próprio produto, migrar os destinatários operacionais para persistência em banco poderá ser avaliado **separadamente** — não antecipado nesta fase.
+
+### 9. Estado da Fase 6
+
+**FASE 6 — APROVADA E CONCLUÍDA.** Acionamento in-process e canal Graph/e-mail implementados e validados; destinatários por ENV aprovados; tudo verde (motor 196/196, V1 25/25, tsc/build limpos); V1 intacta. Sem novas alterações na Fase 6 salvo correção de bug. **Não avanço para a implementação da Fase 7 sem aprovação do desenho.**
