@@ -102,13 +102,20 @@ test('casos 2 e 3: minuta anterior/posterior ao tracking → válida, divergênc
       const c = await containers.create(orgId, processoId, num);
       await seed(pool, c.id, orgId, { discharge: '2026-09-01', houseFT: 5, masterFT: 5, trackingReturn: '2026-09-14' });
       const m = await svc.registrarMinuta({ containerId: c.id, numeroInformado: num, dataInformada: data });
-      const r = await svc.validarMinuta({ minutaId: m.id, papel: 'ADMIN', config: cfg });
+      // 1º passo: divergência NÃO é aceita automaticamente — registra e preserva as duas fontes.
+      const pend = await svc.validarMinuta({ minutaId: m.id, papel: 'ADMIN', config: cfg });
+      assert.equal((pend as any).resultado, 'divergencia_pendente');
+      assert.equal((await container(pool, c.id)).effective_return_date, null, 'não altera effective sem revisão');
+      const tipos1 = (await eventos.listByProcesso(processoId)).filter((e) => e.containerId === c.id).map((e) => e.tipoEvento);
+      assert.ok(tipos1.includes('DIVERGENCIA_TRACKING_MINUTA'));
+      assert.ok(!tipos1.includes('MINUTA_VALIDADA'), 'ainda não validada');
+      // 2º passo: revisão explícita do MANAGER/ADMIN → aceita a divergência e altera effective.
+      const r = await svc.validarMinuta({ minutaId: m.id, papel: 'ADMIN', config: cfg, aceitarDivergencia: true });
+      assert.equal((r as any).resultado, 'validada');
       assert.equal((r as any).divergente, true);
       const row = await container(pool, c.id);
       assert.equal(row.effective_return_date, data);
       assert.equal(row.tracking_return_date, '2026-09-14', 'tracking nunca apagado');
-      const tipos = (await eventos.listByProcesso(processoId)).filter((e) => e.containerId === c.id).map((e) => e.tipoEvento);
-      assert.ok(tipos.includes('DIVERGENCIA_TRACKING_MINUTA'));
     }
   } finally { await pool.end(); }
 });
@@ -151,7 +158,9 @@ test('caso 5: concluído zero-custo + minuta que cria custo → exige reabertura
     const sol = await svc.solicitarReabertura({ processoId, justificativa: 'minuta cria custo' });
     const aut = await svc.autorizarReabertura({ reaberturaId: (sol as any).reaberturaId, papel: 'MANAGER', config: cfg });
     assert.deepEqual(aut, { ok: true });
-    const r2 = await svc.validarMinuta({ minutaId: m.id, papel: 'MANAGER', config: cfg });
+    // 09-25 diverge do tracking 09-10 → revisão explícita do Gestor.
+    assert.equal((await svc.validarMinuta({ minutaId: m.id, papel: 'MANAGER', config: cfg }) as any).resultado, 'divergencia_pendente');
+    const r2 = await svc.validarMinuta({ minutaId: m.id, papel: 'MANAGER', config: cfg, aceitarDivergencia: true });
     assert.equal((r2 as any).resultado, 'validada');
     assert.equal((await container(pool, c.id)).effective_return_date, '2026-09-25');
     // Agora com custo → o processo não pode voltar a FINAL enquanto responsabilidade em análise.
@@ -169,7 +178,9 @@ test('caso 6: apuração aberta com custo + minuta muda dias → recalcula (OPEN
     await seed(pool, c.id, orgId, { discharge: '2026-09-01', houseFT: 5, masterFT: 5, trackingReturn: '2026-09-14' });
     const svc = new ClosingService(pool);
     const m = await svc.registrarMinuta({ containerId: c.id, numeroInformado: 'HDMUOPEN001', dataInformada: '2026-09-12' });
-    const r = await svc.validarMinuta({ minutaId: m.id, papel: 'MANAGER', config: cfg });
+    // Divergente (12 != tracking 14) → exige revisão explícita.
+    assert.equal((await svc.validarMinuta({ minutaId: m.id, papel: 'MANAGER', config: cfg }) as any).resultado, 'divergencia_pendente');
+    const r = await svc.validarMinuta({ minutaId: m.id, papel: 'MANAGER', config: cfg, aceitarDivergencia: true });
     assert.equal((r as any).resultado, 'validada');
     assert.equal((await container(pool, c.id)).effective_return_date, '2026-09-12');
     const eventos = await new ClosingEventRepository(pool).listByProcesso(processoId);
@@ -205,7 +216,7 @@ test('caso 9: multi-contêiner → minuta de um não altera os demais', { skip: 
     await seed(pool, c2.id, orgId, { discharge: '2026-09-01', houseFT: 5, masterFT: 5, trackingReturn: '2026-09-14' });
     const svc = new ClosingService(pool);
     const m = await svc.registrarMinuta({ containerId: c1.id, numeroInformado: 'HDMUM010001', dataInformada: '2026-09-16' });
-    await svc.validarMinuta({ minutaId: m.id, papel: 'MANAGER', config: cfg });
+    await svc.validarMinuta({ minutaId: m.id, papel: 'MANAGER', config: cfg, aceitarDivergencia: true }); // 16 diverge do tracking 14
     assert.equal((await container(pool, c1.id)).effective_return_date, '2026-09-16');
     assert.equal((await container(pool, c2.id)).effective_return_date, null, 'contêiner 2 intocado');
   } finally { await pool.end(); }
@@ -222,7 +233,7 @@ test('caso 10: nova minuta ≠ após validada (OPEN) → supersede a anterior, h
     const a = await svc.registrarMinuta({ containerId: c.id, numeroInformado: 'HDMUSUP0001', dataInformada: '2026-09-14' });
     await svc.validarMinuta({ minutaId: a.id, papel: 'MANAGER', config: cfg });
     const b = await svc.registrarMinuta({ containerId: c.id, numeroInformado: 'HDMUSUP0001', dataInformada: '2026-09-16' });
-    await svc.validarMinuta({ minutaId: b.id, papel: 'MANAGER', config: cfg });
+    await svc.validarMinuta({ minutaId: b.id, papel: 'MANAGER', config: cfg, aceitarDivergencia: true }); // 16 diverge do tracking 14
     assert.equal((await container(pool, c.id)).effective_return_date, '2026-09-16');
     const rows = await new (await import('../persistence/minutaRepository')).MinutaRepository(pool).listByContainer(c.id);
     const bRow = rows.find((m) => m.id === b.id)!;
@@ -267,6 +278,47 @@ test('upload nunca recalcula nem altera datas; badge responsabilidadeEmAnalise r
   } finally { await pool.end(); }
 });
 
+test('adendo: compara pela DATA INFORMADA (não a de recebimento); mesma data = sem divergência, direto', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await setupBanco(pool);
+    const { orgId, processoId } = await novoProcesso(pool);
+    const c = await new ContainerRepository(pool).create(orgId, processoId, 'HDMUAD00001');
+    await seed(pool, c.id, orgId, { discharge: '2026-09-01', houseFT: 5, masterFT: 5, trackingReturn: '2026-09-14' });
+    const svc = new ClosingService(pool);
+    // Minuta "recebida" hoje (2026-10-01), mas o CONTEÚDO informa 14/09 = tracking → sem divergência.
+    const m = await svc.registrarMinuta({ containerId: c.id, numeroInformado: 'HDMUAD00001', dataInformada: '2026-09-14' });
+    const r = await svc.validarMinuta({ minutaId: m.id, papel: 'MANAGER', config: cfg });
+    assert.equal((r as any).resultado, 'validada');
+    assert.equal((r as any).divergente, false, 'data de recebimento não conta; conteúdo 14/09 = tracking');
+    assert.equal((await container(pool, c.id)).effective_return_date, '2026-09-14', 'effective = data informada, nunca a de recebimento');
+  } finally { await pool.end(); }
+});
+
+test('adendo: conteúdo divergente do tracking → NÃO aceita automaticamente; preserva as duas fontes até revisão explícita', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await setupBanco(pool);
+    const { orgId, processoId } = await novoProcesso(pool);
+    const c = await new ContainerRepository(pool).create(orgId, processoId, 'HDMUAD00002');
+    await seed(pool, c.id, orgId, { discharge: '2026-09-01', houseFT: 5, masterFT: 5, trackingReturn: '2026-09-14' });
+    const svc = new ClosingService(pool);
+    // Recebida agora, conteúdo 20/09 (divergente) → cronologicamente possível, mas NÃO aceita sozinha.
+    const m = await svc.registrarMinuta({ containerId: c.id, numeroInformado: 'HDMUAD00002', dataInformada: '2026-09-20' });
+    const pend = await svc.validarMinuta({ minutaId: m.id, papel: 'MANAGER', config: cfg });
+    assert.equal((pend as any).resultado, 'divergencia_pendente');
+    const row1 = await container(pool, c.id);
+    assert.equal(row1.effective_return_date, null, 'effective não alterado sem revisão explícita');
+    assert.equal(row1.tracking_return_date, '2026-09-14', 'ambas as fontes preservadas');
+    // Revisão explícita do MANAGER → aceita e altera effective.
+    const ok = await svc.validarMinuta({ minutaId: m.id, papel: 'MANAGER', config: cfg, aceitarDivergencia: true });
+    assert.equal((ok as any).resultado, 'validada');
+    const row2 = await container(pool, c.id);
+    assert.equal(row2.effective_return_date, '2026-09-20');
+    assert.equal(row2.tracking_return_date, '2026-09-14', 'tracking nunca apagado');
+  } finally { await pool.end(); }
+});
+
 test('timeline: eventos append-only do ciclo (auto × humano) ficam registrados', { skip: !url }, async () => {
   const pool = testPool();
   try {
@@ -276,7 +328,8 @@ test('timeline: eventos append-only do ciclo (auto × humano) ficam registrados'
     await seed(pool, c.id, orgId, { discharge: '2026-09-01', houseFT: 5, masterFT: 5, trackingReturn: '2026-09-14' });
     const svc = new ClosingService(pool);
     const m = await svc.registrarMinuta({ containerId: c.id, numeroInformado: 'HDMUTL00001', dataInformada: '2026-09-16' });
-    await svc.validarMinuta({ minutaId: m.id, papel: 'MANAGER', config: cfg });
+    await svc.validarMinuta({ minutaId: m.id, papel: 'MANAGER', config: cfg }); // pendente (divergência registrada)
+    await svc.validarMinuta({ minutaId: m.id, papel: 'MANAGER', config: cfg, aceitarDivergencia: true }); // revisão explícita
     const eventos = await new ClosingEventRepository(pool).listByProcesso(processoId);
     const tipos = eventos.map((e) => e.tipoEvento);
     for (const t of ['MINUTA_RECEBIDA', 'MINUTA_VALIDADA', 'DIVERGENCIA_TRACKING_MINUTA', 'RECALCULO']) assert.ok(tipos.includes(t as any), `evento ${t} registrado`);

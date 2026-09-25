@@ -71,10 +71,22 @@ export class ClosingService {
     return m;
   }
 
-  /** Validação (MANAGER/ADMIN). Coerência (regra 1) → VALIDADA define effective_return_date + recalcula; senão REJEITADA. */
+  /**
+   * Validação (MANAGER/ADMIN). Coerência (regra 1) → VALIDADA define
+   * effective_return_date + recalcula; senão REJEITADA.
+   *
+   * Divergência documental (ADENDO): a comparação usa a DATA INFORMADA no
+   * conteúdo da minuta (nunca a data de recebimento/upload). Quando
+   * data_informada != tracking_return_date, a minuta NÃO é aceita
+   * automaticamente só por ser cronologicamente possível: a divergência é
+   * registrada, as duas fontes são preservadas e o effective_return_date só é
+   * alterado após revisão EXPLÍCITA do MANAGER/ADMIN (`aceitarDivergencia: true`).
+   */
   async validarMinuta(input: {
     minutaId: string; papel: PapelRbac; validadaPor?: string | null; config: ClosingConfig;
-  }): Promise<{ ok: true; resultado: 'validada'; dataValidada: CivilDate; divergente: boolean } | { ok: true; resultado: 'rejeitada'; motivo: string } | Falha> {
+    /** Revisão explícita do MANAGER/ADMIN aceitando a divergência tracking × minuta. */
+    aceitarDivergencia?: boolean;
+  }): Promise<{ ok: true; resultado: 'validada'; dataValidada: CivilDate; divergente: boolean } | { ok: true; resultado: 'rejeitada'; motivo: string } | { ok: true; resultado: 'divergencia_pendente'; dataInformada: CivilDate; trackingReturnDate: CivilDate | null } | Falha> {
     if (!ehGestor(input.papel)) return { ok: false, motivo: 'apenas_manager_admin' };
     const m = await this.minutas.findById(input.minutaId);
     if (!m) return { ok: false, motivo: 'minuta_nao_encontrada' };
@@ -119,6 +131,27 @@ export class ClosingService {
       return { ok: true, resultado: 'validada', dataValidada: r.dataValidada, divergente };
     }
 
+    // ADENDO: divergência (data_informada != tracking) NÃO é aceita automaticamente.
+    // Registra a divergência, PRESERVA as duas fontes (não altera effective_return_date)
+    // e exige revisão explícita do MANAGER/ADMIN (`aceitarDivergencia: true`) antes de alterar.
+    if (divergente && input.aceitarDivergencia !== true) {
+      if (!m.divergenteDoTracking) {
+        await this.pool.query(`UPDATE minutas SET divergente_do_tracking = true, atualizado_em = now() WHERE id = $1`, [m.id]);
+        await this.eventos.registrar({
+          processoId: ci.processo_id, containerId: m.containerId, tipoEvento: 'DIVERGENCIA_TRACKING_MINUTA',
+          origem: 'automatico', payload: { tracking: ci.tracking_return_date, minuta: r.dataValidada },
+        });
+      }
+      return { ok: true, resultado: 'divergencia_pendente', dataInformada: r.dataValidada, trackingReturnDate: ci.tracking_return_date };
+    }
+    // Divergência já registrada num passo anterior? Se não, e estamos aceitando agora, registra.
+    if (divergente && !m.divergenteDoTracking) {
+      await this.eventos.registrar({
+        processoId: ci.processo_id, containerId: m.containerId, tipoEvento: 'DIVERGENCIA_TRACKING_MINUTA',
+        origem: 'automatico', payload: { tracking: ci.tracking_return_date, minuta: r.dataValidada },
+      });
+    }
+
     // Encadeia lineage se já havia uma minuta efetiva diferente (nova supersede a anterior).
     if (ci.effective_return_minuta_id && ci.effective_return_minuta_id !== m.id) {
       await this.pool.query(`UPDATE minutas SET supersedes_id = $2 WHERE id = $1`, [m.id, ci.effective_return_minuta_id]);
@@ -133,12 +166,6 @@ export class ClosingService {
       processoId: ci.processo_id, containerId: m.containerId, tipoEvento: 'MINUTA_VALIDADA',
       origem: 'humano', atorUsuarioId: input.validadaPor ?? null, payload: { minutaId: m.id, dataValidada: r.dataValidada },
     });
-    if (divergente) {
-      await this.eventos.registrar({
-        processoId: ci.processo_id, containerId: m.containerId, tipoEvento: 'DIVERGENCIA_TRACKING_MINUTA',
-        origem: 'automatico', payload: { tracking: ci.tracking_return_date, minuta: r.dataValidada },
-      });
-    }
     await this.recalcular(ci.processo_id, m.containerId, input.config);
     return { ok: true, resultado: 'validada', dataValidada: r.dataValidada, divergente };
   }
