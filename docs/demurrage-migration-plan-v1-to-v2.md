@@ -405,30 +405,79 @@ Texto determinístico (ex.: “Rocket já exposta”, “Cliente em demurrage (N
 
 ---
 
-## Fase 8 — Empty Return/minuta/fechamento
+## Fase 8 — Minuta, devolução efetiva, recálculo, fechamento e reabertura (especificação oficial v1, travada)
 
-**Objetivo:** implementar a detecção de devolução (Cap. 19), a distinção `trackingReturnDate` × `effective_return_date` da minuta (Cap. 19.1) e o fechamento operacional (Cap. 20/27.1) — **sem** gate de responsabilidade Rocket×cliente (correção de premissa #2: essa análise é plugável e chega na Fase 11; um processo pode fechar operacionalmente sem ela resolvida, ficando "responsabilidade em análise" como estado, não como bloqueio).
+**Fonte de verdade:** Blueprint (Cap. 10, 12, 19, 19.1, 20, 23, 29, 31.6, 31.7, 31.12, 31.14, 32.6) + Fase 7 v4.1 (não alterada). Esta seção substitui a versão anterior do plano, que dizia que responsabilidade “não bloqueia fechamento”: **corrigido** para seguir o Blueprint 20.2 (processo com demurrage permanece em tratamento até concluir responsabilidade/comprovação/valor final).
 
-**Arquivos/modelos novos:**
-- `src/demurrage-engine/closing/returnDetection.ts` (consome evento Empty Return do adaptador de tracking, Fase 5).
-- `src/demurrage-engine/closing/minutaValidation.ts` (validação de minuta: nº de contêiner + data coerente → `effective_return_date`; divergência preserva as duas evidências).
-- `src/demurrage-engine/closing/processClosure.ts` (estados separados do Cap. 20.3: interno da Rocket / documental do cliente / financeiro HeadCargo — este último inicialmente sempre "não disponível", já que HeadCargo é fora de escopo desta migração).
-- `src/demurrage-engine/closing/reopening.ts` (reabertura restrita a `MANAGER`/`ADMIN` + justificativa, preservando valores anteriores).
+**Objetivo:** tratar minuta (upload → validação → rejeição), a devolução efetiva (`effective_return_date` derivado de minuta validada), a divergência minuta × tracking, o recálculo da apuração, o congelamento (`FINAL`), o impacto em processo concluído e a reabertura pelo Gestor. Responsabilidade comercial definitiva (resolução), financeiro HeadCargo e Portal completo ficam fora — a Fase 8 só cria a dimensão de responsabilidade como **gate** de `FINAL` (a Fase 11 resolve).
 
-**Arquivos existentes afetados:** nenhum arquivo da V1. `src/demurrage/demurrageStore.ts` (minuta solicitada + atividades) é **lido** no backfill da Fase 1, mas a partir da Fase 8 a V2 passa a ter seu próprio fluxo de minuta — a ação "solicitar minuta" da V1 (que cria rascunho no Outlook) pode ser reaproveitada como está, já que é só uma ação de e-mail, não faz parte do motor de cálculo.
+### Decisões travadas
 
-**Migrations:** campos `trackingReturnDate`, `effectiveReturnDate`, `minutaDivergence`, estado `responsabilidade: 'em_analise' | 'confirmada_rocket' | 'confirmada_cliente' | 'dividida'` (valor default `em_analise`, sem bloquear fechamento).
+**1. Coerência da minuta (decisão funcional da Priora; o Blueprint não dá fórmula).** Minuta validável só se: nº do contêiner confere; data válida/legível; `data_minuta ≥ discharge_date`; `data_minuta ≤ hoje`; e, havendo Gate Out cheio confirmado, `data_minuta ≥ gate_out_date`. **Sem tolerância** fixa vs. `tracking_return_date` — anterior ou posterior é aceitável desde que respeite a cronologia física; divergência preserva as duas datas e registra no histórico.
 
-**Dependências:** Fase 5 (evento Empty Return estruturado), Fase 7 (estados). T1 (papéis `MANAGER`/`ADMIN` para reabertura).
+**2. Validação (RBAC).** Cliente/Analista **enviam/anexam** (estado `RECEBIDA`); **só MANAGER/ADMIN validam ou rejeitam**. Upload/`RECEBIDA` nunca altera `effective_return_date`, dias ou valores.
 
-**Testes obrigatórios:**
-- Minuta com data diferente do Empty Return → preserva as duas, usa a da minuta, registra divergência (Cap. 19.1).
-- Processo sem custo concluído internamente mesmo com minuta pendente (Cap. 20.1) — confirma que a ausência de análise de responsabilidade **não** impede esse fechamento (validação direta da correção de premissa #2).
-- Minuta chegando depois de um fechamento sem custo e criando custo → vai para reabertura (`MANAGER`), não recalcula silenciosamente (Cap. 19.1 último parágrafo).
+**3. `effective_return_date`.** Fonte de verdade = minuta `VALIDADA`. `containers.effective_return_date` é **derivado materializado** dessa minuta (com proveniência à minuta), não campo editável independente. `tracking_return_date` **nunca** é apagado.
 
-**Condição de aceite:** ciclo completo simulado (descarga → free time → demurrage → Empty Return → minuta) fecha o processo operacionalmente sem exigir responsabilidade resolvida, e reabre corretamente quando uma minuta divergente chega depois.
+**4. Estado operacional × apuração.** `CONCLUIDO_PARA_ROCKET` (Fase 7) permanece estado **derivado**. `OPEN/FINAL` é dimensão **separada** da Fase 8. **Enum/estados/prioridade/precedência da Fase 7 v4.1 intocados.**
 
-**Risco de regressão:** nulo para a V1. Ponto de atenção: se a ação "solicitar minuta" for reaproveitada da V1 (`src/routes/demurrageRoutes.ts`), garantir que ela grave o evento tanto no `demurrageStore.ts` (V1, para não quebrar a tela atual) quanto no novo modelo (V2) enquanto as duas coexistirem — evitar que uma ação do operador apareça numa tela e não na outra.
+**5. Nova minuta após uma validada.** Nunca substitui em silêncio; entra `RECEBIDA`. Mesma data/contêiner → evidência adicional, sem mexer no `effective_return_date`. Data diferente → apuração `OPEN`: Gestor valida a nova, **superseder** a anterior (histórico preservado) e recalcula; apuração `FINAL`: exige **reabertura autorizada** antes de qualquer alteração.
+
+**6. `documentaryStatus` (derivação aprovada no `lifecycleRepository`; sem mudança de enum/contrato da Fase 7):** sem ER → `NAO_APLICAVEL`; ER sem minuta → `MINUTA_PENDENTE`; minuta `RECEBIDA` aguardando validação → `MINUTA_RECEBIDA`; minuta `VALIDADA` → `MINUTA_RECEBIDA`; minuta `REJEITADA` sem outra → `MINUTA_PENDENTE`. `estado_minuta` (`RECEBIDA|VALIDADA|REJEITADA`) é dimensão separada.
+
+**7. Fechamento sem custo.** A Fase 7 pode derivar `CONCLUIDO_PARA_ROCKET` automaticamente; **transformar a apuração em `FINAL`/congelada exige MANAGER/ADMIN** (inclusive no zero-custo).
+
+**8. Gate de responsabilidade (correção do plano, Blueprint 20.2).** Sem demurrage → Fase 8 pode chegar a `FINAL` (MANAGER/ADMIN). Com demurrage → Fase 8 valida minuta, define `effective_return_date` e recalcula, **mas NÃO permite `FINAL` enquanto `responsabilidade = EM_ANALISE`**; permanece `DEVOLVIDO_AGUARDANDO_TRATAMENTO` até a Fase 11 resolver.
+
+**Validação final 1 — dimensão responsabilidade (conectada à Fase 7).** `responsabilidade ∈ { NAO_APLICAVEL, EM_ANALISE, CONFIRMADA_ROCKET, CONFIRMADA_CLIENTE, DIVIDIDA }`. Regra: sem demurrage → `NAO_APLICAVEL`; com demurrage confirmada e sem decisão da Fase 11 → `EM_ANALISE`. O badge existente da Fase 7 passa a refletir o fato real: `responsabilidadeEmAnalise = (responsabilidade === 'EM_ANALISE')`, ligado no `lifecycleRepository` (montagem de fatos), **sem** alterar enums/estados/prioridade/precedência da v4.1 (o badge não participa de balde nem desempate; um contêiner com demurrage já é `EM_DEMURRAGE_*`/`DEVOLVIDO`, então o badge nunca troca o estado). A Fase 11 grava `CONFIRMADA_*`/`DIVIDIDA` e libera o gate. *Assunção documentada:* responsabilidade avaliada por contêiner; gate `FINAL` do processo = nenhum contêiner `EM_ANALISE`.
+
+**Validação final 2 — timeline (log append-only do ciclo de fechamento).** Tabela própria (NÃO `field_observations`, pois não são observações de campo) que registra: Empty Return; minuta recebida; minuta validada; minuta rejeitada; divergência tracking × minuta; recálculo; fechamento `FINAL`; solicitação/autorização de reabertura; reabertura; refechamento. Diferencia **evento automático × ação humana** e preserva ator, data/hora e evidência quando aplicável. UI/timeline visual fica para a Fase 9.
+
+**Validação final 3 — este texto do plano já reflete a correção do item 8** (zero-demurrage pode `FINAL` por MANAGER/ADMIN; com demurrage, `EM_ANALISE` bloqueia `FINAL`; Fase 8 faz minuta/effective/recálculo; Fase 11 resolve responsabilidade e libera o gate).
+
+### Estados/dimensões (separados)
+
+| Dimensão | Valores |
+|---|---|
+| Minuta (`minutas`) | `estado_minuta = RECEBIDA \| VALIDADA \| REJEITADA` (+ nº informado, data_informada, data_validada, evidência, validada_por, `supersedes_id`) |
+| Documento/evidência (`documentos`) | tipo, origem, incluído_por, data, `estado_conferencia` (Cap. 29.7/32.6) |
+| Devolução | `tracking_return_date` (provisório) × `effective_return_date` (derivado da minuta validada, com proveniência) + registro de divergência |
+| Apuração | `OPEN \| FINAL \| SUPERSEDED` (já existe; falta a transição para `FINAL`) |
+| Responsabilidade | `NAO_APLICAVEL \| EM_ANALISE \| CONFIRMADA_ROCKET \| CONFIRMADA_CLIENTE \| DIVIDIDA` — gate de `FINAL` |
+| Fechamento (`fechamentos`) | quem/quando/justificativa do `FINAL` |
+| Reabertura (`reaberturas`) | `SOLICITADA \| AUTORIZADA \| RECALCULADA \| REFECHADA` + valores anteriores preservados |
+| Timeline (`closing_events`) | log append-only dos eventos do ciclo (auto × humano, ator, data/hora, evidência) |
+
+### Fluxo
+Empty Return (tracking) encerra o acúmulo (já na Fase 5). Upload de minuta → `RECEBIDA` (não altera nada). Validação (MANAGER/ADMIN): regra 1 → `VALIDADA` define `effective_return_date` (proveniência) → recálculo dos dois relógios (`finalDate` nova) + supersede de `valores_apurados` quando `OPEN` → registra divergência → Fase 7 re-deriva. Fechamento: zero-custo → `FINAL` por MANAGER/ADMIN; com-custo → bloqueado enquanto `responsabilidade = EM_ANALISE`. Processo já `FINAL` + minuta que muda valor/cria custo → **reabertura** (Gestor, justificativa, valores anteriores preservados) → recálculo → refechamento. Minuta inválida (contêiner errado / data incoerente) → `REJEITADA`, `effective_return_date` intocado.
+
+### Tabela determinística de casos
+
+| Caso | Validação (regra 1) | effective_return_date | Recálculo | FINAL / Reabertura |
+|---|---|---|---|---|
+| 1 (ER 14, minuta 14) | válida | 14/09 | igual; sem divergência | zero→FINAL(Gestor); com-custo→bloqueado (resp.) |
+| 2 (ER 14, minuta 13) | válida se `13 ≥ discharge` e `≥ gate_out` | 13/09 | menos dias; divergência; tracking preservado | idem gate |
+| 3 (ER 14, minuta 16) | válida | 16/09 | mais dias (pode criar custo) | OPEN: recalc; FINAL: reabertura |
+| 4 (concluído zero, minuta mantém zero) | válida | =tracking | sem mudança | segue concluído; documental → `MINUTA_RECEBIDA` |
+| 5 (concluído zero, minuta cria diária) | válida | nova | **não silencioso** | **reabertura (Gestor)** |
+| 6 (aberto c/ custo, minuta muda dias) | válida | nova | recalc OPEN, supersede/histórico | **FINAL bloqueado** por `EM_ANALISE` |
+| 7 (contêiner errado) | rejeitada | inalterado | nenhum | — |
+| 8 (data ilegível/incoerente) | rejeitada | inalterado | nenhum | — |
+| 9 (multi-contêiner) | válida p/ 1 | só daquele | só daquele | demais intocados |
+| 10 (nova minuta ≠ após validada) | Gestor decide | OPEN: supersede+recalc / FINAL: exige reabertura | conforme apuração | histórico preservado |
+
+### Impacto na Fase 7 v4.1
+Sem mudança de contrato/tipo/enum/prioridade. `effective_return_date` já é consumido pelo `lifecycleRepository` → recálculo integra naturalmente. Mudanças de **derivação** (aprovadas) no `lifecycleRepository`: `documentaryStatus` vem da minuta (dec. 6) e `responsabilidadeEmAnalise` vem da dimensão responsabilidade (validação 1). O gate de `FINAL` é dimensão nova, não altera o estado derivado.
+
+**Arquivos/modelos novos:** migration aditiva (minutas, documentos, reaberturas, fechamentos, `closing_events`, transição `FINAL`, proveniência de `effective_return_date`, `responsabilidade`); `closing/minutaValidation.ts` (puro), `closing/effectiveReturn.ts`, `closing/processClosure.ts` (gate zero × com-custo), `closing/reopening.ts`; repositórios de minuta/documento/reabertura/fechamento/timeline; guard RBAC (MANAGER/ADMIN). Alteração aprovada em `lifecycleRepository` (`documentaryStatus` + `responsabilidadeEmAnalise`). **Nenhum arquivo da V1 alterado**; a ação “solicitar minuta” da V1 segue como está.
+
+**Dependências:** Fase 5 (Empty Return), Fase 7 v4.1 (estados), papéis `MANAGER`/`ADMIN`.
+
+**Testes-gabarito:** os 10 casos; RBAC (Analista não valida); upload não altera nada antes da validação; divergência preserva as duas datas; zero-custo `FINAL` por Gestor mesmo com minuta pendente; **com-custo não chega a `FINAL` enquanto `EM_ANALISE`**; reabertura preserva valores anteriores + exige Gestor+justificativa; multi-contêiner isolado; nova minuta pós-validada (OPEN supersede / FINAL reabertura); timeline registra os eventos (auto × humano); Fase 7 v4.1 intacta; V1 + `tsc` + build.
+
+**Condição de aceite:** ciclo completo (descarga → free time → demurrage → Empty Return → minuta → validação → recálculo → fechamento/gate → reabertura) reproduz a tabela de casos; zero-custo fecha `FINAL` por Gestor; com-custo permanece `DEVOLVIDO_AGUARDANDO_TRATAMENTO` até a Fase 11; V1 intacta.
+
+**Risco de regressão:** nulo para a V1.
 
 ---
 
