@@ -13,6 +13,7 @@ import { courierRouter } from './routes/courierRoutes';
 import { trackingRouter } from './routes/trackingRoutes';
 import { demurrageRouter } from './routes/demurrageRoutes';
 import { auditoriaRouter } from './routes/auditoriaRoutes';
+import { iniciarSchedulerDemurrage } from './demurrage/schedulerBootstrap';
 
 const app = express();
 
@@ -89,6 +90,31 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   });
 });
 
-app.listen(config.port, () => {
+const server = app.listen(config.port, () => {
   console.log(`Priora rodando em http://localhost:${config.port}`);
+
+  // Scheduler de demurrage IN-PROCESS (Fase 6, revisão 13): roda no mesmo Web
+  // Service, dispara um tick no boot (recupera janela vencida após deploy) e
+  // depois a cada ~1h. Não bloqueia o boot nem as requisições; o claim em
+  // PostgreSQL é a proteção definitiva contra duplicidade. Falha aqui nunca
+  // derruba o servidor (o bootstrap é defensivo e cada tick captura erros).
+  try {
+    const scheduler = iniciarSchedulerDemurrage();
+    if (scheduler) {
+      const encerrar = (sinal: string) => {
+        console.log(`[demurrage-scheduler] ${sinal} recebido — parando o laço.`);
+        scheduler.stop(); // um tick em andamento termina sozinho; o claim o cobre
+        server.close(() => process.exit(0));
+      };
+      process.once('SIGTERM', () => encerrar('SIGTERM')); // Render envia SIGTERM no deploy
+      process.once('SIGINT', () => encerrar('SIGINT'));
+    }
+  } catch (err) {
+    console.error('[demurrage-scheduler] falha ao iniciar (app segue no ar):', err);
+  }
+});
+
+// Rede de segurança: uma rejeição não tratada não derruba o Web Service.
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason);
 });

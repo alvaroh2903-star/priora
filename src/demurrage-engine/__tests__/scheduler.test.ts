@@ -13,6 +13,7 @@ import { falhasConsecutivas, deveAbrirIncidente, podeAtualizarManual } from '../
 import { sincronizarContainer, sincronizarCiclo, solicitarAtualizacaoManual } from '../scheduler/trackingScheduler';
 import { runSchedulerOnce } from '../scheduler/schedulerWorker';
 import { AlertOutboxRepository, processarEntregasPendentes, AlertTransport, EntregaPendente } from '../scheduler/alertOutbox';
+import { criarGraphAlertTransport, montarEmailPadrao, resolverDestinatariosPorEnv } from '../../demurrage/alertTransportGraph';
 import { ArmadorTrackingPort, TrackingEnrichResult } from '../sources/armadorTrackingSource';
 
 const url = testDatabaseUrl();
@@ -527,4 +528,113 @@ test('outbox: transporte que falha → FAILED com erro (reprocessável), nunca S
     const { rows: rows2 } = await pool.query(`SELECT status FROM tracking_alert_deliveries WHERE incident_id=$1`, [inc.id]);
     assert.ok(rows2.every((r) => r.status === 'SENT'), 'FAILED reprocessado vira SENT');
   } finally { await pool.end(); }
+});
+
+/* ================================================================== *
+ * PARTE E — transporte Graph (e-mail) desacoplado do tracking
+ * ================================================================== */
+
+test('Graph: envio bem-sucedido → SENT; usa token + destinatários resolvidos; segregação por org no conteúdo', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await runMigrations(pool); await truncateAll(pool);
+    const { inc, orgA, orgB } = await abrirIncidenteComEntregas(pool);
+
+    const enviados: Array<{ token: string; to: string[]; subject: string; body: string }> = [];
+    const transport = criarGraphAlertTransport({
+      getToken: async () => 'tok-graph',
+      send: async (token, input) => { enviados.push({ token, to: input.to, subject: input.subject, body: input.body }); },
+      resolverDestinatarios: (e) =>
+        e.escopo === 'tecnico_global' ? { to: ['tech@priora.com'] }
+        : e.organizationId === orgA.id ? { to: ['ops-a@empresaA.com'] }
+        : { to: ['ops-b@empresaB.com'] },
+    });
+
+    const res = await processarEntregasPendentes({ pool, transport });
+    assert.equal(res.enviadas, 3);
+    assert.ok(enviados.every((e) => e.token === 'tok-graph'), 'usou o token do Graph');
+    const { rows } = await pool.query(`SELECT status, enviado_em FROM tracking_alert_deliveries WHERE incident_id=$1`, [inc.id]);
+    assert.ok(rows.every((r) => r.status === 'SENT' && r.enviado_em !== null));
+
+    // Segregação: o e-mail da Org A cita só o contêiner da Org A; o técnico cita ambos.
+    const emailA = enviados.find((e) => e.to[0] === 'ops-a@empresaA.com')!;
+    const emailTec = enviados.find((e) => e.to[0] === 'tech@priora.com')!;
+    assert.match(emailA.body, /HDMUOA00001/);
+    assert.doesNotMatch(emailA.body, /HDMUOB00001/, 'sem vazamento B→A no corpo do e-mail');
+    assert.match(emailTec.body, /HDMUOA00001/);
+    assert.match(emailTec.body, /HDMUOB00001/);
+  } finally { await pool.end(); }
+});
+
+test('Graph: falha de e-mail → FAILED reprocessável e NÃO afeta o tracking (FalhaTracking intacta, sem nova consulta)', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await runMigrations(pool); await truncateAll(pool);
+    const { inc, target } = await abrirIncidenteComEntregas(pool);
+
+    const antesFetches = await contarFetches(pool, target.id);
+    const antesInc = await new TrackingIncidentRepository(pool).incidenteAberto(target.id);
+
+    // Graph lança (indisponível) → o adaptador devolve ok:false → entrega FAILED.
+    const transport = criarGraphAlertTransport({
+      getToken: async () => 'tok',
+      send: async () => { throw new Error('Graph 503'); },
+      resolverDestinatarios: () => ({ to: ['x@y.com'] }),
+    });
+    const res = await processarEntregasPendentes({ pool, transport });
+    assert.equal(res.falhadas, 3);
+    const { rows } = await pool.query(`SELECT status, erro FROM tracking_alert_deliveries WHERE incident_id=$1`, [inc.id]);
+    assert.ok(rows.every((r) => r.status === 'FAILED' && /Graph 503/.test(r.erro)));
+
+    // DESACOPLAMENTO: nada no tracking mudou — nenhum fetch novo, incidente igual.
+    assert.equal(await contarFetches(pool, target.id), antesFetches, 'falha de e-mail não gera consulta ao armador');
+    const depoisInc = await new TrackingIncidentRepository(pool).incidenteAberto(target.id);
+    assert.equal(depoisInc!.id, antesInc!.id, 'o incidente/FalhaTracking permanece o mesmo (não incrementa)');
+
+    // Retry após o Graph voltar → SENT.
+    const bom = criarGraphAlertTransport({ getToken: async () => 'tok', send: async () => {}, resolverDestinatarios: () => ({ to: ['x@y.com'] }) });
+    await processarEntregasPendentes({ pool, transport: bom });
+    const { rows: r2 } = await pool.query(`SELECT status FROM tracking_alert_deliveries WHERE incident_id=$1`, [inc.id]);
+    assert.ok(r2.every((r) => r.status === 'SENT'), 'FAILED de e-mail é reprocessável até enviar');
+  } finally { await pool.end(); }
+});
+
+test('Graph: sem destinatário/sem token → FAILED (nunca SENT antes da confirmação do Graph)', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await runMigrations(pool); await truncateAll(pool);
+    const { inc } = await abrirIncidenteComEntregas(pool);
+
+    // Sem destinatário resolvido → nem tenta o Graph → FAILED.
+    let tentouEnviar = 0;
+    const semDest = criarGraphAlertTransport({ getToken: async () => 'tok', send: async () => { tentouEnviar++; }, resolverDestinatarios: () => ({ to: [] }) });
+    await processarEntregasPendentes({ pool, transport: semDest });
+    let { rows } = await pool.query(`SELECT status FROM tracking_alert_deliveries WHERE incident_id=$1`, [inc.id]);
+    assert.ok(rows.every((r) => r.status === 'FAILED'));
+    assert.equal(tentouEnviar, 0, 'sem destinatário nem chega a chamar o Graph');
+
+    // Com destinatário mas sem token (conta Microsoft não conectada) → FAILED, sem enviar.
+    const semToken = criarGraphAlertTransport({ getToken: async () => null, send: async () => { tentouEnviar++; }, resolverDestinatarios: () => ({ to: ['x@y.com'] }) });
+    await processarEntregasPendentes({ pool, transport: semToken });
+    ({ rows } = await pool.query(`SELECT status FROM tracking_alert_deliveries WHERE incident_id=$1`, [inc.id]));
+    assert.ok(rows.every((r) => r.status === 'FAILED'));
+    assert.equal(tentouEnviar, 0, 'sem token não envia nada (nunca SENT sem confirmação)');
+  } finally { await pool.end(); }
+});
+
+test('Graph: resolver por env (técnico global × por organização) e conteúdo padrão', () => {
+  const resolver = resolverDestinatariosPorEnv({
+    DEMURRAGE_ALERT_TECH_EMAILS: 'tech1@p.com, tech2@p.com',
+    DEMURRAGE_ALERT_ORG_EMAILS: JSON.stringify({ 'org-123': ['ops@empresa.com'] }),
+  } as any);
+  const tec = resolver({ escopo: 'tecnico_global', organizationId: null } as EntregaPendente);
+  assert.deepEqual((tec as any).to, ['tech1@p.com', 'tech2@p.com']);
+  const op = resolver({ escopo: 'operacional_org', organizationId: 'org-123' } as EntregaPendente);
+  assert.deepEqual((op as any).to, ['ops@empresa.com']);
+  const semMap = resolver({ escopo: 'operacional_org', organizationId: 'org-sem-map' } as EntregaPendente);
+  assert.deepEqual((semMap as any).to, [], 'org sem mapeamento → sem destinatário (entrega fica reprocessável)');
+
+  const email = montarEmailPadrao({ escopo: 'tecnico_global', armador: 'hmm', referencia: 'SZPM1', containers: [{ containerId: 'x', numero: 'HDMU1', organizationId: 'o' }] } as EntregaPendente);
+  assert.match(email.subject, /Incidente técnico/);
+  assert.match(email.body, /HDMU1/);
 });

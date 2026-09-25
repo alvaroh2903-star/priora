@@ -2,7 +2,7 @@
 
 **Data:** 24/09/2026 (revisão 8)
 **Base:** `docs/demurrage-blueprint-gap-analysis.md` (diagnóstico aprovado, com as 3 correções de premissa da revisão 1)
-**Status:** Fases 1–5 concluídas (migrations 0001–0012). Fase 6 — Scheduler e cadência **concluída e revisada** (migrations 0013–0014): cadência oficial (D0/D+5/a cada 4 dias/diário 4 dias antes do menor LFD/a cada 2 dias em demurrage/Empty Return encerra), **suspensão automática aos 30 dias sem Empty Return (restaurada na revisão 12 — processo/relógios seguem, manual disponível)**, seleção MBL→CONTAINER (HBL nunca dispara tracking), reuso do cache central, alerta de falha multiempresa (incidente único por target, entregas operacionais segregadas por organização), **worker real com claim de janela em PostgreSQL (dois workers/reinício não duplicam a consulta)** e **outbox de alerta (PENDING/SENT/FAILED atrás de uma porta de transporte)**. Fase 7 aguarda autorização. Ver "Relatório de entrega — revisão 12" no final deste documento.
+**Status:** Fases 1–5 concluídas (migrations 0001–0012). Fase 6 — Scheduler e cadência **concluída e revisada** (migrations 0013–0014): cadência oficial (D0/D+5/a cada 4 dias/diário 4 dias antes do menor LFD/a cada 2 dias em demurrage/Empty Return encerra), **suspensão automática aos 30 dias sem Empty Return (restaurada na revisão 12 — processo/relógios seguem, manual disponível)**, seleção MBL→CONTAINER (HBL nunca dispara tracking), reuso do cache central, alerta de falha multiempresa (incidente único por target, entregas operacionais segregadas por organização), **worker real com claim de janela em PostgreSQL (dois workers/reinício não duplicam a consulta)**, **outbox de alerta (PENDING/SENT/FAILED atrás de uma porta de transporte)**, **acionamento in-process no Web Service existente (tick no boot + a cada ~1h, sem serviço/cron novo)** e **transporte de alerta sobre Microsoft Graph / e-mail (desacoplado do tracking)**. Fase 7 aguarda autorização. Ver "Relatório de entrega — revisão 13" no final deste documento.
 
 **Decisões aprovadas na revisão 7:**
 1. **Seleção de versão do Termo Único:** a versão da tabela aplicada é a **vigente no 1º dia de demurrage do cliente** (fim do House Free Time). Não se cria um `fato_gerador_data` universal.
@@ -1590,3 +1590,54 @@ Não escolhi deploy nem canal externo por conta própria — ambos ficam prontos
 ### 7. Próximo passo
 
 Revisão da Fase 6 concluída. **Não avanço para a Fase 7 sem nova autorização.**
+
+---
+
+## Relatório de entrega — revisão 13 (acionamento in-process aprovado + transporte Graph/e-mail)
+
+Fecha os dois `PRECISA DE SUA VALIDAÇÃO` da revisão 12 com as decisões aprovadas. **Nenhuma mudança estrutural** (cadência, suspensão 30d, MBL→CONTAINER, cache central, claim, incidente/entregas segregadas permanecem exatamente como aprovados). Sem migration nova. **Arquivos V1 intactos** (`demurrageParser.ts`, `demurrageFilters.ts`, `demurrageRoutes.ts`, `Demurrage.dc.html`, `PortalCliente.dc.html` — git status confirma).
+
+### 1. Onde o scheduler é inicializado
+
+`src/index.ts`, dentro do callback de `app.listen(...)` (após o servidor subir), chamando `iniciarSchedulerDemurrage()` de `src/demurrage/schedulerBootstrap.ts`. **Roda no Web Service Render Starter existente (pago, sempre ativo)** — não há Render Cron Job, GitHub Actions nem Background Worker pago. O bootstrap só liga se `DEMURRAGE_DATABASE_URL`/`DATABASE_URL` existir; sem banco, o app sobe normal e o scheduler apenas não roda (não quebra o boot).
+
+O laço em si é puro e testável em `src/demurrage-engine/scheduler/schedulerLoop.ts` (não importa Express nem Graph — a aplicação injeta o `tick`).
+
+### 2. Intervalo utilizado
+
+`INTERVALO_PADRAO_MS = 60 * 60 * 1000` (~1 hora). **Rodar de hora em hora não é consultar armador de hora em hora:** a `cadencePolicy` decide, por target, se a janela venceu; na maioria dos ticks os targets sem janela vencida não geram nenhuma consulta (comprovado: "tick sem janela devida = zero consulta").
+
+### 3. Comportamento no startup
+
+`runOnStart: true` → um tick dispara logo após o boot, **em background** (`void executor.run()`), sem bloquear o boot nem as requisições HTTP. Motivo aprovado: se um deploy/restart ocorreu durante uma janela prevista, a janela vencida é recuperada na hora, sem esperar mais uma hora inteira. O claim garante que essa recuperação não duplica trabalho.
+
+### 4. Proteção contra overlap
+
+Duas camadas: (a) **guarda local** barata (`criarExecutorSemOverlap`): se um tick ainda roda, o disparo sobreposto é descartado; (b) **claim PostgreSQL** (`tracking_schedule_claims`, `UNIQUE(target, janela)`) como proteção **definitiva** — dois ticks coincidentes, duas instâncias durante um deploy, ou um reinício no meio da janela nunca produzem duas consultas reais para a mesma janela.
+
+### 5. Comportamento em deploy/restart
+
+- SIGTERM/SIGINT (Render envia SIGTERM no deploy) → `scheduler.stop()` (clearInterval) + `server.close()`; um tick em andamento termina sozinho e, se for interrompido, o claim o cobre (janela `claimed` stale é reaproveitável; nada fica preso).
+- `process.on('unhandledRejection')` registrado: uma rejeição solta **não derruba** o Web Service. Cada tick também captura o próprio erro (`onError`) e libera a guarda de overlap mesmo após falha.
+
+### 6. Integração Graph (transporte de alerta)
+
+`src/demurrage/alertTransportGraph.ts` implementa a porta `AlertTransport` reutilizando a infra Graph existente (`graphService.sendMail`) e o token da conta Microsoft ativa (`src/auth/backgroundToken.ts` → `acquireTokenSilent`, a mesma renovação do `requireAuth`, mas em background). O mesmo tick in-process processa as entregas pendentes após o ciclo de tracking.
+
+**Desacoplamento tracking × transporte (obrigatório e garantido por construção):** `processarEntregasPendentes`/o adaptador Graph **nunca** tocam em TrackingFetch/FalhaTracking nem chamam a porta do armador. Uma falha de e-mail retorna `{ ok:false }` → a **entrega** vira `FAILED` (reprocessável); **não** vira falha de tracking, **não** incrementa `FalhaTracking`, **não** dispara nova consulta ao armador. `SENT` só quando o `sendMail` do Graph retorna sem erro (nunca antes da confirmação). Estados: `PENDING` (nasce) → `SENT` | `FAILED` (reprocessável). Segregação multiempresa preservada no corpo do e-mail (cada entrega operacional cita só os contêineres da sua organização; sem vazamento A→B).
+
+### 7. Testes
+
+- `schedulerLoop.test.ts` (5/5): dispara um tick no start sem bloquear; agenda o periódico em ~1h e dispara a cada intervalo; guarda de overlap (dois disparos sobrepostos = um tick); erro no tick vai para `onError` sem derrubar; `stop()` limpa o timer certo.
+- `scheduler.test.ts` (20/20): inclui os itens da revisão (suspensão 30d, aceitação janela→cache miss→fetch→eventos→próxima janela, dois workers = uma execução, 30 dias = zero fetch + manual, outbox PENDING/SENT/FAILED) **e** o transporte Graph: sucesso→SENT (token + destinatários + segregação no corpo); falha→FAILED reprocessável **sem** afetar FalhaTracking nem gerar consulta; sem destinatário/sem token→FAILED (nunca SENT sem confirmação); resolver por env (técnico global × por organização).
+- Suíte completa do motor: **196/196**. V1: **25/25**. `tsc --noEmit` limpo. `npm run build` limpo.
+
+Mapa dos 18 itens de teste pedidos: 1 startup (loop 1) ✓; 2 periódico ~1h (loop 2) ✓; 3 dois ticks sobrepostos (loop 3) ✓; 4 duas instâncias/claim (scheduler "concorrência") ✓; 5 restart recupera janela (runOnStart + aceitação) ✓; 6 tick sem janela = zero consulta (aceitação r2) ✓; 7 cache hit = zero consulta nova (Fase 5 + claim; a `enrich` da porta usa o cache central) ✓; 8 MBL compartilhado = uma consulta (scheduler) ✓; 9 suspensão 30d = zero fetch (scheduler) ✓; 10 Graph SENT ✓; 11 Graph FAILED ✓; 12 retry FAILED ✓; 13 falha Graph não altera FalhaTracking ✓; 14 segregação multiempresa ✓; 15 V1 intacta ✓; 16 engine ✓; 17 tsc ✓; 18 build ✓.
+
+### 8. PRECISA DE SUA VALIDAÇÃO (um item de dado, não de estrutura)
+
+**Destinatários dos alertas.** O canal (Graph/e-mail) está pronto; falta o **mapeamento de destinatários**, que é dado operacional que não existe no repositório: (a) e-mail(s) do responsável técnico (alerta técnico global) e (b) e-mail(s) por organização (entrega operacional). O resolver padrão lê de ambiente: `DEMURRAGE_ALERT_TECH_EMAILS` (lista) e `DEMURRAGE_ALERT_ORG_EMAILS` (JSON `{ "<organization_id>": ["email"] }`). Enquanto não forem preenchidos, essas entregas ficam `FAILED`/reprocessáveis (nada se perde; o tracking não é afetado) — assim que você fornecer os endereços (via env ou uma tabela, se preferir persistir), elas passam a enviar. Diga se prefere env ou uma tabela de destinatários no banco, e quais endereços usar.
+
+### 9. Próximo passo
+
+Acionamento e canal implementados conforme aprovado; tudo verde; nenhuma mudança estrutural nova. **Fase 6 pode ser considerada CONCLUÍDA.** **Não avanço para a Fase 7 sem autorização.**
