@@ -4,6 +4,7 @@ import { runSchedulerOnce } from '../demurrage-engine/scheduler/schedulerWorker'
 import { processarEntregasPendentes } from '../demurrage-engine/scheduler/alertOutbox';
 import { startSchedulerLoop, SchedulerLoopHandle, INTERVALO_PADRAO_MS } from '../demurrage-engine/scheduler/schedulerLoop';
 import { passagemDoCalendario } from '../demurrage-engine/apuracao/passagemCalendario';
+import { hojeOperacional } from '../demurrage-engine/time/operationalDate';
 import { criarGraphAlertTransport, resolverDestinatariosPorEnv } from './alertTransportGraph';
 
 /**
@@ -35,7 +36,7 @@ export function iniciarSchedulerDemurrage(opts: { intervalMs?: number } = {}): S
     // data civil, independente da cadência de tracking. Roda SEMPRE — mesmo quando
     // nenhuma consulta ao armador é devida ou o tracking está suspenso (30d) —, e é
     // ≤1×/data civil (chaveado pela data já apurada no relógio).
-    const hoje = new Date().toISOString().slice(0, 10);
+    const hoje = hojeOperacional(); // data civil operacional (fuso local), nunca UTC.
     const cal = await passagemDoCalendario(pool, hoje);
     // 2) Ciclo de tracking (idempotente por claim; consulta só o que a cadência exige).
     const r = await runSchedulerOnce({ pool, port });

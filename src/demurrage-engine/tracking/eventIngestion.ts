@@ -6,6 +6,8 @@ import { TrackingTargetRepository, TrackingTarget } from '../persistence/trackin
 import { dedupeHash } from './dedupe';
 import { TrackingContainerLike, TrackingEnrichResult } from '../sources/armadorTrackingSource';
 import { recalcularApuracaoContainer } from '../apuracao/recalcularApuracao';
+import { hojeOperacional } from '../time/operationalDate';
+import { CivilDate } from '../temporal/civilDate';
 
 /**
  * Ingestão do resultado da API central de tracking (Fase 5).
@@ -86,6 +88,13 @@ export interface IngestInput {
   target: TrackingTarget;
   result: TrackingEnrichResult;
   coletadoEm?: Date;
+  /**
+   * Data civil OPERACIONAL de referência para o recálculo (v1.3). Default:
+   * `hojeOperacional()`. NUNCA derivar de `result.at`/`coletadoEm`: o `at` pode ser
+   * o timestamp de uma resposta CACHEADA (anterior à data civil corrente) e faria a
+   * `data_final_apuracao` de um contêiner sem devolução REGREDIR. Injetável em teste.
+   */
+  hojeReferencia?: CivilDate;
 }
 
 export async function ingestTrackingResult(input: IngestInput): Promise<IngestResult> {
@@ -194,11 +203,13 @@ export async function ingestTrackingResult(input: IngestInput): Promise<IngestRe
     // sem equivalência funcional nova — até existir regra (fora da Fase 5).
   }
 
-  // 3) Pipeline (Fase 8 v1.2): todo contêiner cujo fato de cálculo foi promovido
+  // 3) Pipeline (Fase 8 v1.2/v1.3): todo contêiner cujo fato de cálculo foi promovido
   // passa pela apuração (relógios + valores + lifecycle) com a MESMA data final.
-  // Ex.: valor provisório até D14 → Empty Return real D12 promovido → relógios e
-  // valores recalculam para D12. FINAL é NO-OP no orquestrador (congelado).
-  const hoje = coletadoEm.toISOString().slice(0, 10);
+  // A data de referência é o HOJE OPERACIONAL (fuso local), NUNCA o timestamp da
+  // coleta/cache: sem devolução, `finalDate` = dataReferencia e um `result.at`
+  // cacheado (passado) faria a apuração regredir. Com Empty Return, o orquestrador
+  // usa a data de devolução real (effective ?? tracking) — não o hoje. FINAL é NO-OP.
+  const hoje = input.hojeReferencia ?? hojeOperacional();
   for (const containerId of afetadosCalculo) {
     await recalcularApuracaoContainer(pool, containerId, { dataReferencia: hoje });
   }

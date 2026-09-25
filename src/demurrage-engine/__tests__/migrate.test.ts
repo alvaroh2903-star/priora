@@ -28,6 +28,7 @@ test('migrations: aplica todas as migrations pendentes em um banco novo e é ide
       '0015_lifecycle_estado_prioridade.sql',
       '0016_fase8_minuta_fechamento.sql',
       '0017_final_guard.sql',
+      '0018_final_guard_data_congelada.sql',
     ];
 
     const first = await runMigrations(pool);

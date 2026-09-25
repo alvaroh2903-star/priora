@@ -4,6 +4,7 @@ import { ArmadorTrackingPort } from '../sources/armadorTrackingSource';
 import { SchedulerRepository, ContainerCadenciaRow } from '../persistence/schedulerRepository';
 import { avaliarCadencia, deveConsultarAgora, CadenciaInput } from './cadencePolicy';
 import { sincronizarCiclo } from './trackingScheduler';
+import { hojeOperacional } from '../time/operationalDate';
 
 /**
  * Worker REAL do scheduler (revisão da Fase 6).
@@ -74,8 +75,10 @@ export interface RunSchedulerOnceResultado {
   suspensos: number;
 }
 
-function hojeUTC(): CivilDate {
-  return new Date().toISOString().slice(0, 10);
+// "Hoje" da janela de claim = data civil OPERACIONAL (fuso local), nunca UTC —
+// para o scheduler concordar com tracking/fechamento/calendário sobre o dia.
+function hojeCivil(): CivilDate {
+  return hojeOperacional();
 }
 
 /**
@@ -84,7 +87,7 @@ function hojeUTC(): CivilDate {
  * por dia, mesmo com N workers ou um reinício.
  */
 export async function runSchedulerOnce(input: RunSchedulerOnceInput): Promise<RunSchedulerOnceResultado> {
-  const hoje = input.hoje ?? hojeUTC();
+  const hoje = input.hoje ?? hojeCivil();
   const repo = new SchedulerRepository(input.pool);
   const linhas = await repo.carregarContainersRastreaveis();
 

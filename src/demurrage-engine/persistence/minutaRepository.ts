@@ -84,6 +84,33 @@ export class MinutaRepository {
     return rows[0]?.tem === true;
   }
 
+  /**
+   * Comprovação para o gate de FINAL (v1.3, item 3): não basta existir QUALQUER
+   * minuta VALIDADA. A comprovação só está concluída quando:
+   *  - existe minuta VALIDADA CORRESPONDENTE à evidência efetiva do fechamento
+   *    (data_validada == data final que será congelada); e
+   *  - NÃO há divergência de data ainda PENDENTE de decisão (minuta RECEBIDA
+   *    marcada como divergente do tracking, aguardando revisão do Gestor).
+   * Uma minuta VALIDADA antiga não libera FINAL enquanto uma nova divergência de
+   * devolução estiver aguardando revisão.
+   */
+  async comprovacao(
+    containerId: string,
+    dataFinalEvidencia: CivilDate | null,
+  ): Promise<{ validadaCorrespondente: boolean; divergenciaPendente: boolean }> {
+    const { rows } = await this.pool.query(
+      `SELECT
+         bool_or(estado_minuta = 'VALIDADA' AND data_validada = $2) AS correspondente,
+         bool_or(estado_minuta = 'RECEBIDA' AND divergente_do_tracking = true) AS divergente_pendente
+       FROM minutas WHERE container_id = $1`,
+      [containerId, dataFinalEvidencia],
+    );
+    return {
+      validadaCorrespondente: rows[0]?.correspondente === true,
+      divergenciaPendente: rows[0]?.divergente_pendente === true,
+    };
+  }
+
   async marcarValidada(id: string, dataValidada: CivilDate, divergente: boolean, validadaPor: string | null): Promise<void> {
     await this.pool.query(
       `UPDATE minutas SET estado_minuta = 'VALIDADA', data_validada = $2, divergente_do_tracking = $3,

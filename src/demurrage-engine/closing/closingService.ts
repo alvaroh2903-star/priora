@@ -119,8 +119,12 @@ export class ClosingService {
     // devolução em força apenas encerra a pendência DOCUMENTAL (sem recálculo,
     // sem reabertura). Uma que ALTERARIA o resultado exige reabertura autorizada.
     if (ci.apuracao_status === 'FINAL') {
-      const emForca: CivilDate | null = ci.effective_return_date ?? ci.tracking_return_date ?? null;
-      if (r.dataValidada !== emForca) return { ok: false, motivo: 'exige_reabertura' };
+      // v1.3: a prova de "apenas confirma" é a DATA FINAL CONGELADA (relógios),
+      // não o tracking_return_date atual (que um tracking posterior pode ter movido).
+      const congelada: CivilDate | null = (
+        await this.pool.query(`SELECT data_final_apuracao FROM relogios WHERE container_id = $1 AND tipo = 'cliente'`, [m.containerId])
+      ).rows[0]?.data_final_apuracao ?? ci.effective_return_date ?? ci.tracking_return_date ?? null;
+      if (r.dataValidada !== congelada) return { ok: false, motivo: 'exige_reabertura' };
       await this.minutas.marcarValidada(m.id, r.dataValidada, divergente, input.validadaPor ?? null);
       await this.pool.query(
         `UPDATE containers SET effective_return_date = $2, effective_return_minuta_id = $3 WHERE id = $1`,
@@ -208,7 +212,8 @@ export class ClosingService {
     if (proc.apuracao_status === 'FINAL') return { ok: false, motivo: 'ja_final' };
 
     const { rows: conts } = await this.pool.query(
-      `SELECT id, (effective_return_date IS NOT NULL OR tracking_return_date IS NOT NULL) AS devolvido
+      `SELECT id, effective_return_date, tracking_return_date,
+              (effective_return_date IS NOT NULL OR tracking_return_date IS NOT NULL) AS devolvido
          FROM containers WHERE processo_id = $1 ORDER BY id`,
       [input.processoId],
     );
@@ -229,7 +234,12 @@ export class ClosingService {
       if (facts.apuracaoDemurrageStatus === 'ZERO_CONFIRMADO') continue; // fecha sem tarifa/minuta.
       // DEMURRAGE_CONFIRMADA a partir daqui.
       if (responsabilidade === 'EM_ANALISE') return { ok: false, motivo: 'responsabilidade_em_analise' };
-      if (!(await this.minutas.temValidada(c.id))) return { ok: false, motivo: 'comprovacao_pendente' };
+      // Comprovação (v1.3): minuta VALIDADA correspondente à evidência efetiva do
+      // fechamento E sem divergência de data ainda pendente de revisão.
+      const dataFinalEvidencia: CivilDate | null = c.effective_return_date ?? c.tracking_return_date ?? null;
+      const comprov = await this.minutas.comprovacao(c.id, dataFinalEvidencia);
+      if (comprov.divergenciaPendente) return { ok: false, motivo: 'divergencia_pendente' };
+      if (!comprov.validadaCorrespondente) return { ok: false, motivo: 'comprovacao_pendente' };
       const ativos = await this.valores.ativosDoContainer(c.id);
       const confirmado = (tipo: 'cliente' | 'rocket'): boolean =>
         ativos.some((v) => v.relogioTipo === tipo && (v.confirmationStatus === 'ESTIMATED' || v.confirmationStatus === 'CONFIRMED'));
