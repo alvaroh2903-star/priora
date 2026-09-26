@@ -59,7 +59,7 @@ export function cadenciaInputDe(row: ContainerCadenciaRow, hoje: CivilDate): Cad
 export interface RunSchedulerOnceInput {
   pool: Pool;
   port: ArmadorTrackingPort;
-  /** Data civil operacional do tick (obrigatória em teste; default: hoje UTC). */
+  /** Data civil operacional do tick (injetável em teste; default: hoje operacional, fuso local). */
   hoje?: CivilDate;
   workerId?: string;
   /** Janela stale para reaproveitar claim de worker morto. Default '30 minutes'. */

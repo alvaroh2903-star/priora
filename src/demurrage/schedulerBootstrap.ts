@@ -1,11 +1,46 @@
+import { Pool } from 'pg';
 import { getPool } from '../demurrage-engine/db/pool';
-import { realArmadorTrackingPort } from '../demurrage-engine/sources/armadorTrackingSource';
+import { realArmadorTrackingPort, ArmadorTrackingPort } from '../demurrage-engine/sources/armadorTrackingSource';
 import { runSchedulerOnce } from '../demurrage-engine/scheduler/schedulerWorker';
-import { processarEntregasPendentes } from '../demurrage-engine/scheduler/alertOutbox';
+import { processarEntregasPendentes, AlertTransport } from '../demurrage-engine/scheduler/alertOutbox';
 import { startSchedulerLoop, SchedulerLoopHandle, INTERVALO_PADRAO_MS } from '../demurrage-engine/scheduler/schedulerLoop';
 import { passagemDoCalendario } from '../demurrage-engine/apuracao/passagemCalendario';
 import { hojeOperacional } from '../demurrage-engine/time/operationalDate';
+import { CivilDate } from '../demurrage-engine/temporal/civilDate';
 import { criarGraphAlertTransport, resolverDestinatariosPorEnv } from './alertTransportGraph';
+
+export interface TickDeps {
+  pool: Pool;
+  port: ArmadorTrackingPort;
+  transport: AlertTransport;
+}
+
+export interface TickResultado {
+  /** A ÚNICA data civil operacional usada por TODAS as etapas do tick. */
+  hoje: CivilDate;
+  calendario: number;
+  janela: string;
+  sincronizados: number;
+  entregasEnviadas: number;
+  entregasFalhadas: number;
+}
+
+/**
+ * UM tick do scheduler in-process. Invariante (v1.4): calcula `hojeOperacional()`
+ * UMA vez e passa exatamente o mesmo `hoje` para o calendário, o tracking e o
+ * claim — nunca duas datas civis diferentes num tick que atravesse a meia-noite.
+ * `hojeInjetado` existe só para teste do invariante.
+ */
+export async function executarTickDemurrage(deps: TickDeps, hojeInjetado?: CivilDate): Promise<TickResultado> {
+  const hoje = hojeInjetado ?? hojeOperacional(); // fuso local, nunca UTC.
+  const cal = await passagemDoCalendario(deps.pool, hoje);
+  const r = await runSchedulerOnce({ pool: deps.pool, port: deps.port, hoje });
+  const entregas = await processarEntregasPendentes({ pool: deps.pool, transport: deps.transport });
+  return {
+    hoje, calendario: cal.processados.length, janela: r.janela,
+    sincronizados: r.sincronizados, entregasEnviadas: entregas.enviadas, entregasFalhadas: entregas.falhadas,
+  };
+}
 
 /**
  * Ponto de partida do scheduler in-process (revisão 13). Roda no Web Service
@@ -32,19 +67,10 @@ export function iniciarSchedulerDemurrage(opts: { intervalMs?: number } = {}): S
   const transport = criarGraphAlertTransport({ resolverDestinatarios: resolverDestinatariosPorEnv() });
 
   const tick = async (): Promise<void> => {
-    // 1) Passagem do calendário (tick interno barato): o demurrage cresce com a
-    // data civil, independente da cadência de tracking. Roda SEMPRE — mesmo quando
-    // nenhuma consulta ao armador é devida ou o tracking está suspenso (30d) —, e é
-    // ≤1×/data civil (chaveado pela data já apurada no relógio).
-    const hoje = hojeOperacional(); // data civil operacional (fuso local), nunca UTC.
-    const cal = await passagemDoCalendario(pool, hoje);
-    // 2) Ciclo de tracking (idempotente por claim; consulta só o que a cadência exige).
-    const r = await runSchedulerOnce({ pool, port });
-    // 3) Transporte dos alertas pendentes (desacoplado do tracking).
-    const entregas = await processarEntregasPendentes({ pool, transport });
+    const t = await executarTickDemurrage({ pool, port, transport });
     console.log(
-      `[demurrage-scheduler] tick ${r.janela}: calendário=${cal.processados.length} avaliados=${r.contêineresAvaliados} janela=${r.contêineresNaJanela} ` +
-        `sincronizados=${r.sincronizados} suspensos=${r.suspensos} | entregas: enviadas=${entregas.enviadas} falhadas=${entregas.falhadas}`,
+      `[demurrage-scheduler] tick ${t.hoje}/${t.janela}: calendário=${t.calendario} ` +
+        `sincronizados=${t.sincronizados} | entregas: enviadas=${t.entregasEnviadas} falhadas=${t.entregasFalhadas}`,
     );
   };
 

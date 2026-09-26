@@ -231,13 +231,19 @@ export class ClosingService {
     for (const c of conts) {
       const { facts, responsabilidade } = await this.lifecycle.gateFechamento(c.id, input.config);
       if (facts.apuracaoDemurrageStatus === 'INDETERMINADA') return { ok: false, motivo: 'apuracao_indeterminada' };
-      if (facts.apuracaoDemurrageStatus === 'ZERO_CONFIRMADO') continue; // fecha sem tarifa/minuta.
+      const dataFinalEvidencia: CivilDate | null = c.effective_return_date ?? c.tracking_return_date ?? null;
+      const comprov = await this.minutas.comprovacao(c.id, dataFinalEvidencia);
+      if (facts.apuracaoDemurrageStatus === 'ZERO_CONFIRMADO') {
+        // Zero confirmado fecha SEM minuta; mas uma divergência documental JÁ
+        // CONHECIDA (minuta RECEBIDA divergente aguardando decisão do Gestor) bloqueia
+        // até ser resolvida/rejeitada (v1.4). Ausência de minuta NUNCA bloqueia.
+        if (comprov.divergenciaPendente) return { ok: false, motivo: 'divergencia_pendente' };
+        continue;
+      }
       // DEMURRAGE_CONFIRMADA a partir daqui.
       if (responsabilidade === 'EM_ANALISE') return { ok: false, motivo: 'responsabilidade_em_analise' };
       // Comprovação (v1.3): minuta VALIDADA correspondente à evidência efetiva do
       // fechamento E sem divergência de data ainda pendente de revisão.
-      const dataFinalEvidencia: CivilDate | null = c.effective_return_date ?? c.tracking_return_date ?? null;
-      const comprov = await this.minutas.comprovacao(c.id, dataFinalEvidencia);
       if (comprov.divergenciaPendente) return { ok: false, motivo: 'divergencia_pendente' };
       if (!comprov.validadaCorrespondente) return { ok: false, motivo: 'comprovacao_pendente' };
       const ativos = await this.valores.ativosDoContainer(c.id);
