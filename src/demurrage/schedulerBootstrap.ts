@@ -20,7 +20,13 @@ export interface TickResultado {
   hoje: CivilDate;
   calendario: number;
   janela: string;
+  /** Observabilidade (restaurado): contêineres avaliados pela cadência no tick. */
+  avaliados: number;
+  /** Observabilidade (restaurado): contêineres dentro da janela de consulta. */
+  naJanela: number;
   sincronizados: number;
+  /** Observabilidade (restaurado): contêineres com tracking suspenso (30d). */
+  suspensos: number;
   entregasEnviadas: number;
   entregasFalhadas: number;
 }
@@ -38,7 +44,9 @@ export async function executarTickDemurrage(deps: TickDeps, hojeInjetado?: Civil
   const entregas = await processarEntregasPendentes({ pool: deps.pool, transport: deps.transport });
   return {
     hoje, calendario: cal.processados.length, janela: r.janela,
-    sincronizados: r.sincronizados, entregasEnviadas: entregas.enviadas, entregasFalhadas: entregas.falhadas,
+    avaliados: r.contêineresAvaliados, naJanela: r.contêineresNaJanela,
+    sincronizados: r.sincronizados, suspensos: r.suspensos,
+    entregasEnviadas: entregas.enviadas, entregasFalhadas: entregas.falhadas,
   };
 }
 
@@ -69,8 +77,9 @@ export function iniciarSchedulerDemurrage(opts: { intervalMs?: number } = {}): S
   const tick = async (): Promise<void> => {
     const t = await executarTickDemurrage({ pool, port, transport });
     console.log(
-      `[demurrage-scheduler] tick ${t.hoje}/${t.janela}: calendário=${t.calendario} ` +
-        `sincronizados=${t.sincronizados} | entregas: enviadas=${t.entregasEnviadas} falhadas=${t.entregasFalhadas}`,
+      `[demurrage-scheduler] tick ${t.hoje}/${t.janela}: calendário=${t.calendario} avaliados=${t.avaliados} ` +
+        `janela=${t.naJanela} sincronizados=${t.sincronizados} suspensos=${t.suspensos} | ` +
+        `entregas: enviadas=${t.entregasEnviadas} falhadas=${t.entregasFalhadas}`,
     );
   };
 
