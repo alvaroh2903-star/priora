@@ -97,11 +97,23 @@ export async function avaliarFalhaTarget(pool: Pool, target: TrackingTarget): Pr
   }
 }
 
+/** Uma consulta REAL efetivada nesta sincronização (fetch + ingestão já ocorridos). */
+export interface ConsultaRealizada {
+  targetId: string;
+  referenceValueCanonical: string;
+  result: TrackingEnrichResult;
+  fetchId: string;
+  cached: boolean;
+  ok: boolean;
+}
+
 export interface SincronizarContainerResultado {
   containerId: string;
   usouMbl: boolean;
   consultouContainer: boolean;
   targetsConsultados: Array<'mbl' | 'container'>;
+  /** Consultas reais efetivadas (para quem precisa do resultado/fetch — Bloco 2). */
+  consultas: ConsultaRealizada[];
 }
 
 /**
@@ -124,7 +136,7 @@ export async function sincronizarContainer(input: {
 
   const mbl = links.find((l) => l.referenceType === 'mbl');
   const cont = links.find((l) => l.referenceType === 'container');
-  const res: SincronizarContainerResultado = { containerId, usouMbl: false, consultouContainer: false, targetsConsultados: [] };
+  const res: SincronizarContainerResultado = { containerId, usouMbl: false, consultouContainer: false, targetsConsultados: [], consultas: [] };
 
   // Consulta+ingere um target no máximo UMA vez por ciclo (um TrackingFetch).
   // Respeita a barreira de concorrência: se outro worker já detém o claim do
@@ -133,9 +145,10 @@ export async function sincronizarContainer(input: {
     if (!(await podeConsultarTarget(ciclo, target.id))) return null; // outro worker detém a janela
     const r = await enrichTarget(port, target, ciclo.memo);
     if (!ciclo.ingeridos.has(target.id)) {
-      await ingestTrackingResult({ pool, target, result: r });
+      const ing = await ingestTrackingResult({ pool, target, result: r });
       await avaliarFalhaTarget(pool, target);
       ciclo.ingeridos.add(target.id);
+      res.consultas.push({ targetId: target.id, referenceValueCanonical: target.referenceValueCanonical, result: r, fetchId: ing.fetchId, cached: r.cached, ok: r.ok });
     }
     return r;
   };

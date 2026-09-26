@@ -110,18 +110,9 @@ export async function runSchedulerOnce(input: RunSchedulerOnceInput): Promise<Ru
     }
   }
 
-  // Fase 9 Bloco 2 — tracking intercalado: sobre os DEVIDOS, escolhe UMA referência
-  // por VesselCall compartilhado e cobre os demais (excluídos do individual). INERTE
-  // quando não há participantes confirmados (produção/testes congelados). NÃO altera
-  // o cálculo da cadência — apenas a seleção/execução das consultas automáticas.
-  let compartilhados = 0;
-  let cobertos = 0;
-  const plano = await planejarRodadasCompartilhadas({ pool: input.pool, port: input.port, dataOperacional: hoje, devidos, workerId: input.workerId });
-  compartilhados = plano.rodadas;
-  cobertos = plano.cobertos;
-  const devidosIndividuais = devidos.filter((id) => !plano.tratados.has(id));
-
-  // Barreira: só consulta o target se ESTE worker vencer o claim (target, janela).
+  // Barreira ÚNICA de claim individual (target, janela) — usada TANTO pela rodada
+  // compartilhada quanto pelo fluxo individual, para que a consulta real da
+  // referência atravesse a mesma barreira/fetch/incidente/ingestão.
   const vencidos = new Set<string>();
   const reivindicar = async (trackingTargetId: string): Promise<boolean> => {
     const { venceu } = await repo.claimJanela(trackingTargetId, hoje, {
@@ -132,18 +123,27 @@ export async function runSchedulerOnce(input: RunSchedulerOnceInput): Promise<Ru
     return venceu;
   };
 
+  // Fase 9 Bloco 2 — tracking intercalado: sobre os DEVIDOS, escolhe UMA referência
+  // por VesselCall compartilhado (consultada pelo pipeline individual via `reivindicar`)
+  // e cobre os demais. INERTE sem participantes confirmados. NÃO altera o cálculo da
+  // cadência — só a seleção/execução das consultas automáticas. Cobertura vigente e
+  // rodada de outro worker retiram os participantes do individual neste tick.
+  const plano = await planejarRodadasCompartilhadas({ pool: input.pool, port: input.port, dataOperacional: hoje, devidos, workerId: input.workerId, reivindicar });
+  const compartilhados = plano.rodadas;
+  const cobertos = plano.cobertos;
+  const devidosIndividuais = devidos.filter((id) => !plano.tratados.has(id));
+
   let resultados: Awaited<ReturnType<typeof sincronizarCiclo>> = [];
-  if (devidosIndividuais.length) {
-    try {
+  try {
+    if (devidosIndividuais.length) {
       resultados = await sincronizarCiclo({ pool: input.pool, port: input.port, containerIds: devidosIndividuais, reivindicar });
-      // Janelas vencidas por este worker foram consumidas (sucesso OU falha já
-      // tratada como incidente): marca 'done' para a cadência avançar. Um claim
-      // deixado 'claimed' (exceção abaixo) é reaproveitável depois (stale).
-      for (const targetId of vencidos) await repo.concluirClaim(targetId, hoje, true);
-    } catch (err: any) {
-      for (const targetId of vencidos) await repo.concluirClaim(targetId, hoje, false, err?.message ?? String(err));
-      throw err;
     }
+    // Janelas vencidas por este worker (rodada compartilhada + individual) foram
+    // consumidas (sucesso OU falha já tratada como incidente) → marca 'done'.
+    for (const targetId of vencidos) await repo.concluirClaim(targetId, hoje, true);
+  } catch (err: any) {
+    for (const targetId of vencidos) await repo.concluirClaim(targetId, hoje, false, err?.message ?? String(err));
+    throw err;
   }
   const sincronizados = resultados.filter((r) => r.targetsConsultados.length > 0).length;
 

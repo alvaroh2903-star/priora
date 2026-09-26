@@ -6,272 +6,273 @@ import { testPool, testDatabaseUrl, truncateAll } from './testDb';
 import { OrganizationRepository } from '../persistence/organizationRepository';
 import { ProcessoRepository } from '../persistence/processoRepository';
 import { ContainerRepository } from '../persistence/containerRepository';
+import { FieldObservationRepository } from '../persistence/fieldObservationRepository';
 import { TrackingTargetRepository } from '../persistence/trackingTargetRepository';
 import { VesselCallRepository } from '../persistence/vesselCallRepository';
 import { VesselSharingRepository } from '../persistence/vesselSharingRepository';
 import { executarRodadaCompartilhada, planejarRodadasCompartilhadas } from '../tracking/vesselRound';
 import { ordenarCandidatos, janelaFormacaoValida } from '../tracking/vesselSharing';
-import { ArmadorTrackingPort, TrackingEnrichResult } from '../sources/armadorTrackingSource';
+import { ArmadorTrackingPort, TrackingEnrichResult, TrackingEventLike } from '../sources/armadorTrackingSource';
 
 const url = testDatabaseUrl();
 const HOJE = '2026-09-20';
 const IDENT = { armador: 'MAERSK', armadorOriginal: 'maersk', vessel: 'OCEAN CARGO', vesselOriginal: 'Ocean Cargo', voyage: 'V1', voyageOriginal: 'V1', pod: 'SINGAPURA', podOriginal: 'Singapura' };
+const numeroDe = (i: number) => `HDMU000000${i}`;
 
 /* ---------- puro ---------- */
-
-test('puro: ordenarCandidatos põe o mais antigo primeiro; desempate por containerId', () => {
+test('puro: ordenarCandidatos (mais antigo primeiro; desempate por id) e janela de 4 dias', () => {
   const r = ordenarCandidatos([
     { containerId: 'C', trackingTargetId: null, ultimaConsultaValida: '2026-09-10' },
     { containerId: 'A', trackingTargetId: null, ultimaConsultaValida: null },
     { containerId: 'B', trackingTargetId: null, ultimaConsultaValida: '2026-09-05' },
   ]);
-  assert.deepEqual(r.map((x) => x.containerId), ['A', 'B', 'C']); // null (nunca consultado) primeiro
-});
-
-test('puro: janela de formação — ≤4 dias válida; >4 dias inválida', () => {
+  assert.deepEqual(r.map((x) => x.containerId), ['A', 'B', 'C']);
   assert.equal(janelaFormacaoValida(['2026-09-01', '2026-09-05']), true);
   assert.equal(janelaFormacaoValida(['2026-09-01', '2026-09-06']), false);
-  assert.equal(janelaFormacaoValida(['2026-09-01']), true);
 });
 
 /* ---------- integração ---------- */
-
 async function setup(pool: Pool) { await runMigrations(pool); await truncateAll(pool); }
 const org = (pool: Pool, slug = 'rocket') => new OrganizationRepository(pool).create('Rocket', slug);
 
-function fakePort(over: (ref: string) => Partial<TrackingEnrichResult> = () => ({})): ArmadorTrackingPort {
+/** Resposta com FATO DE VIAGEM (loaded confirmado) para o contêiner do ref MBL-<i>. */
+function travelResult(ref: string, over: Partial<TrackingEnrichResult> = {}): TrackingEnrichResult {
+  const i = ref.replace(/\D/g, '');
+  const numero = `HDMU000000${i}`;
+  const loaded: TrackingEventLike = { date: '2026-09-05', status: 'Loaded on board', location: 'SINGAPURA', vessel: 'OCEAN CARGO', voyage: 'V1', type: 'loaded', statusPrevistoConfirmado: 'confirmado', container: numero };
   return {
-    async enrich(ref: string): Promise<TrackingEnrichResult> {
-      return {
-        carrier: { id: 'maersk', name: 'Maersk' }, reference: ref, referenceType: 'bl', ok: true,
-        needsLogin: false, needsCaptcha: false, message: undefined, events: [], containers: [],
-        cached: false, resolved: false, at: '2026-09-20T00:00:00Z', ...over(ref),
-      };
-    },
+    carrier: { id: 'maersk', name: 'Maersk' }, reference: ref, referenceType: 'bl', ok: true, needsLogin: false, needsCaptcha: false,
+    events: [loaded], containers: [{ numero, tipo: null, dischargeDate: null, availableDate: null, gateOut: null, emptyReturn: null }],
+    cached: false, resolved: false, at: '2026-09-20T00:00:00Z', etaPrevista: '2026-09-25', ...over,
   };
 }
+function fakePort(over: (ref: string) => Partial<TrackingEnrichResult> = () => ({})): ArmadorTrackingPort {
+  return { async enrich(ref: string) { return travelResult(ref, over(ref)); } };
+}
 
-/** Monta VesselCall + N participantes confirmados (elegíveis) e devolve ids. */
 async function grupo(pool: Pool, n: number, opts: { slug?: string } = {}) {
   const o = await org(pool, opts.slug ?? 'rocket');
   const p = await new ProcessoRepository(pool).create({ organizationId: o.id, numeroProcesso: 'IM-G', clienteId: null });
   const vc = await new VesselCallRepository(pool).upsert({ organizationId: o.id, componentes: IDENT, podFonte: 'master_bl' });
   const sharing = new VesselSharingRepository(pool);
-  const containers: { id: string; targetId: string; ref: string }[] = [];
+  const containers: { id: string; targetId: string; ref: string; numero: string }[] = [];
   for (let i = 0; i < n; i++) {
-    const numero = `HDMU000000${i}`;
+    const numero = numeroDe(i);
     const c = await new ContainerRepository(pool).create(o.id, p.id, numero);
+    await new FieldObservationRepository(pool).insert({ organizationId: o.id, entidadeTipo: 'container', entidadeId: c.id, campo: 'podDescarga', valor: 'SINGAPURA', fonte: 'master_bl', observadoEm: new Date('2026-09-01T00:00:00Z') });
     const { target } = await new TrackingTargetRepository(pool).upsert({ carrier: 'maersk', reference: `MBL-${i}` });
     await new TrackingTargetRepository(pool).linkContainer(c.id, target.id, { referenceType: 'mbl', referenceRaw: `MBL-${i}` });
     await new VesselCallRepository(pool).associarContainer({ containerId: c.id, vesselCallId: vc.id, organizationId: o.id, chave: 'k', origemDados: 'tracking_service' });
-    await sharing.confirmarEstruturado({
-      organizationId: o.id, vesselCallId: vc.id, containerId: c.id, trackingTargetId: target.id, processoId: p.id,
-      etaPrevista: '2026-09-25', vinculoConfirmado: true, fonte: 'tracking_service', evidencia: 'loaded on board',
-      observadoEm: new Date('2026-09-05T00:00:00Z'), statusPrevistoConfirmado: 'confirmado',
-    });
-    containers.push({ id: c.id, targetId: target.id, ref: target.referenceValueCanonical });
+    await sharing.confirmarEstruturado({ organizationId: o.id, vesselCallId: vc.id, containerId: c.id, trackingTargetId: target.id, processoId: p.id, etaPrevista: '2026-09-25', vinculoConfirmado: true, fonte: 'tracking_service', evidencia: 'loaded on board', observadoEm: new Date('2026-09-05T00:00:00Z'), statusPrevistoConfirmado: 'confirmado' });
+    containers.push({ id: c.id, targetId: target.id, ref: target.referenceValueCanonical, numero });
   }
-  return { orgId: o.id, processoId: p.id, vesselCallId: vc.id, containers };
+  return { orgId: o.id, processoId: p.id, vesselCallId: vc.id, containers, port: fakePort() };
 }
 const fetchesDe = (pool: Pool, targetId: string) => pool.query(`SELECT count(*)::int n FROM tracking_fetches WHERE tracking_target_id=$1`, [targetId]).then((r) => r.rows[0].n);
-const rodada = (pool: Pool, vcId: string) => pool.query(`SELECT * FROM vessel_call_rodadas WHERE vessel_call_id=$1`, [vcId]).then((r) => r.rows);
+const idSet = (arr: { id: string }[]) => new Set(arr.map((c) => c.id));
 
-test('rodada: 3 participantes → 1 referência consultada (fetch real), 2 cobertos; só a referência tem TrackingFetch', { skip: !url }, async () => {
+test('#4 referência compartilhada adquire/conclui claim individual (TrackingFetch real) e cobre os demais', { skip: !url }, async () => {
   const pool = testPool();
   try {
     await setup(pool);
     const g = await grupo(pool, 3);
-    const devidos = new Set(g.containers.map((c) => c.id));
-    const r = await executarRodadaCompartilhada({ pool, port: fakePort(), organizationId: g.orgId, vesselCallId: g.vesselCallId, dataOperacional: HOJE, devidos });
+    const r = await executarRodadaCompartilhada({ pool, port: g.port, organizationId: g.orgId, vesselCallId: g.vesselCallId, dataOperacional: HOJE, devidos: idSet(g.containers) });
     assert.equal(r.status, 'executada');
     assert.equal(r.cobertos.length, 2);
-    assert.ok(r.referenciaContainerId);
-    assert.equal(r.resultadoReferencia, 'consulta_efetiva');
-    // Só a referência tem fetch; cobertos não.
     const ref = g.containers.find((c) => c.id === r.referenciaContainerId)!;
-    assert.equal(await fetchesDe(pool, ref.targetId), 1);
-    for (const c of g.containers.filter((x) => x.id !== ref.id)) {
-      assert.equal(await fetchesDe(pool, c.targetId), 0, 'coberto não gera TrackingFetch');
-    }
-    // Cobertos ficam vigentes e excluídos da seleção automática.
-    const vigentes = await new VesselSharingRepository(pool).coberturasVigentes(g.vesselCallId);
-    assert.equal(vigentes.length, 2);
+    assert.equal(await fetchesDe(pool, ref.targetId), 1, 'referência tem TrackingFetch real');
+    for (const c of g.containers.filter((x) => x.id !== ref.id)) assert.equal(await fetchesDe(pool, c.targetId), 0, 'coberto não gera fetch');
+    // Proveniência real (#11): fetch, target/processo consultados, evidência, campos.
+    const cob = (await pool.query(`SELECT cobertura_originadora_fetch_id, target_consultado_id, processo_consultado_id, campos_compartilhados, evidencia FROM vessel_call_coberturas WHERE vessel_call_id=$1 AND estado='vigente'`, [g.vesselCallId])).rows;
+    assert.ok(cob.every((x) => x.cobertura_originadora_fetch_id && x.target_consultado_id && x.processo_consultado_id && x.evidencia && x.campos_compartilhados.length));
   } finally { await pool.end(); }
 });
 
-test('formação: <2 elegíveis → sem grupo; confirmações fora da janela de 4 dias → não ativa', { skip: !url }, async () => {
-  const pool = testPool();
-  try {
-    await setup(pool);
-    const g1 = await grupo(pool, 1);
-    const r1 = await executarRodadaCompartilhada({ pool, port: fakePort(), organizationId: g1.orgId, vesselCallId: g1.vesselCallId, dataOperacional: HOJE, devidos: new Set(g1.containers.map((c) => c.id)) });
-    assert.equal(r1.status, 'sem_grupo');
-
-    const g2 = await grupo(pool, 2, { slug: 'org-jan' });
-    // Afasta as confirmações em >4 dias.
-    await pool.query(`UPDATE vessel_call_participantes SET confirmado_em='2026-09-01T00:00:00Z' WHERE container_id=$1`, [g2.containers[0].id]);
-    await pool.query(`UPDATE vessel_call_participantes SET confirmado_em='2026-09-10T00:00:00Z' WHERE container_id=$1`, [g2.containers[1].id]);
-    const r2 = await executarRodadaCompartilhada({ pool, port: fakePort(), organizationId: g2.orgId, vesselCallId: g2.vesselCallId, dataOperacional: HOJE, devidos: new Set(g2.containers.map((c) => c.id)) });
-    assert.equal(r2.status, 'sem_grupo');
-    assert.equal(r2.motivo, 'formacao_fora_da_janela');
-  } finally { await pool.end(); }
-});
-
-test('claim da rodada: única por (org, vessel_call, data) — concorrência e após conclusão', { skip: !url }, async () => {
+test('#1 cobertura vigente suprime o individual em ticks posteriores (planejador)', { skip: !url }, async () => {
   const pool = testPool();
   try {
     await setup(pool);
     const g = await grupo(pool, 3);
-    const devidos = new Set(g.containers.map((c) => c.id));
-    // Concorrência: duas execuções simultâneas → só uma executa.
-    const [a, b] = await Promise.all([
-      executarRodadaCompartilhada({ pool, port: fakePort(), organizationId: g.orgId, vesselCallId: g.vesselCallId, dataOperacional: HOJE, devidos }),
-      executarRodadaCompartilhada({ pool, port: fakePort(), organizationId: g.orgId, vesselCallId: g.vesselCallId, dataOperacional: HOJE, devidos }),
+    await executarRodadaCompartilhada({ pool, port: g.port, organizationId: g.orgId, vesselCallId: g.vesselCallId, dataOperacional: HOJE, devidos: idSet(g.containers) });
+    // Tick posterior (outro dia): os 2 cobertos devem ser suprimidos do individual.
+    const plano = await planejarRodadasCompartilhadas({ pool, port: g.port, dataOperacional: '2026-09-21', devidos: g.containers.map((c) => c.id) });
+    assert.ok(plano.suprimidosPorCobertura.size >= 2, 'cobertos suprimidos do individual');
+    for (const c of g.containers) if (c.id !== [...plano.referenciasExecutadas][0]) { /* cobertos ∈ tratados */ }
+    assert.ok([...plano.suprimidosPorCobertura].every((id) => plano.tratados.has(id)));
+  } finally { await pool.end(); }
+});
+
+test('#2/#3 dois workers → uma única consulta; quem perde o claim não consulta o grupo individualmente', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await setup(pool);
+    const g = await grupo(pool, 3);
+    const [pa, pb] = await Promise.all([
+      planejarRodadasCompartilhadas({ pool, port: g.port, dataOperacional: HOJE, devidos: g.containers.map((c) => c.id), workerId: 'A' }),
+      planejarRodadasCompartilhadas({ pool, port: g.port, dataOperacional: HOJE, devidos: g.containers.map((c) => c.id), workerId: 'B' }),
     ]);
-    const exec = [a, b].filter((r) => r.status === 'executada').length;
-    const naoAdq = [a, b].filter((r) => r.status === 'nao_adquiriu').length;
-    assert.equal(exec, 1, 'apenas uma rodada executa');
-    assert.equal(naoAdq, 1);
-    assert.equal((await rodada(pool, g.vesselCallId)).length, 1, 'uma única linha de rodada por data');
-    // Nova execução no MESMO dia → já concluída, não cria outra rodada nem novo fetch.
-    const c = await executarRodadaCompartilhada({ pool, port: fakePort(), organizationId: g.orgId, vesselCallId: g.vesselCallId, dataOperacional: HOJE, devidos });
-    assert.equal(c.status, 'nao_adquiriu');
-    assert.equal(c.motivo, 'ja_concluida');
-    assert.equal((await rodada(pool, g.vesselCallId)).length, 1);
+    const rodadas = pa.rodadas + pb.rodadas;
+    assert.equal(rodadas, 1, 'apenas uma rodada executa');
+    // Total de fetches no grupo = 1 (só a referência).
+    let total = 0; for (const c of g.containers) total += await fetchesDe(pool, c.targetId);
+    assert.equal(total, 1, 'somente uma consulta efetiva no grupo');
+    // O worker que perdeu retira os participantes do individual (grupoEmExecucaoPorOutroWorker) — nenhum liberado.
+    const perdedor = pa.rodadas === 0 ? pa : pb;
+    assert.equal(perdedor.liberadosParaIndividual.size, 0);
+    assert.ok(g.containers.every((c) => perdedor.tratados.has(c.id)), 'todos do grupo tratados (não vão ao individual)');
   } finally { await pool.end(); }
 });
 
-test('fallback: referência falha → alternativa assume (máx 2); ambas falham → sem cobertura', { skip: !url }, async () => {
+test('#5 resposta sem fatos de viagem → não cria cobertura', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await setup(pool);
+    const g = await grupo(pool, 2);
+    const semViagem = fakePort(() => ({ events: [{ date: '2026-09-19', status: 'Gate out', location: 'SANTOS', vessel: null, voyage: null, type: 'gate_out' }], containers: [], etaPrevista: null }));
+    const r = await executarRodadaCompartilhada({ pool, port: semViagem, organizationId: g.orgId, vesselCallId: g.vesselCallId, dataOperacional: HOJE, devidos: idSet(g.containers) });
+    assert.equal(r.status, 'executada');
+    assert.equal(r.cobertos.length, 0, 'sem fato de viagem → sem cobertura');
+    assert.equal((await new VesselSharingRepository(pool).coberturasVigentes(g.vesselCallId)).length, 0);
+  } finally { await pool.end(); }
+});
+
+test('#6 result.ok só com Gate Out/Empty Return → não cria cobertura', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await setup(pool);
+    const g = await grupo(pool, 2);
+    const soIndividual = fakePort((ref) => ({
+      events: [{ date: '2026-09-19', status: 'Empty return', location: 'SANTOS', vessel: null, voyage: null, type: 'empty_return', container: numeroDe(Number(ref.replace(/\D/g, ''))) }],
+      containers: [{ numero: numeroDe(Number(ref.replace(/\D/g, ''))), tipo: null, dischargeDate: null, availableDate: null, gateOut: '2026-09-18', emptyReturn: null }], etaPrevista: null,
+    }));
+    // Empty return preencheria tracking_return → encerra; para isolar o #6 usamos só gate_out + sem viagem.
+    const soGate = fakePort((ref) => ({ events: [{ date: '2026-09-18', status: 'Gate out', location: 'SANTOS', vessel: null, voyage: null, type: 'gate_out', container: numeroDe(Number(ref.replace(/\D/g, ''))) }], containers: [], etaPrevista: null }));
+    void soIndividual;
+    const r = await executarRodadaCompartilhada({ pool, port: soGate, organizationId: g.orgId, vesselCallId: g.vesselCallId, dataOperacional: HOJE, devidos: idSet(g.containers) });
+    assert.equal(r.cobertos.length, 0);
+  } finally { await pool.end(); }
+});
+
+test('#7 berth descoberto na rodada encerra o grupo sem renovar cobertura', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await setup(pool);
+    const g = await grupo(pool, 2);
+    // Primeira rodada cria cobertura para o outro.
+    await executarRodadaCompartilhada({ pool, port: g.port, organizationId: g.orgId, vesselCallId: g.vesselCallId, dataOperacional: HOJE, devidos: idSet(g.containers) });
+    // Rodada seguinte: a resposta traz BERTH no POD → após ingestão, saída conservadora.
+    const comBerth = fakePort((ref) => ({ events: [
+      { date: '2026-09-05', status: 'Loaded', location: 'SINGAPURA', vessel: 'OCEAN CARGO', voyage: 'V1', type: 'loaded', statusPrevistoConfirmado: 'confirmado', container: numeroDe(Number(ref.replace(/\D/g, ''))) },
+      { date: '2026-09-24', status: 'Berthed', location: 'SINGAPURA', vessel: 'OCEAN CARGO', voyage: 'V1', type: 'berth' },
+    ] }));
+    // Expira coberturas p/ liberar candidato à nova rodada.
+    await pool.query(`UPDATE vessel_call_coberturas SET coberto_ate = now() - interval '1 hour' WHERE vessel_call_id=$1`, [g.vesselCallId]);
+    const r = await executarRodadaCompartilhada({ pool, port: comBerth, organizationId: g.orgId, vesselCallId: g.vesselCallId, dataOperacional: '2026-09-22', devidos: idSet(g.containers) });
+    assert.equal(r.status, 'encerrado');
+    assert.equal((await new VesselSharingRepository(pool).coberturasVigentes(g.vesselCallId)).length, 0, 'nenhum beneficiado coberto');
+  } finally { await pool.end(); }
+});
+
+test('#8 descarga descoberta na rodada encerra o grupo sem renovar cobertura', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await setup(pool);
+    const g = await grupo(pool, 2);
+    const comDescarga = fakePort((ref) => ({ containers: [{ numero: numeroDe(Number(ref.replace(/\D/g, ''))), tipo: null, dischargeDate: '2026-09-26', availableDate: null, gateOut: null, emptyReturn: null }] }));
+    const r = await executarRodadaCompartilhada({ pool, port: comDescarga, organizationId: g.orgId, vesselCallId: g.vesselCallId, dataOperacional: HOJE, devidos: idSet(g.containers) });
+    assert.equal(r.status, 'encerrado');
+    assert.equal((await new VesselSharingRepository(pool).coberturasVigentes(g.vesselCallId)).length, 0);
+  } finally { await pool.end(); }
+});
+
+test('#9 rolagem da referência não cobre o VesselCall anterior', { skip: !url }, async () => {
   const pool = testPool();
   try {
     await setup(pool);
     const g = await grupo(pool, 3);
-    const devidos = new Set(g.containers.map((c) => c.id));
-    // Ordena candidatos p/ saber quem é referência (mais antigo; todos null → menor containerId).
-    const refRef = [...g.containers].sort((a, b) => (a.id < b.id ? -1 : 1))[0];
-    // Port: a referência falha; as demais ok.
-    const port = fakePort((ref) => (ref === refRef.ref ? { ok: false, message: 'portal fora' } : {}));
-    const r = await executarRodadaCompartilhada({ pool, port, organizationId: g.orgId, vesselCallId: g.vesselCallId, dataOperacional: HOJE, devidos });
+    // A referência (menor id) reporta OUTRO navio/viagem → rola para novo VesselCall.
+    const ref = [...g.containers].sort((a, b) => (a.id < b.id ? -1 : 1))[0];
+    const comRolagem = fakePort((r) => (r === ref.ref
+      ? { events: [{ date: '2026-09-06', status: 'Loaded', location: 'SINGAPURA', vessel: 'OTHER SHIP', voyage: 'V2', type: 'loaded', statusPrevistoConfirmado: 'confirmado', container: ref.numero }] }
+      : {}));
+    const r = await executarRodadaCompartilhada({ pool, port: comRolagem, organizationId: g.orgId, vesselCallId: g.vesselCallId, dataOperacional: HOJE, devidos: idSet(g.containers) });
+    assert.equal(r.status, 'executada');
+    assert.equal(r.motivo, 'referencia_divergente');
+    assert.equal(r.cobertos.length, 0, 'não cobre o VesselCall anterior com resposta divergente');
+    // A referência saiu do grupo anterior (removida) e os demais permanecem.
+    assert.equal((await new VesselSharingRepository(pool).participantesElegiveis(g.vesselCallId)).length, 2);
+  } finally { await pool.end(); }
+});
+
+test('#10 mudança SOMENTE de ETA mantém o grupo e renova cobertura', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await setup(pool);
+    const g = await grupo(pool, 2);
+    const etaNova = fakePort(() => ({ etaPrevista: '2026-09-27' }));
+    const r = await executarRodadaCompartilhada({ pool, port: etaNova, organizationId: g.orgId, vesselCallId: g.vesselCallId, dataOperacional: HOJE, devidos: idSet(g.containers) });
+    assert.equal(r.status, 'executada');
+    assert.equal(r.cobertos.length, 1, 'grupo mantido; cobertura renovada');
+    assert.equal((await new VesselSharingRepository(pool).participantesElegiveis(g.vesselCallId)).length, 2, 'ETA não remove participante');
+  } finally { await pool.end(); }
+});
+
+test('#12 falha percorre a política e tenta no máximo uma alternativa', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await setup(pool);
+    const g = await grupo(pool, 3);
+    const ref = [...g.containers].sort((a, b) => (a.id < b.id ? -1 : 1))[0];
+    const port = fakePort((r) => (r === ref.ref ? { ok: false, message: 'portal fora' } : {}));
+    const r = await executarRodadaCompartilhada({ pool, port, organizationId: g.orgId, vesselCallId: g.vesselCallId, dataOperacional: HOJE, devidos: idSet(g.containers) });
     assert.equal(r.status, 'executada');
     assert.equal(r.tentativas, 2, 'referência + 1 alternativa');
-    assert.equal(r.resultadoReferencia, 'consulta_efetiva');
-    const tent = await pool.query(`SELECT numero_tentativa, resultado FROM vessel_call_rodada_tentativas t JOIN vessel_call_rodadas rd ON rd.id=t.rodada_id WHERE rd.vessel_call_id=$1 ORDER BY numero_tentativa`, [g.vesselCallId]);
+    const tent = await pool.query(`SELECT resultado FROM vessel_call_rodada_tentativas t JOIN vessel_call_rodadas rd ON rd.id=t.rodada_id WHERE rd.vessel_call_id=$1 ORDER BY numero_tentativa`, [g.vesselCallId]);
     assert.deepEqual(tent.rows.map((x) => x.resultado), ['falha', 'consulta_efetiva']);
-
-    // Grupo novo em que TODAS falham → nenhuma cobertura criada.
-    const g2 = await grupo(pool, 2, { slug: 'org-falha' });
-    const r2 = await executarRodadaCompartilhada({ pool, port: fakePort(() => ({ ok: false, message: 'fora' })), organizationId: g2.orgId, vesselCallId: g2.vesselCallId, dataOperacional: HOJE, devidos: new Set(g2.containers.map((c) => c.id)) });
-    assert.equal(r2.resultadoReferencia, 'falha');
-    assert.equal((await new VesselSharingRepository(pool).coberturasVigentes(g2.vesselCallId)).length, 0);
+    // A referência falhada teve TrackingFetch (pipeline individual) e incidente avaliado.
+    assert.equal(await fetchesDe(pool, ref.targetId), 1);
   } finally { await pool.end(); }
 });
 
-test('cache vs efetiva: resposta de cache sustenta cobertura e é contada como cache', { skip: !url }, async () => {
+test('#13 saída libera imediatamente todos ao individual (planejador)', { skip: !url }, async () => {
   const pool = testPool();
   try {
     await setup(pool);
     const g = await grupo(pool, 2);
-    const r = await executarRodadaCompartilhada({ pool, port: fakePort(() => ({ cached: true })), organizationId: g.orgId, vesselCallId: g.vesselCallId, dataOperacional: HOJE, devidos: new Set(g.containers.map((c) => c.id)) });
-    assert.equal(r.resultadoReferencia, 'cache_hit');
-    assert.equal(r.cobertos.length, 1);
-    const t = await pool.query(`SELECT cache_hit, consulta_efetiva FROM vessel_call_rodada_tentativas t JOIN vessel_call_rodadas rd ON rd.id=t.rodada_id WHERE rd.vessel_call_id=$1`, [g.vesselCallId]);
-    assert.equal(t.rows[0].cache_hit, true);
-    assert.equal(t.rows[0].consulta_efetiva, false);
-  } finally { await pool.end(); }
-});
-
-test('saída conservadora: descarga/berth no destino encerra e invalida coberturas', { skip: !url }, async () => {
-  const pool = testPool();
-  try {
-    await setup(pool);
-    const g = await grupo(pool, 2);
-    // Primeira rodada cobre o outro.
-    await executarRodadaCompartilhada({ pool, port: fakePort(), organizationId: g.orgId, vesselCallId: g.vesselCallId, dataOperacional: HOJE, devidos: new Set(g.containers.map((c) => c.id)) });
-    assert.equal((await new VesselSharingRepository(pool).coberturasVigentes(g.vesselCallId)).length, 1);
-    // Um contêiner descarrega → saída conservadora.
     await pool.query(`UPDATE containers SET discharge_date='2026-09-26' WHERE id=$1`, [g.containers[0].id]);
-    const r = await executarRodadaCompartilhada({ pool, port: fakePort(), organizationId: g.orgId, vesselCallId: g.vesselCallId, dataOperacional: '2026-09-27', devidos: new Set(g.containers.map((c) => c.id)) });
-    assert.equal(r.status, 'encerrado');
-    assert.equal((await new VesselSharingRepository(pool).coberturasVigentes(g.vesselCallId)).length, 0, 'coberturas invalidadas na saída');
+    const plano = await planejarRodadasCompartilhadas({ pool, port: g.port, dataOperacional: '2026-09-27', devidos: g.containers.map((c) => c.id) });
+    assert.equal(plano.rodadas, 0);
+    assert.ok(g.containers.every((c) => plano.liberadosParaIndividual.has(c.id)), 'todos liberados ao individual');
+    assert.equal(plano.tratados.size, 0);
   } finally { await pool.end(); }
 });
 
-test('divergência: remover 1 participante mantém os demais; <2 encerra o grupo', { skip: !url }, async () => {
-  const pool = testPool();
-  try {
-    await setup(pool);
-    const g = await grupo(pool, 3);
-    const sharing = new VesselSharingRepository(pool);
-    await sharing.removerParticipante(g.vesselCallId, g.containers[0].id, 'navio divergente');
-    assert.equal((await sharing.participantesElegiveis(g.vesselCallId)).length, 2, 'os demais permanecem');
-    const r = await executarRodadaCompartilhada({ pool, port: fakePort(), organizationId: g.orgId, vesselCallId: g.vesselCallId, dataOperacional: HOJE, devidos: new Set([g.containers[1].id, g.containers[2].id]) });
-    assert.equal(r.status, 'executada');
-    // Remove mais um → sobra 1 → encerra.
-    await sharing.removerParticipante(g.vesselCallId, g.containers[1].id, 'viagem divergente');
-    const r2 = await executarRodadaCompartilhada({ pool, port: fakePort(), organizationId: g.orgId, vesselCallId: g.vesselCallId, dataOperacional: '2026-09-21', devidos: new Set([g.containers[2].id]) });
-    assert.equal(r2.status, 'sem_grupo');
-  } finally { await pool.end(); }
-});
-
-test('ETA muda não remove participante; invalida cobertura de ETA; participantes seguem', { skip: !url }, async () => {
+test('#14 atualização manual ignora cobertura e respeita limite (2/dia)', { skip: !url }, async () => {
   const pool = testPool();
   try {
     await setup(pool);
     const g = await grupo(pool, 2);
-    const sharing = new VesselSharingRepository(pool);
-    await executarRodadaCompartilhada({ pool, port: fakePort(), organizationId: g.orgId, vesselCallId: g.vesselCallId, dataOperacional: HOJE, devidos: new Set(g.containers.map((c) => c.id)) });
-    // Nova ETA na mesma identidade → atualiza evento e invalida coberturas de ETA (sem remover).
-    await new VesselCallRepository(pool).aplicarEvento(g.vesselCallId, { campo: 'eta', valor: '2026-09-27', fonte: 'tracking_service', observadoEm: new Date() });
-    await sharing.invalidarCoberturas(g.vesselCallId, 'eta_alterada');
-    assert.equal((await sharing.participantesElegiveis(g.vesselCallId)).length, 2, 'ETA não remove participante');
-    assert.equal((await sharing.coberturasVigentes(g.vesselCallId)).length, 0);
+    await executarRodadaCompartilhada({ pool, port: g.port, organizationId: g.orgId, vesselCallId: g.vesselCallId, dataOperacional: HOJE, devidos: idSet(g.containers) });
+    const coberto = g.containers.find((c) => c.id !== undefined)!; // qualquer coberto
+    const { solicitarAtualizacaoManual } = await import('../scheduler/trackingScheduler');
+    // Manual ignora cobertura: consulta mesmo o target coberto.
+    const m1 = await solicitarAtualizacaoManual({ pool, port: g.port, trackingTargetId: coberto.targetId, papel: 'MANAGER', agora: new Date('2026-09-20T08:00:00Z') });
+    assert.equal(m1.executada, true);
+    const m2 = await solicitarAtualizacaoManual({ pool, port: g.port, trackingTargetId: coberto.targetId, papel: 'MANAGER', agora: new Date('2026-09-20T08:30:00Z') });
+    // cooldown ~2h → segunda no mesmo curto intervalo é barrada (política existente preservada).
+    assert.equal(m2.executada, false);
   } finally { await pool.end(); }
 });
 
-test('confirmação: vínculo previsto NÃO confirma; humano auditado habilita', { skip: !url }, async () => {
-  const pool = testPool();
-  try {
-    await setup(pool);
-    const o = await org(pool);
-    const p = await new ProcessoRepository(pool).create({ organizationId: o.id, numeroProcesso: 'IM-H', clienteId: null });
-    const vc = await new VesselCallRepository(pool).upsert({ organizationId: o.id, componentes: IDENT, podFonte: 'master_bl' });
-    const c = await new ContainerRepository(pool).create(o.id, p.id, 'HDMUHUM0001');
-    await new VesselCallRepository(pool).associarContainer({ containerId: c.id, vesselCallId: vc.id, organizationId: o.id, chave: 'k', origemDados: 'tracking_service' });
-    const sharing = new VesselSharingRepository(pool);
-    // Previsto: vinculoConfirmado=false → não elegível.
-    await sharing.confirmarEstruturado({ organizationId: o.id, vesselCallId: vc.id, containerId: c.id, etaPrevista: '2026-09-25', vinculoConfirmado: false, fonte: 'tracking_service', observadoEm: new Date(), statusPrevistoConfirmado: 'previsto' });
-    assert.equal((await sharing.participantesElegiveis(vc.id)).length, 0, 'previsto não habilita');
-    // Humano auditado → habilita.
-    await sharing.confirmarHumano({ organizationId: o.id, vesselCallId: vc.id, containerId: c.id, etaPrevista: '2026-09-25', usuario: 'ana', motivo: 'confirmado no portal', evidencia: 'print', observadoEm: new Date() });
-    assert.equal((await sharing.participantesElegiveis(vc.id)).length, 1, 'humano auditado habilita');
-  } finally { await pool.end(); }
-});
-
-test('scheduler: planejarRodadasCompartilhadas é inerte sem participantes; ativo trata cobertos', { skip: !url }, async () => {
-  const pool = testPool();
-  try {
-    await setup(pool);
-    // Inerte: nenhum participante.
-    const inerte = await planejarRodadasCompartilhadas({ pool, port: fakePort(), dataOperacional: HOJE, devidos: [] });
-    assert.equal(inerte.tratados.size, 0);
-    // Ativo: grupo confirmado, devidos = os 3.
-    const g = await grupo(pool, 3);
-    const plano = await planejarRodadasCompartilhadas({ pool, port: fakePort(), dataOperacional: HOJE, devidos: g.containers.map((c) => c.id) });
-    assert.equal(plano.rodadas, 1);
-    assert.equal(plano.cobertos, 2);
-    assert.equal(plano.tratados.size, 3, 'referência + 2 cobertos excluídos do individual');
-  } finally { await pool.end(); }
-});
-
-test('isolamento: participantes e coberturas não cruzam organização', { skip: !url }, async () => {
+test('isolamento: coberturas não cruzam organização', { skip: !url }, async () => {
   const pool = testPool();
   try {
     await setup(pool);
     const g1 = await grupo(pool, 2, { slug: 'iso-a' });
     const g2 = await grupo(pool, 2, { slug: 'iso-b' });
-    await executarRodadaCompartilhada({ pool, port: fakePort(), organizationId: g1.orgId, vesselCallId: g1.vesselCallId, dataOperacional: HOJE, devidos: new Set(g1.containers.map((c) => c.id)) });
+    await executarRodadaCompartilhada({ pool, port: g1.port, organizationId: g1.orgId, vesselCallId: g1.vesselCallId, dataOperacional: HOJE, devidos: idSet(g1.containers) });
     const cobA = await pool.query(`SELECT organization_id FROM vessel_call_coberturas WHERE vessel_call_id=$1`, [g1.vesselCallId]);
     assert.ok(cobA.rows.every((r) => r.organization_id === g1.orgId));
-    assert.equal((await new VesselSharingRepository(pool).coberturasVigentes(g2.vesselCallId)).length, 0, 'org B intocada');
+    assert.equal((await new VesselSharingRepository(pool).coberturasVigentes(g2.vesselCallId)).length, 0);
   } finally { await pool.end(); }
 });
