@@ -32,6 +32,7 @@ test('migrations: aplica todas as migrations pendentes em um banco novo e é ide
       '0019_vessel_calls.sql',
       '0020_vessel_call_isolamento_incidentes.sql',
       '0021_vessel_sharing.sql',
+      '0022_vessel_round_desfecho.sql',
     ];
 
     const first = await runMigrations(pool);

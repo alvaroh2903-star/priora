@@ -1,17 +1,24 @@
 import { Pool } from 'pg';
 import { CivilDate } from '../temporal/civilDate';
 import { ArmadorTrackingPort } from '../sources/armadorTrackingSource';
-import { VesselSharingRepository } from '../persistence/vesselSharingRepository';
+import { VesselSharingRepository, DesfechoRodada } from '../persistence/vesselSharingRepository';
 import { sincronizarContainer, novoCiclo, ConsultaRealizada } from '../scheduler/trackingScheduler';
 import { ordenarCandidatos, janelaFormacaoValida, CandidatoRodada, MAX_TENTATIVAS_RODADA } from './vesselSharing';
+import { validarFatosCompartilhados, IdentidadeVesselCall, FatosCompartilhados } from './vesselSharedFacts';
 
 /**
- * Fase 9 Bloco 2 v1.2 — execução de UMA rodada compartilhada REUSANDO o pipeline
+ * Fase 9 Bloco 2 v1.3 — execução de UMA rodada compartilhada REUSANDO o pipeline
  * individual: a consulta real da referência passa por `sincronizarContainer`
  * (claim por target/janela, TrackingFetch real, política de falha/incidente,
  * dedupe e ingestão normal). NÃO há segunda implementação do pipeline aqui e NÃO
  * há consulta por navio. O claim da RODADA coordena QUEM é a referência; o claim
  * INDIVIDUAL protege a consulta real do target. Cadência (cálculo) intocada.
+ *
+ * v1.3: (1) o planejador recalcula as supressões DEPOIS da rodada, refletindo
+ * invalidação de coberturas na saída; (2) o desfecho factual é persistido para
+ * interpretar `ja_concluida` sem ambiguidade; (3) a validação dos fatos
+ * compartilhados é ESTRUTURADA (não booleana) e compara identidade; (4) a
+ * evidência da cobertura é auditável (campo/valor/fonte/observado_em/evento).
  */
 
 export interface RodadaResultado {
@@ -23,22 +30,8 @@ export interface RodadaResultado {
   motivo?: string;
   /** Motivo detalhado de nao_adquiriu (para o planejador decidir supressão). */
   motivoClaim?: 'em_andamento' | 'ja_concluida';
-}
-
-function norm(s: string | null | undefined): string {
-  return String(s ?? '').replace(/\s+/g, ' ').trim().toUpperCase();
-}
-
-/** Há evento de VIAGEM (vessel/voyage) para o contêiner na resposta? (fato compartilhável) */
-function temFatoDeViagem(consultas: ConsultaRealizada[], numero: string): boolean {
-  const n = norm(numero).replace(/[\s-]/g, '');
-  const tipos = new Set(['discharge', 'loaded', 'departed']);
-  for (const c of consultas) {
-    if (!c.ok) continue;
-    if (c.result.etaPrevista) return true;
-    if (c.result.events.some((e) => tipos.has(e.type ?? '') && norm(e.container).replace(/[\s-]/g, '') === n && (e.vessel || e.voyage))) return true;
-  }
-  return false;
+  /** Desfecho factual da rodada (persistido); presente também em nao_adquiriu/ja_concluida. */
+  desfecho?: DesfechoRodada | null;
 }
 
 async function assocAtiva(pool: Pool, containerId: string): Promise<string | null> {
@@ -48,6 +41,41 @@ async function assocAtiva(pool: Pool, containerId: string): Promise<string | nul
 async function processoDoContainer(pool: Pool, containerId: string): Promise<string | null> {
   const { rows } = await pool.query(`SELECT processo_id FROM containers WHERE id=$1`, [containerId]);
   return rows[0]?.processo_id ?? null;
+}
+async function numeroDoContainer(pool: Pool, containerId: string): Promise<string> {
+  const { rows } = await pool.query(`SELECT numero FROM containers WHERE id=$1`, [containerId]);
+  return rows[0]?.numero ?? '';
+}
+
+/** Identidade normalizada atual do VesselCall (para comparação estrita de fatos). */
+async function identidadeVesselCall(pool: Pool, vesselCallId: string): Promise<IdentidadeVesselCall> {
+  const { rows } = await pool.query(
+    `SELECT armador, vessel_normalizado, voyage, pod FROM vessel_calls WHERE id=$1`,
+    [vesselCallId],
+  );
+  const r = rows[0] ?? {};
+  const armador = String(r.armador ?? '');
+  const vessel = String(r.vessel_normalizado ?? '');
+  const voyage = String(r.voyage ?? '');
+  const pod = String(r.pod ?? '');
+  return { armador, vessel, voyage, pod, identidadeConfirmada: !!(armador && vessel && voyage && pod) };
+}
+
+/** Evidência auditável (compacta, por referência ao persistido — nunca payload bruto). */
+function montarEvidencia(input: {
+  fetchId: string; targetConsultadoId: string; processoConsultadoId: string | null; containerConsultadoId: string;
+  fatos: FatosCompartilhados;
+}): string {
+  return JSON.stringify({
+    trackingFetchId: input.fetchId,
+    targetConsultadoId: input.targetConsultadoId,
+    processoConsultadoId: input.processoConsultadoId,
+    containerConsultadoId: input.containerConsultadoId,
+    eventoOriginador: input.fatos.eventoOriginador ?? null,
+    campos: input.fatos.camposValidos.map((c) => ({
+      campo: c.campo, valor: c.valor, fonte: c.fonte, observadoEm: c.observadoEm, evidencia: c.evidencia,
+    })),
+  });
 }
 
 export async function executarRodadaCompartilhada(input: {
@@ -67,7 +95,7 @@ export async function executarRodadaCompartilhada(input: {
 
   if (await sharing.deveEncerrar(vesselCallId)) {
     await sharing.invalidarCoberturas(vesselCallId, 'saida_compartilhamento');
-    return { status: 'encerrado', cobertos: [], tentativas: 0 };
+    return { status: 'encerrado', cobertos: [], tentativas: 0, desfecho: 'encerrada_por_saida' };
   }
 
   const elegiveis = await sharing.participantesElegiveis(vesselCallId);
@@ -86,7 +114,11 @@ export async function executarRodadaCompartilhada(input: {
 
   const claim = await sharing.adquirirRodada({ organizationId: input.organizationId, vesselCallId, dataOperacional: input.dataOperacional, workerId: input.workerId, ttlMs: input.ttlMs });
   if (!claim.adquiriu) {
-    return { status: 'nao_adquiriu', cobertos: [], tentativas: 0, motivo: claim.motivo, motivoClaim: claim.motivo === 'ja_concluida' ? 'ja_concluida' : 'em_andamento' };
+    return {
+      status: 'nao_adquiriu', cobertos: [], tentativas: 0, motivo: claim.motivo,
+      motivoClaim: claim.motivo === 'ja_concluida' ? 'ja_concluida' : 'em_andamento',
+      desfecho: claim.motivo === 'ja_concluida' ? (claim.desfecho ?? null) : undefined,
+    };
   }
 
   // Tenta referência + no máx. 1 alternativa, SEMPRE pelo pipeline individual.
@@ -115,39 +147,47 @@ export async function executarRodadaCompartilhada(input: {
   }
 
   if (!sucesso) {
-    await sharing.concluirRodada(claim.rodadaId, { targetId: null, containerId: null });
-    return { status: 'executada', cobertos: [], tentativas: tentativasFeitas, resultadoReferencia: 'falha' };
+    await sharing.concluirRodada(claim.rodadaId, { targetId: null, containerId: null, desfecho: 'falha_sem_cobertura' });
+    return { status: 'executada', cobertos: [], tentativas: tentativasFeitas, resultadoReferencia: 'falha', desfecho: 'falha_sem_cobertura' };
   }
 
   const refContainer = sucesso.containerId;
   const resultadoRef: 'cache_hit' | 'consulta_efetiva' = sucesso.consulta.cached ? 'cache_hit' : 'consulta_efetiva';
 
-  // (#5) REAVALIA a saída DEPOIS da ingestão: chegada/atracação/berth/descarga → encerra sem cobertura.
+  // REAVALIA a saída DEPOIS da ingestão: chegada/atracação/berth/descarga → encerra sem cobertura.
   if (await sharing.deveEncerrar(vesselCallId)) {
     await sharing.invalidarCoberturas(vesselCallId, 'saida_apos_ingestao');
-    await sharing.concluirRodada(claim.rodadaId, { targetId: sucesso.consulta.targetId, containerId: refContainer });
-    return { status: 'encerrado', referenciaContainerId: refContainer, cobertos: [], tentativas: tentativasFeitas, resultadoReferencia: resultadoRef };
+    await sharing.concluirRodada(claim.rodadaId, { targetId: sucesso.consulta.targetId, containerId: refContainer, desfecho: 'encerrada_por_saida' });
+    return { status: 'encerrado', referenciaContainerId: refContainer, cobertos: [], tentativas: tentativasFeitas, resultadoReferencia: resultadoRef, desfecho: 'encerrada_por_saida' };
   }
 
-  // (#6) Divergência/rolagem: a associação ativa da referência mudou de VesselCall →
-  // remove só a referência; NÃO cobre o VesselCall anterior com esta resposta.
-  if ((await assocAtiva(pool, refContainer)) !== vesselCallId) {
-    await sharing.removerParticipante(vesselCallId, refContainer, 'divergencia_ou_rolagem');
-    await sharing.concluirRodada(claim.rodadaId, { targetId: sucesso.consulta.targetId, containerId: refContainer });
-    return { status: 'executada', referenciaContainerId: refContainer, cobertos: [], tentativas: tentativasFeitas, resultadoReferencia: resultadoRef, motivo: 'referencia_divergente' };
+  // Validação ESTRUTURADA dos fatos compartilhados (compara identidade). NÃO
+  // depende apenas da associação ativa: divergência = validador incompatível OU
+  // a associação ativa da referência mudou de VesselCall (rolagem na ingestão).
+  const identidade = await identidadeVesselCall(pool, vesselCallId);
+  const numero = await numeroDoContainer(pool, refContainer);
+  const fatos = validarFatosCompartilhados({ numero, consulta: sucesso.consulta, identidade });
+  const assocMudou = (await assocAtiva(pool, refContainer)) !== vesselCallId;
+
+  if (!fatos.compativel || assocMudou) {
+    // Divergência/rolagem: remove só a referência; NÃO cobre o VesselCall anterior.
+    await sharing.removerParticipante(vesselCallId, refContainer, fatos.motivoRejeicao ?? 'divergencia_ou_rolagem');
+    await sharing.concluirRodada(claim.rodadaId, { targetId: sucesso.consulta.targetId, containerId: refContainer, desfecho: 'divergencia_referencia' });
+    return { status: 'executada', referenciaContainerId: refContainer, cobertos: [], tentativas: tentativasFeitas, resultadoReferencia: resultadoRef, motivo: 'referencia_divergente', desfecho: 'divergencia_referencia' };
   }
 
-  // (#4) Só cobre se a resposta sustenta fatos de VIAGEM (não apenas eventos individuais).
-  if (!temFatoDeViagem([sucesso.consulta], refContainer)) {
-    await sharing.concluirRodada(claim.rodadaId, { targetId: sucesso.consulta.targetId, containerId: refContainer });
-    return { status: 'executada', referenciaContainerId: refContainer, cobertos: [], tentativas: tentativasFeitas, resultadoReferencia: resultadoRef, motivo: 'sem_fatos_de_viagem' };
+  if (!fatos.ok) {
+    // Compatível, mas sem fato compartilhável (só eventos individuais, ou ETA sem
+    // identidade confirmada / ambígua) → conclui sem cobertura.
+    await sharing.concluirRodada(claim.rodadaId, { targetId: sucesso.consulta.targetId, containerId: refContainer, desfecho: 'sucesso_sem_cobertura' });
+    return { status: 'executada', referenciaContainerId: refContainer, cobertos: [], tentativas: tentativasFeitas, resultadoReferencia: resultadoRef, motivo: fatos.motivoRejeicao ?? 'sem_fatos_de_viagem', desfecho: 'sucesso_sem_cobertura' };
   }
 
-  // (#7) Cobertura com proveniência real. Reconsulta os elegíveis (podem ter mudado).
+  // Cobertura com proveniência real e campos EFETIVAMENTE validados (não fixos).
   const elegiveisFinal = await sharing.participantesElegiveis(vesselCallId);
   const processoRef = await processoDoContainer(pool, refContainer);
-  const campos = ['navio', 'viagem', 'destino', ...(sucesso.consulta.result.etaPrevista ? ['eta'] : [])];
-  const evidencia = `fetch=${sucesso.consulta.fetchId};ref=${sucesso.consulta.referenceValueCanonical}`;
+  const campos = fatos.camposValidos.map((c) => c.campo);
+  const evidencia = montarEvidencia({ fetchId: sucesso.consulta.fetchId, targetConsultadoId: sucesso.consulta.targetId, processoConsultadoId: processoRef, containerConsultadoId: refContainer, fatos });
   const cobertos: string[] = [];
   for (const p of elegiveisFinal) {
     if (p.containerId === refContainer) continue;
@@ -158,8 +198,9 @@ export async function executarRodadaCompartilhada(input: {
     });
     cobertos.push(p.containerId);
   }
-  await sharing.concluirRodada(claim.rodadaId, { targetId: sucesso.consulta.targetId, containerId: refContainer });
-  return { status: 'executada', referenciaContainerId: refContainer, cobertos, tentativas: tentativasFeitas, resultadoReferencia: resultadoRef };
+  const desfecho: DesfechoRodada = cobertos.length ? 'sucesso_com_cobertura' : 'sucesso_sem_cobertura';
+  await sharing.concluirRodada(claim.rodadaId, { targetId: sucesso.consulta.targetId, containerId: refContainer, desfecho });
+  return { status: 'executada', referenciaContainerId: refContainer, cobertos, tentativas: tentativasFeitas, resultadoReferencia: resultadoRef, desfecho };
 }
 
 export interface PlanejamentoCompartilhado {
@@ -211,24 +252,33 @@ export async function planejarRodadasCompartilhadas(input: {
   };
 
   for (const [vesselCallId, grupo] of grupos) {
-    // (#3) Cobertura vigente é filtro GLOBAL: suprime da seleção individual mesmo sem rodada nova.
-    const vigentes = new Set(await sharing.coberturasVigentes(vesselCallId));
-    for (const c of grupo.devidos) if (vigentes.has(c)) out.suprimidosPorCobertura.add(c);
-
     const r = await executarRodadaCompartilhada({
       pool, port: input.port, organizationId: grupo.organizationId, vesselCallId,
       dataOperacional: input.dataOperacional, devidos: grupo.devidos, workerId: input.workerId, ttlMs: input.ttlMs, reivindicar: input.reivindicar,
     });
-    if (r.status === 'executada') {
-      out.rodadas++;
-      if (r.referenciaContainerId) out.referenciasExecutadas.add(r.referenciaContainerId);
-      for (const c of r.cobertos) { out.suprimidosPorCobertura.add(c); out.cobertos++; }
-    } else if (r.status === 'nao_adquiriu') {
-      // (#2) Rodada válida/concluída de OUTRO worker → participantes NÃO caem no individual.
+
+    // Rodada VÁLIDA de OUTRO worker (em andamento) → participantes NÃO caem no
+    // individual neste tick (a consulta real está a cargo do worker que a detém).
+    if (r.status === 'nao_adquiriu' && r.motivoClaim === 'em_andamento') {
       for (const c of grupo.devidos) out.gruposEmExecucaoPorOutroWorker.add(c);
-    } else {
-      // sem_grupo / encerrado → os não-cobertos vão ao individual (regra conservadora).
-      for (const c of grupo.devidos) if (!out.suprimidosPorCobertura.has(c)) out.liberadosParaIndividual.add(c);
+      continue;
+    }
+
+    if (r.status === 'executada') out.rodadas++;
+    if (r.status === 'executada') out.cobertos += r.cobertos.length;
+    if (r.referenciaContainerId) out.referenciasExecutadas.add(r.referenciaContainerId);
+
+    // (v1.3-1/2) Supressão calculada com o estado POSTERIOR à execução: a rodada
+    // pode ter invalidado coberturas na saída. `encerrada_por_saida` libera TODOS
+    // (menos a referência já consultada); nos demais casos, suprime SÓ quem tem
+    // cobertura vigente AGORA e libera o resto ao individual no mesmo tick. Uma
+    // rodada `ja_concluida` sem cobertura não bloqueia o individual do dia.
+    const encerrou = r.status === 'encerrado' || r.desfecho === 'encerrada_por_saida';
+    const vigentes = encerrou ? new Set<string>() : new Set(await sharing.coberturasVigentes(vesselCallId));
+    for (const c of grupo.devidos) {
+      if (c === r.referenciaContainerId) continue; // já tratada nesta rodada (não reconsultar)
+      if (vigentes.has(c)) out.suprimidosPorCobertura.add(c);
+      else out.liberadosParaIndividual.add(c);
     }
   }
 

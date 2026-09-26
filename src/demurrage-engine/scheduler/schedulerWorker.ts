@@ -128,13 +128,16 @@ export async function runSchedulerOnce(input: RunSchedulerOnceInput): Promise<Ru
   // e cobre os demais. INERTE sem participantes confirmados. NÃO altera o cálculo da
   // cadência — só a seleção/execução das consultas automáticas. Cobertura vigente e
   // rodada de outro worker retiram os participantes do individual neste tick.
-  const plano = await planejarRodadasCompartilhadas({ pool: input.pool, port: input.port, dataOperacional: hoje, devidos, workerId: input.workerId, reivindicar });
-  const compartilhados = plano.rodadas;
-  const cobertos = plano.cobertos;
-  const devidosIndividuais = devidos.filter((id) => !plano.tratados.has(id));
-
+  //
+  // (v1.3) O planejamento compartilhado adquire claims individuais (via
+  // `reivindicar`). Ele fica DENTRO da mesma proteção do fluxo individual: se
+  // lançar exceção depois de adquirir claims, esses claims são concluídos com
+  // falha (nunca abandonados até o stale timeout).
+  let plano: Awaited<ReturnType<typeof planejarRodadasCompartilhadas>>;
   let resultados: Awaited<ReturnType<typeof sincronizarCiclo>> = [];
   try {
+    plano = await planejarRodadasCompartilhadas({ pool: input.pool, port: input.port, dataOperacional: hoje, devidos, workerId: input.workerId, reivindicar });
+    const devidosIndividuais = devidos.filter((id) => !plano!.tratados.has(id));
     if (devidosIndividuais.length) {
       resultados = await sincronizarCiclo({ pool: input.pool, port: input.port, containerIds: devidosIndividuais, reivindicar });
     }
@@ -145,6 +148,8 @@ export async function runSchedulerOnce(input: RunSchedulerOnceInput): Promise<Ru
     for (const targetId of vencidos) await repo.concluirClaim(targetId, hoje, false, err?.message ?? String(err));
     throw err;
   }
+  const compartilhados = plano.rodadas;
+  const cobertos = plano.cobertos;
   const sincronizados = resultados.filter((r) => r.targetsConsultados.length > 0).length;
 
   return {

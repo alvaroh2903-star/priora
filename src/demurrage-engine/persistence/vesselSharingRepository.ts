@@ -11,6 +11,19 @@ import { COBERTURA_VALIDADE_HORAS } from '../tracking/vesselSharing';
  * consulta — só suspende o beneficiado da seleção automática compartilhável.
  */
 
+/**
+ * Desfecho FACTUAL da rodada compartilhada (v1.3). Persistido em
+ * `vessel_call_rodadas.desfecho` para que um tick posterior — ou outro worker —
+ * que encontre a rodada JÁ CONCLUÍDA decida sem ambiguidade: suprimir só os
+ * cobertos, liberar todos ao individual, ou tratar divergência.
+ */
+export type DesfechoRodada =
+  | 'sucesso_com_cobertura'
+  | 'sucesso_sem_cobertura'
+  | 'falha_sem_cobertura'
+  | 'encerrada_por_saida'
+  | 'divergencia_referencia';
+
 export interface ParticipanteElegivel {
   containerId: string;
   trackingTargetId: string | null;
@@ -245,7 +258,7 @@ export class VesselSharingRepository {
    */
   async adquirirRodada(input: {
     organizationId: string; vesselCallId: string; dataOperacional: CivilDate; workerId?: string; ttlMs?: number;
-  }): Promise<{ rodadaId: string; adquiriu: boolean; motivo: 'nova' | 'reivindicada' | 'em_andamento' | 'ja_concluida' }> {
+  }): Promise<{ rodadaId: string; adquiriu: boolean; motivo: 'nova' | 'reivindicada' | 'em_andamento' | 'ja_concluida'; desfecho?: DesfechoRodada | null }> {
     const ttl = Math.max(1, Math.floor((input.ttlMs ?? 5 * 60_000) / 1000));
     const client = await this.pool.connect();
     try {
@@ -260,12 +273,12 @@ export class VesselSharingRepository {
       if (ins.rows.length) { await client.query('COMMIT'); return { rodadaId: ins.rows[0].id, adquiriu: true, motivo: 'nova' }; }
 
       const { rows } = await client.query(
-        `SELECT id, estado, expira_em FROM vessel_call_rodadas
+        `SELECT id, estado, expira_em, desfecho FROM vessel_call_rodadas
           WHERE organization_id = $1 AND vessel_call_id = $2 AND data_operacional = $3 FOR UPDATE`,
         [input.organizationId, input.vesselCallId, input.dataOperacional],
       );
       const r = rows[0];
-      if (r.estado === 'concluida') { await client.query('COMMIT'); return { rodadaId: r.id, adquiriu: false, motivo: 'ja_concluida' }; }
+      if (r.estado === 'concluida') { await client.query('COMMIT'); return { rodadaId: r.id, adquiriu: false, motivo: 'ja_concluida', desfecho: r.desfecho ?? null }; }
       const expirada = new Date(r.expira_em).getTime() <= Date.now();
       if (!expirada && r.estado === 'aberta') { await client.query('COMMIT'); return { rodadaId: r.id, adquiriu: false, motivo: 'em_andamento' }; }
       // Reivindica a MESMA rodada expirada/abandonada (não cria outra).
@@ -313,11 +326,14 @@ export class VesselSharingRepository {
     );
   }
 
-  async concluirRodada(rodadaId: string, referencia: { targetId: string | null; containerId: string | null }): Promise<void> {
+  async concluirRodada(
+    rodadaId: string,
+    referencia: { targetId: string | null; containerId: string | null; desfecho: DesfechoRodada },
+  ): Promise<void> {
     await this.pool.query(
       `UPDATE vessel_call_rodadas SET estado = 'concluida', referencia_target_id = $2,
-         referencia_container_id = $3, atualizado_em = now() WHERE id = $1`,
-      [rodadaId, referencia.targetId ?? null, referencia.containerId ?? null],
+         referencia_container_id = $3, desfecho = $4, atualizado_em = now() WHERE id = $1`,
+      [rodadaId, referencia.targetId ?? null, referencia.containerId ?? null, referencia.desfecho],
     );
   }
 }
