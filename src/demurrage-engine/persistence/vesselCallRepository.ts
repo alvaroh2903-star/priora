@@ -3,6 +3,7 @@ import { Pool, PoolClient } from 'pg';
 import { getPool } from '../db/pool';
 import { CivilDate } from '../temporal/civilDate';
 import { IdentidadeComponentes } from '../tracking/vesselIdentity';
+import { FatosFaseTracking, TrackingPhase, derivarFaseTracking } from '../tracking/vesselCallPhase';
 
 /**
  * Persistência do VesselCall (Fase 9 — fundação). Sem tocar relógios/tarifas/
@@ -301,6 +302,40 @@ export class VesselCallRepository {
        VALUES ($1,$2,$3,'vessel_call_sync',$4)`,
       [input.organizationId ?? null, input.trackingTargetId ?? null, input.trackingFetchId ?? null, input.mensagem],
     );
+  }
+
+  /**
+   * Reúne (SOMENTE LEITURA) os fatos já persistidos necessários para derivar a
+   * fase de tracking de um contêiner: associação ATIVA ao VesselCall + chegada/
+   * atracação confirmadas (do VesselCall associado) + descarga/devolução do
+   * contêiner. Não grava nada, não toca cadência/relógios/tarifas.
+   */
+  async fatosFaseTracking(containerId: string): Promise<FatosFaseTracking> {
+    const { rows } = await this.pool.query(
+      `SELECT c.discharge_date, c.effective_return_date, c.tracking_return_date,
+              v.chegada AS vc_chegada, v.atracacao AS vc_atracacao,
+              (cvc.id IS NOT NULL) AS assoc_ativa
+         FROM containers c
+         LEFT JOIN container_vessel_calls cvc ON cvc.container_id = c.id AND cvc.ativo
+         LEFT JOIN vessel_calls v ON v.id = cvc.vessel_call_id
+        WHERE c.id = $1`,
+      [containerId],
+    );
+    if (!rows.length) throw new Error(`fatosFaseTracking: contêiner ${containerId} não encontrado`);
+    const r = rows[0];
+    return {
+      associacaoVesselCallAtiva: r.assoc_ativa === true,
+      chegadaConfirmada: r.vc_chegada !== null && r.vc_chegada !== undefined,
+      atracacaoConfirmada: r.vc_atracacao !== null && r.vc_atracacao !== undefined,
+      dischargeDate: r.discharge_date ?? null,
+      effectiveReturnDate: r.effective_return_date ?? null,
+      trackingReturnDate: r.tracking_return_date ?? null,
+    };
+  }
+
+  /** Fase de tracking derivada (read-only): reúne os fatos e aplica a função pura. */
+  async faseTracking(containerId: string): Promise<TrackingPhase> {
+    return derivarFaseTracking(await this.fatosFaseTracking(containerId));
   }
 
   async pendenciasAbertas(organizationId: string): Promise<Array<{ id: string; tipo: string; containerId: string | null }>> {

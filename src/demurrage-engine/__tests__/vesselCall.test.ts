@@ -403,6 +403,29 @@ test('ciclo de resolução: 1ª ingestão abre pendência; POD corrigido; nova i
   } finally { await pool.end(); }
 });
 
+test('fase de tracking (read-only): SEM_VESSELCALL → PRE_CHEGADA → POS_DESCARGA → DEVOLVIDO sobre dados reais', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await setup(pool);
+    const o = await org(pool);
+    const c = await container(pool, o.id, (await processo(pool, o.id, 'IM-PH')).id, 'HDMU00000PH');
+    const repo = new VesselCallRepository(pool);
+    // Sem associação → SEM_VESSELCALL.
+    assert.equal(await repo.faseTracking(c.id), 'SEM_VESSELCALL');
+    // Associa (POD Master) → PRE_CHEGADA (sem chegada/atracação/descarga).
+    await setPod(pool, o.id, c.id, 'SANTOS');
+    const t = await alvo(pool, 'maersk', 'MBL-PH');
+    await sincronizarVesselCall({ pool, target: t, result: resultado({ events: [descarga('HDMU00000PH', 'MSC A', 'V1')] }), containers: [{ containerId: c.id, organizationId: o.id, numero: 'HDMU00000PH' }] });
+    assert.equal(await repo.faseTracking(c.id), 'PRE_CHEGADA');
+    // Descarga confirmada (fato individual) → POS_DESCARGA (salto, sem EM_PORTO).
+    await pool.query(`UPDATE containers SET discharge_date = '2026-09-15' WHERE id=$1`, [c.id]);
+    assert.equal(await repo.faseTracking(c.id), 'POS_DESCARGA');
+    // Devolução → DEVOLVIDO.
+    await pool.query(`UPDATE containers SET tracking_return_date = '2026-09-20' WHERE id=$1`, [c.id]);
+    assert.equal(await repo.faseTracking(c.id), 'DEVOLVIDO');
+  } finally { await pool.end(); }
+});
+
 test('concorrência: duas primeiras associações simultâneas → associação única, sem erro nem histórico duplicado', { skip: !url }, async () => {
   const pool = testPool();
   try {
