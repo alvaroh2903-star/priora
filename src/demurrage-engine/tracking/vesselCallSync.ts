@@ -3,6 +3,7 @@ import { TrackingEnrichResult, TrackingEventLike } from '../sources/armadorTrack
 import { TrackingTarget } from '../persistence/trackingTargetRepository';
 import { VesselCallRepository } from '../persistence/vesselCallRepository';
 import { montarIdentidade, normalizarPod } from './vesselIdentity';
+import { VesselSharingRepository } from '../persistence/vesselSharingRepository';
 
 /**
  * Fase 9 (fundação) — sincronização do VesselCall a partir de uma consulta de
@@ -32,17 +33,38 @@ export interface VesselCallSyncResultado {
   pendencias: number;
   resolvidas: number;
   ignoradosSemViagem: number;
+  confirmados: number;
 }
 
 function norm(s: string | null | undefined): string {
   return String(s ?? '').replace(/\s+/g, ' ').trim().toUpperCase();
 }
 
-/** Eventos de descarga do contêiner (por número), com vessel/voyage presentes. */
-function descargasDoContainer(result: TrackingEnrichResult, numero: string): TrackingEventLike[] {
+/**
+ * Eventos de VIAGEM do contêiner (por número) com vessel/voyage: descarga
+ * (destino) e, pré-chegada, loaded/departed (embarque). Base para derivar a
+ * identidade da escala tanto na chegada quanto antes dela.
+ */
+function eventosViagemDoContainer(result: TrackingEnrichResult, numero: string): TrackingEventLike[] {
   const n = norm(numero).replace(/[\s-]/g, '');
+  const tipos = new Set(['discharge', 'loaded', 'departed']);
   return result.events.filter(
-    (e) => e.type === 'discharge' && norm(e.container).replace(/[\s-]/g, '') === n && (e.vessel || e.voyage),
+    (e) => tipos.has(e.type ?? '') && norm(e.container).replace(/[\s-]/g, '') === n && (e.vessel || e.voyage),
+  );
+}
+
+/**
+ * Vínculo de viagem CONFIRMADO (Bloco 2): existe evento loaded/departed do
+ * contêiner com `statusPrevistoConfirmado === 'confirmado'`. A mera presença de
+ * vessel/voyage (previsto/descarga) NÃO confirma. Retorna o evento comprovante.
+ */
+function eventoEmbarqueConfirmado(result: TrackingEnrichResult, numero: string): TrackingEventLike | null {
+  const n = norm(numero).replace(/[\s-]/g, '');
+  return (
+    result.events.find(
+      (e) => (e.type === 'loaded' || e.type === 'departed') && e.statusPrevistoConfirmado === 'confirmado' &&
+        norm(e.container).replace(/[\s-]/g, '') === n && (e.vessel || e.voyage),
+    ) ?? null
   );
 }
 
@@ -92,12 +114,13 @@ export async function sincronizarVesselCall(input: {
 }): Promise<VesselCallSyncResultado> {
   const { pool, target, result } = input;
   const repo = new VesselCallRepository(pool);
-  const out: VesselCallSyncResultado = { associados: 0, rolagens: 0, pendencias: 0, resolvidas: 0, ignoradosSemViagem: 0 };
+  const out: VesselCallSyncResultado = { associados: 0, rolagens: 0, pendencias: 0, resolvidas: 0, ignoradosSemViagem: 0, confirmados: 0 };
   if (!result.ok) return out;
 
   for (const c of input.containers) {
-    // 1) Viagem/navio a partir dos eventos de descarga DESTE contêiner.
-    const descargas = descargasDoContainer(result, c.numero);
+    // 1) Viagem/navio a partir dos eventos de viagem DESTE contêiner (descarga no
+    // destino; loaded/departed antes da chegada).
+    const descargas = eventosViagemDoContainer(result, c.numero);
     if (!descargas.length) { out.ignoradosSemViagem++; continue; } // só dado de contêiner → individual
     const chaves = new Set(descargas.map((e) => `${norm(e.vessel)}|${norm(e.voyage)}`));
     if (chaves.size > 1) {
@@ -155,6 +178,21 @@ export async function sincronizarVesselCall(input: {
     });
     if (assoc.efeito === 'associado') out.associados++;
     if (assoc.efeito === 'rolagem') out.rolagens++;
+
+    // Bloco 2: confirmação ESTRUTURADA de vínculo de viagem — só com evento
+    // loaded/departed CONFIRMADO + ETA prevista estruturada. Presença de
+    // vessel/voyage (previsto/descarga) NÃO confirma. Sem isso, não registra
+    // participante confirmado → permanece no tracking individual.
+    const embarque = eventoEmbarqueConfirmado(result, c.numero);
+    if (embarque && result.etaPrevista) {
+      await new VesselSharingRepository(pool).confirmarEstruturado({
+        organizationId: c.organizationId, vesselCallId: vc.id, containerId: c.containerId,
+        trackingTargetId: target.id, processoId: null, etaPrevista: result.etaPrevista, vinculoConfirmado: true,
+        fonte: 'tracking_service', evidencia: embarque.status ?? result.reference, observadoEm: result.at ? new Date(result.at) : new Date(),
+        statusPrevistoConfirmado: 'confirmado', trackingFetchId: input.fetchId ?? null,
+      });
+      out.confirmados++;
+    }
 
     // Item 3: a condição desapareceu (identidade completa + POD confirmado) → fecha
     // as pendências abertas correspondentes deste contêiner/target (idempotente).

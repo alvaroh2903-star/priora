@@ -31,6 +31,7 @@ test('migrations: aplica todas as migrations pendentes em um banco novo e é ide
       '0018_final_guard_data_congelada.sql',
       '0019_vessel_calls.sql',
       '0020_vessel_call_isolamento_incidentes.sql',
+      '0021_vessel_sharing.sql',
     ];
 
     const first = await runMigrations(pool);

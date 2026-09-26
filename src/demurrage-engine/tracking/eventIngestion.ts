@@ -122,8 +122,12 @@ export async function ingestTrackingResult(input: IngestInput): Promise<IngestRe
   // 1) Eventos normalizados, deduplicados no banco.
   let inseridos = 0;
   let duplicados = 0;
+  // Tipos que a tabela tracking_events armazena (CHECK da 0011). Tipos novos do
+  // Bloco 2 (loaded/departed) são armazenados como 'other'; o vínculo de viagem é
+  // derivado do resultado BRUTO em vesselCallSync, não do tipo persistido.
+  const TIPOS_ARMAZENADOS = new Set(['berth', 'discharge', 'available', 'gate_out', 'empty_return', 'other']);
   for (const e of result.events) {
-    const tipoEvento = (e.type ?? 'other') as TipoEvento;
+    const tipoEvento = (TIPOS_ARMAZENADOS.has(e.type ?? 'other') ? (e.type ?? 'other') : 'other') as TipoEvento;
     const hash = dedupeHash({
       armador: result.carrier?.id ?? null,
       trackingTargetId: target.id,

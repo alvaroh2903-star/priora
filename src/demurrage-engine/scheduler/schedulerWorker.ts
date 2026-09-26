@@ -5,6 +5,7 @@ import { SchedulerRepository, ContainerCadenciaRow } from '../persistence/schedu
 import { avaliarCadencia, deveConsultarAgora, CadenciaInput } from './cadencePolicy';
 import { sincronizarCiclo } from './trackingScheduler';
 import { hojeOperacional } from '../time/operationalDate';
+import { planejarRodadasCompartilhadas } from '../tracking/vesselRound';
 
 /**
  * Worker REAL do scheduler (revisão da Fase 6).
@@ -73,6 +74,9 @@ export interface RunSchedulerOnceResultado {
   /** Contêineres efetivamente sincronizados (dos que venceram o claim do target). */
   sincronizados: number;
   suspensos: number;
+  /** Fase 9 Bloco 2: rodadas compartilhadas executadas e contêineres cobertos no tick. */
+  rodadasCompartilhadas: number;
+  contêineresCobertos: number;
 }
 
 // "Hoje" da janela de claim = data civil OPERACIONAL (fuso local), nunca UTC —
@@ -106,6 +110,17 @@ export async function runSchedulerOnce(input: RunSchedulerOnceInput): Promise<Ru
     }
   }
 
+  // Fase 9 Bloco 2 — tracking intercalado: sobre os DEVIDOS, escolhe UMA referência
+  // por VesselCall compartilhado e cobre os demais (excluídos do individual). INERTE
+  // quando não há participantes confirmados (produção/testes congelados). NÃO altera
+  // o cálculo da cadência — apenas a seleção/execução das consultas automáticas.
+  let compartilhados = 0;
+  let cobertos = 0;
+  const plano = await planejarRodadasCompartilhadas({ pool: input.pool, port: input.port, dataOperacional: hoje, devidos, workerId: input.workerId });
+  compartilhados = plano.rodadas;
+  cobertos = plano.cobertos;
+  const devidosIndividuais = devidos.filter((id) => !plano.tratados.has(id));
+
   // Barreira: só consulta o target se ESTE worker vencer o claim (target, janela).
   const vencidos = new Set<string>();
   const reivindicar = async (trackingTargetId: string): Promise<boolean> => {
@@ -118,9 +133,9 @@ export async function runSchedulerOnce(input: RunSchedulerOnceInput): Promise<Ru
   };
 
   let resultados: Awaited<ReturnType<typeof sincronizarCiclo>> = [];
-  if (devidos.length) {
+  if (devidosIndividuais.length) {
     try {
-      resultados = await sincronizarCiclo({ pool: input.pool, port: input.port, containerIds: devidos, reivindicar });
+      resultados = await sincronizarCiclo({ pool: input.pool, port: input.port, containerIds: devidosIndividuais, reivindicar });
       // Janelas vencidas por este worker foram consumidas (sucesso OU falha já
       // tratada como incidente): marca 'done' para a cadência avançar. Um claim
       // deixado 'claimed' (exceção abaixo) é reaproveitável depois (stale).
@@ -138,5 +153,7 @@ export async function runSchedulerOnce(input: RunSchedulerOnceInput): Promise<Ru
     contêineresNaJanela: naJanela,
     sincronizados,
     suspensos,
+    rodadasCompartilhadas: compartilhados,
+    contêineresCobertos: cobertos,
   };
 }

@@ -20,7 +20,17 @@ export interface TrackingEventLike {
   location: string | null;
   vessel?: string | null;
   voyage?: string | null;
-  type?: 'berth' | 'discharge' | 'available' | 'gate_out' | 'empty_return' | 'other';
+  /**
+   * Tipo normalizado. Fase 9 Bloco 2: `loaded`/`departed` (loaded on board /
+   * vessel departed / container loaded) são o ÚNICO sinal que pode CONFIRMAR o
+   * vínculo de viagem de um contêiner — e só quando `statusPrevistoConfirmado ===
+   * 'confirmado'`. A presença de vessel/voyage em outros tipos é vínculo PREVISTO.
+   * O adaptador atual NÃO emite loaded/departed; o campo existe para quando o
+   * fornecedor passar a fornecer (comportamento conservador até lá).
+   */
+  type?: 'berth' | 'discharge' | 'available' | 'gate_out' | 'empty_return' | 'loaded' | 'departed' | 'other';
+  /** Diferencia informação PREVISTA de FATO CONFIRMADO, quando o fornecedor informa. */
+  statusPrevistoConfirmado?: 'previsto' | 'confirmado';
   container?: string | null;
   tipo?: string | null;
 }
@@ -49,6 +59,12 @@ export interface TrackingEnrichResult {
   cached: boolean;
   resolved: boolean;
   at: string;
+  /**
+   * ETA prevista estruturada da viagem (Fase 9 Bloco 2), quando o fornecedor a
+   * informar. Obrigatória para ativar o compartilhamento automático. O adaptador
+   * atual não a fornece → undefined → participante permanece individual.
+   */
+  etaPrevista?: string | null;
 }
 
 export interface EnrichOpts {

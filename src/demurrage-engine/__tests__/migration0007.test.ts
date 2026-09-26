@@ -117,7 +117,8 @@ test('0007 — organization_id imutável nas tabelas de tenant', { skip: !url },
     const EXCECOES_APROVADAS: string[] = [];
     // tariff_tables (Fase 4) também carrega organization_id e, pela convenção da
     // DECISÃO 1, recebeu o mesmo trigger — entra na expectativa do catálogo.
-    const TABELAS_COM_ORG = [...TABELAS_TENANT, 'tariff_tables', 'tracking_alert_deliveries', 'vessel_calls', 'vessel_call_pendencias', 'container_vessel_calls', 'vessel_call_sync_incidents'];
+    const TABELAS_COM_ORG = [...TABELAS_TENANT, 'tariff_tables', 'tracking_alert_deliveries', 'vessel_calls', 'vessel_call_pendencias', 'container_vessel_calls', 'vessel_call_sync_incidents',
+      'vessel_call_participantes', 'vessel_call_rodadas', 'vessel_call_coberturas'];
     const { rows } = await pool.query(`
       SELECT c.table_name,
              EXISTS (SELECT 1 FROM pg_trigger tg
