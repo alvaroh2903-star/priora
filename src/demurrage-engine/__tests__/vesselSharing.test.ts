@@ -311,6 +311,75 @@ test('v1.3 puro: ETA isolada só gera fato eta e exige identidade confirmada', (
   assert.equal(semIdent.motivoRejeicao, 'eta_sem_identidade_confirmada');
 });
 
+/* ---------- v1.4: observado_em não fabricado + fencing ---------- */
+test('v1.4(#1) puro: sem observado_em válido → observado_em_ausente e sem cobertura', () => {
+  const c = consultaDe({ at: '', events: [{ date: null, status: 'Loaded', location: 'SINGAPURA', vessel: 'OCEAN CARGO', voyage: 'V1', type: 'loaded', statusPrevistoConfirmado: 'confirmado', container: numeroDe(0) }], etaPrevista: null });
+  const f = validarFatosCompartilhados({ numero: numeroDe(0), consulta: c, identidade: IDENT_NORM });
+  assert.equal(f.ok, false);
+  assert.equal(f.motivoRejeicao, 'observado_em_ausente');
+  // 2ª origem (TrackingFetch/evento persistido) supre o momento e o fato volta a valer.
+  const g = validarFatosCompartilhados({ numero: numeroDe(0), consulta: c, identidade: IDENT_NORM, momentoPersistido: '2026-09-20T10:00:00Z' });
+  assert.equal(g.ok, true);
+  assert.ok(g.camposValidos.length > 0 && g.camposValidos.every((x) => x.observadoEm === '2026-09-20T10:00:00Z'));
+});
+
+test('v1.4(#2) puro: determinístico e sem relógio atual', () => {
+  const c = consultaDe({ at: '2026-09-20T00:00:00Z' });
+  const a = validarFatosCompartilhados({ numero: numeroDe(0), consulta: c, identidade: IDENT_NORM });
+  const b = validarFatosCompartilhados({ numero: numeroDe(0), consulta: c, identidade: IDENT_NORM });
+  assert.deepEqual(a, b, 'saída idêntica para a mesma entrada');
+  assert.ok(a.camposValidos.every((x) => x.observadoEm === '2026-09-20T00:00:00Z'), 'observado_em vem da resposta, não do relógio');
+});
+
+test('v1.4(#3) puro: data impossível (30/02) é rejeitada', () => {
+  const c1 = consultaDe({ at: '2026-02-30T00:00:00Z', events: [{ date: null, status: 'L', location: 'SINGAPURA', vessel: 'OCEAN CARGO', voyage: 'V1', type: 'loaded', statusPrevistoConfirmado: 'confirmado', container: numeroDe(0) }], etaPrevista: null });
+  assert.equal(validarFatosCompartilhados({ numero: numeroDe(0), consulta: c1, identidade: IDENT_NORM }).motivoRejeicao, 'observado_em_ausente', 'timestamp impossível não é aceito');
+  const c2 = consultaDe({ at: '2026-09-20T00:00:00Z', events: [], etaPrevista: '2026-02-30' });
+  const f2 = validarFatosCompartilhados({ numero: numeroDe(0), consulta: c2, identidade: IDENT_NORM });
+  assert.ok(!f2.camposValidos.some((x) => x.campo === 'eta'), 'eta com data impossível não vira campo');
+});
+
+test('v1.4(#4-#10) fencing: rodada reivindicada — proprietário anterior rejeitado; só o novo conclui', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await setup(pool);
+    const g = await grupo(pool, 3);
+    const sharing = new VesselSharingRepository(pool);
+    // (#4) A adquire.
+    const a = await sharing.adquirirRodada({ organizationId: g.orgId, vesselCallId: g.vesselCallId, dataOperacional: HOJE, workerId: 'A', ttlMs: 1 });
+    assert.equal(a.adquiriu, true);
+    assert.ok(a.token, 'A recebe token de posse');
+    // (#5) rodada de A expira.
+    await pool.query(`UPDATE vessel_call_rodadas SET expira_em = now() - interval '1 minute' WHERE id=$1`, [a.rodadaId]);
+    // (#6) B reivindica a MESMA rodada (época monotônica bumpa).
+    const b = await sharing.adquirirRodada({ organizationId: g.orgId, vesselCallId: g.vesselCallId, dataOperacional: HOJE, workerId: 'B', ttlMs: 5 * 60_000 });
+    assert.equal(b.adquiriu, true);
+    assert.equal(b.rodadaId, a.rodadaId, 'mesma linha reivindicada, não outra');
+    assert.ok(b.token!.epoca > a.token!.epoca, 'época monotônica avançou na reivindicação');
+    // (#7) A tenta gravar tentativa/cobertura/conclusão com posse obsoleta → tudo rejeitado.
+    const tentA = await sharing.registrarTentativa({ rodadaId: a.rodadaId, numeroTentativa: 1, targetId: null, containerId: null, iniciadaEm: new Date(), terminadaEm: new Date(), resultado: 'falha', cacheHit: false, consultaEfetiva: false, token: a.token });
+    assert.equal(tentA, false, 'A não grava tentativa após a transferência');
+    const finA = await sharing.finalizarRodada({ token: a.token!, desfecho: 'sucesso_com_cobertura', referencia: { targetId: null, containerId: g.containers[0].id }, coberturas: [{ organizationId: g.orgId, vesselCallId: g.vesselCallId, containerId: g.containers[1].id, trackingTargetId: g.containers[1].targetId, targetConsultadoId: g.containers[0].targetId, processoConsultadoId: g.processoId, campos: ['navio'], evidencia: 'A-obsoleto' }] });
+    assert.equal(finA.aplicado, false, 'A não finaliza nem cria cobertura obsoleta');
+    const concA = await sharing.concluirRodada(a.rodadaId, { targetId: null, containerId: null, desfecho: 'falha_sem_cobertura' }, a.token);
+    assert.equal(concA, false, 'A não sobrescreve o desfecho');
+    // (#9) nenhuma cobertura do resultado obsoleto de A permanece.
+    assert.equal((await sharing.coberturasVigentes(g.vesselCallId)).length, 0, 'nada coberto pelo resultado obsoleto de A');
+    // (#8) só B consegue concluir.
+    const finB = await sharing.finalizarRodada({ token: b.token!, desfecho: 'sucesso_com_cobertura', referencia: { targetId: g.containers[0].targetId, containerId: g.containers[0].id }, coberturas: [{ organizationId: g.orgId, vesselCallId: g.vesselCallId, containerId: g.containers[1].id, trackingTargetId: g.containers[1].targetId, targetConsultadoId: g.containers[0].targetId, processoConsultadoId: g.processoId, campos: ['navio'], evidencia: 'B-valido' }] });
+    assert.equal(finB.aplicado, true, 'só B (posse atual) conclui');
+    assert.equal(finB.cobertos.length, 1);
+    // (#10) desfecho e proprietário são de B; cobertura vigente é a de B.
+    const row = (await pool.query(`SELECT estado, desfecho, worker_id FROM vessel_call_rodadas WHERE id=$1`, [a.rodadaId])).rows[0];
+    assert.equal(row.estado, 'concluida');
+    assert.equal(row.desfecho, 'sucesso_com_cobertura');
+    assert.equal(row.worker_id, 'B');
+    const cob = (await pool.query(`SELECT evidencia FROM vessel_call_coberturas WHERE vessel_call_id=$1 AND estado='vigente'`, [g.vesselCallId])).rows;
+    assert.equal(cob.length, 1);
+    assert.equal(cob[0].evidencia, 'B-valido', 'cobertura vigente é a de B');
+  } finally { await pool.end(); }
+});
+
 /* ---------- v1.3: integração ---------- */
 test('v1.3(#1,#2) saída pós-ingestão invalida coberturas e libera os demais ao individual no mesmo tick', { skip: !url }, async () => {
   const pool = testPool();

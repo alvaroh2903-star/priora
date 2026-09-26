@@ -46,6 +46,13 @@ async function numeroDoContainer(pool: Pool, containerId: string): Promise<strin
   const { rows } = await pool.query(`SELECT numero FROM containers WHERE id=$1`, [containerId]);
   return rows[0]?.numero ?? '';
 }
+/** Momento PERSISTIDO do TrackingFetch (2ª origem de observado_em, v1.4). */
+async function fetchObservadoEm(pool: Pool, fetchId: string): Promise<string | null> {
+  const { rows } = await pool.query(`SELECT finalizado_em FROM tracking_fetches WHERE id=$1`, [fetchId]);
+  const v = rows[0]?.finalizado_em;
+  if (!v) return null;
+  return v instanceof Date ? v.toISOString() : String(v);
+}
 
 /** Identidade normalizada atual do VesselCall (para comparação estrita de fatos). */
 async function identidadeVesselCall(pool: Pool, vesselCallId: string): Promise<IdentidadeVesselCall> {
@@ -113,13 +120,20 @@ export async function executarRodadaCompartilhada(input: {
   const ordenados = ordenarCandidatos(candidatos);
 
   const claim = await sharing.adquirirRodada({ organizationId: input.organizationId, vesselCallId, dataOperacional: input.dataOperacional, workerId: input.workerId, ttlMs: input.ttlMs });
-  if (!claim.adquiriu) {
+  if (!claim.adquiriu || !claim.token) {
     return {
       status: 'nao_adquiriu', cobertos: [], tentativas: 0, motivo: claim.motivo,
       motivoClaim: claim.motivo === 'ja_concluida' ? 'ja_concluida' : 'em_andamento',
       desfecho: claim.motivo === 'ja_concluida' ? (claim.desfecho ?? null) : undefined,
     };
   }
+  const token = claim.token;
+
+  // Perda de posse (fencing): a rodada foi reivindicada por outro worker. Interrompe
+  // sem criar/renovar cobertura, sem sobrescrever desfecho e SEM liberar/suprimir por
+  // resultado obsoleto — o grupo fica com o proprietário atual (tratado como em_andamento).
+  const posseperdida = (tentativas: number): RodadaResultado =>
+    ({ status: 'nao_adquiriu', cobertos: [], tentativas, motivo: 'posse_perdida', motivoClaim: 'em_andamento' });
 
   // Tenta referência + no máx. 1 alternativa, SEMPRE pelo pipeline individual.
   const seq = ordenados.slice(0, MAX_TENTATIVAS_RODADA);
@@ -132,32 +146,37 @@ export async function executarRodadaCompartilhada(input: {
     const res = await sincronizarContainer({ pool, port, containerId: cand.containerId, ciclo: novoCiclo(input.reivindicar) });
     if (!res.consultas.length) {
       // Claim individual perdido para outro worker OU sem target → tentativa sem consulta.
-      await sharing.registrarTentativa({ rodadaId: claim.rodadaId, numeroTentativa: tentativasFeitas, targetId: cand.trackingTargetId, containerId: cand.containerId, iniciadaEm: iniciada, terminadaEm: new Date(), resultado: 'falha', cacheHit: false, consultaEfetiva: false, falhaSanitizada: 'claim individual perdido ou sem target' });
+      const gravou = await sharing.registrarTentativa({ rodadaId: claim.rodadaId, numeroTentativa: tentativasFeitas, targetId: cand.trackingTargetId, containerId: cand.containerId, iniciadaEm: iniciada, terminadaEm: new Date(), resultado: 'falha', cacheHit: false, consultaEfetiva: false, falhaSanitizada: 'claim individual perdido ou sem target', token });
+      if (!gravou) return posseperdida(tentativasFeitas);
       continue;
     }
     const efetiva = res.consultas.find((c) => c.ok) ?? res.consultas[0];
     const tipo: 'cache_hit' | 'consulta_efetiva' | 'falha' = !efetiva.ok ? 'falha' : efetiva.cached ? 'cache_hit' : 'consulta_efetiva';
-    await sharing.registrarTentativa({
+    const gravou = await sharing.registrarTentativa({
       rodadaId: claim.rodadaId, numeroTentativa: tentativasFeitas, targetId: efetiva.targetId, containerId: cand.containerId,
       iniciadaEm: iniciada, terminadaEm: new Date(), resultado: tipo, trackingFetchId: efetiva.fetchId,
       cacheHit: efetiva.cached, consultaEfetiva: efetiva.ok && !efetiva.cached,
       falhaSanitizada: efetiva.ok ? null : (efetiva.result.message ?? 'falha').replace(/\s+/g, ' ').slice(0, 300),
+      token,
     });
+    if (!gravou) return posseperdida(tentativasFeitas); // rodada transferida no meio das tentativas
     if (efetiva.ok) { sucesso = { containerId: cand.containerId, consulta: efetiva }; break; }
   }
 
   if (!sucesso) {
-    await sharing.concluirRodada(claim.rodadaId, { targetId: null, containerId: null, desfecho: 'falha_sem_cobertura' });
+    const fim = await sharing.finalizarRodada({ token, desfecho: 'falha_sem_cobertura', referencia: { targetId: null, containerId: null } });
+    if (!fim.aplicado) return posseperdida(tentativasFeitas);
     return { status: 'executada', cobertos: [], tentativas: tentativasFeitas, resultadoReferencia: 'falha', desfecho: 'falha_sem_cobertura' };
   }
 
   const refContainer = sucesso.containerId;
   const resultadoRef: 'cache_hit' | 'consulta_efetiva' = sucesso.consulta.cached ? 'cache_hit' : 'consulta_efetiva';
 
-  // REAVALIA a saída DEPOIS da ingestão: chegada/atracação/berth/descarga → encerra sem cobertura.
+  // REAVALIA a saída DEPOIS da ingestão: chegada/atracação/berth/descarga → encerra
+  // sem cobertura. Invalidação + conclusão na MESMA transação fenced.
   if (await sharing.deveEncerrar(vesselCallId)) {
-    await sharing.invalidarCoberturas(vesselCallId, 'saida_apos_ingestao');
-    await sharing.concluirRodada(claim.rodadaId, { targetId: sucesso.consulta.targetId, containerId: refContainer, desfecho: 'encerrada_por_saida' });
+    const fim = await sharing.finalizarRodada({ token, desfecho: 'encerrada_por_saida', referencia: { targetId: sucesso.consulta.targetId, containerId: refContainer }, invalidarVesselCallId: vesselCallId, invalidarMotivo: 'saida_apos_ingestao' });
+    if (!fim.aplicado) return posseperdida(tentativasFeitas);
     return { status: 'encerrado', referenciaContainerId: refContainer, cobertos: [], tentativas: tentativasFeitas, resultadoReferencia: resultadoRef, desfecho: 'encerrada_por_saida' };
   }
 
@@ -166,41 +185,43 @@ export async function executarRodadaCompartilhada(input: {
   // a associação ativa da referência mudou de VesselCall (rolagem na ingestão).
   const identidade = await identidadeVesselCall(pool, vesselCallId);
   const numero = await numeroDoContainer(pool, refContainer);
-  const fatos = validarFatosCompartilhados({ numero, consulta: sucesso.consulta, identidade });
+  const momentoPersistido = await fetchObservadoEm(pool, sucesso.consulta.fetchId);
+  const fatos = validarFatosCompartilhados({ numero, consulta: sucesso.consulta, identidade, momentoPersistido });
   const assocMudou = (await assocAtiva(pool, refContainer)) !== vesselCallId;
 
   if (!fatos.compativel || assocMudou) {
     // Divergência/rolagem: remove só a referência; NÃO cobre o VesselCall anterior.
-    await sharing.removerParticipante(vesselCallId, refContainer, fatos.motivoRejeicao ?? 'divergencia_ou_rolagem');
-    await sharing.concluirRodada(claim.rodadaId, { targetId: sucesso.consulta.targetId, containerId: refContainer, desfecho: 'divergencia_referencia' });
+    const fim = await sharing.finalizarRodada({ token, desfecho: 'divergencia_referencia', referencia: { targetId: sucesso.consulta.targetId, containerId: refContainer }, removerParticipante: { vesselCallId, containerId: refContainer, motivo: fatos.motivoRejeicao ?? 'divergencia_ou_rolagem' } });
+    if (!fim.aplicado) return posseperdida(tentativasFeitas);
     return { status: 'executada', referenciaContainerId: refContainer, cobertos: [], tentativas: tentativasFeitas, resultadoReferencia: resultadoRef, motivo: 'referencia_divergente', desfecho: 'divergencia_referencia' };
   }
 
   if (!fatos.ok) {
-    // Compatível, mas sem fato compartilhável (só eventos individuais, ou ETA sem
-    // identidade confirmada / ambígua) → conclui sem cobertura.
-    await sharing.concluirRodada(claim.rodadaId, { targetId: sucesso.consulta.targetId, containerId: refContainer, desfecho: 'sucesso_sem_cobertura' });
+    // Compatível, mas sem fato compartilhável (só eventos individuais, ETA sem
+    // identidade confirmada/ambígua, ou observado_em ausente) → conclui sem cobertura.
+    const fim = await sharing.finalizarRodada({ token, desfecho: 'sucesso_sem_cobertura', referencia: { targetId: sucesso.consulta.targetId, containerId: refContainer } });
+    if (!fim.aplicado) return posseperdida(tentativasFeitas);
     return { status: 'executada', referenciaContainerId: refContainer, cobertos: [], tentativas: tentativasFeitas, resultadoReferencia: resultadoRef, motivo: fatos.motivoRejeicao ?? 'sem_fatos_de_viagem', desfecho: 'sucesso_sem_cobertura' };
   }
 
   // Cobertura com proveniência real e campos EFETIVAMENTE validados (não fixos).
+  // Coberturas + desfecho gravados ATOMICAMENTE, revalidando a posse (fencing) na
+  // mesma transação.
   const elegiveisFinal = await sharing.participantesElegiveis(vesselCallId);
   const processoRef = await processoDoContainer(pool, refContainer);
   const campos = fatos.camposValidos.map((c) => c.campo);
   const evidencia = montarEvidencia({ fetchId: sucesso.consulta.fetchId, targetConsultadoId: sucesso.consulta.targetId, processoConsultadoId: processoRef, containerConsultadoId: refContainer, fatos });
-  const cobertos: string[] = [];
-  for (const p of elegiveisFinal) {
-    if (p.containerId === refContainer) continue;
-    await sharing.renovarCobertura({
+  const coberturasNovas = elegiveisFinal
+    .filter((p) => p.containerId !== refContainer)
+    .map((p) => ({
       organizationId: input.organizationId, vesselCallId, containerId: p.containerId, trackingTargetId: p.trackingTargetId,
-      rodadaId: claim.rodadaId, fetchId: sucesso.consulta.fetchId, targetConsultadoId: sucesso.consulta.targetId, processoConsultadoId: processoRef,
+      fetchId: sucesso!.consulta.fetchId, targetConsultadoId: sucesso!.consulta.targetId, processoConsultadoId: processoRef,
       campos, evidencia,
-    });
-    cobertos.push(p.containerId);
-  }
-  const desfecho: DesfechoRodada = cobertos.length ? 'sucesso_com_cobertura' : 'sucesso_sem_cobertura';
-  await sharing.concluirRodada(claim.rodadaId, { targetId: sucesso.consulta.targetId, containerId: refContainer, desfecho });
-  return { status: 'executada', referenciaContainerId: refContainer, cobertos, tentativas: tentativasFeitas, resultadoReferencia: resultadoRef, desfecho };
+    }));
+  const desfechoFinal: DesfechoRodada = coberturasNovas.length ? 'sucesso_com_cobertura' : 'sucesso_sem_cobertura';
+  const fim = await sharing.finalizarRodada({ token, desfecho: desfechoFinal, referencia: { targetId: sucesso.consulta.targetId, containerId: refContainer }, coberturas: coberturasNovas });
+  if (!fim.aplicado) return posseperdida(tentativasFeitas);
+  return { status: 'executada', referenciaContainerId: refContainer, cobertos: fim.cobertos, tentativas: tentativasFeitas, resultadoReferencia: resultadoRef, desfecho: desfechoFinal };
 }
 
 export interface PlanejamentoCompartilhado {

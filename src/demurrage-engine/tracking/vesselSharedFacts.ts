@@ -60,13 +60,40 @@ function normContainer(s: string | null | undefined): string {
   return norm(s).replace(/[\s-]/g, '');
 }
 
-/** ETA estruturada válida: string de data ISO (YYYY-MM-DD) parseável; senão null. */
-function etaValida(eta: string | null | undefined): string | null {
-  if (!eta || typeof eta !== 'string') return null;
-  const m = eta.match(/^\d{4}-\d{2}-\d{2}/);
+/**
+ * Momento (data civil OU timestamp ISO) ESTRITAMENTE válido. Round-trip pelos
+ * componentes UTC para rejeitar datas impossíveis (ex.: 2026-02-30, que o
+ * Date.parse "corrige" para 02/03). Retorna a string original quando válida,
+ * senão null. Pura e determinística — sem relógio atual.
+ */
+function momentoValido(s: string | null | undefined): string | null {
+  if (!s || typeof s !== 'string') return null;
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?$/);
   if (!m) return null;
-  const t = Date.parse(eta.length === 10 ? eta + 'T00:00:00Z' : eta);
-  return Number.isNaN(t) ? null : eta.slice(0, 10);
+  const yy = +m[1], MM = +m[2], dd = +m[3];
+  const hh = m[4] === undefined ? 0 : +m[4];
+  const mi = m[5] === undefined ? 0 : +m[5];
+  const ss = m[6] === undefined ? 0 : +m[6];
+  if (MM < 1 || MM > 12 || dd < 1 || dd > 31 || hh > 23 || mi > 59 || ss > 59) return null;
+  const dt = new Date(Date.UTC(yy, MM - 1, dd, hh, mi, ss));
+  if (dt.getUTCFullYear() !== yy || dt.getUTCMonth() !== MM - 1 || dt.getUTCDate() !== dd) return null;
+  return s;
+}
+
+/** Data civil (YYYY-MM-DD) ESTRITAMENTE válida (rejeita 30/02); senão null. */
+function dataCivilValida(eta: string | null | undefined): string | null {
+  const ok = momentoValido(eta);
+  return ok ? ok.slice(0, 10) : null;
+}
+
+/**
+ * Momento observado válido para o fato compartilhável, em ordem de origem
+ * EXPLÍCITA (v1.4): (1) timestamp estruturado da resposta; (2) timestamp
+ * persistido do TrackingFetch/evento originador (fornecido pelo chamador);
+ * (3) data do evento originador presente na resposta. Nunca o relógio atual.
+ */
+function resolverObservadoEm(rAt: string | null | undefined, momentoPersistido: string | null | undefined, eventoData: string | null | undefined): string | null {
+  return momentoValido(rAt) ?? momentoValido(momentoPersistido) ?? momentoValido(eventoData);
 }
 
 /**
@@ -93,12 +120,23 @@ export function validarFatosCompartilhados(input: {
   numero: string;
   consulta: ConsultaRealizada;
   identidade: IdentidadeVesselCall;
+  /**
+   * Momento persistido do TrackingFetch (ou evento originador) fornecido pelo
+   * chamador — 2ª origem de `observado_em`. Mantém a função PURA (não consulta o
+   * banco): quem tem o Pool resolve o timestamp e o injeta aqui.
+   */
+  momentoPersistido?: string | null;
 }): FatosCompartilhados {
   const { numero, consulta, identidade } = input;
   if (!consulta.ok) return { ok: false, compativel: false, camposValidos: [], motivoRejeicao: 'consulta_falhou' };
 
   const r = consulta.result;
-  const observadoEm = r.at ?? new Date().toISOString();
+  const evento = eventoEmbarqueConfirmado(r, numero);
+  // Momento observado NUNCA fabricado (v1.4): resposta → fetch/evento persistido →
+  // data do evento originador; sem nenhum válido, rejeita o compartilhamento.
+  const observadoEm = resolverObservadoEm(r.at, input.momentoPersistido, evento?.date);
+  if (!observadoEm) return { ok: false, compativel: true, camposValidos: [], motivoRejeicao: 'observado_em_ausente', eventoOriginador: evento?.status };
+
   const fonte = 'tracking_service';
   const campos: CampoCompartilhado[] = [];
   let incompat: string | undefined;
@@ -108,7 +146,6 @@ export function validarFatosCompartilhados(input: {
   const carrierNorm = normalizarArmador(r.carrier?.id || r.carrier?.name || '');
   if (carrierNorm && identidade.armador && carrierNorm !== identidade.armador) incompat = 'armador_divergente';
 
-  const evento = eventoEmbarqueConfirmado(r, numero);
   if (evento) {
     const navio = normalizarNavio(evento.vessel);
     const viagem = normalizarViagem(evento.voyage);
@@ -132,8 +169,8 @@ export function validarFatosCompartilhados(input: {
     else campos.push({ campo: 'destino', valor: String(desc.location), fonte, observadoEm, evidencia: `evento=discharge;status=${desc.status}` });
   }
 
-  // ETA estruturada válida.
-  const eta = etaValida(r.etaPrevista);
+  // ETA estruturada válida (data civil estrita: rejeita 30/02 etc.).
+  const eta = dataCivilValida(r.etaPrevista);
   if (eta) campos.push({ campo: 'eta', valor: eta, fonte, observadoEm, evidencia: `etaPrevista;ref=${consulta.referenceValueCanonical}` });
 
   if (incompat) return { ok: false, compativel: false, camposValidos: [], motivoRejeicao: incompat, eventoOriginador: evento?.status };

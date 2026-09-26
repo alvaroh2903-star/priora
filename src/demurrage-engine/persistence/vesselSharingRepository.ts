@@ -24,6 +24,18 @@ export type DesfechoRodada =
   | 'encerrada_por_saida'
   | 'divergencia_referencia';
 
+/**
+ * Token de posse (fencing) de uma rodada: identidade + versão MONOTÔNICA (`epoca`)
+ * + worker proprietário. Toda escrita terminal (tentativa, cobertura, desfecho,
+ * invalidação relacionada) valida este token contra o estado atual da rodada; se
+ * a rodada foi reivindicada por outro worker (época bumpada), a escrita é rejeitada.
+ */
+export interface PosseRodada {
+  rodadaId: string;
+  epoca: number;
+  workerId: string | null;
+}
+
 export interface ParticipanteElegivel {
   containerId: string;
   trackingTargetId: string | null;
@@ -258,22 +270,25 @@ export class VesselSharingRepository {
    */
   async adquirirRodada(input: {
     organizationId: string; vesselCallId: string; dataOperacional: CivilDate; workerId?: string; ttlMs?: number;
-  }): Promise<{ rodadaId: string; adquiriu: boolean; motivo: 'nova' | 'reivindicada' | 'em_andamento' | 'ja_concluida'; desfecho?: DesfechoRodada | null }> {
+  }): Promise<{ rodadaId: string; adquiriu: boolean; motivo: 'nova' | 'reivindicada' | 'em_andamento' | 'ja_concluida'; desfecho?: DesfechoRodada | null; token?: PosseRodada }> {
     const ttl = Math.max(1, Math.floor((input.ttlMs ?? 5 * 60_000) / 1000));
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
       const ins = await client.query(
-        `INSERT INTO vessel_call_rodadas (organization_id, vessel_call_id, data_operacional, worker_id, expira_em, estado)
-         VALUES ($1,$2,$3,$4, now() + ($5 || ' seconds')::interval, 'aberta')
+        `INSERT INTO vessel_call_rodadas (organization_id, vessel_call_id, data_operacional, worker_id, expira_em, estado, epoca)
+         VALUES ($1,$2,$3,$4, now() + ($5 || ' seconds')::interval, 'aberta', 1)
          ON CONFLICT (organization_id, vessel_call_id, data_operacional) DO NOTHING
-         RETURNING id`,
+         RETURNING id, epoca`,
         [input.organizationId, input.vesselCallId, input.dataOperacional, input.workerId ?? null, String(ttl)],
       );
-      if (ins.rows.length) { await client.query('COMMIT'); return { rodadaId: ins.rows[0].id, adquiriu: true, motivo: 'nova' }; }
+      if (ins.rows.length) {
+        await client.query('COMMIT');
+        return { rodadaId: ins.rows[0].id, adquiriu: true, motivo: 'nova', token: { rodadaId: ins.rows[0].id, epoca: ins.rows[0].epoca, workerId: input.workerId ?? null } };
+      }
 
       const { rows } = await client.query(
-        `SELECT id, estado, expira_em, desfecho FROM vessel_call_rodadas
+        `SELECT id, estado, expira_em, desfecho, epoca FROM vessel_call_rodadas
           WHERE organization_id = $1 AND vessel_call_id = $2 AND data_operacional = $3 FOR UPDATE`,
         [input.organizationId, input.vesselCallId, input.dataOperacional],
       );
@@ -281,21 +296,37 @@ export class VesselSharingRepository {
       if (r.estado === 'concluida') { await client.query('COMMIT'); return { rodadaId: r.id, adquiriu: false, motivo: 'ja_concluida', desfecho: r.desfecho ?? null }; }
       const expirada = new Date(r.expira_em).getTime() <= Date.now();
       if (!expirada && r.estado === 'aberta') { await client.query('COMMIT'); return { rodadaId: r.id, adquiriu: false, motivo: 'em_andamento' }; }
-      // Reivindica a MESMA rodada expirada/abandonada (não cria outra).
-      await client.query(
+      // Reivindica a MESMA rodada expirada/abandonada (não cria outra) e BUMPA a
+      // época: qualquer escrita do proprietário anterior (época antiga) é fencing-rejeitada.
+      const upd = await client.query(
         `UPDATE vessel_call_rodadas SET worker_id = $2, adquirida_em = now(),
-           expira_em = now() + ($3 || ' seconds')::interval, estado = 'aberta', atualizado_em = now()
-         WHERE id = $1`,
+           expira_em = now() + ($3 || ' seconds')::interval, estado = 'aberta', epoca = epoca + 1, atualizado_em = now()
+         WHERE id = $1 RETURNING epoca`,
         [r.id, input.workerId ?? null, String(ttl)],
       );
       await client.query('COMMIT');
-      return { rodadaId: r.id, adquiriu: true, motivo: 'reivindicada' };
+      return { rodadaId: r.id, adquiriu: true, motivo: 'reivindicada', token: { rodadaId: r.id, epoca: upd.rows[0].epoca, workerId: input.workerId ?? null } };
     } catch (erro) {
       await client.query('ROLLBACK');
       throw erro;
     } finally {
       client.release();
     }
+  }
+
+  /**
+   * Fencing: a rodada `rodadaId` ainda pertence a esta posse (época/worker) e
+   * está aberta? Toda escrita terminal do worker valida isto antes de aplicar,
+   * para não gravar sobre uma rodada já transferida a outro worker.
+   */
+  private async possuiRodada(client: Pool | import('pg').PoolClient, token: PosseRodada): Promise<boolean> {
+    const { rows } = await client.query(
+      `SELECT 1 FROM vessel_call_rodadas
+        WHERE id = $1 AND epoca = $2 AND estado = 'aberta'
+          AND worker_id IS NOT DISTINCT FROM $3`,
+      [token.rodadaId, token.epoca, token.workerId],
+    );
+    return rows.length > 0;
   }
 
   /** Próximo número de tentativa da rodada (1 ou 2 — fallback máximo 2). */
@@ -307,33 +338,141 @@ export class VesselSharingRepository {
     return rows[0].n;
   }
 
-  /** Registra uma tentativa (append-only) com resultado distinto: cache/efetiva/falha. */
+  /**
+   * Registra uma tentativa (append-only) com resultado distinto: cache/efetiva/falha.
+   * FENCED: só grava se a posse (`token`) ainda for a atual (rodada aberta, mesma
+   * época e worker). Retorna `true` se aplicou; `false` se o worker perdeu a posse.
+   */
   async registrarTentativa(input: {
     rodadaId: string; numeroTentativa: number; targetId: string | null; containerId: string | null;
     iniciadaEm: Date; terminadaEm: Date; resultado: 'cache_hit' | 'consulta_efetiva' | 'falha';
     trackingFetchId?: string | null; cacheHit: boolean; consultaEfetiva: boolean; falhaSanitizada?: string | null;
-  }): Promise<void> {
-    await this.pool.query(
+    token?: PosseRodada;
+  }): Promise<boolean> {
+    // Sem token (chamada legada/pura) → mantém comportamento anterior (sempre grava).
+    // Com token → INSERT condicionado à posse atual (fencing).
+    const fence = input.token
+      ? `AND EXISTS (SELECT 1 FROM vessel_call_rodadas r WHERE r.id = $1 AND r.epoca = $12 AND r.estado = 'aberta' AND r.worker_id IS NOT DISTINCT FROM $13)`
+      : '';
+    const params: unknown[] = [
+      input.rodadaId, input.numeroTentativa, input.targetId ?? null, input.containerId ?? null,
+      input.iniciadaEm, input.terminadaEm, input.resultado, input.trackingFetchId ?? null,
+      input.cacheHit, input.consultaEfetiva, input.falhaSanitizada ?? null,
+    ];
+    if (input.token) params.push(input.token.epoca, input.token.workerId);
+    const { rowCount } = await this.pool.query(
       `INSERT INTO vessel_call_rodada_tentativas
          (rodada_id, numero_tentativa, target_id, container_id, iniciada_em, terminada_em,
           resultado, tracking_fetch_id, cache_hit, consulta_efetiva, falha_sanitizada)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-      [
-        input.rodadaId, input.numeroTentativa, input.targetId ?? null, input.containerId ?? null,
-        input.iniciadaEm, input.terminadaEm, input.resultado, input.trackingFetchId ?? null,
-        input.cacheHit, input.consultaEfetiva, input.falhaSanitizada ?? null,
-      ],
+       SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11 WHERE true ${fence}`,
+      params,
     );
+    return (rowCount ?? 0) > 0;
   }
 
+  /**
+   * Conclui a rodada gravando referência + desfecho. FENCED por posse. Retorna
+   * `true` se aplicou; `false` se o worker perdeu a posse (não sobrescreve).
+   */
   async concluirRodada(
     rodadaId: string,
     referencia: { targetId: string | null; containerId: string | null; desfecho: DesfechoRodada },
-  ): Promise<void> {
-    await this.pool.query(
+    token?: PosseRodada,
+  ): Promise<boolean> {
+    const fence = token ? `AND epoca = $5 AND worker_id IS NOT DISTINCT FROM $6` : '';
+    const params: unknown[] = [rodadaId, referencia.targetId ?? null, referencia.containerId ?? null, referencia.desfecho];
+    if (token) params.push(token.epoca, token.workerId);
+    const { rowCount } = await this.pool.query(
       `UPDATE vessel_call_rodadas SET estado = 'concluida', referencia_target_id = $2,
-         referencia_container_id = $3, desfecho = $4, atualizado_em = now() WHERE id = $1`,
-      [rodadaId, referencia.targetId ?? null, referencia.containerId ?? null, referencia.desfecho],
+         referencia_container_id = $3, desfecho = $4, atualizado_em = now()
+        WHERE id = $1 AND estado = 'aberta' ${fence}`,
+      params,
     );
+    return (rowCount ?? 0) > 0;
+  }
+
+  /**
+   * Finaliza a rodada ATOMICAMENTE e sob FENCING: numa única transação, revalida
+   * a posse (época/worker) FOR UPDATE, aplica os efeitos do desfecho (invalidação
+   * na saída, remoção do participante divergente, criação das coberturas) e grava
+   * referência + desfecho. Se a rodada foi transferida a outro worker, NADA é
+   * escrito (`aplicado:false`) — deixa o proprietário atual concluir. É aqui que a
+   * validação "antes de criar cobertura E de novo na conclusão" acontece, na
+   * mesma transação que grava cobertura e desfecho.
+   */
+  async finalizarRodada(input: {
+    token: PosseRodada;
+    desfecho: DesfechoRodada;
+    referencia: { targetId: string | null; containerId: string | null };
+    invalidarVesselCallId?: string;
+    invalidarMotivo?: string;
+    removerParticipante?: { vesselCallId: string; containerId: string; motivo: string };
+    coberturas?: Array<{
+      organizationId: string; vesselCallId: string; containerId: string; trackingTargetId: string | null;
+      fetchId?: string | null; targetConsultadoId: string | null; processoConsultadoId: string | null;
+      campos: string[]; evidencia?: string | null; validadeHoras?: number;
+    }>;
+  }): Promise<{ aplicado: boolean; cobertos: string[] }> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query(
+        `SELECT epoca, worker_id, estado FROM vessel_call_rodadas WHERE id = $1 FOR UPDATE`,
+        [input.token.rodadaId],
+      );
+      const r = rows[0];
+      const possui = r && r.estado === 'aberta' && r.epoca === input.token.epoca
+        && (r.worker_id ?? null) === (input.token.workerId ?? null);
+      if (!possui) { await client.query('ROLLBACK'); return { aplicado: false, cobertos: [] }; }
+
+      if (input.invalidarVesselCallId) {
+        await client.query(
+          `UPDATE vessel_call_coberturas SET estado = 'invalidada', motivo_termino = $2, atualizado_em = now()
+            WHERE vessel_call_id = $1 AND estado = 'vigente'`,
+          [input.invalidarVesselCallId, input.invalidarMotivo ?? 'saida'],
+        );
+      }
+      if (input.removerParticipante) {
+        await client.query(
+          `UPDATE vessel_call_participantes SET estado = 'removido', motivo_remocao = $3, atualizado_em = now()
+            WHERE vessel_call_id = $1 AND container_id = $2 AND estado = 'elegivel'`,
+          [input.removerParticipante.vesselCallId, input.removerParticipante.containerId, input.removerParticipante.motivo],
+        );
+      }
+      const cobertos: string[] = [];
+      for (const c of input.coberturas ?? []) {
+        const horas = Math.min(c.validadeHoras ?? COBERTURA_VALIDADE_HORAS, COBERTURA_VALIDADE_HORAS);
+        await client.query(
+          `UPDATE vessel_call_coberturas SET estado = 'invalidada', motivo_termino = 'renovada', atualizado_em = now()
+            WHERE vessel_call_id = $1 AND container_id = $2 AND estado = 'vigente'`,
+          [c.vesselCallId, c.containerId],
+        );
+        await client.query(
+          `INSERT INTO vessel_call_coberturas
+             (organization_id, vessel_call_id, container_id, tracking_target_id, rodada_id,
+              cobertura_originadora_fetch_id, target_consultado_id, processo_consultado_id,
+              coberto_desde, coberto_ate, campos_compartilhados, evidencia, estado)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8, now(), now() + ($9 || ' hours')::interval, $10, $11, 'vigente')`,
+          [
+            c.organizationId, c.vesselCallId, c.containerId, c.trackingTargetId ?? null, input.token.rodadaId,
+            c.fetchId ?? null, c.targetConsultadoId ?? null, c.processoConsultadoId ?? null,
+            String(horas), c.campos, c.evidencia ?? null,
+          ],
+        );
+        cobertos.push(c.containerId);
+      }
+      await client.query(
+        `UPDATE vessel_call_rodadas SET estado = 'concluida', referencia_target_id = $2,
+           referencia_container_id = $3, desfecho = $4, atualizado_em = now() WHERE id = $1`,
+        [input.token.rodadaId, input.referencia.targetId ?? null, input.referencia.containerId ?? null, input.desfecho],
+      );
+      await client.query('COMMIT');
+      return { aplicado: true, cobertos };
+    } catch (erro) {
+      await client.query('ROLLBACK');
+      throw erro;
+    } finally {
+      client.release();
+    }
   }
 }
