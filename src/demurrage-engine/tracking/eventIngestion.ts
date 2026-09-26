@@ -8,6 +8,7 @@ import { TrackingContainerLike, TrackingEnrichResult } from '../sources/armadorT
 import { recalcularApuracaoContainer } from '../apuracao/recalcularApuracao';
 import { hojeOperacional } from '../time/operationalDate';
 import { CivilDate } from '../temporal/civilDate';
+import { sincronizarVesselCall } from './vesselCallSync';
 
 /**
  * Ingestão do resultado da API central de tracking (Fase 5).
@@ -155,7 +156,8 @@ export async function ingestTrackingResult(input: IngestInput): Promise<IngestRe
   // Return (data final) mudam o cálculo; Gate Out não entra na fórmula temporal.
   const afetadosCalculo = new Set<string>();
   const vinculados = await targets.containersForTarget(target.id);
-  for (const { containerId, organizationId, rc } of casarContainers(result, vinculados)) {
+  const casados = casarContainers(result, vinculados);
+  for (const { containerId, organizationId, rc } of casados) {
     // Descarga → fonte de verdade → promove.
     if (rc.dischargeDate) {
       const out = await tolerante(() =>
@@ -212,6 +214,18 @@ export async function ingestTrackingResult(input: IngestInput): Promise<IngestRe
   const hoje = input.hojeReferencia ?? hojeOperacional();
   for (const containerId of afetadosCalculo) {
     await recalcularApuracaoContainer(pool, containerId, { dataReferencia: hoje });
+  }
+
+  // 4) VesselCall (Fase 9, fundação): associação da escala + propagação SÓ dos
+  // eventos compartilháveis, a partir desta consulta JÁ autorizada. ISOLADO do
+  // tracking — uma falha aqui NUNCA falha a ingestão (nem toca relógios/tarifas).
+  try {
+    await sincronizarVesselCall({
+      pool, target, result, fetchId: fetch.id,
+      containers: casados.map((x) => ({ containerId: x.containerId, organizationId: x.organizationId, numero: String(x.rc.numero ?? '') })),
+    });
+  } catch (err) {
+    console.error('[vessel-call-sync] falha isolada (ingestão preservada):', err);
   }
 
   return {

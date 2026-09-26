@@ -27,6 +27,8 @@ export function testPool(): Pool {
 export async function truncateAll(pool: Pool): Promise<void> {
   await pool.query(`
     TRUNCATE TABLE
+      container_vessel_call_eventos, container_vessel_calls, vessel_call_eventos,
+      vessel_call_pendencias, vessel_calls,
       closing_events, reaberturas, fechamentos, documentos, minutas,
       tracking_schedule_claims,
       tracking_alert_deliveries, tracking_incidents,
