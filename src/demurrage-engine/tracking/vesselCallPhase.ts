@@ -22,6 +22,16 @@ import { CivilDate } from '../temporal/civilDate';
  * existir; nunca inferir chegada de ETA, `berth` ambíguo ou passagem do tempo.
  */
 
+/**
+ * Fontes EXPLICITAMENTE PERMITIDAS para confirmar cada evento de viagem. O tracking
+ * do armador é a fonte de verdade dos eventos de tracking, então hoje só a consulta
+ * do armador confirma chegada/atracação. Ponto único e reutilizável: qualquer fonte
+ * fora destes conjuntos NÃO confirma o evento (texto não-vazio não basta). A camada
+ * somente-leitura usa estas listas ao montar `FatosFaseTracking`.
+ */
+export const FONTES_CHEGADA_VALIDAS: readonly string[] = ['tracking_service'];
+export const FONTES_ATRACACAO_VALIDAS: readonly string[] = ['tracking_service'];
+
 export type TrackingPhase =
   | 'SEM_VESSELCALL'
   | 'PRE_CHEGADA'

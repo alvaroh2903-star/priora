@@ -3,7 +3,7 @@ import { Pool, PoolClient } from 'pg';
 import { getPool } from '../db/pool';
 import { CivilDate } from '../temporal/civilDate';
 import { IdentidadeComponentes } from '../tracking/vesselIdentity';
-import { FatosFaseTracking, TrackingPhase, derivarFaseTracking } from '../tracking/vesselCallPhase';
+import { FatosFaseTracking, TrackingPhase, derivarFaseTracking, FONTES_CHEGADA_VALIDAS, FONTES_ATRACACAO_VALIDAS } from '../tracking/vesselCallPhase';
 
 /**
  * Persistência do VesselCall (Fase 9 — fundação). Sem tocar relógios/tarifas/
@@ -306,15 +306,26 @@ export class VesselCallRepository {
 
   /**
    * Reúne (SOMENTE LEITURA) os fatos já persistidos necessários para derivar a
-   * fase de tracking de um contêiner: associação ATIVA ao VesselCall + chegada/
-   * atracação confirmadas (do VesselCall associado) + descarga/devolução do
-   * contêiner. Não grava nada, não toca cadência/relógios/tarifas.
+   * fase de tracking. É AQUI que se VALIDA a confirmação de chegada/atracação — a
+   * função pura recebe apenas booleanos já validados. Confirmação exige:
+   *   (1) data presente;
+   *   (2) fonte presente e no conjunto EXPLICITAMENTE permitido do evento
+   *       (FONTES_CHEGADA_VALIDAS / FONTES_ATRACACAO_VALIDAS) — texto não-vazio
+   *       qualquer NÃO basta;
+   *   (3) sem pendência aberta que torne o evento ambíguo (atracacao_ambigua
+   *       para a atracação).
+   * Não grava nada, não toca cadência/claim/target/créditos/relógios/tarifas.
    */
   async fatosFaseTracking(containerId: string): Promise<FatosFaseTracking> {
     const { rows } = await this.pool.query(
       `SELECT c.discharge_date, c.effective_return_date, c.tracking_return_date,
-              v.chegada AS vc_chegada, v.atracacao AS vc_atracacao,
-              (cvc.id IS NOT NULL) AS assoc_ativa
+              v.chegada AS vc_chegada, v.chegada_fonte AS vc_chegada_fonte, v.chegada_evidencia AS vc_chegada_evid,
+              v.atracacao AS vc_atracacao, v.atracacao_fonte AS vc_atracacao_fonte, v.atracacao_evidencia AS vc_atracacao_evid,
+              (cvc.id IS NOT NULL) AS assoc_ativa,
+              EXISTS (
+                SELECT 1 FROM vessel_call_pendencias p
+                 WHERE p.container_id = c.id AND p.tipo = 'atracacao_ambigua' AND p.estado = 'aberta'
+              ) AS atracacao_ambigua_aberta
          FROM containers c
          LEFT JOIN container_vessel_calls cvc ON cvc.container_id = c.id AND cvc.ativo
          LEFT JOIN vessel_calls v ON v.id = cvc.vessel_call_id
@@ -323,10 +334,20 @@ export class VesselCallRepository {
     );
     if (!rows.length) throw new Error(`fatosFaseTracking: contêiner ${containerId} não encontrado`);
     const r = rows[0];
+
+    const chegadaConfirmada =
+      r.vc_chegada !== null && r.vc_chegada !== undefined &&
+      typeof r.vc_chegada_fonte === 'string' && FONTES_CHEGADA_VALIDAS.includes(r.vc_chegada_fonte);
+
+    const atracacaoConfirmada =
+      r.vc_atracacao !== null && r.vc_atracacao !== undefined &&
+      typeof r.vc_atracacao_fonte === 'string' && FONTES_ATRACACAO_VALIDAS.includes(r.vc_atracacao_fonte) &&
+      r.atracacao_ambigua_aberta !== true;
+
     return {
       associacaoVesselCallAtiva: r.assoc_ativa === true,
-      chegadaConfirmada: r.vc_chegada !== null && r.vc_chegada !== undefined,
-      atracacaoConfirmada: r.vc_atracacao !== null && r.vc_atracacao !== undefined,
+      chegadaConfirmada,
+      atracacaoConfirmada,
       dischargeDate: r.discharge_date ?? null,
       effectiveReturnDate: r.effective_return_date ?? null,
       trackingReturnDate: r.tracking_return_date ?? null,

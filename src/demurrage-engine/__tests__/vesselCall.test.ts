@@ -426,6 +426,72 @@ test('fase de tracking (read-only): SEM_VESSELCALL → PRE_CHEGADA → POS_DESCA
   } finally { await pool.end(); }
 });
 
+test('fase: chegada/atracação só confirmam EM_PORTO com FONTE permitida e sem pendência ambígua', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await setup(pool);
+    const repo = new VesselCallRepository(pool);
+    // Helper: cria contêiner associado a um VesselCall (PRE_CHEGADA) e devolve ids.
+    const preparar = async (slug: string, numero: string) => {
+      const o = await org(pool, slug);
+      const c = await container(pool, o.id, (await processo(pool, o.id, `IM-${numero}`)).id, numero);
+      await setPod(pool, o.id, c.id, 'SANTOS');
+      const t = await alvo(pool, 'maersk', `MBL-${numero}`);
+      await sincronizarVesselCall({ pool, target: t, result: resultado({ events: [descarga(numero, 'MSC A', 'V1')] }), containers: [{ containerId: c.id, organizationId: o.id, numero }] });
+      const vcId = await assocAtiva(pool, c.id);
+      assert.ok(vcId, 'associado (PRE_CHEGADA)');
+      assert.equal(await repo.faseTracking(c.id), 'PRE_CHEGADA');
+      return { orgId: o.id, containerId: c.id, vcId };
+    };
+    const setChegada = (vcId: string, data: string | null, fonte: string | null) =>
+      pool.query(`UPDATE vessel_calls SET chegada=$2, chegada_fonte=$3 WHERE id=$1`, [vcId, data, fonte]);
+    const setAtracacao = (vcId: string, data: string | null, fonte: string | null) =>
+      pool.query(`UPDATE vessel_calls SET atracacao=$2, atracacao_fonte=$3 WHERE id=$1`, [vcId, data, fonte]);
+
+    // chegada com data e SEM fonte → não entra em EM_PORTO.
+    let s = await preparar('f-cs', 'CHEGSEMF001');
+    await setChegada(s.vcId, '2026-09-14', null);
+    assert.equal(await repo.faseTracking(s.containerId), 'PRE_CHEGADA');
+
+    // chegada com fonte DESCONHECIDA → não entra em EM_PORTO.
+    s = await preparar('f-cd', 'CHEGDESC001');
+    await setChegada(s.vcId, '2026-09-14', 'email_heuristic');
+    assert.equal(await repo.faseTracking(s.containerId), 'PRE_CHEGADA');
+
+    // chegada com fonte PERMITIDA → EM_PORTO.
+    s = await preparar('f-cp', 'CHEGPERM001');
+    await setChegada(s.vcId, '2026-09-14', 'tracking_service');
+    assert.equal(await repo.faseTracking(s.containerId), 'EM_PORTO');
+
+    // atracação com data e SEM fonte → não entra em EM_PORTO.
+    s = await preparar('f-as', 'ATRSEMF0001');
+    await setAtracacao(s.vcId, '2026-09-14', null);
+    assert.equal(await repo.faseTracking(s.containerId), 'PRE_CHEGADA');
+
+    // atracação com fonte DESCONHECIDA → não entra em EM_PORTO.
+    s = await preparar('f-ad', 'ATRDESC0001');
+    await setAtracacao(s.vcId, '2026-09-14', 'outro');
+    assert.equal(await repo.faseTracking(s.containerId), 'PRE_CHEGADA');
+
+    // atracação com fonte PERMITIDA e SEM pendência ambígua → EM_PORTO.
+    s = await preparar('f-ap', 'ATRPERM0001');
+    await setAtracacao(s.vcId, '2026-09-14', 'tracking_service');
+    assert.equal(await repo.faseTracking(s.containerId), 'EM_PORTO');
+
+    // atracação com fonte permitida MAS pendência atracacao_ambigua ABERTA → não EM_PORTO.
+    s = await preparar('f-aa', 'ATRAMB00001');
+    await setAtracacao(s.vcId, '2026-09-14', 'tracking_service');
+    await repo.registrarPendencia({ organizationId: s.orgId, containerId: s.containerId, tipo: 'atracacao_ambigua', contexto: 'x' });
+    assert.equal(await repo.faseTracking(s.containerId), 'PRE_CHEGADA');
+
+    // descarga prevalece sobre chegada/atracação confirmadas.
+    s = await preparar('f-dp', 'DESCPREV001');
+    await setAtracacao(s.vcId, '2026-09-14', 'tracking_service');
+    await pool.query(`UPDATE containers SET discharge_date='2026-09-15' WHERE id=$1`, [s.containerId]);
+    assert.equal(await repo.faseTracking(s.containerId), 'POS_DESCARGA');
+  } finally { await pool.end(); }
+});
+
 test('concorrência: duas primeiras associações simultâneas → associação única, sem erro nem histórico duplicado', { skip: !url }, async () => {
   const pool = testPool();
   try {
