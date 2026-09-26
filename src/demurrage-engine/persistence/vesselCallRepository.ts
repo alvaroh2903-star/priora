@@ -74,39 +74,54 @@ export class VesselCallRepository {
 
   /**
    * Aplica um evento compartilhado ao VesselCall com HISTÓRICO. Nunca sobrescreve
-   * em silêncio: só grava (e cria linha de histórico) quando o valor MUDA. Valor
-   * idêntico ao atual → no-op (sem novo histórico). Retorna se houve mudança.
+   * em silêncio e nunca FABRICA mudança de data (item 7):
+   *  - reingestão REALMENTE idêntica (mesma data + mesma fonte + mesma evidência)
+   *    → no-op (sem histórico);
+   *  - MESMA data com fonte/evidência NOVA relevante → registra uma linha de
+   *    evidência auditável (anterior == novo == a data) e atualiza fonte/evidência
+   *    correntes, sem inventar mudança de data;
+   *  - MUDANÇA de data → atualiza o valor e registra anterior/novo.
    */
-  async aplicarEvento(vesselCallId: string, ev: EventoCompartilhado): Promise<{ mudou: boolean }> {
+  async aplicarEvento(vesselCallId: string, ev: EventoCompartilhado): Promise<{ mudou: boolean; evidenciaRegistrada: boolean }> {
     const col = COL[ev.campo];
+    const evid = ev.evidencia ?? null;
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
       const atualRes = await client.query(
-        `SELECT ${col.valor} AS valor FROM vessel_calls WHERE id = $1 FOR UPDATE`,
+        `SELECT ${col.valor} AS valor, ${col.fonte} AS fonte, ${col.evid} AS evidencia FROM vessel_calls WHERE id = $1 FOR UPDATE`,
         [vesselCallId],
       );
-      if (!atualRes.rows.length) { await client.query('ROLLBACK'); return { mudou: false }; }
+      if (!atualRes.rows.length) { await client.query('ROLLBACK'); return { mudou: false, evidenciaRegistrada: false }; }
       const anterior: CivilDate | null = atualRes.rows[0].valor;
-      if (anterior === ev.valor) { await client.query('COMMIT'); return { mudou: false }; }
+      const fonteAtual: string | null = atualRes.rows[0].fonte;
+      const evidAtual: string | null = atualRes.rows[0].evidencia;
 
+      const mudouData = anterior !== ev.valor;
+      const identico = !mudouData && fonteAtual === ev.fonte && evidAtual === evid;
+      if (identico) { await client.query('COMMIT'); return { mudou: false, evidenciaRegistrada: false }; }
+
+      // Atualiza valor (se mudou) e sempre a fonte/evidência/observação correntes.
       await client.query(
         `UPDATE vessel_calls SET ${col.valor} = $2, ${col.fonte} = $3, ${col.obs} = $4, ${col.evid} = $5, atualizado_em = now()
           WHERE id = $1`,
-        [vesselCallId, ev.valor, ev.fonte, ev.observadoEm, ev.evidencia ?? null],
+        [vesselCallId, ev.valor, ev.fonte, ev.observadoEm, evid],
       );
+      // Histórico: mudança de data grava anterior→novo; nova evidência na mesma data
+      // grava anterior==novo (não fabrica mudança), com motivo auditável.
       await client.query(
         `INSERT INTO vessel_call_eventos
            (vessel_call_id, campo, valor_anterior, valor_novo, fonte, observado_em, evidencia,
             tracking_fetch_id, processo_originador_id, container_originador_id, motivo)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
         [
-          vesselCallId, ev.campo, anterior, ev.valor, ev.fonte, ev.observadoEm, ev.evidencia ?? null,
-          ev.trackingFetchId ?? null, ev.processoOriginadorId ?? null, ev.containerOriginadorId ?? null, ev.motivo ?? null,
+          vesselCallId, ev.campo, anterior, ev.valor, ev.fonte, ev.observadoEm, evid,
+          ev.trackingFetchId ?? null, ev.processoOriginadorId ?? null, ev.containerOriginadorId ?? null,
+          ev.motivo ?? (mudouData ? 'mudanca de data' : 'nova evidencia (mesma data)'),
         ],
       );
       await client.query('COMMIT');
-      return { mudou: true };
+      return { mudou: mudouData, evidenciaRegistrada: !mudouData };
     } catch (erro) {
       await client.query('ROLLBACK');
       throw erro;
@@ -135,6 +150,7 @@ export class VesselCallRepository {
   async associarContainer(input: {
     containerId: string;
     vesselCallId: string;
+    organizationId: string;
     chave: string;
     origemDados: string;
     motivo?: string | null;
@@ -142,6 +158,22 @@ export class VesselCallRepository {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      // Concorrência (item 6): trava a LINHA DO CONTÊINER antes de consultar/mudar
+      // a associação — serializa duas primeiras associações concorrentes mesmo sem
+      // linha em container_vessel_calls (a trava por linha ativa não existiria ainda).
+      const contLock = await client.query(
+        `SELECT organization_id FROM containers WHERE id = $1 FOR UPDATE`,
+        [input.containerId],
+      );
+      if (!contLock.rows.length) { await client.query('ROLLBACK'); throw new Error(`associarContainer: contêiner ${input.containerId} não encontrado`); }
+      // Isolamento (item 2, validação na aplicação além do FK composto do banco):
+      // contêiner e VesselCall precisam ser da MESMA organização informada.
+      const orgContainer: string = contLock.rows[0].organization_id;
+      const vcOrg = await client.query(`SELECT organization_id FROM vessel_calls WHERE id = $1`, [input.vesselCallId]);
+      if (!vcOrg.rows.length || orgContainer !== input.organizationId || vcOrg.rows[0].organization_id !== input.organizationId) {
+        await client.query('ROLLBACK');
+        throw new Error('associarContainer: associação cruzada entre organizações não permitida');
+      }
       const { rows: ativos } = await client.query(
         `SELECT id, vessel_call_id FROM container_vessel_calls WHERE container_id = $1 AND ativo FOR UPDATE`,
         [input.containerId],
@@ -170,9 +202,9 @@ export class VesselCallRepository {
         );
       }
       await client.query(
-        `INSERT INTO container_vessel_calls (container_id, vessel_call_id, motivo_chave, origem_dados)
-         VALUES ($1,$2,$3,$4)`,
-        [input.containerId, input.vesselCallId, input.chave, input.origemDados],
+        `INSERT INTO container_vessel_calls (container_id, vessel_call_id, organization_id, motivo_chave, origem_dados)
+         VALUES ($1,$2,$3,$4,$5)`,
+        [input.containerId, input.vesselCallId, input.organizationId, input.chave, input.origemDados],
       );
       await client.query(
         `INSERT INTO container_vessel_call_eventos (container_id, vessel_call_id, tipo, chave, origem_dados, motivo)
@@ -229,6 +261,45 @@ export class VesselCallRepository {
       `UPDATE vessel_call_pendencias SET estado = 'resolvida', resolvido_em = now(), atualizado_em = now()
         WHERE contexto_hash = $1 AND estado = 'aberta'`,
       [contextoHash],
+    );
+  }
+
+  /**
+   * Resolve pendências ABERTAS quando a condição desaparece (item 3). Restrita à
+   * MESMA organização + contêiner + target + tipo(s). Idempotente: sem linha
+   * aberta, no-op. A linha resolvida é preservada (estado='resolvida', resolvido_em).
+   */
+  async resolverPendencias(input: {
+    organizationId: string;
+    containerId?: string | null;
+    trackingTargetId?: string | null;
+    tipos: TipoPendencia[];
+  }): Promise<number> {
+    if (!input.tipos.length) return 0;
+    const { rowCount } = await this.pool.query(
+      `UPDATE vessel_call_pendencias SET estado = 'resolvida', resolvido_em = now(), atualizado_em = now()
+        WHERE estado = 'aberta' AND organization_id = $1 AND tipo = ANY($2::text[])
+          AND container_id IS NOT DISTINCT FROM $3 AND tracking_target_id IS NOT DISTINCT FROM $4`,
+      [input.organizationId, input.tipos, input.containerId ?? null, input.trackingTargetId ?? null],
+    );
+    return rowCount ?? 0;
+  }
+
+  /**
+   * Registra uma falha técnica ISOLADA do vessel_call_sync (item 5) — persistente,
+   * append-only. A ingestão principal não é interrompida; a falha não fica só em
+   * console. `mensagem` já deve chegar sanitizada.
+   */
+  async registrarIncidenteSync(input: {
+    organizationId?: string | null;
+    trackingTargetId?: string | null;
+    trackingFetchId?: string | null;
+    mensagem: string;
+  }): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO vessel_call_sync_incidents (organization_id, tracking_target_id, tracking_fetch_id, etapa, mensagem)
+       VALUES ($1,$2,$3,'vessel_call_sync',$4)`,
+      [input.organizationId ?? null, input.trackingTargetId ?? null, input.trackingFetchId ?? null, input.mensagem],
     );
   }
 

@@ -9,6 +9,7 @@ import { recalcularApuracaoContainer } from '../apuracao/recalcularApuracao';
 import { hojeOperacional } from '../time/operationalDate';
 import { CivilDate } from '../temporal/civilDate';
 import { sincronizarVesselCall } from './vesselCallSync';
+import { VesselCallRepository } from '../persistence/vesselCallRepository';
 
 /**
  * Ingestão do resultado da API central de tracking (Fase 5).
@@ -225,7 +226,20 @@ export async function ingestTrackingResult(input: IngestInput): Promise<IngestRe
       containers: casados.map((x) => ({ containerId: x.containerId, organizationId: x.organizationId, numero: String(x.rc.numero ?? '') })),
     });
   } catch (err) {
-    console.error('[vessel-call-sync] falha isolada (ingestão preservada):', err);
+    // Isolado: a ingestão principal segue. Mas a falha NÃO fica só em console —
+    // é PERSISTIDA como incidente técnico (org quando única, target, fetch, etapa,
+    // mensagem sanitizada, momento). Não altera relógios/tarifas/cadência.
+    const orgs = new Set(casados.map((x) => x.organizationId));
+    const mensagem = String((err as any)?.message ?? err).replace(/\s+/g, ' ').slice(0, 500);
+    try {
+      await new VesselCallRepository(pool).registrarIncidenteSync({
+        organizationId: orgs.size === 1 ? [...orgs][0] : null,
+        trackingTargetId: target.id, trackingFetchId: fetch.id, mensagem,
+      });
+    } catch (err2) {
+      console.error('[vessel-call-sync] falha ao registrar incidente:', err2);
+    }
+    console.error('[vessel-call-sync] falha isolada (ingestão preservada):', mensagem);
   }
 
   return {

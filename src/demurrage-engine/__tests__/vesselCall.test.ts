@@ -110,19 +110,58 @@ test('POD ausente → pendência pod_nao_confirmado, sem associação', { skip: 
   } finally { await pool.end(); }
 });
 
-test('POD divergente entre fontes → pendência pod_divergente, sem associação', { skip: !url }, async () => {
+test('POD: Master diverge do House → Master prevalece e associa (divergência não bloqueia)', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await setup(pool);
+    const o = await org(pool);
+    const c = await container(pool, o.id, (await processo(pool, o.id, 'IM-MH')).id, 'HDMU0000010');
+    await setPod(pool, o.id, c.id, 'SANTOS', 'master_bl');
+    await setPod(pool, o.id, c.id, 'PARANAGUA', 'house_document');
+    const t = await alvo(pool, 'maersk', 'MBL-MH');
+    await sincronizarVesselCall({ pool, target: t, result: resultado({ events: [descarga('HDMU0000010', 'MSC A', 'V1')] }), containers: [{ containerId: c.id, organizationId: o.id, numero: 'HDMU0000010' }] });
+    const vcId = await assocAtiva(pool, c.id);
+    assert.ok(vcId, 'associa com o POD do Master');
+    const vc = (await pool.query(`SELECT pod, pod_fonte FROM vessel_calls WHERE id=$1`, [vcId])).rows[0];
+    assert.equal(vc.pod, 'SANTOS');
+    assert.equal(vc.pod_fonte, 'master_bl');
+    assert.deepEqual((await new VesselCallRepository(pool).pendenciasAbertas(o.id)).map((x) => x.tipo), [], 'sem pendência');
+  } finally { await pool.end(); }
+});
+
+test('POD divergente NA MESMA autoridade (dois Masters conflitantes) → pendência, sem associação', { skip: !url }, async () => {
   const pool = testPool();
   try {
     await setup(pool);
     const o = await org(pool);
     const c = await container(pool, o.id, (await processo(pool, o.id, 'IM-DV')).id, 'HDMU0000010');
-    await setPod(pool, o.id, c.id, 'SANTOS', 'master_bl');
-    await setPod(pool, o.id, c.id, 'PARANAGUA', 'house_document');
+    // Duas observações Master com datas de observação distintas (permitido pelo UNIQUE) e valores em conflito.
+    await new FieldObservationRepository(pool).insert({ organizationId: o.id, entidadeTipo: 'container', entidadeId: c.id, campo: 'podDescarga', valor: 'SANTOS', fonte: 'master_bl', observadoEm: new Date('2026-09-01T00:00:00Z') });
+    await new FieldObservationRepository(pool).insert({ organizationId: o.id, entidadeTipo: 'container', entidadeId: c.id, campo: 'podDescarga', valor: 'PARANAGUA', fonte: 'master_bl', observadoEm: new Date('2026-09-02T00:00:00Z') });
     const t = await alvo(pool, 'maersk', 'MBL-DV');
     await sincronizarVesselCall({ pool, target: t, result: resultado({ events: [descarga('HDMU0000010', 'MSC A', 'V1')] }), containers: [{ containerId: c.id, organizationId: o.id, numero: 'HDMU0000010' }] });
     assert.equal(await vcCount(pool, o.id), 0);
-    const pend = await new VesselCallRepository(pool).pendenciasAbertas(o.id);
-    assert.deepEqual(pend.map((x) => x.tipo), ['pod_divergente']);
+    assert.deepEqual((await new VesselCallRepository(pool).pendenciasAbertas(o.id)).map((x) => x.tipo), ['pod_divergente']);
+  } finally { await pool.end(); }
+});
+
+test('POD: fonte DESCONHECIDA nunca supera o Master (e sozinha não confirma POD)', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await setup(pool);
+    const o = await org(pool);
+    // Só uma observação de fonte não-permitida ('outro') → POD não confirmado.
+    const cX = await container(pool, o.id, (await processo(pool, o.id, 'IM-UX')).id, 'HDMU00000AX');
+    await new FieldObservationRepository(pool).insert({ organizationId: o.id, entidadeTipo: 'container', entidadeId: cX.id, campo: 'podDescarga', valor: 'ITAJAI', fonte: 'outro', observadoEm: new Date('2026-09-01T00:00:00Z') });
+    const t = await alvo(pool, 'maersk', 'MBL-UX');
+    await sincronizarVesselCall({ pool, target: t, result: resultado({ events: [descarga('HDMU00000AX', 'MSC A', 'V1')] }), containers: [{ containerId: cX.id, organizationId: o.id, numero: 'HDMU00000AX' }] });
+    assert.equal(await assocAtiva(pool, cX.id), null, 'fonte desconhecida não confirma POD');
+    // Master + fonte desconhecida conflitante → Master prevalece.
+    const cY = await container(pool, o.id, (await processo(pool, o.id, 'IM-UY')).id, 'HDMU00000AY');
+    await new FieldObservationRepository(pool).insert({ organizationId: o.id, entidadeTipo: 'container', entidadeId: cY.id, campo: 'podDescarga', valor: 'ITAJAI', fonte: 'outro', observadoEm: new Date('2026-09-01T00:00:00Z') });
+    await setPod(pool, o.id, cY.id, 'SANTOS', 'master_bl');
+    await sincronizarVesselCall({ pool, target: t, result: resultado({ events: [descarga('HDMU00000AY', 'MSC A', 'V1')] }), containers: [{ containerId: cY.id, organizationId: o.id, numero: 'HDMU00000AY' }] });
+    assert.equal((await pool.query(`SELECT pod FROM vessel_calls WHERE id=$1`, [await assocAtiva(pool, cY.id)])).rows[0].pod, 'SANTOS');
   } finally { await pool.end(); }
 });
 
@@ -141,7 +180,7 @@ test('POD só do Master (secundária ausente) → Master prevalece e associa', {
   } finally { await pool.end(); }
 });
 
-test('ETA/chegada permanecem nulas; atracação só com berth inequívoco no POD', { skip: !url }, async () => {
+test('ETA/chegada permanecem nulas; atracação NÃO confirmada nesta entrega (berth → pendência)', { skip: !url }, async () => {
   const pool = testPool();
   try {
     await setup(pool);
@@ -157,52 +196,54 @@ test('ETA/chegada permanecem nulas; atracação só com berth inequívoco no POD
     const vc = (await pool.query(`SELECT eta_atual, chegada, atracacao FROM vessel_calls WHERE id=$1`, [await assocAtiva(pool, c.id)])).rows[0];
     assert.equal(vc.eta_atual, null, 'ETA sem fonte no contrato → nula');
     assert.equal(vc.chegada, null, 'chegada sem fonte inequívoca → nula');
-    assert.equal(vc.atracacao, '2026-09-14', 'atracação de berth inequívoco no POD');
+    assert.equal(vc.atracacao, null, 'contrato não distingue previsto×confirmado → atracação não confirmada');
+    assert.ok((await new VesselCallRepository(pool).pendenciasAbertas(o.id)).some((x) => x.tipo === 'atracacao_ambigua'), 'berth gera pendência para tratamento');
   } finally { await pool.end(); }
 });
 
-test('berth ambíguo (fora do POD) → atracação nula + pendência atracacao_ambigua', { skip: !url }, async () => {
+test('sem berth → nenhuma pendência de atracação (nada a confirmar)', { skip: !url }, async () => {
   const pool = testPool();
   try {
     await setup(pool);
     const o = await org(pool);
-    const c = await container(pool, o.id, (await processo(pool, o.id, 'IM-AMB')).id, 'HDMU0000013');
+    const c = await container(pool, o.id, (await processo(pool, o.id, 'IM-NB')).id, 'HDMU0000013');
     await setPod(pool, o.id, c.id, 'SANTOS');
-    const t = await alvo(pool, 'maersk', 'MBL-AMB');
-    await sincronizarVesselCall({
-      pool, target: t,
-      result: resultado({ events: [descarga('HDMU0000013', 'MSC A', 'V1'), berth('ITAGUAI', '2026-09-13')] }),
-      containers: [{ containerId: c.id, organizationId: o.id, numero: 'HDMU0000013' }],
-    });
-    assert.equal((await pool.query(`SELECT atracacao FROM vessel_calls WHERE id=$1`, [await assocAtiva(pool, c.id)])).rows[0].atracacao, null);
-    const pend = await new VesselCallRepository(pool).pendenciasAbertas(o.id);
-    assert.ok(pend.some((x) => x.tipo === 'atracacao_ambigua'));
+    const t = await alvo(pool, 'maersk', 'MBL-NB');
+    await sincronizarVesselCall({ pool, target: t, result: resultado({ events: [descarga('HDMU0000013', 'MSC A', 'V1')] }), containers: [{ containerId: c.id, organizationId: o.id, numero: 'HDMU0000013' }] });
+    assert.deepEqual((await new VesselCallRepository(pool).pendenciasAbertas(o.id)).map((x) => x.tipo), []);
   } finally { await pool.end(); }
 });
 
-test('histórico: reingestão idêntica não gera novo evento; mudança grava anterior/novo', { skip: !url }, async () => {
+test('aplicarEvento: idêntico → no-op; mesma data + nova evidência → linha auditável sem forjar mudança; mudança de data → anterior/novo', { skip: !url }, async () => {
   const pool = testPool();
   try {
     await setup(pool);
     const o = await org(pool);
-    const c = await container(pool, o.id, (await processo(pool, o.id, 'IM-H')).id, 'HDMU0000014');
-    await setPod(pool, o.id, c.id, 'SANTOS');
-    const t = await alvo(pool, 'maersk', 'MBL-H');
-    const run = (data: string) => sincronizarVesselCall({
-      pool, target: t,
-      result: resultado({ at: `${data}T00:00:00Z`, events: [descarga('HDMU0000014', 'MSC A', 'V1'), berth('SANTOS', data)] }),
-      containers: [{ containerId: c.id, organizationId: o.id, numero: 'HDMU0000014' }],
-    });
-    await run('2026-09-14');
-    await run('2026-09-14'); // idêntico → sem novo histórico
-    const vcId = await assocAtiva(pool, c.id);
-    let hist = (await pool.query(`SELECT count(*)::int n FROM vessel_call_eventos WHERE vessel_call_id=$1 AND campo='atracacao'`, [vcId])).rows[0].n;
-    assert.equal(hist, 1, 'reingestão idêntica não duplica histórico');
-    await run('2026-09-16'); // mudança relevante → nova linha
-    const rows = (await pool.query(`SELECT valor_anterior, valor_novo FROM vessel_call_eventos WHERE vessel_call_id=$1 AND campo='atracacao' ORDER BY criado_em`, [vcId])).rows;
-    assert.equal(rows.length, 2);
-    assert.equal(rows[1].valor_anterior, '2026-09-14');
-    assert.equal(rows[1].valor_novo, '2026-09-16');
+    const repo = new VesselCallRepository(pool);
+    const vc = await repo.upsert({ organizationId: o.id, componentes: { armador: 'MAERSK', armadorOriginal: 'maersk', vessel: 'MSC A', vesselOriginal: 'MSC A', voyage: 'V1', voyageOriginal: 'V1', pod: 'SANTOS', podOriginal: 'Santos' }, podFonte: 'master_bl' });
+    const hist = () => pool.query(`SELECT valor_anterior, valor_novo, fonte, evidencia FROM vessel_call_eventos WHERE vessel_call_id=$1 AND campo='atracacao' ORDER BY criado_em`, [vc.id]).then((r) => r.rows);
+    const base = { campo: 'atracacao' as const, valor: '2026-09-14', observadoEm: new Date('2026-09-14T00:00:00Z') };
+
+    const r1 = await repo.aplicarEvento(vc.id, { ...base, fonte: 'tracking_service', evidencia: 'REF-1' });
+    assert.deepEqual([r1.mudou, r1.evidenciaRegistrada], [true, false], 'primeira gravação é mudança (null→data)');
+    const r2 = await repo.aplicarEvento(vc.id, { ...base, fonte: 'tracking_service', evidencia: 'REF-1' });
+    assert.deepEqual([r2.mudou, r2.evidenciaRegistrada], [false, false], 'reingestão idêntica → no-op');
+    assert.equal((await hist()).length, 1);
+
+    const r3 = await repo.aplicarEvento(vc.id, { ...base, fonte: 'tracking_service', evidencia: 'REF-2' });
+    assert.deepEqual([r3.mudou, r3.evidenciaRegistrada], [false, true], 'mesma data + evidência nova → auditável sem mudança de data');
+    const h3 = await hist();
+    assert.equal(h3.length, 2);
+    assert.equal(h3[1].valor_anterior, '2026-09-14');
+    assert.equal(h3[1].valor_novo, '2026-09-14', 'não fabrica mudança de data');
+    assert.equal(h3[1].evidencia, 'REF-2');
+
+    const r4 = await repo.aplicarEvento(vc.id, { campo: 'atracacao', valor: '2026-09-16', fonte: 'tracking_service', evidencia: 'REF-2', observadoEm: new Date('2026-09-16T00:00:00Z') });
+    assert.equal(r4.mudou, true);
+    const h4 = await hist();
+    assert.equal(h4.length, 3);
+    assert.equal(h4[2].valor_anterior, '2026-09-14');
+    assert.equal(h4[2].valor_novo, '2026-09-16');
   } finally { await pool.end(); }
 });
 
@@ -305,12 +346,78 @@ test('histórico compartilhado é append-only (UPDATE/DELETE barrados)', { skip:
   try {
     await setup(pool);
     const o = await org(pool);
-    const c = await container(pool, o.id, (await processo(pool, o.id, 'IM-AO')).id, 'HDMU0000051');
-    await setPod(pool, o.id, c.id, 'SANTOS');
-    const t = await alvo(pool, 'maersk', 'MBL-AO');
-    await sincronizarVesselCall({ pool, target: t, result: resultado({ events: [descarga('HDMU0000051', 'MSC A', 'V1'), berth('SANTOS', '2026-09-14')] }), containers: [{ containerId: c.id, organizationId: o.id, numero: 'HDMU0000051' }] });
-    const evId = (await pool.query(`SELECT e.id FROM vessel_call_eventos e JOIN vessel_calls v ON v.id=e.vessel_call_id WHERE v.organization_id=$1 LIMIT 1`, [o.id])).rows[0].id;
+    const repo = new VesselCallRepository(pool);
+    const vc = await repo.upsert({ organizationId: o.id, componentes: { armador: 'MAERSK', armadorOriginal: 'maersk', vessel: 'MSC A', vesselOriginal: 'MSC A', voyage: 'V1', voyageOriginal: 'V1', pod: 'SANTOS', podOriginal: 'SANTOS' }, podFonte: 'master_bl' });
+    await repo.aplicarEvento(vc.id, { campo: 'atracacao', valor: '2026-09-14', fonte: 'tracking_service', observadoEm: new Date('2026-09-14T00:00:00Z') });
+    const evId = (await pool.query(`SELECT id FROM vessel_call_eventos WHERE vessel_call_id=$1 LIMIT 1`, [vc.id])).rows[0].id;
     await assert.rejects(() => pool.query(`UPDATE vessel_call_eventos SET motivo='x' WHERE id=$1`, [evId]));
     await assert.rejects(() => pool.query(`DELETE FROM vessel_call_eventos WHERE id=$1`, [evId]));
+  } finally { await pool.end(); }
+});
+
+test('isolamento (banco): associar contêiner de OUTRA org ao VesselCall é rejeitado — sem associação nem histórico', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await setup(pool);
+    const o1 = await org(pool, 'iso-1');
+    const o2 = await org(pool, 'iso-2');
+    const c2 = await container(pool, o2.id, (await processo(pool, o2.id, 'IM-X2')).id, 'HDMU00000X2');
+    const repo = new VesselCallRepository(pool);
+    // VesselCall da org 1.
+    const vc = await repo.upsert({ organizationId: o1.id, componentes: { armador: 'MAERSK', armadorOriginal: 'maersk', vessel: 'MSC A', vesselOriginal: 'MSC A', voyage: 'V1', voyageOriginal: 'V1', pod: 'SANTOS', podOriginal: 'SANTOS' }, podFonte: 'master_bl' });
+    // Tenta associar o contêiner da org 2 — via repository direto, informando org2 e org1.
+    await assert.rejects(() => repo.associarContainer({ containerId: c2.id, vesselCallId: vc.id, organizationId: o2.id, chave: 'x', origemDados: 'tracking_service' }), /organiza/i);
+    await assert.rejects(() => repo.associarContainer({ containerId: c2.id, vesselCallId: vc.id, organizationId: o1.id, chave: 'x', origemDados: 'tracking_service' }));
+    assert.equal(await assocAtiva(pool, c2.id), null, 'nenhuma associação gravada');
+    assert.equal((await pool.query(`SELECT count(*)::int n FROM container_vessel_call_eventos WHERE container_id=$1`, [c2.id])).rows[0].n, 0, 'nenhum histórico gravado');
+  } finally { await pool.end(); }
+});
+
+test('ciclo de resolução: 1ª ingestão abre pendência; POD corrigido; nova ingestão associa e RESOLVE; reingestão não duplica', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await setup(pool);
+    const o = await org(pool);
+    const c = await container(pool, o.id, (await processo(pool, o.id, 'IM-CY')).id, 'HDMU00000CY');
+    const t = await alvo(pool, 'maersk', 'MBL-CY');
+    const run = () => sincronizarVesselCall({ pool, target: t, result: resultado({ events: [descarga('HDMU00000CY', 'MSC A', 'V1')] }), containers: [{ containerId: c.id, organizationId: o.id, numero: 'HDMU00000CY' }] });
+    // 1) sem POD → pendência aberta.
+    await run();
+    let pend = (await pool.query(`SELECT estado FROM vessel_call_pendencias WHERE container_id=$1 AND tipo='pod_nao_confirmado'`, [c.id])).rows;
+    assert.deepEqual(pend.map((p) => p.estado), ['aberta']);
+    // 2) POD corrigido. 3) nova ingestão associa.
+    await setPod(pool, o.id, c.id, 'SANTOS', 'master_bl');
+    await run();
+    assert.ok(await assocAtiva(pool, c.id), 'contêiner associado');
+    // 4) pendência anterior resolvida (preservada).
+    pend = (await pool.query(`SELECT estado, resolvido_em FROM vessel_call_pendencias WHERE container_id=$1 AND tipo='pod_nao_confirmado'`, [c.id])).rows;
+    assert.equal(pend.length, 1, 'linha preservada, não apagada');
+    assert.equal(pend[0].estado, 'resolvida');
+    assert.ok(pend[0].resolvido_em);
+    // 5) reingestão não altera nem duplica.
+    await run();
+    const total = (await pool.query(`SELECT count(*)::int n FROM vessel_call_pendencias WHERE container_id=$1`, [c.id])).rows[0].n;
+    assert.equal(total, 1);
+    const assocEv = (await pool.query(`SELECT count(*)::int n FROM container_vessel_call_eventos WHERE container_id=$1 AND tipo='associado'`, [c.id])).rows[0].n;
+    assert.equal(assocEv, 1, 'associação idempotente');
+  } finally { await pool.end(); }
+});
+
+test('concorrência: duas primeiras associações simultâneas → associação única, sem erro nem histórico duplicado', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await setup(pool);
+    const o = await org(pool);
+    const c = await container(pool, o.id, (await processo(pool, o.id, 'IM-CC')).id, 'HDMU00000CC');
+    await setPod(pool, o.id, c.id, 'SANTOS');
+    const t = await alvo(pool, 'maersk', 'MBL-CC');
+    const run = () => sincronizarVesselCall({ pool, target: t, result: resultado({ events: [descarga('HDMU00000CC', 'MSC A', 'V1')] }), containers: [{ containerId: c.id, organizationId: o.id, numero: 'HDMU00000CC' }] });
+    // Duas sincronizações concorrentes do MESMO contêiner/escala.
+    await Promise.all([run(), run()]);
+    assert.equal(await vcCount(pool, o.id), 1);
+    const ativas = (await pool.query(`SELECT count(*)::int n FROM container_vessel_calls WHERE container_id=$1 AND ativo`, [c.id])).rows[0].n;
+    assert.equal(ativas, 1, 'uma única associação ativa');
+    const assocEv = (await pool.query(`SELECT count(*)::int n FROM container_vessel_call_eventos WHERE container_id=$1 AND tipo='associado'`, [c.id])).rows[0].n;
+    assert.equal(assocEv, 1, 'sem histórico de associação duplicado');
   } finally { await pool.end(); }
 });

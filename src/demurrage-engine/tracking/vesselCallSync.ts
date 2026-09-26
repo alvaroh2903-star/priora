@@ -30,6 +30,7 @@ export interface VesselCallSyncResultado {
   associados: number;
   rolagens: number;
   pendencias: number;
+  resolvidas: number;
   ignoradosSemViagem: number;
 }
 
@@ -45,7 +46,21 @@ function descargasDoContainer(result: TrackingEnrichResult, numero: string): Tra
   );
 }
 
-/** POD estruturado do contêiner via observações: Master prevalece; divergência → conflito. */
+/**
+ * Hierarquia documental APROVADA de fontes de POD (autoridade decrescente).
+ * Fontes FORA desta lista são DESCONHECIDAS: nunca rankeiam nem definem POD
+ * (item 1.5/1.6) — são simplesmente ignoradas na resolução.
+ */
+const POD_HIERARQUIA = ['master_bl', 'house_document', 'headcargo', 'manual_fallback', 'tracking_service', 'email_heuristic'] as const;
+
+/**
+ * POD estruturado do contêiner via observações, com PRECEDÊNCIA por autoridade
+ * (item 1): o Master prevalece; divergências de fontes inferiores contra o Master
+ * NÃO bloqueiam (a hierarquia resolve). Sem Master, usa a próxima autoridade
+ * válida. `pod_divergente` só quando há conflito irreconciliável pela hierarquia —
+ * i.e., DUAS observações conflitantes na MESMA autoridade. Fonte desconhecida é
+ * ignorada (nunca supera o Master por acidente de índice).
+ */
 async function resolverPod(
   pool: Pool,
   containerId: string,
@@ -55,28 +70,17 @@ async function resolverPod(
       WHERE entidade_tipo = 'container' AND entidade_id = $1 AND campo = 'podDescarga'`,
     [containerId],
   );
-  const validas = rows.filter((r) => norm(r.valor) !== '');
-  if (!validas.length) return null; // POD não confirmado
-  const distintos = new Set(validas.map((r) => normalizarPod(r.valor)));
-  if (distintos.size > 1) return { conflito: true }; // divergência entre fontes
-  // Hierarquia: Master prevalece; senão a fonte de maior prioridade disponível.
-  const ordem = ['master_bl', 'house_document', 'headcargo', 'manual_fallback', 'tracking_service', 'email_heuristic', 'outro'];
-  const escolhida = validas.slice().sort((a, b) => ordem.indexOf(a.fonte) - ordem.indexOf(b.fonte))[0];
-  return { pod: String(escolhida.valor), fonte: escolhida.fonte, evidencia: escolhida.evidencia_ref ?? null };
-}
-
-/** Atracação a partir de um evento `berth` INEQUÍVOCO no POD; senão null (+pendência se ambíguo). */
-function resolverAtracacao(
-  result: TrackingEnrichResult,
-  podNormalizado: string,
-): { data: string } | { ambiguo: true } | null {
-  const berths = result.events.filter((e) => e.type === 'berth');
-  if (!berths.length) return null; // sem evento de atracação → nada a preencher
-  const noPod = berths.filter((e) => e.date && normalizarPod(e.location) === podNormalizado);
-  if (noPod.length === 1) return { data: noPod[0].date as string };
-  // Múltiplos berths no POD, ou berth fora do POD/sem data → dúvida (porto/etapa/
-  // transbordo/previsto×confirmado). Não fabrica: fica nulo e vira pendência.
-  return { ambiguo: true };
+  const permitidas = new Set<string>(POD_HIERARQUIA);
+  const validas = rows.filter((r) => permitidas.has(r.fonte) && normalizarPod(r.valor) !== '');
+  if (!validas.length) return null; // POD não confirmado (só fontes desconhecidas ou vazio)
+  for (const fonte of POD_HIERARQUIA) {
+    const doNivel = validas.filter((r) => r.fonte === fonte);
+    if (!doNivel.length) continue; // desce para a próxima autoridade
+    const distintos = new Set(doNivel.map((r) => normalizarPod(r.valor)));
+    if (distintos.size > 1) return { conflito: true }; // conflito NA MESMA autoridade → irreconciliável
+    return { pod: String(doNivel[0].valor), fonte, evidencia: doNivel[0].evidencia_ref ?? null };
+  }
+  return null;
 }
 
 export async function sincronizarVesselCall(input: {
@@ -88,7 +92,7 @@ export async function sincronizarVesselCall(input: {
 }): Promise<VesselCallSyncResultado> {
   const { pool, target, result } = input;
   const repo = new VesselCallRepository(pool);
-  const out: VesselCallSyncResultado = { associados: 0, rolagens: 0, pendencias: 0, ignoradosSemViagem: 0 };
+  const out: VesselCallSyncResultado = { associados: 0, rolagens: 0, pendencias: 0, resolvidas: 0, ignoradosSemViagem: 0 };
   if (!result.ok) return out;
 
   for (const c of input.containers) {
@@ -141,34 +145,36 @@ export async function sincronizarVesselCall(input: {
       continue;
     }
 
-    // 4) Upsert da escala + associação (idempotente, rolagem auditável).
+    // 4) Upsert da escala + associação (idempotente, rolagem auditável, isolada por org).
     const vc = await repo.upsert({
       organizationId: c.organizationId, componentes: ident.componentes, podFonte: pod.fonte, podEvidencia: pod.evidencia,
     });
     const assoc = await repo.associarContainer({
-      containerId: c.containerId, vesselCallId: vc.id, chave: ident.chave, origemDados: 'tracking_service',
+      containerId: c.containerId, vesselCallId: vc.id, organizationId: c.organizationId,
+      chave: ident.chave, origemDados: 'tracking_service',
     });
     if (assoc.efeito === 'associado') out.associados++;
     if (assoc.efeito === 'rolagem') out.rolagens++;
 
+    // Item 3: a condição desapareceu (identidade completa + POD confirmado) → fecha
+    // as pendências abertas correspondentes deste contêiner/target (idempotente).
+    out.resolvidas += await repo.resolverPendencias({
+      organizationId: c.organizationId, containerId: c.containerId, trackingTargetId: target.id,
+      tipos: ['pod_nao_confirmado', 'pod_divergente', 'identidade_ambigua'],
+    });
+
     // 5) Eventos compartilhados. ETA/chegada: sem fonte no contrato atual → nulos.
-    // Atracação: só de `berth` inequívoco no POD; ambíguo → nulo + pendência.
-    const processoId = (await pool.query(`SELECT processo_id FROM containers WHERE id = $1`, [c.containerId])).rows[0]?.processo_id ?? null;
-    const atr = resolverAtracacao(result, ident.componentes.pod);
-    if (atr && 'data' in atr) {
-      await repo.aplicarEvento(vc.id, {
-        campo: 'atracacao', valor: atr.data, fonte: 'tracking_service',
-        observadoEm: result.at ? new Date(result.at) : new Date(), evidencia: result.reference,
-        trackingFetchId: input.fetchId ?? null, processoOriginadorId: processoId, containerOriginadorId: c.containerId,
-        motivo: 'atracacao confirmada por evento berth no POD',
-      });
-    } else if (atr && 'ambiguo' in atr) {
-      await repo.registrarPendencia({
+    // Atracação (item 4): o contrato NÃO distingue evento de atracação PREVISTO de
+    // CONFIRMADO; portanto NÃO confirmamos atracação nesta entrega. Se há evento
+    // `berth`, fica NULA e registra pendência para tratamento operacional. Sem
+    // `berth`, nada a fazer. Nenhuma heurística por quantidade/localização.
+    if (result.events.some((e) => e.type === 'berth')) {
+      const p = await repo.registrarPendencia({
         organizationId: c.organizationId, containerId: c.containerId, trackingTargetId: target.id,
         tipo: 'atracacao_ambigua', contexto: ident.chave,
-        detalhe: { motivo: 'berth_ambiguo_porto_etapa_ou_previsto' },
+        detalhe: { motivo: 'contrato_sem_distincao_previsto_confirmado' },
       });
-      out.pendencias++;
+      if (p.criada) out.pendencias++;
     }
   }
   return out;
