@@ -1,5 +1,13 @@
-import { Router } from 'express';
+import { Router, RequestHandler } from 'express';
+import { Pool } from 'pg';
 import { requireAuth, AuthedRequest } from '../middleware/requireAuth';
+import { getPool } from '../demurrage-engine/db/pool';
+import {
+  PortasShippingInstructions,
+  ingerirShippingInstructions,
+  registrarConversaPreAlerta,
+} from '../demurrage-engine/shippingInstructions/ingestaoShippingInstructions';
+import { criarPortasShippingInstructions } from '../demurrage/shippingInstructionsPorts';
 import {
   searchLogisticsMessages,
   listRecentSummaries,
@@ -118,3 +126,61 @@ processRouter.get(
     }
   },
 );
+
+const RE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export interface ReprocessarSIDeps {
+  pool?: () => Pool;
+  portas?: (accessToken: string) => PortasShippingInstructions;
+}
+
+/**
+ * POST /api/processes/:conversationId/shipping-instructions/reprocessar
+ * Body: { organizationId }.
+ *
+ * Reprocessamento MANUAL da Shipping Instructions pelo mesmo serviço
+ * idempotente da ingestão. Versão já concluída não é relida; versão PENDENTE ou
+ * FAILED é reprocessada. Autorização: o usuário da sessão (home_account_id) deve
+ * ser membro não-CLIENT da organização informada. A rota GET de análise acima
+ * permanece somente leitura.
+ */
+export function criarHandlerReprocessarSI(deps: ReprocessarSIDeps = {}): RequestHandler {
+  return async (req: AuthedRequest, res, next) => {
+    try {
+      const organizationId = String((req.body as any)?.organizationId ?? '');
+      const conversationId = String(req.params.conversationId ?? '');
+      if (!RE_UUID.test(organizationId) || !conversationId) {
+        res.status(400).json({ error: 'Informe organizationId (UUID) e conversationId.' });
+        return;
+      }
+      const homeAccountId = req.session?.homeAccountId;
+      if (!homeAccountId) {
+        res.status(401).json({ error: 'Não autenticado.' });
+        return;
+      }
+      const pool = (deps.pool ?? getPool)();
+      const { rows } = await pool.query(
+        `SELECT u.id AS usuario_id, m.papel FROM usuarios u
+           JOIN organization_memberships m ON m.usuario_id = u.id
+          WHERE u.home_account_id = $1 AND m.organization_id = $2`,
+        [homeAccountId, organizationId],
+      );
+      const m = rows[0];
+      if (!m || m.papel === 'CLIENT') {
+        res.status(403).json({ error: 'Usuário sem permissão operacional nesta organização.' });
+        return;
+      }
+      await registrarConversaPreAlerta(pool, { organizationId, conversationId, origem: 'manual' });
+      const r = await ingerirShippingInstructions({
+        pool, organizationId, conversationId, modo: 'manual',
+        portas: (deps.portas ?? criarPortasShippingInstructions)(req.accessToken!),
+        autor: `usuario:${m.usuario_id}`,
+      });
+      res.status(r.status === 'falhou' ? 502 : 200).json(r);
+    } catch (err) {
+      next(err);
+    }
+  };
+}
+
+processRouter.post('/:conversationId/shipping-instructions/reprocessar', criarHandlerReprocessarSI());

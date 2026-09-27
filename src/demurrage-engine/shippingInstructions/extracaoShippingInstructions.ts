@@ -24,7 +24,7 @@ const RE_ANCORA = /free\s*-?\s*time|demurrage|dias?\s+livres|livre\s+de\s+demurr
 const RE_NAO_MASTER = /\b(house|hbl|h\.b\/l|cliente|client|consignee|importador)\b/i;
 const RE_CONTAINER = /\b([A-Z]{4})[\s-]?(\d{6})[\s-]?(\d)\b/g;
 const RE_PROCESSO = /\bIM\d{3,6}(?:-\d{1,3})?\b/gi;
-const RE_MBL = /\b(?:MBL|M\.?\s?B\/?L|MASTER\s*B\/?L|MASTER\s*BILL(?:\s+OF\s+LADING)?)\s*(?:N[OoºÚ°.]*|#|NUMBER)?\s*[:\-]?\s*([A-Z0-9]{6,20})\b/gi;
+const RE_MBL = /\b(?:MBL|M\.?\s?B\/?L|MASTER\s*B\/?L|MASTER\s*BILL(?:\s+OF\s+LADING)?)\s*(?:N[Ooº°.]*|#|NUMBER)?\s*[:\-]?\s*([A-Z0-9]{6,20})\b/gi;
 
 export interface AnexoMetaSI {
   id: string;
@@ -119,7 +119,9 @@ export function extrairReferencias(texto: string): ReferenciasSI {
 
 /** Candidato bruto encontrado num trecho do corpo. */
 interface CandidatoCorpo {
-  valores: string[]; // textos numéricos brutos (validados depois)
+  valores: string[]; // números ligados a dias (validados depois)
+  /** Números sem unidade de dias no trecho ancorado (ex.: "Demurrage: 140"). */
+  semUnidade: string[];
   containers: string[];
   trecho: string;
 }
@@ -141,11 +143,16 @@ function candidatosDoCorpo(corpo: string): CandidatoCorpo[] {
     });
     // Remove referências que carregam dígitos e não são dias.
     limpo = limpo.replace(RE_PROCESSO, ' ').replace(/\b\d{1,4}[/.-]\d{1,2}[/.-]\d{2,4}\b/g, ' ');
+    // Só conta número EXPLICITAMENTE ligado a dias ("14 days", "0 dias", "zero days").
     const valores: string[] = [];
     for (const m of limpo.matchAll(/(-?\d+(?:[.,]\d+)?)\s*(?:FREE\s+)?(?:DAYS?|DIAS?)\b/g)) valores.push(m[1]);
-    for (const m of limpo.matchAll(/(?:FREE\s*-?\s*TIME|DEMURRAGE)\s*(?:MASTER\s*)?[:=\-–]?\s*(-?\d+(?:[.,]\d+)?)(?!\s*(?:USD|US\$|\$|%|\/|[.,]\d|\d))/g)) valores.push(m[1]);
     if (/\b(?:ZERO|NIL)\s+(?:FREE\s+)?(?:DAYS?|DIAS?)\b/.test(limpo)) valores.push('0');
-    if (valores.length) out.push({ valores: [...new Set(valores)], containers: [...new Set(containers)], trecho: trecho.slice(0, 500) });
+    // Número colado à âncora SEM unidade de dias (e sem moeda) é ambíguo.
+    const semUnidade: string[] = [];
+    for (const m of limpo.matchAll(/(?:FREE\s*-?\s*TIME|DEMURRAGE)\s*(?:MASTER\s*)?[:=\-–]?\s*(-?\d+(?:[.,]\d+)?)(?!\s*(?:DAYS?|DIAS?|USD|US\$|\$|%|\/|[.,]\d|\d))/g)) semUnidade.push(m[1]);
+    if (valores.length || semUnidade.length) {
+      out.push({ valores: [...new Set(valores)], semUnidade: [...new Set(semUnidade)], containers: [...new Set(containers)], trecho: trecho.slice(0, 500) });
+    }
   }
   return out;
 }
@@ -167,6 +174,10 @@ export function extrairFreeTimeDoCorpo(corpo: string): ResultadoCorpo {
   const ocorrencias: OcorrenciaFreeTime[] = [];
   const problemas: ProblemaExtracao[] = [];
   for (const c of candidatosDoCorpo(normalizarCorpo(corpo))) {
+    if (!c.valores.length) {
+      problemas.push({ tipo: 'free_time_ambiguo', trecho: c.trecho, containers: c.containers, motivo: `numero_sem_unidade_dias:${c.semUnidade.join(',')}` });
+      continue;
+    }
     const validos = [...new Set(c.valores.map(parseDias).filter((v): v is number => v !== null))];
     const invalidos = c.valores.filter((v) => parseDias(v) === null);
     if (invalidos.length || validos.length !== 1) {
@@ -201,8 +212,12 @@ export function anexoDocumental(a: AnexoMetaSI): boolean {
 export function avaliarOcr(anexo: AnexoMetaSI, r: OcrResultadoSI): { ocorrencia: OcorrenciaFreeTime | null; problema: ProblemaExtracao | null } {
   const confianca = Number.isFinite(r.confianca) ? Math.max(0, Math.min(1, r.confianca)) : 0;
   const temAncora = !!r.ancoraTexto && RE_ANCORA.test(r.ancoraTexto) && !RE_NAO_MASTER.test(r.ancoraTexto);
+  // Ilegível: não dá para afirmar que o anexo não traz Free Time → pendência.
+  if (!r.legivel) {
+    return { ocorrencia: null, problema: { tipo: 'ocr_baixa_confianca', motivo: 'ilegivel', attachmentId: anexo.id, attachmentNome: anexo.name, confianca } };
+  }
   if (r.masterFreeTimeDays === null && !r.multiplosValores) return { ocorrencia: null, problema: null };
-  if (!r.legivel || confianca < CONFIANCA_MINIMA_OCR) {
+  if (confianca < CONFIANCA_MINIMA_OCR) {
     return { ocorrencia: null, problema: { tipo: 'ocr_baixa_confianca', motivo: r.legivel ? `confianca:${confianca}` : 'ilegivel', attachmentId: anexo.id, attachmentNome: anexo.name, confianca } };
   }
   const valor = r.masterFreeTimeDays;
@@ -242,4 +257,41 @@ export function primeiraMensagem<T extends { id: string; receivedDateTime: strin
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   });
   return ord[0] ?? null;
+}
+
+/** Alcance consolidado: um valor por MBL/processo inteiro e exceções por contêiner. */
+export interface Consolidacao {
+  /** Valor do nível MBL/processo (sem contêiner específico), ou null. */
+  nivelMbl: OcorrenciaFreeTime | null;
+  /** Exceções por contêiner (ISO 6346) → ocorrência. */
+  porContainer: Map<string, OcorrenciaFreeTime>;
+  problemas: ProblemaExtracao[];
+}
+
+/**
+ * Consolida as ocorrências aceitas (corpo + anexos). Valores DISTINTOS no mesmo
+ * alcance → ambíguo (pendência, nada promovido naquele alcance). Valores iguais
+ * vindos de fontes diferentes se corroboram: prevalece o corpo (determinístico).
+ */
+export function consolidarOcorrencias(ocorrencias: OcorrenciaFreeTime[]): Consolidacao {
+  const ordem = [...ocorrencias].sort((a, b) => (a.metodo === b.metodo ? 0 : a.metodo === 'texto' ? -1 : 1));
+  const problemas: ProblemaExtracao[] = [];
+  const mbl = ordem.filter((o) => o.containers.length === 0);
+  let nivelMbl: OcorrenciaFreeTime | null = null;
+  const valoresMbl = [...new Set(mbl.map((o) => o.valor))];
+  if (valoresMbl.length === 1) nivelMbl = mbl[0];
+  else if (valoresMbl.length > 1) problemas.push({ tipo: 'free_time_ambiguo', motivo: `valores_distintos_mbl:${valoresMbl.sort((a, b) => a - b).join(',')}` });
+
+  const porNumero = new Map<string, OcorrenciaFreeTime[]>();
+  for (const o of ordem) for (const n of o.containers) {
+    if (!porNumero.has(n)) porNumero.set(n, []);
+    porNumero.get(n)!.push(o);
+  }
+  const porContainer = new Map<string, OcorrenciaFreeTime>();
+  for (const [n, lista] of [...porNumero.entries()].sort()) {
+    const vals = [...new Set(lista.map((o) => o.valor))];
+    if (vals.length === 1) porContainer.set(n, lista[0]);
+    else problemas.push({ tipo: 'free_time_ambiguo', motivo: `valores_distintos_container:${vals.sort((a, b) => a - b).join(',')}`, containers: [n] });
+  }
+  return { nivelMbl, porContainer, problemas };
 }

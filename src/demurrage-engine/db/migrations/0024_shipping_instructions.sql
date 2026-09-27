@@ -93,6 +93,9 @@ CREATE TABLE si_intencoes (
   processo_id UUID,
   processos_ref TEXT[] NOT NULL DEFAULT '{}',
   mbls_ref TEXT[] NOT NULL DEFAULT '{}',
+  -- Contêineres citados na SI (ISO 6346): permitem reavaliar o alcance e as
+  -- pendências de contêiner inexistente sem reler o documento.
+  containers_ref TEXT[] NOT NULL DEFAULT '{}',
   escopo TEXT NOT NULL CHECK (escopo IN ('mbl', 'container')),
   container_numero TEXT,
   valor_dias INTEGER NOT NULL CHECK (valor_dias >= 0),
@@ -247,6 +250,9 @@ CREATE TRIGGER organization_id_immutable
 
 -- Entregas (outbox de aviso) POR OCORRÊNCIA: reabrir gera novos avisos;
 -- reprocessar a mesma ocorrência não duplica; falhas são retentáveis.
+-- Claim PERSISTENTE (status PROCESSING + claim_token + expira_em): o envio
+-- externo acontece FORA de qualquer transação/lock; a finalização só é aceita
+-- com o token vigente; PROCESSING vencido (processo interrompido) é recuperado.
 CREATE TABLE ft_divergencia_entregas (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   organization_id UUID NOT NULL REFERENCES organizations(id),
@@ -254,13 +260,17 @@ CREATE TABLE ft_divergencia_entregas (
   ocorrencia_seq INTEGER NOT NULL,
   destinatario_tipo TEXT NOT NULL CHECK (destinatario_tipo IN ('responsavel_operacional', 'gestor')),
   destinatario_membership_id UUID NOT NULL,
-  status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'SENT', 'FAILED')),
+  status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'PROCESSING', 'SENT', 'FAILED')),
   tentativas INTEGER NOT NULL DEFAULT 0,
+  claim_token UUID,
+  worker_id TEXT,
+  expira_em TIMESTAMPTZ,
   erro TEXT,
   criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
   atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
   enviado_em TIMESTAMPTZ,
   CONSTRAINT ft_divergencia_entregas_unica UNIQUE (divergencia_id, ocorrencia_seq, destinatario_membership_id),
+  CONSTRAINT ft_divergencia_entregas_claim CHECK ((status = 'PROCESSING') = (claim_token IS NOT NULL AND expira_em IS NOT NULL)),
   CONSTRAINT ft_divergencia_entregas_membership_org_fk FOREIGN KEY (destinatario_membership_id, organization_id)
     REFERENCES organization_memberships (id, organization_id)
 );
@@ -290,6 +300,7 @@ CREATE TABLE recalculo_outbox (
   criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
   atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
   concluido_em TIMESTAMPTZ,
+  CONSTRAINT recalculo_outbox_claim CHECK (estado <> 'PROCESSING' OR (worker_id IS NOT NULL AND expira_em IS NOT NULL)),
   CONSTRAINT recalculo_outbox_unica UNIQUE (container_id, tipo, chave),
   CONSTRAINT recalculo_outbox_container_org_fk FOREIGN KEY (container_id, organization_id) REFERENCES containers (id, organization_id)
 );

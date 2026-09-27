@@ -220,6 +220,8 @@ export async function getConversation(
 }
 
 export interface EmailAttachmentMeta {
+  /** Quando o Graph informar (versão do anexo; entra no hash da Shipping Instructions). */
+  lastModifiedDateTime?: string | null;
   id: string;
   name: string;
   contentType: string;
@@ -251,7 +253,7 @@ export interface FullEmailMessage {
 const FULL_FIELDS =
   'id,internetMessageId,conversationId,subject,from,toRecipients,ccRecipients,sentDateTime,receivedDateTime,body,bodyPreview,hasAttachments';
 // Só metadados do anexo (nome/tipo) — sem baixar o conteúdo (contentBytes).
-const ATTACHMENT_EXPAND = 'attachments($select=id,name,contentType,size,isInline)';
+const ATTACHMENT_EXPAND = 'attachments($select=id,name,contentType,size,isInline,lastModifiedDateTime)';
 
 /** Busca uma mensagem completa (corpo em texto puro + metadados de anexos). */
 export async function getFullMessage(

@@ -46,7 +46,7 @@ export async function processarRecalculosPendentes(input: ProcessarRecalculosInp
         SELECT id FROM recalculo_outbox
          WHERE estado = 'PENDING'
             OR (estado = 'FAILED' AND tentativas < $3)
-            OR (estado = 'PROCESSING' AND expira_em < now())
+            OR (estado = 'PROCESSING' AND expira_em < now() AND tentativas < $3)
          ORDER BY criado_em
          FOR UPDATE SKIP LOCKED
          LIMIT $4)

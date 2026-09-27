@@ -8,11 +8,19 @@ import { passagemDoCalendario } from '../demurrage-engine/apuracao/passagemCalen
 import { hojeOperacional } from '../demurrage-engine/time/operationalDate';
 import { CivilDate } from '../demurrage-engine/temporal/civilDate';
 import { criarGraphAlertTransport, resolverDestinatariosPorEnv } from './alertTransportGraph';
+import { reaplicarIntencoesShippingInstructions } from '../demurrage-engine/shippingInstructions/ingestaoShippingInstructions';
+import { processarRecalculosPendentes } from '../demurrage-engine/freeTime/recalculoOutbox';
+import { processarAvisosDivergenciaPendentes, AvisoDivergenciaTransport } from '../demurrage-engine/freeTime/divergenciaAvisos';
+import { criarAvisoDivergenciaTransportGraph } from './avisoDivergenciaTransportGraph';
 
 export interface TickDeps {
   pool: Pool;
   port: ArmadorTrackingPort;
   transport: AlertTransport;
+  /** Transporte dos avisos de divergência de Master Free Time (ausente → entregas ficam PENDING). */
+  avisoTransport?: AvisoDivergenciaTransport;
+  /** Identificador do processo nos claims dos outboxes. */
+  workerId?: string;
 }
 
 export interface TickResultado {
@@ -29,6 +37,13 @@ export interface TickResultado {
   suspensos: number;
   entregasEnviadas: number;
   entregasFalhadas: number;
+  /** Master Free Time: intenções da SI reaplicadas (sem nova leitura documental). */
+  siPromovidos: number;
+  /** Outbox de recálculo: itens concluídos / falhados no tick. */
+  recalculosConcluidos: number;
+  recalculosFalhados: number;
+  avisosEnviados: number;
+  avisosFalhados: number;
 }
 
 /**
@@ -42,11 +57,21 @@ export async function executarTickDemurrage(deps: TickDeps, hojeInjetado?: Civil
   const cal = await passagemDoCalendario(deps.pool, hoje);
   const r = await runSchedulerOnce({ pool: deps.pool, port: deps.port, hoje });
   const entregas = await processarEntregasPendentes({ pool: deps.pool, transport: deps.transport });
+  const workerId = deps.workerId ?? `tick-${process.pid}`;
+  // Master Free Time: reaplica intenções já extraídas a contêineres novos e
+  // consome o outbox de recálculo (relógio Rocket, exposição, lifecycle).
+  const si = await reaplicarIntencoesShippingInstructions({ pool: deps.pool });
+  const rec = await processarRecalculosPendentes({ pool: deps.pool, hoje, workerId });
+  const avisos = deps.avisoTransport
+    ? await processarAvisosDivergenciaPendentes({ pool: deps.pool, transport: deps.avisoTransport, workerId })
+    : { enviadas: 0, falhadas: 0 };
   return {
     hoje, calendario: cal.processados.length, janela: r.janela,
     avaliados: r.contêineresAvaliados, naJanela: r.contêineresNaJanela,
     sincronizados: r.sincronizados, suspensos: r.suspensos,
     entregasEnviadas: entregas.enviadas, entregasFalhadas: entregas.falhadas,
+    siPromovidos: si.promovidos, recalculosConcluidos: rec.concluidos, recalculosFalhados: rec.falhados,
+    avisosEnviados: avisos.enviadas, avisosFalhados: avisos.falhadas,
   };
 }
 
@@ -73,13 +98,16 @@ export function iniciarSchedulerDemurrage(opts: { intervalMs?: number } = {}): S
   const pool = getPool();
   const port = realArmadorTrackingPort();
   const transport = criarGraphAlertTransport({ resolverDestinatarios: resolverDestinatariosPorEnv() });
+  const avisoTransport = criarAvisoDivergenciaTransportGraph();
 
   const tick = async (): Promise<void> => {
-    const t = await executarTickDemurrage({ pool, port, transport });
+    const t = await executarTickDemurrage({ pool, port, transport, avisoTransport });
     console.log(
       `[demurrage-scheduler] tick ${t.hoje}/${t.janela}: calendário=${t.calendario} avaliados=${t.avaliados} ` +
         `janela=${t.naJanela} sincronizados=${t.sincronizados} suspensos=${t.suspensos} | ` +
-        `entregas: enviadas=${t.entregasEnviadas} falhadas=${t.entregasFalhadas}`,
+        `entregas: enviadas=${t.entregasEnviadas} falhadas=${t.entregasFalhadas} | ` +
+        `masterFT: si=${t.siPromovidos} recalculos=${t.recalculosConcluidos}/${t.recalculosFalhados} ` +
+        `avisos=${t.avisosEnviados}/${t.avisosFalhados}`,
     );
   };
 
