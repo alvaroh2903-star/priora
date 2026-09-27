@@ -387,3 +387,96 @@ export async function sendMail(
     saveToSentItems: input.saveToSentItems ?? true,
   });
 }
+
+/* --------------------------------------------------------------------------
+ * Captura automática do pré-alerta (polling incremental): páginas cruas do
+ * Graph para `messages/delta` (Inbox/Sent Items) e para listagem por período
+ * (backfill). Só metadados — nunca corpo completo ou anexo nesta camada; a
+ * conversa completa é lida separadamente (`getConversationFull`), e só para
+ * as candidatas já triadas. Funções ADITIVAS: nada acima foi alterado.
+ * ------------------------------------------------------------------------ */
+
+/** Metadados de UMA mensagem de uma página de delta/listagem (sem corpo completo). */
+export interface MailDeltaMessage {
+  id: string;
+  conversationId?: string | null;
+  subject?: string | null;
+  bodyPreview?: string | null;
+  receivedDateTime?: string | null;
+  /** Presente quando o Graph reporta a mensagem como removida no delta. */
+  '@removed'?: { reason: string };
+}
+
+export interface MailDeltaPage {
+  mensagens: MailDeltaMessage[];
+  nextLink?: string | null;
+  deltaLink?: string | null;
+}
+
+export interface MailPeriodPage {
+  mensagens: MailDeltaMessage[];
+  nextLink?: string | null;
+}
+
+const DELTA_SELECT_FIELDS = 'id,conversationId,subject,bodyPreview,receivedDateTime';
+
+function toMailDeltaMessages(value: any[] | undefined): MailDeltaMessage[] {
+  return (value ?? []).map((m) => ({
+    id: m.id,
+    conversationId: m.conversationId ?? null,
+    subject: m.subject ?? null,
+    bodyPreview: m.bodyPreview ?? null,
+    receivedDateTime: m.receivedDateTime ?? null,
+    ...(m['@removed'] ? { '@removed': m['@removed'] } : {}),
+  }));
+}
+
+/**
+ * Uma página de `mailFolders/{pasta}/messages/delta`: continuação por
+ * `cursor.link` (nextLink OU deltaLink — ambos URLs absolutas, que o SDK do
+ * Graph aceita diretamente em `.api()`) ou início por `cursor.desde` (janela
+ * de dias). `pasta` usa os nomes conhecidos do Graph ("inbox", "sentitems").
+ */
+export async function getMailFolderDeltaPage(
+  accessToken: string,
+  pasta: string,
+  cursor: { link: string } | { desde: Date },
+): Promise<MailDeltaPage> {
+  const client = getGraphClient(accessToken);
+  const req = 'link' in cursor
+    ? client.api(cursor.link)
+    : client
+        .api(`/me/mailFolders/${pasta}/messages/delta`)
+        .header('Prefer', 'odata.maxpagesize=50')
+        .select(DELTA_SELECT_FIELDS)
+        .filter(`receivedDateTime ge ${cursor.desde.toISOString()}`);
+  const resp: any = await req.get();
+  return {
+    mensagens: toMailDeltaMessages(resp?.value),
+    nextLink: resp?.['@odata.nextLink'] ?? null,
+    deltaLink: resp?.['@odata.deltaLink'] ?? null,
+  };
+}
+
+/**
+ * Uma página de listagem (não-delta) de `mailFolders/{pasta}/messages` num
+ * período fechado [desde, ate] — usada só pelo backfill controlado. Não
+ * produz `deltaLink` (não interfere no cursor do polling incremental).
+ */
+export async function getMailFolderPeriodPage(
+  accessToken: string,
+  pasta: string,
+  p: { desde: Date; ate: Date; link?: string | null },
+): Promise<MailPeriodPage> {
+  const client = getGraphClient(accessToken);
+  const req = p.link
+    ? client.api(p.link)
+    : client
+        .api(`/me/mailFolders/${pasta}/messages`)
+        .select(DELTA_SELECT_FIELDS)
+        .filter(`receivedDateTime ge ${p.desde.toISOString()} and receivedDateTime le ${p.ate.toISOString()}`)
+        .orderby('receivedDateTime asc')
+        .top(50);
+  const resp: any = await req.get();
+  return { mensagens: toMailDeltaMessages(resp?.value), nextLink: resp?.['@odata.nextLink'] ?? null };
+}

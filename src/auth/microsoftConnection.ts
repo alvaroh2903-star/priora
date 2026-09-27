@@ -3,8 +3,10 @@ import {
   getActiveAccount,
   setActiveAccount,
   clearActiveAccount,
+  persistirContaAtiva,
   ActiveAccount,
 } from './activeAccount';
+import { avancarGeracaoCacheDuravel } from './persistenciaAuth';
 import { resetCourierStore } from '../couriers/courierStore';
 import { resetDemurrageStore } from '../demurrage/demurrageStore';
 
@@ -53,10 +55,15 @@ export async function connectMicrosoftAccount(
   const trocouDeConta =
     !previous || previous.homeAccountId !== homeAccountId;
   if (trocouDeConta) {
+    // Nova geração do cache durável: escritas atrasadas de tokens da conta
+    // anterior (de qualquer instância) passam a ser descartadas.
+    await avancarGeracaoCacheDuravel();
     // Mantém só os tokens da nova conta; apaga o resto (tokens antigos + dados).
     await wipeConnectionData(homeAccountId);
   }
-  return setActiveAccount(homeAccountId, username);
+  const ativa = setActiveAccount(homeAccountId, username);
+  await persistirContaAtiva();
+  return ativa;
 }
 
 /**
@@ -65,6 +72,8 @@ export async function connectMicrosoftAccount(
  * quem chama (rota de logout).
  */
 export async function disconnectMicrosoftAccount(): Promise<void> {
+  await avancarGeracaoCacheDuravel();
   await wipeConnectionData(null);
   clearActiveAccount();
+  await persistirContaAtiva();
 }

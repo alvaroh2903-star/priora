@@ -1,6 +1,19 @@
-import { ConfidentialClientApplication, LogLevel } from '@azure/msal-node';
+import { ConfidentialClientApplication, ICachePlugin, LogLevel } from '@azure/msal-node';
 import { config, authority, isAzureConfigured } from '../config';
 import { cachePlugin } from './tokenCache';
+
+/**
+ * Plugin de persistência do cache do MSAL. Padrão: arquivo legado (dev sem
+ * banco). Na inicialização, `inicializarPersistenciaAuth` troca pelo cache
+ * DURÁVEL cifrado no PostgreSQL (ou por "somente memória" quando a chave está
+ * ausente/inválida — falha segura, nada em texto claro).
+ */
+let pluginCache: ICachePlugin = cachePlugin;
+
+export function definirCachePluginMsal(plugin: ICachePlugin): void {
+  pluginCache = plugin;
+  cachedClient = null; // o próximo getMsalClient usa o plugin novo
+}
 
 /**
  * Cliente confidencial do MSAL, construído sob demanda.
@@ -26,8 +39,8 @@ export function getMsalClient(): ConfidentialClientApplication {
         authority,
         clientSecret: config.azure.clientSecret,
       },
-      // Persiste os tokens em disco para sobreviver a reinícios do processo.
-      cache: { cachePlugin },
+      // Persistência pelo plugin configurado (PostgreSQL cifrado em produção).
+      cache: { cachePlugin: pluginCache },
       system: {
         loggerOptions: {
           loggerCallback(_level, message) {
