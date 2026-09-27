@@ -3,7 +3,7 @@ import { createHash } from 'crypto';
 /**
  * Extrator DEDICADO da Shipping Instructions (SI). Módulo PURO: sem banco, sem
  * Graph, sem IA — recebe só a PRIMEIRA mensagem cronológica da conversa de
- * pré-alerta e devolve ocorrências estruturadas de Master Free Time.
+ * pré-alerta e devolve ocorrências estruturadas de House e Master Free Time.
  *
  * Separado do `ExtractionSchema` genérico da auditoria de pré-alerta: a regra e
  * a proveniência da SI são específicas e não devem forçar leitura de campos
@@ -12,7 +12,14 @@ import { createHash } from 'crypto';
  * Regras:
  * - Corpo: parser textual DETERMINÍSTICO. Aceita inteiro >= 0 (zero é válido)
  *   ligado inequivocamente a Free Time/Demurrage. Negativo/decimal → inválido.
- * - Menção de House/cliente não é Master Free Time e é ignorada.
+ * - Rótulos estruturados do formato real da Rocket ("FREE TIME MASTER: 20",
+ *   "MASTER FREE TIME: 20", "FREE TIME HOUSE: 20", "HOUSE FREE TIME: 20")
+ *   significam DIAS mesmo sem a palavra "dias" e definem o campo (House/Master).
+ * - Sem rótulo: número ligado a dias vale como Master (regra operacional da SI);
+ *   contexto de House/cliente sem rótulo estruturado é ignorado.
+ * - Número colado a rótulo genérico ("Demurrage: 140", "Demurrage USD 140",
+ *   "Free Time/Demurrage: 140") não distingue prazo de tarifa → ambíguo.
+ * - Código do processo é preservado INTEGRALMENTE (IM3126-26, nunca IM3126).
  * - Mais de um valor distinto no mesmo alcance → ambíguo (pendência).
  * - Anexos: o resultado da leitura documental só é aceito com confiança
  *   >= 0.90, âncora explícita, valor legível e sem múltiplos valores.
@@ -23,7 +30,11 @@ export const CONFIANCA_MINIMA_OCR = 0.9;
 const RE_ANCORA = /free\s*-?\s*time|demurrage|dias?\s+livres|livre\s+de\s+demurrage/i;
 const RE_NAO_MASTER = /\b(house|hbl|h\.b\/l|cliente|client|consignee|importador)\b/i;
 const RE_CONTAINER = /\b([A-Z]{4})[\s-]?(\d{6})[\s-]?(\d)\b/g;
-const RE_PROCESSO = /\bIM\d{3,6}(?:-\d{1,3})?\b/gi;
+// Código integral do processo. O lookahead impede captura parcial: em
+// "IM3126-2600" nada casa (em vez de reduzir silenciosamente para IM3126).
+const RE_PROCESSO = /\bIM\d{3,6}(?:-\d{1,3})?(?![\w-])/gi;
+// Rótulo estruturado de Free Time: o número ligado a ele significa DIAS.
+const RE_ROTULO = /\b(?:FREE\s*-?\s*TIME\s+(MASTER|HOUSE)|(MASTER|HOUSE)\s+FREE\s*-?\s*TIME)\s*[:=\-–]?\s*(-?\d+(?:[.,]\d+)?)(?![.,]?\d)(?:\s*(?:FREE\s+)?(?:DAYS?|DIAS?)\b)?(?!\s*(?:USD|US\$|R\$|\$|BRL|EUR|%))/g;
 const RE_MBL = /\b(?:MBL|M\.?\s?B\/?L|MASTER\s*B\/?L|MASTER\s*BILL(?:\s+OF\s+LADING)?)\s*(?:N[Ooº°.]*|#|NUMBER)?\s*[:\-]?\s*([A-Z0-9]{6,20})\b/gi;
 
 export interface AnexoMetaSI {
@@ -44,6 +55,9 @@ export interface MensagemSI {
   attachments: AnexoMetaSI[];
 }
 
+export type CampoFreeTime = 'masterFreeTimeDays' | 'houseFreeTimeDays';
+export const CAMPOS_FREE_TIME_SI: readonly CampoFreeTime[] = ['masterFreeTimeDays', 'houseFreeTimeDays'];
+
 /** Resultado bruto da leitura documental de um anexo (porta de OCR/visão). */
 export interface OcrResultadoSI {
   legivel: boolean;
@@ -55,10 +69,16 @@ export interface OcrResultadoSI {
   mbl: string | null;
   processo: string | null;
   multiplosValores: boolean;
+  /** House Free Time, quando o documento o informar explicitamente. */
+  houseFreeTimeDays?: number | null;
+  ancoraHouse?: string | null;
+  trechoHouse?: string | null;
+  multiplosValoresHouse?: boolean;
 }
 
-/** Uma ocorrência ACEITA de Master Free Time, com sua evidência. */
+/** Uma ocorrência ACEITA de Free Time (House ou Master), com sua evidência. */
 export interface OcorrenciaFreeTime {
+  campo: CampoFreeTime;
   valor: number;
   /** Contêineres (ISO 6346 normalizados) do alcance; vazio = MBL/processo inteiro. */
   containers: string[];
@@ -71,7 +91,7 @@ export interface OcorrenciaFreeTime {
 }
 
 export type ProblemaExtracao =
-  | { tipo: 'free_time_ambiguo'; motivo: string; trecho?: string; attachmentId?: string | null; containers?: string[] }
+  | { tipo: 'free_time_ambiguo'; motivo: string; campo?: CampoFreeTime; trecho?: string; attachmentId?: string | null; containers?: string[] }
   | { tipo: 'ocr_baixa_confianca'; motivo: string; attachmentId: string; attachmentNome: string; confianca: number };
 
 /** ISO 6346: 4 letras + 7 dígitos, sem espaços/hífens. Null se inválido. */
@@ -85,9 +105,9 @@ export function normalizarMbl(v: string | null | undefined): string {
   return String(v ?? '').toUpperCase().replace(/[\s\-./]/g, '');
 }
 
-/** Número do processo reduzido à base (IM1234-01 → IM1234). */
-export function baseProcesso(v: string | null | undefined): string {
-  return String(v ?? '').toUpperCase().replace(/-\d{1,3}$/, '').trim();
+/** Código do processo normalizado SEM perder o sufixo (" im3126-26 " → "IM3126-26"). */
+export function normalizarProcesso(v: string | null | undefined): string {
+  return String(v ?? '').toUpperCase().replace(/\s+/g, '');
 }
 
 export function normalizarCorpo(texto: string | null | undefined): string {
@@ -95,7 +115,7 @@ export function normalizarCorpo(texto: string | null | undefined): string {
 }
 
 export interface ReferenciasSI {
-  processos: string[]; // bases IM normalizadas
+  processos: string[]; // códigos IM integrais (com sufixo)
   mbls: string[];      // normalizados
   containers: string[]; // ISO 6346 normalizados
 }
@@ -103,7 +123,7 @@ export interface ReferenciasSI {
 /** Referências de processo/MBL/contêiner citadas no assunto + corpo. */
 export function extrairReferencias(texto: string): ReferenciasSI {
   const processos = new Set<string>();
-  for (const m of texto.matchAll(RE_PROCESSO)) processos.add(baseProcesso(m[0]));
+  for (const m of texto.matchAll(RE_PROCESSO)) processos.add(normalizarProcesso(m[0]));
   const mbls = new Set<string>();
   for (const m of texto.matchAll(RE_MBL)) {
     const v = normalizarMbl(m[1]);
@@ -119,22 +139,27 @@ export function extrairReferencias(texto: string): ReferenciasSI {
 
 /** Candidato bruto encontrado num trecho do corpo. */
 interface CandidatoCorpo {
-  valores: string[]; // números ligados a dias (validados depois)
-  /** Números sem unidade de dias no trecho ancorado (ex.: "Demurrage: 140"). */
+  campo: CampoFreeTime;
+  valores: string[]; // números ligados a dias ou a rótulo estruturado (validados depois)
+  /** Números colados a rótulo GENÉRICO sem unidade de dias (ex.: "Demurrage: 140"). */
   semUnidade: string[];
   containers: string[];
   trecho: string;
 }
 
+const campoDoRotulo = (r: string): CampoFreeTime => (r === 'HOUSE' ? 'houseFreeTimeDays' : 'masterFreeTimeDays');
+
 /**
  * Candidatos do corpo: cada trecho (linha ou parte separada por ';' / '|')
- * com âncora explícita de Free Time/Demurrage e sem contexto de House/cliente.
+ * com âncora de Free Time/Demurrage. Primeiro os rótulos estruturados
+ * (House/Master); no restante do trecho, a leitura genérica (só Master e só sem
+ * contexto de House/cliente).
  */
 function candidatosDoCorpo(corpo: string): CandidatoCorpo[] {
   const out: CandidatoCorpo[] = [];
   const trechos = corpo.split(/\n|;|\|/).map((t) => t.trim()).filter(Boolean);
   for (const trecho of trechos) {
-    if (!RE_ANCORA.test(trecho) || RE_NAO_MASTER.test(trecho)) continue;
+    if (!RE_ANCORA.test(trecho)) continue;
     const containers: string[] = [];
     let limpo = trecho.toUpperCase().replace(RE_CONTAINER, (_m, a, b, c) => {
       const n = normalizarContainer(`${a}${b}${c}`);
@@ -143,15 +168,31 @@ function candidatosDoCorpo(corpo: string): CandidatoCorpo[] {
     });
     // Remove referências que carregam dígitos e não são dias.
     limpo = limpo.replace(RE_PROCESSO, ' ').replace(/\b\d{1,4}[/.-]\d{1,2}[/.-]\d{2,4}\b/g, ' ');
+    const cont = [...new Set(containers)];
+
+    // 1) Rótulos estruturados: o número significa dias e o rótulo define o campo.
+    const rotulados = new Map<CampoFreeTime, string[]>();
+    limpo = limpo.replace(RE_ROTULO, (_m, c1: string | undefined, c2: string | undefined, num: string) => {
+      const campo = campoDoRotulo((c1 || c2)!);
+      if (!rotulados.has(campo)) rotulados.set(campo, []);
+      rotulados.get(campo)!.push(num);
+      return ' ';
+    });
+    for (const [campo, valores] of rotulados) {
+      out.push({ campo, valores: [...new Set(valores)], semUnidade: [], containers: cont, trecho: trecho.slice(0, 500) });
+    }
+
+    // 2) Leitura genérica do restante: só Master, nunca em contexto de House/cliente.
+    if (!RE_ANCORA.test(limpo) || RE_NAO_MASTER.test(limpo)) continue;
     // Só conta número EXPLICITAMENTE ligado a dias ("14 days", "0 dias", "zero days").
     const valores: string[] = [];
     for (const m of limpo.matchAll(/(-?\d+(?:[.,]\d+)?)\s*(?:FREE\s+)?(?:DAYS?|DIAS?)\b/g)) valores.push(m[1]);
     if (/\b(?:ZERO|NIL)\s+(?:FREE\s+)?(?:DAYS?|DIAS?)\b/.test(limpo)) valores.push('0');
-    // Número colado à âncora SEM unidade de dias (e sem moeda) é ambíguo.
+    // Número colado a rótulo genérico (com ou sem moeda) e sem unidade de dias: ambíguo.
     const semUnidade: string[] = [];
-    for (const m of limpo.matchAll(/(?:FREE\s*-?\s*TIME|DEMURRAGE)\s*(?:MASTER\s*)?[:=\-–]?\s*(-?\d+(?:[.,]\d+)?)(?!\s*(?:DAYS?|DIAS?|USD|US\$|\$|%|\/|[.,]\d|\d))/g)) semUnidade.push(m[1]);
+    for (const m of limpo.matchAll(/(?:FREE\s*-?\s*TIME|DEMURRAGE)\s*[:=\-–]?\s*(?:USD|US\$|R\$|\$|BRL|EUR)?\s*(-?\d+(?:[.,]\d+)?)(?!\s*(?:DAYS?|DIAS?|%|\/|[.,]\d|\d))/g)) semUnidade.push(m[1]);
     if (valores.length || semUnidade.length) {
-      out.push({ valores: [...new Set(valores)], semUnidade: [...new Set(semUnidade)], containers: [...new Set(containers)], trecho: trecho.slice(0, 500) });
+      out.push({ campo: 'masterFreeTimeDays', valores: [...new Set(valores)], semUnidade: [...new Set(semUnidade)], containers: cont, trecho: trecho.slice(0, 500) });
     }
   }
   return out;
@@ -169,28 +210,37 @@ export interface ResultadoCorpo {
   problemas: ProblemaExtracao[];
 }
 
-/** Extração determinística do corpo da primeira mensagem. */
+/**
+ * Extração determinística do corpo da primeira mensagem. Um número colado a
+ * rótulo genérico ("Demurrage: 140") só vira pendência de ambiguidade quando o
+ * documento NÃO traz valor aceito para aquele campo — com "FREE TIME MASTER: 20"
+ * presente, uma linha de tarifa de demurrage não torna o Master ambíguo.
+ */
 export function extrairFreeTimeDoCorpo(corpo: string): ResultadoCorpo {
   const ocorrencias: OcorrenciaFreeTime[] = [];
   const problemas: ProblemaExtracao[] = [];
+  const semUnidade: ProblemaExtracao[] = [];
   for (const c of candidatosDoCorpo(normalizarCorpo(corpo))) {
     if (!c.valores.length) {
-      problemas.push({ tipo: 'free_time_ambiguo', trecho: c.trecho, containers: c.containers, motivo: `numero_sem_unidade_dias:${c.semUnidade.join(',')}` });
+      semUnidade.push({ tipo: 'free_time_ambiguo', campo: c.campo, trecho: c.trecho, containers: c.containers, motivo: `numero_sem_unidade_dias:${c.semUnidade.join(',')}` });
       continue;
     }
     const validos = [...new Set(c.valores.map(parseDias).filter((v): v is number => v !== null))];
     const invalidos = c.valores.filter((v) => parseDias(v) === null);
     if (invalidos.length || validos.length !== 1) {
       problemas.push({
-        tipo: 'free_time_ambiguo', trecho: c.trecho, containers: c.containers,
+        tipo: 'free_time_ambiguo', campo: c.campo, trecho: c.trecho, containers: c.containers,
         motivo: invalidos.length ? `valor_invalido:${invalidos.join(',')}` : `multiplos_valores:${validos.join(',')}`,
       });
       continue;
     }
     ocorrencias.push({
-      valor: validos[0], containers: c.containers, encontradoEm: 'corpo', attachmentId: null, attachmentNome: null,
+      campo: c.campo, valor: validos[0], containers: c.containers, encontradoEm: 'corpo', attachmentId: null, attachmentNome: null,
       trecho: c.trecho, metodo: 'texto', confianca: 1,
     });
+  }
+  for (const p of semUnidade) {
+    if (p.tipo === 'free_time_ambiguo' && !ocorrencias.some((o) => o.campo === p.campo)) problemas.push(p);
   }
   return { ocorrencias, problemas };
 }
@@ -203,37 +253,46 @@ export function anexoDocumental(a: AnexoMetaSI): boolean {
   return ct.includes('pdf') || n.endsWith('.pdf') || /image\/(png|jpe?g|tiff|webp)/.test(ct) || /\.(png|jpe?g|tiff?|webp)$/.test(n);
 }
 
+const RE_HOUSE = /\b(house|hbl|h\.b\/l)\b/i;
+
 /**
- * Avalia o resultado da leitura documental de um anexo. Aceita automaticamente
- * só com: legível, confiança >= 0.90, âncora explícita de Free Time/Demurrage,
- * inteiro >= 0 e valor único. Caso contrário devolve o problema (pendência).
- * `null` em ambos = o anexo não menciona Free Time (nada a registrar).
+ * Avalia o resultado da leitura documental de um anexo, para House e Master.
+ * Aceita automaticamente só com: legível, confiança >= 0.90, âncora explícita
+ * de Free Time/Demurrage do campo correspondente, inteiro >= 0 e valor único.
+ * Caso contrário devolve o problema (pendência). Anexo sem Free Time → vazio.
  */
-export function avaliarOcr(anexo: AnexoMetaSI, r: OcrResultadoSI): { ocorrencia: OcorrenciaFreeTime | null; problema: ProblemaExtracao | null } {
+export function avaliarOcr(anexo: AnexoMetaSI, r: OcrResultadoSI): { ocorrencias: OcorrenciaFreeTime[]; problemas: ProblemaExtracao[] } {
   const confianca = Number.isFinite(r.confianca) ? Math.max(0, Math.min(1, r.confianca)) : 0;
-  const temAncora = !!r.ancoraTexto && RE_ANCORA.test(r.ancoraTexto) && !RE_NAO_MASTER.test(r.ancoraTexto);
   // Ilegível: não dá para afirmar que o anexo não traz Free Time → pendência.
   if (!r.legivel) {
-    return { ocorrencia: null, problema: { tipo: 'ocr_baixa_confianca', motivo: 'ilegivel', attachmentId: anexo.id, attachmentNome: anexo.name, confianca } };
+    return { ocorrencias: [], problemas: [{ tipo: 'ocr_baixa_confianca', motivo: 'ilegivel', attachmentId: anexo.id, attachmentNome: anexo.name, confianca }] };
   }
-  if (r.masterFreeTimeDays === null && !r.multiplosValores) return { ocorrencia: null, problema: null };
+  const itens = [
+    { campo: 'masterFreeTimeDays' as CampoFreeTime, valor: r.masterFreeTimeDays, ancora: r.ancoraTexto, trecho: r.trecho, multiplos: r.multiplosValores,
+      ancoraOk: !!r.ancoraTexto && RE_ANCORA.test(r.ancoraTexto) && !RE_NAO_MASTER.test(r.ancoraTexto) },
+    { campo: 'houseFreeTimeDays' as CampoFreeTime, valor: r.houseFreeTimeDays ?? null, ancora: r.ancoraHouse ?? null, trecho: r.trechoHouse ?? null,
+      multiplos: r.multiplosValoresHouse ?? false, ancoraOk: !!r.ancoraHouse && RE_ANCORA.test(r.ancoraHouse) && RE_HOUSE.test(r.ancoraHouse) },
+  ].filter((i) => i.valor !== null || i.multiplos);
+  if (!itens.length) return { ocorrencias: [], problemas: [] };
   if (confianca < CONFIANCA_MINIMA_OCR) {
-    return { ocorrencia: null, problema: { tipo: 'ocr_baixa_confianca', motivo: r.legivel ? `confianca:${confianca}` : 'ilegivel', attachmentId: anexo.id, attachmentNome: anexo.name, confianca } };
-  }
-  const valor = r.masterFreeTimeDays;
-  const valido = typeof valor === 'number' && Number.isInteger(valor) && valor >= 0;
-  if (r.multiplosValores || !valido || !temAncora) {
-    const motivo = r.multiplosValores ? 'multiplos_valores' : !valido ? `valor_invalido:${valor}` : 'sem_ancora_explicita';
-    return { ocorrencia: null, problema: { tipo: 'free_time_ambiguo', motivo, attachmentId: anexo.id, trecho: r.trecho ?? undefined } };
+    return { ocorrencias: [], problemas: [{ tipo: 'ocr_baixa_confianca', motivo: `confianca:${confianca}`, attachmentId: anexo.id, attachmentNome: anexo.name, confianca }] };
   }
   const containers = [...new Set(r.containers.map(normalizarContainer).filter((n): n is string => !!n))];
-  return {
-    ocorrencia: {
-      valor: valor as number, containers, encontradoEm: 'anexo', attachmentId: anexo.id, attachmentNome: anexo.name,
-      trecho: (r.trecho || r.ancoraTexto || '').slice(0, 500), metodo: 'ocr_visao', confianca,
-    },
-    problema: null,
-  };
+  const ocorrencias: OcorrenciaFreeTime[] = [];
+  const problemas: ProblemaExtracao[] = [];
+  for (const i of itens) {
+    const valido = typeof i.valor === 'number' && Number.isInteger(i.valor) && i.valor >= 0;
+    if (i.multiplos || !valido || !i.ancoraOk) {
+      const motivo = i.multiplos ? 'multiplos_valores' : !valido ? `valor_invalido:${i.valor}` : 'sem_ancora_explicita';
+      problemas.push({ tipo: 'free_time_ambiguo', campo: i.campo, motivo, attachmentId: anexo.id, trecho: i.trecho ?? undefined });
+      continue;
+    }
+    ocorrencias.push({
+      campo: i.campo, valor: i.valor as number, containers, encontradoEm: 'anexo', attachmentId: anexo.id, attachmentNome: anexo.name,
+      trecho: (i.trecho || i.ancora || '').slice(0, 500), metodo: 'ocr_visao', confianca,
+    });
+  }
+  return { ocorrencias, problemas };
 }
 
 /**
@@ -259,39 +318,49 @@ export function primeiraMensagem<T extends { id: string; receivedDateTime: strin
   return ord[0] ?? null;
 }
 
-/** Alcance consolidado: um valor por MBL/processo inteiro e exceções por contêiner. */
-export interface Consolidacao {
-  /** Valor do nível MBL/processo (sem contêiner específico), ou null. */
+/** Alcance consolidado de UM campo: valor do processo inteiro e exceções por contêiner. */
+export interface ConsolidacaoCampo {
+  /** Valor no nível do processo/MBL (sem contêiner específico), ou null. */
   nivelMbl: OcorrenciaFreeTime | null;
   /** Exceções por contêiner (ISO 6346) → ocorrência. */
   porContainer: Map<string, OcorrenciaFreeTime>;
+}
+
+export interface Consolidacao {
+  porCampo: Record<CampoFreeTime, ConsolidacaoCampo>;
   problemas: ProblemaExtracao[];
 }
 
 /**
- * Consolida as ocorrências aceitas (corpo + anexos). Valores DISTINTOS no mesmo
- * alcance → ambíguo (pendência, nada promovido naquele alcance). Valores iguais
- * vindos de fontes diferentes se corroboram: prevalece o corpo (determinístico).
+ * Consolida as ocorrências aceitas (corpo + anexos), POR CAMPO. Valores
+ * DISTINTOS no mesmo campo e alcance → ambíguo (pendência, nada promovido
+ * naquele alcance). Valores iguais se corroboram: prevalece o corpo
+ * (determinístico). House e Master diferentes entre si NÃO são ambiguidade.
  */
 export function consolidarOcorrencias(ocorrencias: OcorrenciaFreeTime[]): Consolidacao {
-  const ordem = [...ocorrencias].sort((a, b) => (a.metodo === b.metodo ? 0 : a.metodo === 'texto' ? -1 : 1));
   const problemas: ProblemaExtracao[] = [];
-  const mbl = ordem.filter((o) => o.containers.length === 0);
-  let nivelMbl: OcorrenciaFreeTime | null = null;
-  const valoresMbl = [...new Set(mbl.map((o) => o.valor))];
-  if (valoresMbl.length === 1) nivelMbl = mbl[0];
-  else if (valoresMbl.length > 1) problemas.push({ tipo: 'free_time_ambiguo', motivo: `valores_distintos_mbl:${valoresMbl.sort((a, b) => a - b).join(',')}` });
+  const porCampo = {} as Record<CampoFreeTime, ConsolidacaoCampo>;
+  for (const campo of CAMPOS_FREE_TIME_SI) {
+    const ordem = ocorrencias.filter((o) => o.campo === campo)
+      .sort((a, b) => (a.metodo === b.metodo ? 0 : a.metodo === 'texto' ? -1 : 1));
+    const mbl = ordem.filter((o) => o.containers.length === 0);
+    let nivelMbl: OcorrenciaFreeTime | null = null;
+    const valoresMbl = [...new Set(mbl.map((o) => o.valor))];
+    if (valoresMbl.length === 1) nivelMbl = mbl[0];
+    else if (valoresMbl.length > 1) problemas.push({ tipo: 'free_time_ambiguo', campo, motivo: `valores_distintos_processo:${valoresMbl.sort((a, b) => a - b).join(',')}` });
 
-  const porNumero = new Map<string, OcorrenciaFreeTime[]>();
-  for (const o of ordem) for (const n of o.containers) {
-    if (!porNumero.has(n)) porNumero.set(n, []);
-    porNumero.get(n)!.push(o);
+    const porNumero = new Map<string, OcorrenciaFreeTime[]>();
+    for (const o of ordem) for (const n of o.containers) {
+      if (!porNumero.has(n)) porNumero.set(n, []);
+      porNumero.get(n)!.push(o);
+    }
+    const porContainer = new Map<string, OcorrenciaFreeTime>();
+    for (const [n, lista] of [...porNumero.entries()].sort()) {
+      const vals = [...new Set(lista.map((o) => o.valor))];
+      if (vals.length === 1) porContainer.set(n, lista[0]);
+      else problemas.push({ tipo: 'free_time_ambiguo', campo, motivo: `valores_distintos_container:${vals.sort((a, b) => a - b).join(',')}`, containers: [n] });
+    }
+    porCampo[campo] = { nivelMbl, porContainer };
   }
-  const porContainer = new Map<string, OcorrenciaFreeTime>();
-  for (const [n, lista] of [...porNumero.entries()].sort()) {
-    const vals = [...new Set(lista.map((o) => o.valor))];
-    if (vals.length === 1) porContainer.set(n, lista[0]);
-    else problemas.push({ tipo: 'free_time_ambiguo', motivo: `valores_distintos_container:${vals.sort((a, b) => a - b).join(',')}`, containers: [n] });
-  }
-  return { nivelMbl, porContainer, problemas };
+  return { porCampo, problemas };
 }

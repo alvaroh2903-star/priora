@@ -2,9 +2,10 @@ import { createHash } from 'crypto';
 import { Pool, PoolClient } from 'pg';
 import { getPool } from '../db/pool';
 import { promoverMasterFreeTimeComClient } from '../freeTime/masterFreeTimeService';
+import { promoverHouseFreeTimeComClient } from '../freeTime/houseFreeTimeService';
 import {
   AnexoMetaSI, MensagemSI, OcrResultadoSI, OcorrenciaFreeTime, ProblemaExtracao,
-  anexoDocumental, avaliarOcr, baseProcesso, consolidarOcorrencias, extrairFreeTimeDoCorpo,
+  CAMPOS_FREE_TIME_SI, CampoFreeTime, anexoDocumental, avaliarOcr, consolidarOcorrencias, extrairFreeTimeDoCorpo, normalizarProcesso,
   extrairReferencias, hashConteudo, normalizarContainer, normalizarMbl, primeiraMensagem,
 } from './extracaoShippingInstructions';
 
@@ -172,13 +173,14 @@ async function lerShippingInstructions(msg: MensagemSI, portas: PortasShippingIn
     }
     const r = await portas.lerDocumento({ ...conteudo, nome: anexo.name });
     const av = avaliarOcr(anexo, r);
-    if (av.ocorrencia) {
-      ocorrencias.push(av.ocorrencia);
-      for (const n of av.ocorrencia.containers) containers.add(n);
+    ocorrencias.push(...av.ocorrencias);
+    problemas.push(...av.problemas);
+    if (av.ocorrencias.length) {
+      for (const o of av.ocorrencias) for (const n of o.containers) containers.add(n);
       if (r.mbl && normalizarMbl(r.mbl)) mbls.add(normalizarMbl(r.mbl));
-      if (r.processo && /^IM\d{3,6}/i.test(r.processo.trim())) processos.add(baseProcesso(r.processo));
+      // Código integral (IM3126-26): nunca reduzido à base.
+      if (r.processo && /^IM\d{3,6}(?:-\d{1,3})?$/i.test(normalizarProcesso(r.processo))) processos.add(normalizarProcesso(r.processo));
     }
-    if (av.problema) problemas.push(av.problema);
   }
   return { ocorrencias, problemas, refs: { processos: [...processos], mbls: [...mbls], containers: [...containers] } };
 }
@@ -189,11 +191,18 @@ function hashContexto(parts: Record<string, unknown>): string {
 
 interface ProcessoResolvido { id: string; numero: string | null; mbl: string | null }
 
+export type AssociacaoPor = 'numero_processo' | 'mbl' | 'numero_processo_e_mbl';
+
 type Resolucao =
-  | { ok: true; processo: ProcessoResolvido }
+  | { ok: true; processo: ProcessoResolvido; associacao: AssociacaoPor }
   | { ok: false; pendencias: PendenciaSI[] };
 
-/** Associação SEGURA ao processo: exatamente um processo, sem conflito de refs. */
+/**
+ * Associação SEGURA ao processo: exatamente um processo da organização, sem
+ * conflito de refs. O código é comparado INTEGRALMENTE (IM3126-26 ≠ IM3126).
+ * A SI real é emitida antes do MBL: um único código de processo explícito
+ * basta — MBL ausente não bloqueia, não vira pendência e não é inventado.
+ */
 async function resolverProcesso(db: PoolClient, organizationId: string, refs: Leitura['refs']): Promise<Resolucao> {
   if (refs.processos.length > 1 || refs.mbls.length > 1) {
     return { ok: false, pendencias: [{ tipo: 'conversa_multiprocesso', motivo: 'multiplas_referencias_na_si', contexto: { processos: refs.processos, mbls: refs.mbls } }] };
@@ -207,7 +216,7 @@ async function resolverProcesso(db: PoolClient, organizationId: string, refs: Le
   const { rows } = await db.query(
     `SELECT id, numero_processo, mbl FROM processos
       WHERE organization_id = $1
-        AND (upper(regexp_replace(coalesce(numero_processo, ''), '-[0-9]{1,3}$', '')) = ANY($2::text[])
+        AND (upper(regexp_replace(coalesce(numero_processo, ''), '[[:space:]]', '', 'g')) = ANY($2::text[])
              OR upper(regexp_replace(coalesce(mbl, ''), '[[:space:]./-]', '', 'g')) = ANY($3::text[]))
       ORDER BY id`,
     [organizationId, refs.processos, refs.mbls],
@@ -220,15 +229,19 @@ async function resolverProcesso(db: PoolClient, organizationId: string, refs: Le
   }
   const p: ProcessoResolvido = { id: rows[0].id, numero: rows[0].numero_processo, mbl: rows[0].mbl };
   const mblSi = refs.mbls[0], mblP = p.mbl ? normalizarMbl(p.mbl) : null;
-  const procSi = refs.processos[0], procP = p.numero ? baseProcesso(p.numero) : null;
+  const procSi = refs.processos[0], procP = p.numero ? normalizarProcesso(p.numero) : null;
   if ((mblSi && mblP && mblSi !== mblP) || (procSi && procP && procSi !== procP)) {
     return { ok: false, pendencias: [{ tipo: 'alcance_nao_determinado', motivo: 'processo_e_mbl_da_si_nao_conferem', processoId: p.id, mbl: mblSi ?? null, contexto: { mblSi, mblProcesso: mblP, processoSi: procSi, processoCadastro: procP } }] };
   }
-  return { ok: true, processo: p };
+  const porNumero = !!procSi && procSi === procP;
+  const porMbl = !!mblSi && mblSi === mblP;
+  return { ok: true, processo: p, associacao: porNumero && porMbl ? 'numero_processo_e_mbl' : porNumero ? 'numero_processo' : 'mbl' };
 }
 
 interface IntencaoRow {
   id: string;
+  campo: CampoFreeTime;
+  /** 'mbl' = nível do processo inteiro (vale para os contêineres atuais e futuros). */
   escopo: 'mbl' | 'container';
   container_numero: string | null;
   valor_dias: number;
@@ -293,7 +306,9 @@ async function aplicarIntencoes(
       : { tipo: 'container_nao_encontrado', motivo: 'container_citado_inexistente', processoId: P.id, mbl: P.mbl, containerNumero: n });
   }
 
-  const excecoes = new Set(intencoes.filter((i) => i.escopo === 'container').map((i) => i.container_numero!));
+  // Exceções por contêiner valem POR CAMPO (House e Master são independentes).
+  const excecoes = (campo: CampoFreeTime) =>
+    new Set(intencoes.filter((i) => i.campo === campo && i.escopo === 'container').map((i) => i.container_numero!));
   const alvos: Array<{ intencao: IntencaoRow; containerId: string }> = [];
   for (const i of intencoes) {
     if (i.escopo === 'container') {
@@ -301,32 +316,37 @@ async function aplicarIntencoes(
       if (id) alvos.push({ intencao: i, containerId: id });
       continue;
     }
-    if (!doProcesso.size) {
-      pendencias.push({ tipo: 'container_nao_encontrado', motivo: 'processo_sem_conteineres', processoId: P.id, mbl: P.mbl });
-      continue;
-    }
-    for (const [n, id] of doProcesso) if (!excecoes.has(n)) alvos.push({ intencao: i, containerId: id });
+    // Nível do processo: aplica aos contêineres ATUAIS; os futuros recebem pela
+    // reaplicação. Processo ainda sem contêiner não é erro nem pendência.
+    const ex = excecoes(i.campo);
+    for (const [n, id] of doProcesso) if (!ex.has(n)) alvos.push({ intencao: i, containerId: id });
   }
 
   let promovidos = 0;
   for (const { intencao: i, containerId } of alvos) {
-    const r = await promoverMasterFreeTimeComClient(client, {
-      organizationId: ctx.organizationId, containerId, valor: i.valor_dias, fonte: 'shipping_instructions',
-      observadoEm: ctx.messageReceivedAt, evidenciaRef: `si_intencao:${i.id}`, autor: ctx.autor,
-    });
+    const base = {
+      organizationId: ctx.organizationId, containerId, valor: i.valor_dias, fonte: 'shipping_instructions' as const,
+      observadoEm: ctx.messageReceivedAt, evidenciaRef: `si_intencao:${i.id}`,
+    };
+    // Master: serviço central (divergência SI × Master + recálculo). House:
+    // writer transacional com a hierarquia de fontes. Ambos na MESMA transação.
+    const r = i.campo === 'masterFreeTimeDays'
+      ? await promoverMasterFreeTimeComClient(client, { ...base, autor: ctx.autor })
+      : await promoverHouseFreeTimeComClient(client, base);
     if (r.conflitoMesmaFonte) {
-      pendencias.push({ tipo: 'free_time_ambiguo', motivo: 'valor_diferente_para_mesma_mensagem', processoId: P.id, mbl: P.mbl, containerId, contexto: { intencaoId: i.id, valorNovo: i.valor_dias } });
+      pendencias.push({ tipo: 'free_time_ambiguo', motivo: 'valor_diferente_para_mesma_mensagem', processoId: P.id, mbl: P.mbl, containerId, chave: i.campo, contexto: { campo: i.campo, intencaoId: i.id, valorNovo: i.valor_dias } });
       continue;
     }
     const { rowCount } = await client.query(
       `INSERT INTO si_proveniencias
          (organization_id, intencao_id, field_observation_id, processo_id, container_id, conversation_id, message_id,
           message_received_at, encontrado_em, attachment_id, attachment_nome, trecho_evidencia, valor_dias,
-          metodo_extracao, confianca, conteudo_hash, observado_em)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$8)
+          metodo_extracao, confianca, conteudo_hash, observado_em, campo, associacao_por)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$8,$17,$18)
        ON CONFLICT (intencao_id, container_id) DO NOTHING`,
       [ctx.organizationId, i.id, r.observationId, P.id, containerId, ctx.conversationId, ctx.messageId, ctx.messageReceivedAt,
-        i.encontrado_em, i.attachment_id, i.attachment_nome, i.trecho_evidencia, i.valor_dias, i.metodo_extracao, i.confianca, i.conteudo_hash],
+        i.encontrado_em, i.attachment_id, i.attachment_nome, i.trecho_evidencia, i.valor_dias, i.metodo_extracao, i.confianca, i.conteudo_hash,
+        i.campo, res.associacao],
     );
     promovidos += rowCount ?? 0;
   }
@@ -373,20 +393,23 @@ async function sincronizarPendencias(
   return rows[0].n;
 }
 
-function pendenciasDaLeitura(leitura: Leitura, temIntencao: boolean): PendenciaSI[] {
+function pendenciasDaLeitura(leitura: Leitura, temMaster: boolean): PendenciaSI[] {
   const out: PendenciaSI[] = [];
   for (const p of leitura.problemas) {
     if (p.tipo === 'ocr_baixa_confianca') {
       out.push({ tipo: p.tipo, motivo: p.motivo, chave: `anexo:${p.attachmentId}`, contexto: { attachmentId: p.attachmentId, attachmentNome: p.attachmentNome, confianca: p.confianca } });
     } else {
       out.push({
-        tipo: 'free_time_ambiguo', motivo: p.motivo, chave: `${p.attachmentId ?? 'corpo'}:${(p.containers ?? []).join(',')}:${p.trecho ?? ''}`,
+        tipo: 'free_time_ambiguo', motivo: p.motivo, chave: `${p.campo ?? ''}:${p.attachmentId ?? 'corpo'}:${(p.containers ?? []).join(',')}:${p.trecho ?? ''}`,
         containerNumero: p.containers && p.containers.length === 1 ? p.containers[0] : null,
-        contexto: { trecho: p.trecho ?? null, attachmentId: p.attachmentId ?? null, containers: p.containers ?? [] },
+        contexto: { campo: p.campo ?? null, trecho: p.trecho ?? null, attachmentId: p.attachmentId ?? null, containers: p.containers ?? [] },
       });
     }
   }
-  if (!temIntencao && !out.length) out.push({ tipo: 'free_time_nao_encontrado', motivo: 'sem_valor_explicito_no_corpo_ou_anexos' });
+  // Ausência do MASTER Free Time é pendência (deixa o relógio Rocket pendente).
+  // House ausente na SI não é pendência: sua fonte natural é o documento House.
+  const masterTratado = temMaster || leitura.problemas.some((p) => p.tipo === 'ocr_baixa_confianca' || (p.tipo === 'free_time_ambiguo' && (p.campo ?? 'masterFreeTimeDays') === 'masterFreeTimeDays'));
+  if (!masterTratado) out.push({ tipo: 'free_time_nao_encontrado', motivo: 'master_free_time_ausente', chave: 'masterFreeTimeDays' });
   return out;
 }
 
@@ -397,24 +420,25 @@ async function inserirIntencao(
   escopo: 'mbl' | 'container',
   containerNumero: string | null,
 ): Promise<{ row: IntencaoRow; divergente: boolean }> {
+  const campo = o.campo;
   const ins = await client.query(
     `INSERT INTO si_intencoes
        (organization_id, versao_id, conversation_id, message_id, message_received_at, processos_ref, mbls_ref, containers_ref,
         escopo, container_numero, valor_dias, encontrado_em, attachment_id, attachment_nome, trecho_evidencia,
-        metodo_extracao, confianca, conteudo_hash)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
-     ON CONFLICT (versao_id, escopo, (COALESCE(container_numero, ''))) DO NOTHING
+        metodo_extracao, confianca, conteudo_hash, campo)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+     ON CONFLICT (versao_id, campo, escopo, (COALESCE(container_numero, ''))) DO NOTHING
      RETURNING *`,
     [ctx.organizationId, ctx.versaoId, ctx.conversationId, ctx.messageId, ctx.messageReceivedAt, ctx.refs.processos, ctx.refs.mbls,
       ctx.refs.containers, escopo, containerNumero, o.valor, o.encontradoEm, o.attachmentId, o.attachmentNome, o.trecho,
-      o.metodo, o.confianca, ctx.conteudoHash],
+      o.metodo, o.confianca, ctx.conteudoHash, campo],
   );
   if (ins.rows[0]) return { row: ins.rows[0], divergente: false };
   // Reprocesso da MESMA versão: a intenção já existe (append-only). Se a nova
   // leitura discordar do valor já registrado, é ambiguidade — nada muda.
   const { rows } = await client.query(
-    `SELECT * FROM si_intencoes WHERE versao_id = $1 AND escopo = $2 AND COALESCE(container_numero, '') = $3`,
-    [ctx.versaoId, escopo, containerNumero ?? ''],
+    `SELECT * FROM si_intencoes WHERE versao_id = $1 AND campo = $2 AND escopo = $3 AND COALESCE(container_numero, '') = $4`,
+    [ctx.versaoId, campo, escopo, containerNumero ?? ''],
   );
   return { row: rows[0], divergente: rows[0].valor_dias !== o.valor };
 }
@@ -480,14 +504,18 @@ export async function ingerirShippingInstructions(input: IngerirInput): Promise<
     const ctxI = { ...ctx, conteudoHash: hash, refs: leitura.refs };
     const registrar = async (o: OcorrenciaFreeTime, escopo: 'mbl' | 'container', numero: string | null) => {
       const r = await inserirIntencao(client, ctxI, o, escopo, numero);
-      if (r.divergente) extras.push({ tipo: 'free_time_ambiguo', motivo: 'leituras_divergentes_mesma_versao', containerNumero: numero, chave: `intencao:${r.row.id}`, contexto: { intencaoId: r.row.id, valorRegistrado: r.row.valor_dias, valorNovo: o.valor } });
+      if (r.divergente) extras.push({ tipo: 'free_time_ambiguo', motivo: 'leituras_divergentes_mesma_versao', containerNumero: numero, chave: `intencao:${r.row.id}`, contexto: { campo: o.campo, intencaoId: r.row.id, valorRegistrado: r.row.valor_dias, valorNovo: o.valor } });
       else intencoes.push(r.row);
     };
-    if (cons.nivelMbl) await registrar(cons.nivelMbl, 'mbl', null);
-    for (const [n, o] of cons.porContainer) await registrar(o, 'container', n);
+    for (const campo of CAMPOS_FREE_TIME_SI) {
+      const cc = cons.porCampo[campo];
+      if (cc.nivelMbl) await registrar(cc.nivelMbl, 'mbl', null);
+      for (const [n, o] of cc.porContainer) await registrar(o, 'container', n);
+    }
 
     const aplicado = await aplicarIntencoes(client, ctx, intencoes);
-    const pendencias = [...pendenciasDaLeitura(leitura, intencoes.length > 0), ...extras, ...aplicado.pendencias];
+    const temMaster = intencoes.some((i) => i.campo === 'masterFreeTimeDays');
+    const pendencias = [...pendenciasDaLeitura(leitura, temMaster), ...extras, ...aplicado.pendencias];
     const abertas = await sincronizarPendencias(client, ctx, pendencias, [...TIPOS_EXTRACAO, ...TIPOS_ASSOCIACAO]);
     const estado = abertas === 0 ? 'DONE' : 'PENDENTE';
     await client.query(
@@ -529,14 +557,14 @@ export async function reaplicarIntencoesShippingInstructions(input: { pool?: Poo
          OR EXISTS (
            SELECT 1 FROM si_intencoes i
              JOIN processos p ON p.organization_id = i.organization_id
-              AND (upper(regexp_replace(coalesce(p.numero_processo, ''), '-[0-9]{1,3}$', '')) = ANY(i.processos_ref)
+              AND (upper(regexp_replace(coalesce(p.numero_processo, ''), '[[:space:]]', '', 'g')) = ANY(i.processos_ref)
                    OR upper(regexp_replace(coalesce(p.mbl, ''), '[[:space:]./-]', '', 'g')) = ANY(i.mbls_ref))
              JOIN containers c ON c.processo_id = p.id AND c.organization_id = p.organization_id
             WHERE i.versao_id = u.id
               AND NOT EXISTS (SELECT 1 FROM si_proveniencias pv WHERE pv.intencao_id = i.id AND pv.container_id = c.id)
               AND (i.escopo = 'container' AND upper(regexp_replace(c.numero, '[^A-Za-z0-9]', '', 'g')) = i.container_numero
                    OR i.escopo = 'mbl' AND NOT EXISTS (
-                        SELECT 1 FROM si_intencoes x WHERE x.versao_id = i.versao_id AND x.escopo = 'container'
+                        SELECT 1 FROM si_intencoes x WHERE x.versao_id = i.versao_id AND x.campo = i.campo AND x.escopo = 'container'
                            AND x.container_numero = upper(regexp_replace(c.numero, '[^A-Za-z0-9]', '', 'g')))))
       ORDER BY u.id`,
     [input.organizationId ?? null],

@@ -1,4 +1,4 @@
-import { Pool } from 'pg';
+import { Pool, PoolClient } from 'pg';
 import { getPool } from '../db/pool';
 import { Container, ContainerObservableField, FIELD_OBSERVATION_SOURCE_PRIORITY, FieldObservationSource } from '../domain/types';
 import { FieldObservationRepository, InsertFieldObservationInput, assertFonteAutorizada } from './fieldObservationRepository';
@@ -154,5 +154,58 @@ export class ContainerRepository {
     }
 
     return { outcome: shouldPromote ? 'promovida' : 'registrada_sem_promover', observationId: observation.id };
+  }
+
+  /**
+   * Writer TRANSACIONAL (grava no `client` do chamador, sem BEGIN/COMMIT
+   * próprios): observação no ledger + promoção pela mesma hierarquia de
+   * `applyObservation`. Só um fato NOVO altera a seleção — reprocessar uma
+   * observação existente nunca muda o estado. `conflitoMesmaFonte` = a mesma
+   * fonte já registrou o campo no mesmo instante com OUTRO valor (nada muda).
+   * Master Free Time tem serviço próprio (divergência/recálculo) e é recusado aqui.
+   */
+  static async applyObservationComClient(
+    client: PoolClient,
+    input: ApplyObservationInput,
+  ): Promise<{ outcome: ApplyObservationOutcome; observationId: string; criada: boolean; valorAnterior: unknown; valorSelecionado: unknown; conflitoMesmaFonte: boolean }> {
+    assertFonteAutorizada(input.campo, input.fonte);
+    if (input.campo === 'masterFreeTimeDays') {
+      throw new Error('masterFreeTimeDays deve ser promovido pelo serviço central (promoverMasterFreeTimeComClient).');
+    }
+    const columns = FIELD_COLUMNS[input.campo];
+    const { rows: cr } = await client.query(
+      `SELECT organization_id, ${columns.valueColumn} AS valor, ${columns.obsColumn} AS obs_id FROM containers WHERE id = $1 FOR UPDATE`,
+      [input.containerId],
+    );
+    const c = cr[0];
+    if (!c) throw new Error(`Contêiner ${input.containerId} não encontrado.`);
+    if (c.organization_id !== input.organizationId) {
+      throw new Error(`Contêiner ${input.containerId} não pertence à organização ${input.organizationId}.`);
+    }
+    const { observacao, criada } = await FieldObservationRepository.insertComClient(client, {
+      organizationId: input.organizationId, entidadeTipo: 'container', entidadeId: input.containerId, campo: input.campo,
+      valor: input.valor, fonte: input.fonte, observadoEm: input.observadoEm, evidenciaRef: input.evidenciaRef, criadoPor: input.criadoPor,
+    });
+    const conflito = !criada && JSON.stringify(observacao.valor) !== JSON.stringify(input.valor);
+    let promover = false;
+    if (criada) {
+      promover = true;
+      if (c.obs_id) {
+        const { rows: atual } = await client.query(`SELECT fonte FROM field_observations WHERE id = $1`, [c.obs_id]);
+        const fonteAtual = atual[0]?.fonte as FieldObservationSource | undefined;
+        if (fonteAtual) promover = FIELD_OBSERVATION_SOURCE_PRIORITY[input.fonte] >= FIELD_OBSERVATION_SOURCE_PRIORITY[fonteAtual];
+      }
+    }
+    if (promover) {
+      await client.query(
+        `UPDATE containers SET ${columns.valueColumn} = $2, ${columns.obsColumn} = $3, atualizado_em = now() WHERE id = $1`,
+        [input.containerId, input.valor, observacao.id],
+      );
+    }
+    const selecionadaAgora = promover || (!criada && c.obs_id === observacao.id);
+    return {
+      outcome: selecionadaAgora ? 'promovida' : 'registrada_sem_promover', observationId: observacao.id, criada,
+      valorAnterior: c.valor, valorSelecionado: promover ? input.valor : c.valor, conflitoMesmaFonte: conflito,
+    };
   }
 }

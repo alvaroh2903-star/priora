@@ -36,6 +36,7 @@ test('migrations: aplica todas as migrations pendentes em um banco novo e é ide
       '0023_vessel_round_fencing.sql',
       '0024_shipping_instructions.sql',
       '0025_shipping_instructions_corretiva.sql',
+      '0026_shipping_instructions_house_master.sql',
     ];
 
     const first = await runMigrations(pool);

@@ -25,21 +25,28 @@ const LeituraSISchema = z.object({
   mbl: z.string().nullable(),
   processo: z.string().nullable(),
   multiplosValores: z.boolean(),
+  houseFreeTimeDays: z.number().nullable(),
+  ancoraHouse: z.string().nullable(),
+  trechoHouse: z.string().nullable(),
+  multiplosValoresHouse: z.boolean(),
 });
 
 const INSTRUCAO_LEITURA_SI = `Você lê a Shipping Instructions (SI) de uma importação marítima para a Priora.
 
-Objetivo: identificar o MASTER FREE TIME — quantidade de dias livres de demurrage concedida pelo armador — apenas quando estiver escrita de forma EXPLÍCITA no documento.
+Objetivo: identificar, separadamente, o MASTER FREE TIME (dias livres concedidos pelo armador) e o HOUSE FREE TIME (dias livres do House/cliente) — apenas quando estiverem escritos de forma EXPLÍCITA no documento.
+
+Formato usual: "FREE TIME MASTER: 20" e "FREE TIME HOUSE: 20" (o número significa dias, mesmo sem a palavra "dias").
 
 Regras:
-- Nunca invente nem presuma. Sem valor explícito: masterFreeTimeDays = null.
-- Free time do House/cliente/consignee NÃO é Master Free Time: ignore.
+- Nunca invente nem presuma. Sem valor explícito: o campo correspondente = null.
+- Não confunda House com Master: cada valor vai para o seu campo.
+- Tarifa de demurrage (valor em dinheiro) não é Free Time.
 - Zero dias é um valor válido quando estiver escrito.
-- Se houver mais de um valor diferente de Master Free Time, marque multiplosValores = true.
-- ancoraTexto: a expressão literal do documento que liga o número a Free Time/Demurrage (ex.: "Free time: 14 days").
-- trecho: a frase/linha do documento de onde o valor foi lido.
+- Se houver mais de um valor diferente de Master Free Time, marque multiplosValores = true (idem multiplosValoresHouse para o House).
+- ancoraTexto / ancoraHouse: a expressão literal que liga o número ao Free Time do campo (ex.: "FREE TIME MASTER: 20").
+- trecho / trechoHouse: a linha do documento de onde cada valor foi lido.
 - containers: números de contêiner aos quais o valor se aplica, se o documento restringir; senão lista vazia.
-- mbl e processo (código IMxxxx): somente se aparecerem no documento.
+- mbl e processo (código completo, ex.: IM3126-26, com o sufixo): somente se aparecerem no documento.
 - confianca: de 0 a 1, sua confiança na leitura do valor.
 - legivel = false se o documento estiver ilegível ou cortado.
 
@@ -70,7 +77,7 @@ export function criarPortasShippingInstructions(accessToken: string): PortasShip
       const mime = doc.mimeType.toLowerCase().includes('pdf') || doc.nome.toLowerCase().endsWith('.pdf') ? 'application/pdf' : doc.mimeType;
       return generateStructuredFromDocument(
         LeituraSISchema, INSTRUCAO_LEITURA_SI, { data: doc.dataBase64, mimeType: mime },
-        'Leia o documento anexo e extraia o Master Free Time conforme as regras.',
+        'Leia o documento anexo e extraia o Master e o House Free Time conforme as regras.',
       );
     },
   };

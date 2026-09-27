@@ -15,7 +15,7 @@ import {
   processarAvisosDivergenciaPendentes, resolverDivergencia, reconhecerDivergencia, AvisoDivergenciaTransport,
 } from '../freeTime/divergenciaAvisos';
 import {
-  extrairFreeTimeDoCorpo, consolidarOcorrencias, avaliarOcr, hashConteudo, primeiraMensagem, MensagemSI, OcrResultadoSI,
+  extrairFreeTimeDoCorpo, extrairReferencias, consolidarOcorrencias, avaliarOcr, hashConteudo, primeiraMensagem, MensagemSI, OcrResultadoSI,
 } from '../shippingInstructions/extracaoShippingInstructions';
 import {
   ingerirShippingInstructions, reaplicarIntencoesShippingInstructions, PortasShippingInstructions,
@@ -36,30 +36,39 @@ test('SI puro: corpo — zero é válido; negativo, decimal e número sem unidad
     assert.equal(r.ocorrencias.length, 0, t);
     assert.equal(r.problemas[0].tipo, 'free_time_ambiguo', t);
   }
-  assert.deepEqual(extrairFreeTimeDoCorpo('House free time: 7 days'), { ocorrencias: [], problemas: [] }, 'House não é Master');
+  const house = extrairFreeTimeDoCorpo('House free time: 7 days').ocorrencias;
+  assert.deepEqual(house.map((o) => [o.campo, o.valor]), [['houseFreeTimeDays', 7]], 'House rotulado vai para o House, nunca para o Master');
   assert.deepEqual(extrairFreeTimeDoCorpo('Please book as agreed'), { ocorrencias: [], problemas: [] });
 });
 
 test('SI puro: valores distintos no mesmo alcance → ambíguo; exceção por contêiner é preservada', () => {
   const ocs = extrairFreeTimeDoCorpo('Free time: 14 days\nfree time 21 days').ocorrencias;
   const c = consolidarOcorrencias(ocs);
-  assert.equal(c.nivelMbl, null);
+  assert.equal(c.porCampo.masterFreeTimeDays.nivelMbl, null);
   assert.equal(c.problemas[0].tipo, 'free_time_ambiguo');
   const c2 = consolidarOcorrencias(extrairFreeTimeDoCorpo('Free time: 14 days\nFree time 21 days for MSCU1234567').ocorrencias);
-  assert.equal(c2.nivelMbl!.valor, 14);
-  assert.equal(c2.porContainer.get('MSCU1234567')!.valor, 21);
+  assert.equal(c2.porCampo.masterFreeTimeDays.nivelMbl!.valor, 14);
+  assert.equal(c2.porCampo.masterFreeTimeDays.porContainer.get('MSCU1234567')!.valor, 21);
+  // House e Master diferentes entre si NÃO são ambiguidade.
+  const c3 = consolidarOcorrencias(extrairFreeTimeDoCorpo('FREE TIME HOUSE: 14\nFREE TIME MASTER: 20').ocorrencias);
+  assert.deepEqual(c3.problemas, []);
+  assert.equal(c3.porCampo.houseFreeTimeDays.nivelMbl!.valor, 14);
+  assert.equal(c3.porCampo.masterFreeTimeDays.nivelMbl!.valor, 20);
 });
 
 test('SI puro: leitura de anexo só é aceita com confiança >= 0.90, âncora e valor único', () => {
   const anexo = { id: 'a1', name: 'si.pdf', contentType: 'application/pdf', size: 10 };
   const base: OcrResultadoSI = { legivel: true, masterFreeTimeDays: 14, ancoraTexto: 'Free time: 14 days', trecho: 'Free time: 14 days', confianca: 0.95, containers: [], mbl: null, processo: null, multiplosValores: false };
-  assert.equal(avaliarOcr(anexo, base).ocorrencia!.valor, 14);
-  assert.equal(avaliarOcr(anexo, { ...base, confianca: 0.89 }).problema!.tipo, 'ocr_baixa_confianca');
-  assert.equal(avaliarOcr(anexo, { ...base, ancoraTexto: 'Total 14' }).problema!.tipo, 'free_time_ambiguo');
-  assert.equal(avaliarOcr(anexo, { ...base, multiplosValores: true }).problema!.tipo, 'free_time_ambiguo');
-  assert.equal(avaliarOcr(anexo, { ...base, masterFreeTimeDays: 2.5 }).problema!.tipo, 'free_time_ambiguo');
-  assert.equal(avaliarOcr(anexo, { ...base, legivel: false }).problema!.tipo, 'ocr_baixa_confianca');
-  assert.equal(avaliarOcr(anexo, { ...base, masterFreeTimeDays: 0, ancoraTexto: 'Free time: 0 days' }).ocorrencia!.valor, 0);
+  assert.equal(avaliarOcr(anexo, base).ocorrencias[0].valor, 14);
+  assert.equal(avaliarOcr(anexo, { ...base, confianca: 0.89 }).problemas[0].tipo, 'ocr_baixa_confianca');
+  assert.equal(avaliarOcr(anexo, { ...base, ancoraTexto: 'Total 14' }).problemas[0].tipo, 'free_time_ambiguo');
+  assert.equal(avaliarOcr(anexo, { ...base, multiplosValores: true }).problemas[0].tipo, 'free_time_ambiguo');
+  assert.equal(avaliarOcr(anexo, { ...base, masterFreeTimeDays: 2.5 }).problemas[0].tipo, 'free_time_ambiguo');
+  assert.equal(avaliarOcr(anexo, { ...base, legivel: false }).problemas[0].tipo, 'ocr_baixa_confianca');
+  assert.equal(avaliarOcr(anexo, { ...base, masterFreeTimeDays: 0, ancoraTexto: 'Free time: 0 days' }).ocorrencias[0].valor, 0);
+  // House e Master do mesmo anexo, cada um no seu campo.
+  const ambos = avaliarOcr(anexo, { ...base, masterFreeTimeDays: 20, ancoraTexto: 'FREE TIME MASTER: 20', houseFreeTimeDays: 20, ancoraHouse: 'FREE TIME HOUSE: 20' });
+  assert.deepEqual(ambos.ocorrencias.map((o) => [o.campo, o.valor]), [['masterFreeTimeDays', 20], ['houseFreeTimeDays', 20]]);
 });
 
 test('SI puro: primeira mensagem cronológica e hash de versão', () => {
@@ -706,7 +715,7 @@ test('Migration 0025: banco que já executou a 0024 ORIGINAL recebe só a 0025, 
        VALUES ($1, $2, 'conv', 'm1', now(), 'mbl', 14, 'corpo', 'Free time: 14 days', 'texto', 1, 'h')`, [s.orgId, v.id]);
     const antes = await count(pool, `SELECT (SELECT count(*) FROM ft_divergencia_entregas) + (SELECT count(*) FROM recalculo_outbox) + (SELECT count(*) FROM si_intencoes) n`);
 
-    const r = await runMigrations(pool);
+    const r = await runMigrations(pool, { until: '0025_shipping_instructions_corretiva.sql' });
     assert.deepEqual(r.applied, ['0025_shipping_instructions_corretiva.sql'], 'só a 0025 é aplicada');
     assert.equal(await count(pool, `SELECT (SELECT count(*) FROM ft_divergencia_entregas) + (SELECT count(*) FROM recalculo_outbox) + (SELECT count(*) FROM si_intencoes) n`), antes, 'dados preservados');
     assert.deepEqual((await pool.query(`SELECT containers_ref FROM si_intencoes`)).rows[0].containers_ref, [], 'intenção antiga recebe o default');
@@ -719,6 +728,9 @@ test('Migration 0025: banco que já executou a 0024 ORIGINAL recebe só a 0025, 
     // A funcionalidade opera normalmente sobre o banco migrado.
     const sent = await processarAvisosDivergenciaPendentes({ pool, workerId: 'w', transport: { async enviar() { return { ok: true }; } } });
     assert.equal(sent.enviadas, 1, 'a entrega PENDING restante é enviada');
+    // 0026 sobre o banco já migrado até a 0025: intenção antiga vira Master.
+    assert.deepEqual((await runMigrations(pool)).applied, ['0026_shipping_instructions_house_master.sql']);
+    assert.equal((await pool.query(`SELECT campo FROM si_intencoes`)).rows[0].campo, 'masterFreeTimeDays');
     assert.equal((await runMigrations(pool)).applied.length, 0, 'idempotente');
   } finally { await pool.end(); }
 });
@@ -771,4 +783,173 @@ test('Avisos: uma entrega por ciclo — duas instâncias concorrentes e transpor
     assert.equal(await count(pool, `SELECT count(*) n FROM ft_divergencia_entregas WHERE status = 'PROCESSING'`), 0, 'sem claim pendurado');
     assert.equal(await count(pool, `SELECT count(*) n FROM ft_divergencia_entregas WHERE status = 'PENDING'`), 1, 'a próxima segue PENDING, sem posse');
   } finally { await pool.end(); await observador.end(); }
+});
+
+/* =========================== formato real da SI (Rocket) =========================== */
+
+const SI_REAL = [
+  'SHIPPING INSTRUCTION: IM3126-26',
+  'CARRIER: ZIM',
+  'DESTINATION: SANTOS',
+  'FREE TIME HOUSE: 20',
+  'FREE TIME MASTER: 20',
+  'OCEAN FREIGHT 3 X USD 2.450,00 / 40 HIGH CUBE',
+].join('\n');
+const siReal = (body = SI_REAL) => msg('si-1', '2026-08-20T10:00:00Z', body, [], 'SHIPPING INSTRUCTION - IM3126-26');
+const houseFt = (pool: Pool, containerId: string) =>
+  pool.query(`SELECT house_free_time_days AS v FROM containers WHERE id = $1`, [containerId]).then((r) => r.rows[0].v as number | null);
+
+test('SI puro (formato real): rótulos House/Master sem "dias", processo integral, sem MBL e sem ISO; tarifas ambíguas', () => {
+  const r = extrairFreeTimeDoCorpo(SI_REAL);
+  assert.deepEqual(r.ocorrencias.map((o) => [o.campo, o.valor, o.containers]), [['houseFreeTimeDays', 20, []], ['masterFreeTimeDays', 20, []]]);
+  assert.deepEqual(r.problemas, []);
+  const refs = extrairReferencias(`SHIPPING INSTRUCTION - IM3126-26\n${SI_REAL}`);
+  assert.deepEqual(refs, { processos: ['IM3126-26'], mbls: [], containers: [] }, 'IM3126-26 íntegro; "40 HIGH CUBE" não é contêiner');
+  assert.deepEqual(extrairReferencias('IM3126-2600').processos, [], 'código mais longo não é reduzido a IM3126');
+  for (const [t, campo] of [['MASTER FREE TIME: 20', 'masterFreeTimeDays'], ['HOUSE FREE TIME: 20', 'houseFreeTimeDays'], ['FREE TIME MASTER: 0', 'masterFreeTimeDays']] as const) {
+    const o = extrairFreeTimeDoCorpo(t).ocorrencias;
+    assert.deepEqual(o.map((x) => x.campo), [campo], t);
+  }
+  assert.equal(extrairFreeTimeDoCorpo('FREE TIME MASTER: 0').ocorrencias[0].valor, 0);
+  for (const t of ['Demurrage: 140', 'Demurrage USD 140', 'Free Time/Demurrage: 140']) {
+    const x = extrairFreeTimeDoCorpo(t);
+    assert.equal(x.ocorrencias.length, 0, t);
+    assert.equal(x.problemas[0]?.tipo, 'free_time_ambiguo', t);
+  }
+  // Tarifa de demurrage ao lado do rótulo estruturado não torna o Master ambíguo.
+  assert.deepEqual(extrairFreeTimeDoCorpo('FREE TIME MASTER: 20\nDemurrage USD 140').problemas, []);
+});
+
+test('SI real: IM3126-26 sem MBL e sem contêiner é associada pelo código; contêineres cadastrados depois recebem House e Master sem nova leitura', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await setup(pool);
+    const s = await cenario(pool, { numero: 'IM3126-26', mbl: null, containers: [] });
+    // Processos "vizinhos" na mesma organização: nenhum pode ser confundido.
+    const repoP = new ProcessoRepository(pool);
+    const vizinho = await repoP.create({ organizationId: s.orgId, numeroProcesso: 'IM3126', clienteId: null });
+    const cVizinho = await novoContainer(pool, s.orgId, vizinho.id, 'MSCU9999990');
+
+    const f = portasFake([siReal()]);
+    const r = await ingerirShippingInstructions({ pool, organizationId: s.orgId, conversationId: CONV, portas: f.p, modo: 'automatico' });
+    assert.equal(r.status, 'concluida', 'sem MBL e sem contêiner: nenhuma pendência');
+    assert.equal(await abertas(pool), 0);
+    assert.equal(await count(pool, `SELECT count(*) n FROM si_pendencias WHERE tipo IN ('mbl_nao_identificado', 'container_nao_encontrado')`), 0);
+    const int = (await pool.query(`SELECT campo, escopo, valor_dias, processos_ref, mbls_ref FROM si_intencoes ORDER BY campo`)).rows;
+    assert.deepEqual(int.map((i) => [i.campo, i.escopo, i.valor_dias]), [['houseFreeTimeDays', 'mbl', 20], ['masterFreeTimeDays', 'mbl', 20]]);
+    assert.deepEqual(int[0].processos_ref, ['IM3126-26'], 'código integral preservado');
+    assert.deepEqual(int[0].mbls_ref, [], 'MBL ausente, não inventado');
+    assert.equal((await pool.query(`SELECT mbl FROM processos WHERE id = $1`, [s.processoId])).rows[0].mbl, null);
+
+    // Três contêineres (3 × 40 HIGH CUBE) cadastrados depois.
+    const novos = [];
+    for (const n of ['ZIMU1111111', 'ZIMU2222222', 'ZIMU3333333']) novos.push(await novoContainer(pool, s.orgId, s.processoId, n));
+    const re = await reaplicarIntencoesShippingInstructions({ pool });
+    assert.equal(re.promovidos, 6, '3 contêineres × (House + Master)');
+    for (const c of novos) {
+      assert.equal(await houseFt(pool, c), 20, 'FREE TIME HOUSE: 20 → House 20');
+      assert.equal(await masterFt(pool, c), 20, 'FREE TIME MASTER: 20 → Master 20');
+    }
+    assert.equal(f.chamadas.conversa, 1, 'reaplicação não recarrega a conversa');
+    assert.equal(f.chamadas.documento, 0, 'nenhuma leitura documental');
+    const pv = (await pool.query(`SELECT DISTINCT campo, associacao_por FROM si_proveniencias ORDER BY campo`)).rows;
+    assert.deepEqual(pv.map((x) => [x.campo, x.associacao_por]), [['houseFreeTimeDays', 'numero_processo'], ['masterFreeTimeDays', 'numero_processo']]);
+    assert.equal(await count(pool, `SELECT count(*) n FROM field_observations WHERE fonte = 'shipping_instructions'`), 6);
+    assert.equal(await count(pool, `SELECT count(*) n FROM recalculo_outbox WHERE tipo = 'house_free_time'`), 3);
+    assert.equal(await count(pool, `SELECT count(*) n FROM recalculo_outbox WHERE tipo = 'master_free_time'`), 3);
+    assert.equal(await count(pool, `SELECT count(*) n FROM ft_divergencias`), 0, 'House = Master não é divergência');
+    assert.equal(await masterFt(pool, cVizinho), null, 'processo IM3126 (sem sufixo) não é tocado');
+    assert.equal((await reaplicarIntencoesShippingInstructions({ pool })).promovidos, 0, 'idempotente');
+  } finally { await pool.end(); }
+});
+
+test('SI real: House e Master diferentes não são divergência; House respeita a hierarquia (house_document prevalece)', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await setup(pool);
+    const s = await cenario(pool, { numero: 'IM3126-26', mbl: null, containers: ['ZIMU1111111', 'ZIMU2222222'] });
+    const [c1, c2] = Object.values(s.containers);
+    await new ContainerRepository(pool).applyObservation({ containerId: c2, organizationId: s.orgId, campo: 'houseFreeTimeDays', valor: 10, fonte: 'house_document', observadoEm: new Date('2026-08-01T00:00:00Z') });
+    const r = await ingerirShippingInstructions({ pool, organizationId: s.orgId, conversationId: CONV, modo: 'automatico',
+      portas: portasFake([siReal(SI_REAL.replace('FREE TIME HOUSE: 20', 'FREE TIME HOUSE: 14'))]).p });
+    assert.equal(r.status, 'concluida');
+    assert.equal(await houseFt(pool, c1), 14);
+    assert.equal(await masterFt(pool, c1), 20);
+    assert.equal(await houseFt(pool, c2), 10, 'house_document (90) prevalece sobre a SI (85)');
+    assert.equal(await count(pool, `SELECT count(*) n FROM field_observations WHERE entidade_id = $1 AND campo = 'houseFreeTimeDays' AND fonte = 'shipping_instructions'`, [c2]), 1, 'SI fica no ledger');
+    assert.equal(await count(pool, `SELECT count(*) n FROM ft_divergencias`), 0);
+  } finally { await pool.end(); }
+});
+
+test('SI real: FREE TIME MASTER: 0 é aceito; "Demurrage: 140" isolado é ambíguo e nada promove', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await setup(pool);
+    const s = await cenario(pool, { numero: 'IM3126-26', mbl: null, containers: ['ZIMU1111111'] });
+    const c = s.containers.ZIMU1111111;
+    await ingerirShippingInstructions({ pool, organizationId: s.orgId, conversationId: CONV, modo: 'automatico',
+      portas: portasFake([siReal(SI_REAL.replace('FREE TIME MASTER: 20', 'FREE TIME MASTER: 0'))]).p });
+    assert.equal(await masterFt(pool, c), 0);
+
+    const t = await cenario(pool, { slug: 'ambigua', numero: 'IM3126-26', mbl: null, containers: ['ZIMU2222222'] });
+    const r = await ingerirShippingInstructions({ pool, organizationId: t.orgId, conversationId: 'conv-2', modo: 'automatico',
+      portas: portasFake([siReal('SHIPPING INSTRUCTION: IM3126-26\nCARRIER: ZIM\nDemurrage: 140')]).p });
+    assert.equal(r.status, 'pendente');
+    assert.equal(await count(pool, `SELECT count(*) n FROM si_pendencias WHERE organization_id = $1 AND tipo = 'free_time_ambiguo' AND estado = 'aberta'`, [t.orgId]), 1);
+    assert.equal(await masterFt(pool, t.containers.ZIMU2222222), null, 'nenhum valor presumido');
+  } finally { await pool.end(); }
+});
+
+test('SI real: dois processos no mesmo documento ficam pendentes; processo de outra organização não é associado', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await setup(pool);
+    const a = await cenario(pool, { slug: 'org-a', numero: 'IM3126-26', mbl: null, containers: ['ZIMU1111111'] });
+    await new ProcessoRepository(pool).create({ organizationId: a.orgId, numeroProcesso: 'IM3126-27', clienteId: null });
+    const r = await ingerirShippingInstructions({ pool, organizationId: a.orgId, conversationId: CONV, modo: 'automatico',
+      portas: portasFake([siReal(`SHIPPING INSTRUCTION: IM3126-26 / IM3126-27\n${SI_REAL}`)]).p });
+    assert.equal(r.status, 'pendente');
+    assert.equal(await abertas(pool, 'conversa_multiprocesso'), 1);
+    assert.equal(await masterFt(pool, a.containers.ZIMU1111111), null);
+
+    // Org B não tem o IM3126-26; a Org C tem. Ingerir na Org B não alcança a Org C.
+    const b = await cenario(pool, { slug: 'org-b', numero: 'IM0001-01', mbl: null, containers: ['ZIMU4444444'] });
+    const cOrg = await cenario(pool, { slug: 'org-c', numero: 'IM3126-26', mbl: null, containers: ['ZIMU5555555'] });
+    const rb = await ingerirShippingInstructions({ pool, organizationId: b.orgId, conversationId: 'conv-b', modo: 'automatico', portas: portasFake([siReal()]).p });
+    assert.equal(rb.status, 'pendente');
+    assert.equal(await count(pool, `SELECT count(*) n FROM si_pendencias WHERE organization_id = $1 AND tipo = 'processo_nao_identificado'`, [b.orgId]), 1);
+    assert.equal(await masterFt(pool, cOrg.containers.ZIMU5555555), null, 'processo de outra organização intocado');
+    assert.equal(await houseFt(pool, cOrg.containers.ZIMU5555555), null);
+  } finally { await pool.end(); }
+});
+
+test('SI real: falha em uma das promoções (House) desfaz a ingestão inteira, inclusive o Master', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await setup(pool);
+    const s = await cenario(pool, { numero: 'IM3126-26', mbl: null, containers: ['ZIMU1111111'] });
+    const c = s.containers.ZIMU1111111;
+    const snap = () => count(pool, `SELECT (SELECT count(*) FROM field_observations) + (SELECT count(*) FROM si_proveniencias) + (SELECT count(*) FROM si_intencoes)
+      + (SELECT count(*) FROM recalculo_outbox) + (SELECT count(*) FROM ft_divergencias) + (SELECT count(*) FROM si_pendencias) n`);
+    const antes = await snap();
+    await pool.query(`CREATE FUNCTION falha_house() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN IF NEW.campo = 'houseFreeTimeDays' THEN RAISE EXCEPTION 'falha simulada no House'; END IF; RETURN NEW; END $$`);
+    await pool.query(`CREATE TRIGGER falha_house BEFORE INSERT ON field_observations FOR EACH ROW EXECUTE FUNCTION falha_house()`);
+    try {
+      const r = await ingerirShippingInstructions({ pool, organizationId: s.orgId, conversationId: CONV, modo: 'automatico', portas: portasFake([siReal()]).p });
+      assert.equal(r.status, 'falhou');
+      assert.match(r.erro!, /falha simulada no House/);
+    } finally {
+      await pool.query(`DROP TRIGGER falha_house ON field_observations`);
+      await pool.query(`DROP FUNCTION falha_house()`);
+    }
+    assert.equal(await snap(), antes, 'nada persistido');
+    assert.equal(await masterFt(pool, c), null, 'o Master promovido antes da falha também foi desfeito');
+    assert.equal(await houseFt(pool, c), null);
+    assert.equal((await pool.query(`SELECT estado FROM si_versoes`)).rows[0].estado, 'FAILED');
+    // Reprocesso manual depois da falha aplica os dois.
+    const ok = await ingerirShippingInstructions({ pool, organizationId: s.orgId, conversationId: CONV, modo: 'manual', portas: portasFake([siReal()]).p });
+    assert.equal(ok.status, 'concluida');
+    assert.deepEqual([await houseFt(pool, c), await masterFt(pool, c)], [20, 20]);
+  } finally { await pool.end(); }
 });
