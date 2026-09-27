@@ -677,3 +677,98 @@ test('Isolamento: mesma conversa e mesmo processo em duas organizações não se
       [a.orgId, ia.id, obs.id, a.processoId, b.containers.MSCU1234567]), /si_proveniencias_container_org_fk/);
   } finally { await pool.end(); }
 });
+
+/* =========================== corretiva final =========================== */
+
+test('Migration 0025: banco que já executou a 0024 ORIGINAL recebe só a 0025, com dados preservados', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
+    const ate24 = await runMigrations(pool, { until: '0024_shipping_instructions.sql' });
+    assert.equal(ate24.applied[ate24.applied.length - 1], '0024_shipping_instructions.sql');
+    const colunas = async (tabela: string) => (await pool.query(
+      `SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1`, [tabela])).rows.map((r) => r.column_name);
+    assert.ok(!(await colunas('si_intencoes')).includes('containers_ref'), '0024 original não tem containers_ref');
+    assert.ok(!(await colunas('ft_divergencia_entregas')).includes('claim_token'), '0024 original não tem claim');
+
+    // Dados gravados sob o schema ORIGINAL: divergência com entregas, outbox e intenção.
+    const s = await cenario(pool);
+    const c = s.containers.MSCU1234567;
+    await promoverMasterFreeTime(pool, { organizationId: s.orgId, containerId: c, valor: 14, fonte: 'shipping_instructions', observadoEm: new Date('2026-08-20T00:00:00Z'), autor: 'si' });
+    await promoverMasterFreeTime(pool, { organizationId: s.orgId, containerId: c, valor: 10, fonte: 'master_bl', observadoEm: new Date('2026-09-01T00:00:00Z'), autor: 'm' });
+    await pool.query(`UPDATE recalculo_outbox SET estado = 'PROCESSING', worker_id = 'w-antigo', expira_em = now() + interval '1 minute' WHERE ctid IN (SELECT ctid FROM recalculo_outbox LIMIT 1)`);
+    const v = (await pool.query(
+      `INSERT INTO si_versoes (organization_id, conversation_id, message_id, message_received_at, conteudo_hash, estado, expira_em)
+       VALUES ($1, 'conv', 'm1', now(), 'h', 'DONE', now()) RETURNING id`, [s.orgId])).rows[0];
+    await pool.query(
+      `INSERT INTO si_intencoes (organization_id, versao_id, conversation_id, message_id, message_received_at, escopo, valor_dias,
+         encontrado_em, trecho_evidencia, metodo_extracao, confianca, conteudo_hash)
+       VALUES ($1, $2, 'conv', 'm1', now(), 'mbl', 14, 'corpo', 'Free time: 14 days', 'texto', 1, 'h')`, [s.orgId, v.id]);
+    const antes = await count(pool, `SELECT (SELECT count(*) FROM ft_divergencia_entregas) + (SELECT count(*) FROM recalculo_outbox) + (SELECT count(*) FROM si_intencoes) n`);
+
+    const r = await runMigrations(pool);
+    assert.deepEqual(r.applied, ['0025_shipping_instructions_corretiva.sql'], 'só a 0025 é aplicada');
+    assert.equal(await count(pool, `SELECT (SELECT count(*) FROM ft_divergencia_entregas) + (SELECT count(*) FROM recalculo_outbox) + (SELECT count(*) FROM si_intencoes) n`), antes, 'dados preservados');
+    assert.deepEqual((await pool.query(`SELECT containers_ref FROM si_intencoes`)).rows[0].containers_ref, [], 'intenção antiga recebe o default');
+    assert.equal(await count(pool, `SELECT count(*) n FROM ft_divergencia_entregas WHERE status = 'PENDING' AND claim_token IS NULL`), 2);
+    // Constraints novas valem a partir de agora.
+    const e = (await pool.query(`SELECT id FROM ft_divergencia_entregas LIMIT 1`)).rows[0];
+    await assert.rejects(pool.query(`UPDATE ft_divergencia_entregas SET status = 'PROCESSING' WHERE id = $1`, [e.id]), /ft_divergencia_entregas_claim/);
+    await pool.query(`UPDATE ft_divergencia_entregas SET status = 'PROCESSING', claim_token = gen_random_uuid(), expira_em = now() + interval '1 hour' WHERE id = $1`, [e.id]);
+    await assert.rejects(pool.query(`UPDATE recalculo_outbox SET worker_id = NULL WHERE estado = 'PROCESSING'`), /recalculo_outbox_claim/);
+    // A funcionalidade opera normalmente sobre o banco migrado.
+    const sent = await processarAvisosDivergenciaPendentes({ pool, workerId: 'w', transport: { async enviar() { return { ok: true }; } } });
+    assert.equal(sent.enviadas, 1, 'a entrega PENDING restante é enviada');
+    assert.equal((await runMigrations(pool)).applied.length, 0, 'idempotente');
+  } finally { await pool.end(); }
+});
+
+test('Avisos: uma entrega por ciclo — duas instâncias concorrentes e transporte lento não expõem entregas ainda não iniciadas', { skip: !url }, async () => {
+  const pool = testPool();
+  const observador = testPool();
+  try {
+    await setup(pool);
+    const numeros = ['MSCU1234567', 'TGHU7654321', 'CAIU1112223', 'TCNU4445556'];
+    const s = await cenario(pool, { containers: numeros });
+    for (const id of Object.values(s.containers)) {
+      await promoverMasterFreeTime(pool, { organizationId: s.orgId, containerId: id, valor: 14, fonte: 'shipping_instructions', observadoEm: new Date('2026-08-20T00:00:00Z'), autor: 'si' });
+      await promoverMasterFreeTime(pool, { organizationId: s.orgId, containerId: id, valor: 10, fonte: 'master_bl', observadoEm: new Date('2026-09-01T00:00:00Z'), autor: 'm' });
+    }
+    const total = await count(pool, `SELECT count(*) n FROM ft_divergencia_entregas`);
+    assert.equal(total, 8, '4 divergências × 2 destinatários');
+
+    let maxProcessing = 0;
+    const enviados: string[] = [];
+    const transport: AvisoDivergenciaTransport = {
+      async enviar(a) {
+        // No instante do envio, cada instância detém no máximo UMA posse.
+        const n = (await observador.query(`SELECT count(*)::int n FROM ft_divergencia_entregas WHERE status = 'PROCESSING'`)).rows[0].n;
+        maxProcessing = Math.max(maxProcessing, n);
+        await new Promise((r) => setTimeout(r, 40));
+        enviados.push(a.entregaId);
+        return { ok: true };
+      },
+    };
+    const [a, b] = await Promise.all([
+      processarAvisosDivergenciaPendentes({ pool, transport, workerId: 'A' }),
+      processarAvisosDivergenciaPendentes({ pool, transport, workerId: 'B' }),
+    ]);
+    assert.ok(maxProcessing <= 2, `posse nunca antecipada: no máximo 1 PROCESSING por instância (visto ${maxProcessing})`);
+    assert.equal(a.reivindicadas + b.reivindicadas, total, 'cada entrega reivindicada uma vez');
+    assert.equal(a.enviadas + b.enviadas, total);
+    assert.equal(a.possePerdida + b.possePerdida, 0);
+    assert.equal(new Set(enviados).size, total, 'nenhuma entrega enviada duas vezes');
+    assert.ok(a.enviadas > 0 && b.enviadas > 0, 'as duas instâncias dividiram o trabalho');
+    assert.equal(await count(pool, `SELECT count(*) n FROM ft_divergencia_entregas WHERE status = 'SENT' AND claim_token IS NULL AND expira_em IS NULL`), total);
+
+    // `limite` interrompe o ciclo: nada fica reivindicado além do que foi processado.
+    const d = (await pool.query(`SELECT id FROM ft_divergencias ORDER BY id LIMIT 1`)).rows[0];
+    await resolverDivergencia(pool, { divergenciaId: d.id, usuario: 'g' });
+    const c0 = (await pool.query(`SELECT container_id FROM ft_divergencias WHERE id = $1`, [d.id])).rows[0].container_id;
+    await promoverMasterFreeTime(pool, { organizationId: s.orgId, containerId: c0, valor: 11, fonte: 'master_bl', observadoEm: new Date('2026-09-03T00:00:00Z'), autor: 'm' });
+    const parcial = await processarAvisosDivergenciaPendentes({ pool, transport: { async enviar() { return { ok: true }; } }, workerId: 'A', limite: 1 });
+    assert.equal(parcial.reivindicadas, 1);
+    assert.equal(await count(pool, `SELECT count(*) n FROM ft_divergencia_entregas WHERE status = 'PROCESSING'`), 0, 'sem claim pendurado');
+    assert.equal(await count(pool, `SELECT count(*) n FROM ft_divergencia_entregas WHERE status = 'PENDING'`), 1, 'a próxima segue PENDING, sem posse');
+  } finally { await pool.end(); await observador.end(); }
+});

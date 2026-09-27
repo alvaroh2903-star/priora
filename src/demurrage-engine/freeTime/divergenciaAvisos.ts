@@ -106,9 +106,10 @@ export interface ProcessarAvisosResultado {
  * Processa entregas em TRÊS passos, sem nenhuma transação ou lock do PostgreSQL
  * aberto durante o envio externo:
  *
- * 1. CLAIM persistente (um UPDATE autocommit com `FOR UPDATE SKIP LOCKED`):
- *    PENDING, FAILED retentável ou PROCESSING com posse vencida viram
- *    PROCESSING com `claim_token` novo, `worker_id` e `expira_em`.
+ * 1. CLAIM persistente de EXATAMENTE UMA entrega (UPDATE autocommit com
+ *    `FOR UPDATE SKIP LOCKED`): PENDING, FAILED retentável ou PROCESSING com
+ *    posse vencida vira PROCESSING com `claim_token` novo, `worker_id` e
+ *    `expira_em`. O ciclo se repete até `limite` ou até não haver entrega.
  * 2. ENVIO pelo transporte, fora de transação.
  * 3. FINALIZAÇÃO numa transação nova, aceita só se o `claim_token` ainda for o
  *    vigente: SENT, ou FAILED + evento `aviso_falhou`. Se a posse expirou e foi
@@ -123,23 +124,32 @@ export async function processarAvisosDivergenciaPendentes(input: ProcessarAvisos
   const ttl = Math.max(1, Math.floor((input.ttlMs ?? 5 * 60_000) / 1000));
   const out: ProcessarAvisosResultado = { reivindicadas: 0, enviadas: 0, falhadas: 0, possePerdida: 0 };
 
-  const { rows: claims } = await input.pool.query(
-    `UPDATE ft_divergencia_entregas e
-        SET status = 'PROCESSING', claim_token = gen_random_uuid(), worker_id = $1,
-            expira_em = now() + ($2 || ' seconds')::interval, tentativas = e.tentativas + 1, atualizado_em = now()
-      WHERE e.id IN (
-        SELECT id FROM ft_divergencia_entregas
-         WHERE tentativas < $3
-           AND (status = 'PENDING' OR status = 'FAILED' OR (status = 'PROCESSING' AND expira_em < now()))
-         ORDER BY criado_em
-         FOR UPDATE SKIP LOCKED
-         LIMIT $4)
-      RETURNING e.id, e.claim_token`,
-    [input.workerId, String(ttl), max, limite],
-  );
-  out.reivindicadas = claims.length;
-
-  for (const claim of claims) {
+  // UMA entrega por ciclo interno: reivindica exatamente uma, envia, finaliza e
+  // só então reivindica a próxima. Nenhuma entrega fica com posse antecipada
+  // aguardando numa fila local (o que a deixaria vencer antes do envio).
+  // Uma entrega já tentada NESTA execução não é reivindicada de novo nela: o
+  // retry de FAILED fica para as próximas execuções (não queima as tentativas).
+  const processadas: string[] = [];
+  for (let i = 0; i < limite; i++) {
+    const { rows: claims } = await input.pool.query(
+      `UPDATE ft_divergencia_entregas e
+          SET status = 'PROCESSING', claim_token = gen_random_uuid(), worker_id = $1,
+              expira_em = now() + ($2 || ' seconds')::interval, tentativas = e.tentativas + 1, atualizado_em = now()
+        WHERE e.id = (
+          SELECT id FROM ft_divergencia_entregas
+           WHERE tentativas < $3
+             AND (status = 'PENDING' OR status = 'FAILED' OR (status = 'PROCESSING' AND expira_em < now()))
+             AND NOT (id = ANY($4::uuid[]))
+           ORDER BY criado_em, id
+           FOR UPDATE SKIP LOCKED
+           LIMIT 1)
+        RETURNING e.id, e.claim_token`,
+      [input.workerId, String(ttl), max, processadas],
+    );
+    const claim = claims[0];
+    if (!claim) break; // nada elegível
+    out.reivindicadas++;
+    processadas.push(claim.id);
     const { rows } = await input.pool.query(
       `SELECT e.*, d.valor_si, d.valor_master, c.numero AS container_numero, p.numero_processo, p.mbl, u.email, u.nome
          FROM ft_divergencia_entregas e

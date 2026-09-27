@@ -171,6 +171,7 @@ test('migration 0006: compatibilidade com registros existentes do vínculo antig
       '0022_vessel_round_desfecho.sql',
       '0023_vessel_round_fencing.sql',
       '0024_shipping_instructions.sql',
+      '0025_shipping_instructions_corretiva.sql',
     ]);
 
     const processos = new ProcessoRepository(pool);
