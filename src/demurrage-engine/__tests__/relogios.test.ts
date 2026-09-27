@@ -26,10 +26,12 @@ async function novoContainer(
 ): Promise<string> {
   const containers = new ContainerRepository(pool);
   const container = await containers.create(orgId, processoId, numero);
+  // Fonte documental por campo: o tracking nunca registra House/Master Free Time.
+  const FONTE = { dischargeDate: 'tracking_service', houseFreeTimeDays: 'house_document', masterFreeTimeDays: 'master_bl' } as const;
   const obs = (campo: 'dischargeDate' | 'houseFreeTimeDays' | 'masterFreeTimeDays', valor: unknown) =>
     containers.applyObservation({
       containerId: container.id, organizationId: orgId, campo, valor,
-      fonte: 'tracking_service', observadoEm: new Date('2026-09-01T00:00:00Z'),
+      fonte: FONTE[campo], observadoEm: new Date('2026-09-01T00:00:00Z'),
     });
   if (e.descarga !== undefined && e.descarga !== null) await obs('dischargeDate', e.descarga);
   if (e.house !== undefined && e.house !== null) await obs('houseFreeTimeDays', e.house);
@@ -102,7 +104,7 @@ test('relógios: input_hash muda quando o free time muda → cache fica OBSOLETO
     // Muda o free time House: o hash esperado passa a divergir do gravado.
     await containers.applyObservation({
       containerId, organizationId: orgId, campo: 'houseFreeTimeDays', valor: 7,
-      fonte: 'tracking_service', observadoEm: new Date('2026-09-02T00:00:00Z'),
+      fonte: 'house_document', observadoEm: new Date('2026-09-02T00:00:00Z'),
     });
     const obsoleto = await relogios.buscarValido(containerId, 'cliente', '2026-09-22');
     assert.equal(obsoleto.validade, 'OBSOLETO', 'FT mudou: o cache do Cliente deve ficar obsoleto');

@@ -21,7 +21,8 @@ export type FieldObservationSource =
   | 'house_document'
   | 'master_bl'
   | 'headcargo'
-  | 'outro';
+  | 'outro'
+  | 'shipping_instructions';
 
 /**
  * Ordem de prioridade para decidir qual observação vira a "selecionada"
@@ -38,6 +39,9 @@ export const FIELD_OBSERVATION_SOURCE_PRIORITY: Record<FieldObservationSource, n
   house_document: 90,
   master_bl: 90,
   headcargo: 80,
+  // Shipping Instructions (1º e-mail do pré-alerta): abaixo do Master BL (90),
+  // acima de HeadCargo (80). Hierarquia aprovada do Master Free Time.
+  shipping_instructions: 85,
   manual_fallback: 70,
   email_heuristic: 50,
   outro: 10,

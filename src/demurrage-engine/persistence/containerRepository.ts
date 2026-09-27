@@ -1,7 +1,8 @@
 import { Pool } from 'pg';
 import { getPool } from '../db/pool';
 import { Container, ContainerObservableField, FIELD_OBSERVATION_SOURCE_PRIORITY, FieldObservationSource } from '../domain/types';
-import { FieldObservationRepository, InsertFieldObservationInput } from './fieldObservationRepository';
+import { FieldObservationRepository, InsertFieldObservationInput, assertFonteAutorizada } from './fieldObservationRepository';
+import { promoverMasterFreeTime } from '../freeTime/masterFreeTimeService';
 
 function mapRow(row: any): Container {
   return {
@@ -100,6 +101,21 @@ export class ContainerRepository {
   async applyObservation(
     input: ApplyObservationInput,
   ): Promise<{ outcome: ApplyObservationOutcome; observationId: string }> {
+    // Guarda central: tracking nunca registra House/Master Free Time.
+    assertFonteAutorizada(input.campo, input.fonte);
+
+    // Master Free Time passa SEMPRE pelo serviço central (mesma regra de
+    // promoção, + divergência SI × Master, eventos, avisos e outbox de
+    // recálculo numa única transação) — qualquer que seja a entrada.
+    if (input.campo === 'masterFreeTimeDays') {
+      const r = await promoverMasterFreeTime(this.pool, {
+        organizationId: input.organizationId, containerId: input.containerId, valor: input.valor as number,
+        fonte: input.fonte, observadoEm: input.observadoEm, evidenciaRef: input.evidenciaRef, criadoPor: input.criadoPor,
+        autor: `applyObservation:${input.fonte}`,
+      });
+      return { outcome: r.outcome, observationId: r.observationId };
+    }
+
     const columns = FIELD_COLUMNS[input.campo];
 
     const observation = await this.fieldObservations.insert({
