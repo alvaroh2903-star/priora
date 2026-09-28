@@ -1,6 +1,6 @@
 import { Pool } from 'pg';
 import {
-  CONTRATO_REGISTRO_DEMURRAGE_V1, ContainerContrato, FonteContrato, Observado,
+  CONTRATO_REGISTRO_DEMURRAGE_V1, ContainerContrato, FonteContrato, ManualFallbackGovernanca, Observado,
   RegistroProcessoDemurrageV1, digitoVerificadorIso6346,
 } from '../registro/contrato';
 import { TrackingTarget, TrackingTargetRepository } from '../persistence/trackingTargetRepository';
@@ -20,8 +20,11 @@ export function numeroContainer(prefixo: string, seq: number): string {
   return `${corpo}${digitoVerificadorIso6346(corpo)}`;
 }
 
-export function o<T>(valor: T, fonte: FonteContrato, observadoEm: string, evidenciaRef: string | null = null): Observado<T> {
-  return { valor, fonte, observadoEm, evidenciaRef };
+export function o<T>(
+  valor: T, fonte: FonteContrato, observadoEm: string, evidenciaRef: string | null = null,
+  manualFallback: ManualFallbackGovernanca | null = null,
+): Observado<T> {
+  return { valor, fonte, observadoEm, evidenciaRef, manualFallback };
 }
 
 export function containerContrato(numero: string, over: Partial<Omit<ContainerContrato, 'numero'>> = {}): ContainerContrato {

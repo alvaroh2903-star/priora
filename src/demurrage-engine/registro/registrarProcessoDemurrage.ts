@@ -5,7 +5,6 @@ import { hojeOperacional } from '../time/operationalDate';
 import { FIELD_OBSERVATION_SOURCE_PRIORITY, FieldObservationSource } from '../domain/types';
 import { EquipmentMapping, normalizarEquipamento } from '../domain/containerType';
 import { FieldObservationRepository } from '../persistence/fieldObservationRepository';
-import { ContainerRepository } from '../persistence/containerRepository';
 import { ClienteRepository } from '../persistence/clienteRepository';
 import { TrackingTargetRepository } from '../persistence/trackingTargetRepository';
 import { promoverMasterFreeTimeComClient } from '../freeTime/masterFreeTimeService';
@@ -13,7 +12,7 @@ import { promoverHouseFreeTimeComClient } from '../freeTime/houseFreeTimeService
 import { recalcularApuracaoContainer } from '../apuracao/recalcularApuracao';
 import { atualizarFotografia } from './fotografia';
 import {
-  ErroContratoDemurrage, Observado, RegistroNormalizado, RegistroProcessoDemurrageV1, validarRegistro,
+  ErroContratoDemurrage, ManualFallbackGovernanca, Observado, RegistroNormalizado, RegistroProcessoDemurrageV1, validarRegistro,
 } from './contrato';
 
 /**
@@ -28,19 +27,26 @@ import {
  *     código integral, nunca reduzido;
  *  3. campos do processo (MBL, House, armador, cliente, condição, responsável)
  *     viram observações no ledger append-only e só alteram a coluna tipada pela
- *     hierarquia de fontes existente (FIELD_OBSERVATION_SOURCE_PRIORITY);
+ *     hierarquia de fontes existente (FIELD_OBSERVATION_SOURCE_PRIORITY), agora
+ *     restrita pela MATRIZ campo×fonte do contrato (v1.1 — `FONTES_POR_CAMPO`);
  *  4. cria ou recupera os contêineres DENTRO do processo; um contêiner que já
  *     pertence a OUTRO processo da organização rejeita a chamada inteira;
  *  5. tipo original preservado + normalização pelas regras existentes
- *     (`normalizarEquipamento`, mapeamentos com vigência, sem fuzzy);
+ *     (`normalizarEquipamento`, mapeamentos com vigência, sem fuzzy) — v1.1: o
+ *     tipo original SELECIONADO e o tipo NORMALIZADO são sempre derivados da
+ *     MESMA observação vencedora pela hierarquia (nunca dois de fontes diferentes);
  *  6. House/Master Free Time pelos writers congelados (promoverHouse/Master…);
+ *     `manual_fallback` grava a governança própria (justificativa + autor, v1.1);
  *  7. vínculo do tracking pelo MBL + armador (TrackingTargetRepository, target
  *     reaproveitado), SEM consulta ao armador — o scheduler existente consulta;
- *     sem MBL/armador suficiente → pendência explícita, nenhum target inventado.
+ *     sem MBL/armador suficiente → pendência explícita, nenhum target inventado;
+ *  8. UMA linha pendente por contêiner no outbox de pós-commit (v1.1).
  * Qualquer erro → ROLLBACK de tudo (processo, contêineres, observações, vínculos).
  *
- * Depois do COMMIT (caches recomputáveis): apuração/lifecycle/consolidação pelo
- * orquestrador congelado e fotografia (só existe com descarga).
+ * Depois do COMMIT (caches recomputáveis, sem transação longa): o reparo do
+ * outbox (recálculo + fotografia) roda SEMPRE — 'registrado' ou 'ja_registrado'
+ * — e é durável: uma falha no reparo nunca perde a linha pendente (v1.1,
+ * `repararPosCommitOutbox`); a próxima chamada idempotente a repara.
  */
 
 export interface ResultadoRegistroDemurrage {
@@ -59,6 +65,27 @@ export interface OpcoesRegistro {
   pool?: Pool;
   /** Data civil operacional do recálculo pós-commit (default: hojeOperacional()). */
   hojeReferencia?: CivilDate;
+  /**
+   * SÓ TESTE (Fase D10 v1.1) — injeta uma falha determinística no reparo
+   * pós-commit de um contêiner específico, simulando um crash entre o COMMIT
+   * principal e o recálculo/fotografia. Nunca usado em produção; nenhuma rota
+   * ou integração expõe este parâmetro.
+   */
+  _testeFalhaPosCommit?: (containerId: string) => void;
+}
+
+/** Pós-commit incompleto: o registro principal (processo/contêineres/ledger)
+ * foi confirmado, mas 1+ contêiner falhou no recálculo/fotografia. O estado
+ * do outbox é DURÁVEL — repita a MESMA chamada para reparar (idempotente). */
+export class PosCommitIncompletoError extends Error {
+  constructor(public readonly processoId: string, public readonly falhas: Array<{ containerId: string; erro: string }>) {
+    super(
+      `Pós-commit incompleto para o processo ${processoId}: ${falhas.length} contêiner(es) com falha ` +
+      `(${falhas.map((f) => `${f.containerId}: ${f.erro}`).join('; ')}). O processo, os contêineres e o ledger já ` +
+      `estão confirmados — repita exatamente a mesma chamada para reparar (idempotente).`,
+    );
+    this.name = 'PosCommitIncompletoError';
+  }
 }
 
 type Db = PoolClient;
@@ -149,6 +176,47 @@ async function carregarMapeamentos(db: Db): Promise<{ mappings: EquipmentMapping
   };
 }
 
+/* ------------------------------ governança do manual_fallback (v1.1) ------------------------------ */
+
+/**
+ * Grava a governança do `manual_fallback` (Free Time apenas — a matriz do
+ * contrato já garante isso): autor validado como membership REAL da mesma
+ * organização + justificativa, sempre auditável (Blueprint Cap. 4). Idempotente
+ * por `observation_id` — reprocessar a MESMA observação nunca duplica a linha.
+ */
+/**
+ * Valida o autor do `manual_fallback` como membership REAL da MESMA organização
+ * e devolve o `usuario_id` correspondente — `field_observations.criado_por`
+ * referencia `usuarios(id)` (governança já existente desde a Fase 1), nunca um
+ * `organization_memberships.id` diretamente.
+ */
+async function resolverAutorManualFallback(db: Db, org: string, autorMembershipId: string): Promise<string> {
+  const { rows } = await db.query(
+    `SELECT usuario_id FROM organization_memberships WHERE id = $1 AND organization_id = $2`,
+    [autorMembershipId, org],
+  );
+  if (!rows.length) {
+    throw new ErroContratoDemurrage('MANUAL_FALLBACK_INCOMPLETO', { motivo: 'autor_membership_invalido', autorMembershipId });
+  }
+  return rows[0].usuario_id;
+}
+
+/**
+ * Grava a governança do `manual_fallback` (Free Time apenas — a matriz do
+ * contrato já garante isso): autor + justificativa, sempre auditável (Blueprint
+ * Cap. 4). Idempotente por `observation_id` — reprocessar a MESMA observação
+ * nunca duplica a linha. O autor já foi validado por `resolverAutorManualFallback`.
+ */
+async function registrarGovernancaManualFallback(
+  db: Db, org: string, observationId: string, mf: ManualFallbackGovernanca,
+): Promise<void> {
+  await db.query(
+    `INSERT INTO demurrage_fallback_manual_justificativas (organization_id, observation_id, justificativa, autor_membership_id)
+     VALUES ($1, $2, $3, $4) ON CONFLICT (observation_id) DO NOTHING`,
+    [org, observationId, mf.justificativa.trim(), mf.autorMembershipId],
+  );
+}
+
 /* ------------------------------ serviço ------------------------------ */
 
 export async function registrarProcessoDemurrage(
@@ -169,17 +237,62 @@ export async function registrarProcessoDemurrage(
   } finally {
     client.release();
   }
-  if (resultado.status === 'registrado') await posCommit(pool, resultado.processoId, opcoes.hojeReferencia ?? hojeOperacional());
+  // v1.1 — reparo do pós-commit roda SEMPRE (registrado OU ja_registrado), fora
+  // da transação principal (sem transação longa envolvendo os cálculos
+  // derivados) e é DURÁVEL: dirigido pelo estado do outbox, não pelo status
+  // desta chamada. Uma falha aqui nunca perde a linha pendente — a PRÓXIMA
+  // chamada idempotente (mesma entrada/chave) repara sem duplicar nada.
+  const { falhas } = await repararPosCommitOutbox(pool, resultado.processoId, {
+    hojeReferencia: opcoes.hojeReferencia ?? hojeOperacional(),
+    falhaInjetada: opcoes._testeFalhaPosCommit,
+  });
+  if (falhas.length) throw new PosCommitIncompletoError(resultado.processoId, falhas);
   return resultado;
 }
 
-/** Caches recomputáveis (apuração → relógios → valores → lifecycle → consolidação) + fotografia. */
-async function posCommit(pool: Pool, processoId: string, hoje: CivilDate): Promise<void> {
-  const { rows } = await pool.query(`SELECT id FROM containers WHERE processo_id = $1 ORDER BY id`, [processoId]);
+/**
+ * Reparo IDEMPOTENTE e DURÁVEL do outbox de pós-commit (recálculo + fotografia).
+ * Só toca contêineres com linha `pendente`/`falha` (nunca `concluido` — reexecutar
+ * quando tudo já está completo é NO-OP, sem tocar recálculo/fotografia de novo).
+ * Cada contêiner é tentado independentemente: a falha de um nunca impede o
+ * reparo dos demais nesta mesma chamada.
+ */
+export async function repararPosCommitOutbox(
+  pool: Pool,
+  processoId: string,
+  opts: { hojeReferencia: CivilDate; falhaInjetada?: (containerId: string) => void },
+): Promise<{ reparados: string[]; falhas: Array<{ containerId: string; erro: string }> }> {
+  const { rows } = await pool.query(
+    `SELECT container_id FROM demurrage_pos_commit_outbox WHERE processo_id = $1 AND estado <> 'concluido' ORDER BY container_id`,
+    [processoId],
+  );
+  const reparados: string[] = [];
+  const falhas: Array<{ containerId: string; erro: string }> = [];
   for (const r of rows) {
-    await recalcularApuracaoContainer(pool, r.id, { dataReferencia: hoje });
-    await atualizarFotografia(pool, r.id, { origem: { tipo: 'registro_contrato' } });
+    const containerId: string = r.container_id;
+    try {
+      opts.falhaInjetada?.(containerId);
+      await recalcularApuracaoContainer(pool, containerId, { dataReferencia: opts.hojeReferencia });
+      await atualizarFotografia(pool, containerId, { origem: { tipo: 'registro_contrato' } });
+      await pool.query(
+        `UPDATE demurrage_pos_commit_outbox
+            SET estado = 'concluido', concluido_em = now(), atualizado_em = now(), tentativas = tentativas + 1, ultimo_erro = NULL
+          WHERE processo_id = $1 AND container_id = $2`,
+        [processoId, containerId],
+      );
+      reparados.push(containerId);
+    } catch (erro) {
+      const mensagem = erro instanceof Error ? erro.message : String(erro);
+      await pool.query(
+        `UPDATE demurrage_pos_commit_outbox
+            SET estado = 'falha', atualizado_em = now(), tentativas = tentativas + 1, ultimo_erro = $3
+          WHERE processo_id = $1 AND container_id = $2`,
+        [processoId, containerId, mensagem],
+      );
+      falhas.push({ containerId, erro: mensagem });
+    }
   }
+  return { reparados, falhas };
 }
 
 async function aplicar(db: Db, reg: RegistroNormalizado): Promise<ResultadoRegistroDemurrage> {
@@ -276,38 +389,80 @@ async function aplicar(db: Db, reg: RegistroNormalizado): Promise<ResultadoRegis
       : (await db.query(`SELECT id FROM containers WHERE processo_id = $1 AND numero = $2`, [processoId, c.numeroNormalizado])).rows[0].id;
     containers.push({ numero: c.numeroNormalizado, containerId, criado });
 
-    // 5a) Tipo: original preservado (ledger + tabela) e normalização existente.
+    // 5a) Tipo: original preservado (ledger, SEMPRE) e normalização existente.
+    // v1.1 — o tipo original SELECIONADO e o tipo NORMALIZADO nunca mais são
+    // decididos por dois caminhos independentes: uma ÚNICA comparação de
+    // prioridade (contra a fonte hoje selecionada em `container_equipamento_
+    // original`) decide se esta observação vence; só quando vence é que os
+    // dois — original exibido E normalizado (`containers.container_type_id`)
+    // — são atualizados juntos, a partir da MESMA observação.
     if (c.tipoOriginal) {
       const t = c.tipoOriginal;
       const bruto = String(t.valor).trim();
-      await FieldObservationRepository.insertComClient(db, {
+      const { observacao: obsTipo, criada: criadaTipo } = await FieldObservationRepository.insertComClient(db, {
         organizationId: org, entidadeTipo: 'container', entidadeId: containerId, campo: 'tipoEquipamentoOriginal',
         valor: bruto, fonte: t.fonte as FieldObservationSource, observadoEm: dataObs(t), evidenciaRef: t.evidenciaRef ?? null,
       });
-      const norm = normalizarEquipamento({
-        valorOriginal: bruto, fonte: t.fonte, referenceDate: t.observadoEm.slice(0, 10),
-        mappings: mapeamento.mappings, codigosConhecidos: mapeamento.conhecidos,
-      });
-      await db.query(
-        `INSERT INTO container_equipamento_original
-           (container_id, organization_id, tipo_original, fonte, observado_em, evidencia_ref, codigo_normalizado, regra_aplicada)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         ON CONFLICT (container_id) DO UPDATE SET tipo_original = EXCLUDED.tipo_original, fonte = EXCLUDED.fonte,
-           observado_em = EXCLUDED.observado_em, evidencia_ref = EXCLUDED.evidencia_ref,
-           codigo_normalizado = EXCLUDED.codigo_normalizado, regra_aplicada = EXCLUDED.regra_aplicada, atualizado_em = now()`,
-        [containerId, org, bruto, t.fonte, dataObs(t), t.evidenciaRef ?? null, norm.codigoNormalizado, norm.regraAplicada],
-      );
-      if (norm.codigoNormalizado) {
-        const r = await ContainerRepository.applyObservationComClient(db, {
-          containerId, organizationId: org, campo: 'containerType', valor: mapeamento.idPorCodigo.get(norm.codigoNormalizado)!,
-          fonte: t.fonte as FieldObservationSource, observadoEm: dataObs(t), evidenciaRef: t.evidenciaRef ?? null,
-        });
-        if (r.conflitoMesmaFonte) conflitos.push({ campo: 'containerType', containerNumero: c.numeroNormalizado });
-        await resolverPendencias(db, processoId, containerId, ['tipo_ausente', 'tipo_nao_reconhecido']);
-      } else {
-        await resolverPendencias(db, processoId, containerId, ['tipo_ausente']);
-        await abrirPendencia(db, org, processoId, containerId, 'tipo_nao_reconhecido', { tipoOriginal: bruto, fonte: t.fonte });
+      // Mesma fonte, mesmo instante, valor diferente: conflito auditável (a
+      // observação ORIGINAL desse instante é preservada; esta chamada não a
+      // sobrescreve — mesma regra usada nos campos do processo). Em QUALQUER
+      // caso de `!criadaTipo` (replay idêntico OU conflito) a observação já
+      // existia — esta chamada nunca introduziu um fato novo, então nem tenta
+      // reavaliar a seleção (mesmo padrão de `aplicarCampoProcesso`).
+      const conflitoMesmoInstante = !criadaTipo && JSON.stringify(obsTipo.valor) !== JSON.stringify(bruto);
+      if (conflitoMesmoInstante) {
+        conflitos.push({ campo: 'tipoEquipamentoOriginal', containerNumero: c.numeroNormalizado });
       }
+      const { rows: selAtual } = await db.query(
+        `SELECT fonte FROM container_equipamento_original WHERE container_id = $1 FOR UPDATE`, [containerId],
+      );
+      const fonteAtual = selAtual[0]?.fonte as FieldObservationSource | undefined;
+      const venceu = criadaTipo && (!fonteAtual || FIELD_OBSERVATION_SOURCE_PRIORITY[t.fonte as FieldObservationSource] >= FIELD_OBSERVATION_SOURCE_PRIORITY[fonteAtual]);
+      if (venceu) {
+        const norm = normalizarEquipamento({
+          valorOriginal: bruto, fonte: t.fonte, referenceDate: t.observadoEm.slice(0, 10),
+          mappings: mapeamento.mappings, codigosConhecidos: mapeamento.conhecidos,
+        });
+        await db.query(
+          `INSERT INTO container_equipamento_original
+             (container_id, organization_id, tipo_original, fonte, observado_em, evidencia_ref, codigo_normalizado, regra_aplicada, observation_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           ON CONFLICT (container_id) DO UPDATE SET tipo_original = EXCLUDED.tipo_original, fonte = EXCLUDED.fonte,
+             observado_em = EXCLUDED.observado_em, evidencia_ref = EXCLUDED.evidencia_ref,
+             codigo_normalizado = EXCLUDED.codigo_normalizado, regra_aplicada = EXCLUDED.regra_aplicada,
+             observation_id = EXCLUDED.observation_id, atualizado_em = now()`,
+          [containerId, org, bruto, t.fonte, dataObs(t), t.evidenciaRef ?? null, norm.codigoNormalizado, norm.regraAplicada, obsTipo.id],
+        );
+        if (norm.codigoNormalizado) {
+          // O normalizado segue a MESMA decisão de vitória — não uma promoção
+          // independente (por isso grava direto, em vez de reconsultar a
+          // prioridade de `container_type_source_observation_id`, que poderia,
+          // em tese, divergir da de `container_equipamento_original`).
+          const tipoId = mapeamento.idPorCodigo.get(norm.codigoNormalizado)!;
+          const { observacao: obsNormalizado } = await FieldObservationRepository.insertComClient(db, {
+            organizationId: org, entidadeTipo: 'container', entidadeId: containerId, campo: 'containerType',
+            valor: tipoId, fonte: t.fonte as FieldObservationSource, observadoEm: dataObs(t), evidenciaRef: t.evidenciaRef ?? null,
+          });
+          await db.query(
+            `UPDATE containers SET container_type_id = $2, container_type_source_observation_id = $3, atualizado_em = now() WHERE id = $1`,
+            [containerId, tipoId, obsNormalizado.id],
+          );
+          await resolverPendencias(db, processoId, containerId, ['tipo_ausente', 'tipo_nao_reconhecido']);
+        } else {
+          // A observação vencedora não normaliza: o normalizado ACOMPANHA (nunca
+          // fica um código normalizado "órfão" de uma fonte agora superada) —
+          // é exatamente o que impedia a fotografia de mostrar tipo original de
+          // uma fonte e tipo normalizado de outra.
+          await db.query(
+            `UPDATE containers SET container_type_id = NULL, container_type_source_observation_id = NULL, atualizado_em = now() WHERE id = $1`,
+            [containerId],
+          );
+          await resolverPendencias(db, processoId, containerId, ['tipo_ausente']);
+          await abrirPendencia(db, org, processoId, containerId, 'tipo_nao_reconhecido', { tipoOriginal: bruto, fonte: t.fonte });
+        }
+      }
+      // Não venceu: a observação já está no ledger (acima) — preservada, auditável
+      // — mas NÃO substitui a seleção atual (nem o original exibido, nem o normalizado).
     } else {
       const { rows: jaTem } = await db.query(`SELECT container_type_id FROM containers WHERE id = $1`, [containerId]);
       if (!jaTem[0].container_type_id) await abrirPendencia(db, org, processoId, containerId, 'tipo_ausente', {});
@@ -317,19 +472,27 @@ async function aplicar(db: Db, reg: RegistroNormalizado): Promise<ResultadoRegis
     const autor = `demurrage.registro.v1:${e.origem.sistema}`;
     const house = c.houseFreeTimeDays ?? e.houseFreeTimeDays;
     if (house) {
+      const autorUsuarioId = house.fonte === 'manual_fallback' ? await resolverAutorManualFallback(db, org, house.manualFallback!.autorMembershipId) : undefined;
       const r = await promoverHouseFreeTimeComClient(db, {
         organizationId: org, containerId, valor: house.valor, fonte: house.fonte as FieldObservationSource,
-        observadoEm: dataObs(house), evidenciaRef: house.evidenciaRef ?? null,
+        observadoEm: dataObs(house), evidenciaRef: house.evidenciaRef ?? null, criadoPor: autorUsuarioId,
       });
       if (r.conflitoMesmaFonte) conflitos.push({ campo: 'houseFreeTimeDays', containerNumero: c.numeroNormalizado });
+      if (house.fonte === 'manual_fallback') {
+        await registrarGovernancaManualFallback(db, org, r.observationId, house.manualFallback!);
+      }
     }
     const master = c.masterFreeTimeDays ?? e.masterFreeTimeDays;
     if (master) {
+      const autorUsuarioId = master.fonte === 'manual_fallback' ? await resolverAutorManualFallback(db, org, master.manualFallback!.autorMembershipId) : undefined;
       const r = await promoverMasterFreeTimeComClient(db, {
         organizationId: org, containerId, valor: master.valor, fonte: master.fonte as FieldObservationSource,
-        observadoEm: dataObs(master), evidenciaRef: master.evidenciaRef ?? null, autor,
+        observadoEm: dataObs(master), evidenciaRef: master.evidenciaRef ?? null, autor, criadoPor: autorUsuarioId,
       });
       if (r.conflitoMesmaFonte) conflitos.push({ campo: 'masterFreeTimeDays', containerNumero: c.numeroNormalizado });
+      if (master.fonte === 'manual_fallback') {
+        await registrarGovernancaManualFallback(db, org, r.observationId, master.manualFallback!);
+      }
     }
   }
 
@@ -375,6 +538,23 @@ async function aplicar(db: Db, reg: RegistroNormalizado): Promise<ResultadoRegis
     pendenciasAbertas: pend.map((p) => ({ tipo: p.tipo, containerNumero: p.numero ?? null })),
     conflitosMesmaFonte: conflitos, tracking,
   };
+
+  // v1.1 — uma linha PENDENTE por contêiner do processo, na MESMA transação
+  // que confirma processo/contêineres/ledger: se o pós-commit falhar depois do
+  // COMMIT, esta linha sobrevive e guia o reparo (nunca perde o rastro do que
+  // falta recalcular/fotografar). TODOS os contêineres do processo entram
+  // (não só os desta chamada) — o registro pode ter mudado fatos de nível de
+  // processo que afetam contêineres não citados nesta entrada.
+  const { rows: todosContainersDoProcesso } = await db.query(`SELECT id FROM containers WHERE processo_id = $1`, [processoId]);
+  for (const tc of todosContainersDoProcesso) {
+    await db.query(
+      `INSERT INTO demurrage_pos_commit_outbox (organization_id, processo_id, container_id, estado)
+       VALUES ($1, $2, $3, 'pendente')
+       ON CONFLICT (processo_id, container_id) DO UPDATE SET estado = 'pendente', atualizado_em = now()`,
+      [org, processoId, tc.id],
+    );
+  }
+
   const { rows: led } = await db.query(
     `INSERT INTO demurrage_registros
        (organization_id, processo_id, versao_contrato, chave_idempotencia, payload_hash, origem_sistema, origem_referencia, resultado)

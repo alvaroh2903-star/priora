@@ -28,6 +28,7 @@ export async function truncateAll(pool: Pool): Promise<void> {
   await pool.query(`
     TRUNCATE TABLE
       demurrage_registros, processo_campos_selecionados, container_equipamento_original, demurrage_pendencias,
+      demurrage_pos_commit_outbox, demurrage_fallback_manual_justificativas,
       si_conversas_descobertas, email_sync_estado, email_caixas, msal_cache_criptografado, msal_conta_ativa,
       recalculo_outbox, ft_divergencia_entregas, ft_divergencia_eventos, ft_divergencias,
       si_pendencias, si_proveniencias, si_intencoes, si_versoes, si_conversas,
