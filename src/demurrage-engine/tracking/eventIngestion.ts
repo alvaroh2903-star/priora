@@ -10,6 +10,7 @@ import { hojeOperacional } from '../time/operationalDate';
 import { CivilDate } from '../temporal/civilDate';
 import { sincronizarVesselCall } from './vesselCallSync';
 import { VesselCallRepository } from '../persistence/vesselCallRepository';
+import { atualizarFotografia } from '../registro/fotografia';
 
 /**
  * Ingestão do resultado da API central de tracking (Fase 5).
@@ -219,6 +220,23 @@ export async function ingestTrackingResult(input: IngestInput): Promise<IngestRe
   const hoje = input.hojeReferencia ?? hojeOperacional();
   for (const containerId of afetadosCalculo) {
     await recalcularApuracaoContainer(pool, containerId, { dataReferencia: hoje });
+  }
+
+  // 3b) Fotografia (Fase D10, Cap. 14): a descarga promovida cria a fotografia
+  // INICIAL; Gate Out/devolução promovidos criam nova versão SÓ se um fato
+  // relevante mudou (dedupe por hash — reingestão idêntica não duplica). Isolada:
+  // uma falha aqui nunca desfaz a ingestão (as fotografias se recompõem na
+  // próxima mudança relevante).
+  const fotografar = new Set<string>([
+    ...afetadosCalculo,
+    ...promocoes.filter((p) => p.outcome === 'promovida').map((p) => p.containerId),
+  ]);
+  for (const containerId of fotografar) {
+    try {
+      await atualizarFotografia(pool, containerId, { origem: { tipo: 'tracking', trackingFetchId: fetch.id, trackingTargetId: target.id } });
+    } catch (err) {
+      console.error('[fotografia] falha isolada (ingestão preservada):', String((err as any)?.message ?? err).slice(0, 300));
+    }
   }
 
   // 4) VesselCall (Fase 9, fundação): associação da escala + propagação SÓ dos

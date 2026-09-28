@@ -38,6 +38,7 @@ test('migrations: aplica todas as migrations pendentes em um banco novo e é ide
       '0025_shipping_instructions_corretiva.sql',
       '0026_shipping_instructions_house_master.sql',
       '0027_captura_pre_alerta.sql',
+      '0028_demurrage_registro.sql',
     ];
 
     const first = await runMigrations(pool);
