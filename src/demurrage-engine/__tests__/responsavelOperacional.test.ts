@@ -177,6 +177,8 @@ test('migration 0006: compatibilidade com registros existentes do vínculo antig
       '0028_demurrage_registro.sql',
       '0029_demurrage_registro_v1_1.sql',
       '0030_demurrage_registro_v1_2.sql',
+      '0031_responsabilidade_decisoes.sql',
+      '0032_responsabilidade_projecao_guard.sql',
     ]);
 
     const processos = new ProcessoRepository(pool);

@@ -83,6 +83,18 @@ export async function montarFotografia(pool: Pool, containerId: string): Promise
       WHERE processo_id = $1 AND (container_id IS NULL OR container_id = $2) AND estado = 'aberta' ORDER BY tipo`,
     [c.processo_id, containerId],
   );
+  // Fase D11 (item 5, aditivo): decisão VIGENTE de Responsabilidade Rocket ×
+  // Cliente, quando existe. Ausente (undefined, nunca null) quando não há
+  // decisão — `jsonEstavel` filtra chaves undefined, então contêineres sem
+  // decisão mantêm o MESMO hash de antes da D11. Uma correção (nova versão)
+  // muda `id`/`decididoEm` e por isso sempre gera uma nova fotografia.
+  const { rows: resp } = await pool.query(
+    `SELECT id, versao, status, motivo_estruturado, base_relogio, dias_rocket, dias_cliente,
+            valor_status, valor_rocket, valor_cliente, moeda, justificativa, evidencia_ref,
+            autor_membership_id, decidido_em, substitui_decisao_id, motivo_correcao
+       FROM responsabilidade_decisoes WHERE container_id = $1 ORDER BY versao DESC LIMIT 1`,
+    [containerId],
+  );
 
   const relogio = (tipo: string) => {
     const r = rel.find((x) => x.tipo === tipo);
@@ -108,6 +120,18 @@ export async function montarFotografia(pool: Pool, containerId: string): Promise
     tarifas: val.map((v) => ({ relogio: v.relogio_tipo, motor: v.motor_comercial, tabelaId: v.tabela_id, versaoTabela: v.versao_tabela, status: v.confirmation_status })),
     tracking: { vinculos: trk.map((t) => ({ carrier: t.armador, referencia: t.reference_value_canonical, tipo: t.reference_type })) },
     pendencias: pend.map((p) => ({ tipo: p.tipo, nivel: p.do_container ? 'container' : 'processo' })),
+    responsabilidade: resp.length ? {
+      decisaoId: resp[0].id, versao: resp[0].versao, status: resp[0].status,
+      motivoEstruturado: resp[0].motivo_estruturado, baseRelogio: resp[0].base_relogio,
+      diasRocket: resp[0].dias_rocket, diasCliente: resp[0].dias_cliente,
+      valorStatus: resp[0].valor_status,
+      valorRocket: resp[0].valor_rocket === null ? null : Number(resp[0].valor_rocket),
+      valorCliente: resp[0].valor_cliente === null ? null : Number(resp[0].valor_cliente),
+      moeda: resp[0].moeda,
+      justificativa: resp[0].justificativa, evidenciaRef: resp[0].evidencia_ref,
+      autorMembershipId: resp[0].autor_membership_id, decididoEm: iso(resp[0].decidido_em),
+      substituiDecisaoId: resp[0].substitui_decisao_id, motivoCorrecao: resp[0].motivo_correcao,
+    } : undefined,
   };
   const derivados = {
     relogios: { cliente: relogio('cliente'), rocket: relogio('rocket') },

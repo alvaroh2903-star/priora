@@ -27,6 +27,7 @@ export function testPool(): Pool {
 export async function truncateAll(pool: Pool): Promise<void> {
   await pool.query(`
     TRUNCATE TABLE
+      responsabilidade_decisao_dias, responsabilidade_decisao_periodos, responsabilidade_decisoes,
       demurrage_registros, processo_campos_selecionados, container_equipamento_original, demurrage_pendencias,
       demurrage_fallback_manual_avisos, demurrage_pos_commit_outbox, demurrage_fallback_manual_justificativas,
       si_conversas_descobertas, email_sync_estado, email_caixas, msal_cache_criptografado, msal_conta_ativa,

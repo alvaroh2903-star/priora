@@ -11,6 +11,7 @@ import { ClosingService } from '../closing/closingService';
 import { passagemDoCalendario } from '../apuracao/passagemCalendario';
 import { seedArmadorTables } from '../tariffs/seed/armadorTables';
 import { seedRocketTermoPorEmbarque } from '../tariffs/seed/rocketTermoPorEmbarque';
+import { confirmarResponsabilidadeClienteIntegral } from './responsabilidadeTestHelper';
 import {
   containerContrato, contratoRegistro, ingerirTrackingDoContainer, numeroContainer, o, resultadoTracking,
 } from './registroDemurrageHelpers';
@@ -320,8 +321,9 @@ test('D10 gate6: cenário B — descarga → estoura os dois Free Times → valo
     const tentativa1 = await closing.finalizarProcesso({ processoId: r1.processoId, papel: 'MANAGER', config: { hoje: '2026-10-05' } });
     assert.deepEqual(tentativa1, { ok: false, motivo: 'responsabilidade_em_analise' });
 
-    // Responsabilidade (Fase 11 ainda não existe — mesmo substituto usado pelos testes congelados).
-    await pool.query(`UPDATE containers SET responsabilidade = 'CONFIRMADA_CLIENTE' WHERE id = $1`, [containerId]);
+    // Responsabilidade (Fase D11): decisão real pelo serviço — todos os dias
+    // do relógio do cliente atribuídos ao próprio cliente.
+    await confirmarResponsabilidadeClienteIntegral(pool, { containerId, hoje: '2026-10-05' });
 
     // Gate congelado: com responsabilidade decidida mas SEM minuta, ainda bloqueia (comprovação).
     const tentativa2 = await closing.finalizarProcesso({ processoId: r1.processoId, papel: 'MANAGER', config: { hoje: '2026-10-05' } });
@@ -452,7 +454,7 @@ test('D10 integridade — LIMITAÇÃO EXTERNA REAL: tabelas do Blueprint (vocabu
     const rocket = valores.find((v) => v.relogio_tipo === 'rocket');
     assert.equal(rocket?.confirmation_status, 'UNAVAILABLE', 'vocabulário "40DRYHC" (Maersk/Blueprint) não bate com a classe normalizada "40HC" — motor devolve UNAVAILABLE, nunca inventa valor');
 
-    await pool.query(`UPDATE containers SET responsabilidade = 'CONFIRMADA_CLIENTE' WHERE id = $1`, [containerId]);
+    await confirmarResponsabilidadeClienteIntegral(pool, { containerId, hoje: '2026-10-01' });
     const closing = new ClosingService(pool);
     const minuta = await closing.registrarMinuta({ containerId, numeroInformado: numero, dataInformada: '2026-09-30' });
     await closing.validarMinuta({ minutaId: minuta.id, papel: 'MANAGER', config: { hoje: '2026-10-01' } });

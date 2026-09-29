@@ -14,6 +14,7 @@ import { TrackingEnrichResult } from '../sources/armadorTrackingSource';
 import { recalcularApuracaoContainer } from '../apuracao/recalcularApuracao';
 import { seedRocketTermoPorEmbarque } from '../tariffs/seed/rocketTermoPorEmbarque';
 import { hojeOperacional } from '../time/operationalDate';
+import { confirmarResponsabilidadeClienteIntegral } from './responsabilidadeTestHelper';
 
 /**
  * Fase 8 v1.3 corretiva:
@@ -50,7 +51,11 @@ async function novoContainer(pool: Pool, orgId: string, processoId: string, nume
 }
 const setEffective = (pool: Pool, id: string, d: string | null) => pool.query(`UPDATE containers SET effective_return_date = $2 WHERE id = $1`, [id, d]);
 const setTracking = (pool: Pool, id: string, d: string) => pool.query(`UPDATE containers SET tracking_return_date = $2 WHERE id = $1`, [id, d]);
-const setResp = (pool: Pool, id: string, r: string) => pool.query(`UPDATE containers SET responsabilidade = $2 WHERE id = $1`, [id, r]);
+// Fase D11 (ajuste 6): a decisão só nasce pelo serviço da D11 — o UPDATE
+// direto agora é rejeitado pelo banco. O único uso aqui era confirmar a
+// responsabilidade INTEGRAL do cliente; o helper passa pelo serviço real
+// (exige que os relógios já existam — ver `cenarioConfirmada` abaixo).
+const setResp = (pool: Pool, id: string, r: 'CONFIRMADA_CLIENTE') => confirmarResponsabilidadeClienteIntegral(pool, { containerId: id, hoje: cfg.hoje });
 const relogio = (pool: Pool, id: string, tipo: string) => pool.query(`SELECT * FROM relogios WHERE container_id=$1 AND tipo=$2`, [id, tipo]).then((r) => r.rows[0]);
 
 function trackingResult(over: Partial<TrackingEnrichResult> = {}): TrackingEnrichResult {
@@ -147,8 +152,10 @@ async function cenarioConfirmada(pool: Pool, numero: string) {
   await condicao(pool, o.id, p.id, 'embarque', tabela);
   const c = await novoContainer(pool, o.id, p.id, numero, { discharge: '2026-09-01', houseFT: 5, masterFT: 100 });
   await setEffective(pool, c, '2026-09-10'); // 5 dias de demurrage
-  await setResp(pool, c, 'CONFIRMADA_CLIENTE');
+  // Relógios precisam existir ANTES da decisão de responsabilidade (D11 exige
+  // o intervalo de apuração fechado — o serviço lê `relogios`).
   await recalcularApuracaoContainer(pool, c, { dataReferencia: cfg.hoje });
+  await setResp(pool, c, 'CONFIRMADA_CLIENTE');
   return { processoId: p.id, containerId: c, svc: new ClosingService(pool) };
 }
 async function minutaValidadaDireta(pool: Pool, containerId: string, data: string) {

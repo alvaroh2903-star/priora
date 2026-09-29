@@ -13,6 +13,7 @@ import { ClosingService } from '../closing/closingService';
 import { recalcularApuracaoContainer } from '../apuracao/recalcularApuracao';
 import { passagemDoCalendario } from '../apuracao/passagemCalendario';
 import { seedRocketTermoPorEmbarque, seedRocketTermoUnico } from '../tariffs/seed/rocketTermoPorEmbarque';
+import { confirmarResponsabilidadeClienteIntegral } from './responsabilidadeTestHelper';
 
 /**
  * Fase 8 v1.1 — GABARITO da apuração monetária orquestrada. Pipeline ÚNICO e
@@ -61,7 +62,11 @@ async function novoContainer(
 }
 
 const setEffective = (pool: Pool, id: string, d: string | null) => pool.query(`UPDATE containers SET effective_return_date = $2 WHERE id = $1`, [id, d]);
-const setResp = (pool: Pool, id: string, r: string) => pool.query(`UPDATE containers SET responsabilidade = $2 WHERE id = $1`, [id, r]);
+// Fase D11 (ajuste 6): a decisão de responsabilidade só nasce pelo serviço da
+// D11 — nunca por UPDATE direto (o banco agora rejeita). Todos os cenários
+// abaixo confirmavam a responsabilidade INTEGRAL do cliente (sem alegação de
+// causa Rocket) — o helper cobre exatamente esse caso, passando pelo serviço real.
+const setResp = (pool: Pool, id: string, r: 'CONFIRMADA_CLIENTE') => confirmarResponsabilidadeClienteIntegral(pool, { containerId: id, hoje: cfg.hoje });
 const relogio = (pool: Pool, id: string, tipo: string) => pool.query(`SELECT * FROM relogios WHERE container_id=$1 AND tipo=$2`, [id, tipo]).then((r) => r.rows[0]);
 const clienteAtivo = (pool: Pool, id: string) =>
   pool.query(`SELECT * FROM valores_apurados WHERE container_id=$1 AND relogio_tipo='cliente' AND calculation_status IN ('OPEN','FINAL')`, [id]).then((r) => r.rows[0] ?? null);

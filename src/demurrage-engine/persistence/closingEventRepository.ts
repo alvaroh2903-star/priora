@@ -10,7 +10,11 @@ import { getPool } from '../db/pool';
 export type TipoEventoFechamento =
   | 'EMPTY_RETURN' | 'MINUTA_RECEBIDA' | 'MINUTA_VALIDADA' | 'MINUTA_REJEITADA'
   | 'DIVERGENCIA_TRACKING_MINUTA' | 'RECALCULO' | 'FECHAMENTO_FINAL'
-  | 'REABERTURA_SOLICITADA' | 'REABERTURA_AUTORIZADA' | 'REABERTURA' | 'REFECHAMENTO';
+  | 'REABERTURA_SOLICITADA' | 'REABERTURA_AUTORIZADA' | 'REABERTURA' | 'REFECHAMENTO'
+  // Fase D11 (Gate G_timeline, aditivo): eventos da decisão de Responsabilidade
+  // Rocket × Cliente — cada um referencia a versão da decisão, autor e motivo
+  // no payload (nunca o payload documental bruto).
+  | 'RESPONSABILIDADE_CONFIRMADA' | 'RESPONSABILIDADE_CORRIGIDA' | 'RESPONSABILIDADE_INVALIDADA';
 
 export interface ClosingEvent {
   id: string;
