@@ -23,6 +23,16 @@ export interface SugestaoResponsabilidade {
   periodos: PeriodoInput[];
   /** Dias do relógio-base que a sugestão NÃO conseguiu atribuir a nenhum lado. */
   diasNaoAtribuidos: CivilDate[];
+  /**
+   * v1.1 (corretiva 4): dias em que DOIS eventos da timeline da Liberação
+   * atribuem lados DIFERENTES — nunca vão para `periodos` (nenhum dos dois
+   * lados vence por "último evento" ou qualquer outra precedência fabricada).
+   * Eventos duplicados do MESMO lado no mesmo dia não geram ambiguidade —
+   * são consolidados normalmente.
+   */
+  diasAmbiguos: CivilDate[];
+  /** false quando há qualquer dia ambíguo ou não atribuído — nunca apresentada como completa nesse caso. */
+  completa: boolean;
 }
 
 export interface LiberacaoTimelinePort {
@@ -44,12 +54,22 @@ export class NullLiberacaoPort implements LiberacaoTimelinePort {
   }
 }
 
+const AMBIGUO = Symbol('AMBIGUO');
+
 /**
  * Função PURA: dados os eventos da timeline da Liberação (quando existirem)
  * e o intervalo do relógio-base, devolve uma SUGESTÃO — nunca uma decisão.
  * Interseção simples: um dia do relógio-base entra na sugestão só quando a
- * timeline da Liberação o cobre com um lado explícito; o resto fica em
- * `diasNaoAtribuidos` (nunca fabricado, nunca "completa por omissão").
+ * timeline da Liberação o cobre com um lado explícito e SEM conflito; o
+ * resto fica em `diasNaoAtribuidos` (sem nenhum evento) ou `diasAmbiguos`
+ * (dois eventos discordantes) — nunca fabricado, nunca "completa por omissão".
+ *
+ * Conflito (v1.1, corretiva 4): se dois eventos atribuem o MESMO dia a lados
+ * DIFERENTES, o dia é AMBÍGUO — não vai para nenhum dos dois lados, não
+ * fabricamos precedência entre eventos (nem "primeiro vence" nem "último
+ * vence"; a ordem do array `eventosLiberacao` não afeta o resultado).
+ * Eventos duplicados do MESMO lado no mesmo dia continuam sendo consolidados
+ * sem ambiguidade.
  *
  * Não escreve nada, não é chamada por nenhum caminho automático — existe só
  * para ser testável isoladamente e pronta para quando a Liberação existir.
@@ -60,34 +80,52 @@ export function sugerirResponsabilidade(input: {
   ultimoDia: CivilDate;
   eventosLiberacao: LiberacaoEvento[] | null;
 }): SugestaoResponsabilidade {
-  if (!input.eventosLiberacao || input.eventosLiberacao.length === 0) {
-    return { baseRelogio: input.baseRelogio, periodos: [], diasNaoAtribuidos: diasEntre(input.primeiroDia, input.ultimoDia) };
-  }
   const todos = diasEntre(input.primeiroDia, input.ultimoDia);
-  const cobertura = new Map<CivilDate, LadoResponsabilidade>();
+  if (!input.eventosLiberacao || input.eventosLiberacao.length === 0) {
+    return { baseRelogio: input.baseRelogio, periodos: [], diasNaoAtribuidos: todos, diasAmbiguos: [], completa: todos.length === 0 };
+  }
+
+  // Primeiro passo: classifica cada dia coberto por ALGUM evento como um
+  // lado único ou como AMBIGUO — independente da ORDEM dos eventos (qualquer
+  // conflito, em qualquer ordem, marca o dia ambíguo; nunca desfaz).
+  const cobertura = new Map<CivilDate, LadoResponsabilidade | typeof AMBIGUO>();
   for (const ev of input.eventosLiberacao) {
     for (const dia of diasEntre(ev.inicio, ev.fim)) {
-      if (todos.includes(dia)) cobertura.set(dia, ev.lado);
+      if (!todos.includes(dia)) continue;
+      const atual = cobertura.get(dia);
+      if (atual === undefined) cobertura.set(dia, ev.lado);
+      else if (atual !== AMBIGUO && atual !== ev.lado) cobertura.set(dia, AMBIGUO);
+      // atual === ev.lado (duplicata do mesmo lado) ou já AMBIGUO: sem mudança.
     }
   }
+
   const periodos: PeriodoInput[] = [];
-  let atual: { lado: LadoResponsabilidade; inicio: CivilDate; fim: CivilDate } | null = null;
+  let atualPeriodo: { lado: LadoResponsabilidade; inicio: CivilDate; fim: CivilDate } | null = null;
   const naoAtribuidos: CivilDate[] = [];
+  const ambiguos: CivilDate[] = [];
   for (const dia of todos) {
     const lado = cobertura.get(dia);
-    if (!lado) {
+    if (lado === undefined) {
       naoAtribuidos.push(dia);
-      if (atual) { periodos.push(atual); atual = null; }
+      if (atualPeriodo) { periodos.push(atualPeriodo); atualPeriodo = null; }
       continue;
     }
-    if (atual && atual.lado === lado) atual.fim = dia;
+    if (lado === AMBIGUO) {
+      ambiguos.push(dia);
+      if (atualPeriodo) { periodos.push(atualPeriodo); atualPeriodo = null; }
+      continue;
+    }
+    if (atualPeriodo && atualPeriodo.lado === lado) atualPeriodo.fim = dia;
     else {
-      if (atual) periodos.push(atual);
-      atual = { lado, inicio: dia, fim: dia };
+      if (atualPeriodo) periodos.push(atualPeriodo);
+      atualPeriodo = { lado, inicio: dia, fim: dia };
     }
   }
-  if (atual) periodos.push(atual);
-  return { baseRelogio: input.baseRelogio, periodos, diasNaoAtribuidos: naoAtribuidos };
+  if (atualPeriodo) periodos.push(atualPeriodo);
+  return {
+    baseRelogio: input.baseRelogio, periodos, diasNaoAtribuidos: naoAtribuidos, diasAmbiguos: ambiguos,
+    completa: naoAtribuidos.length === 0 && ambiguos.length === 0,
+  };
 }
 
 function diasEntre(inicio: CivilDate, fim: CivilDate): CivilDate[] {

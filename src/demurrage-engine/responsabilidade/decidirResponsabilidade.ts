@@ -83,6 +83,7 @@ export async function decidirResponsabilidade(
 
     const { rows: cr } = await client.query(
       `SELECT c.id, c.organization_id, c.processo_id, c.effective_return_date, c.tracking_return_date,
+              c.house_free_time_days, c.master_free_time_days,
               p.apuracao_status, cc.termo_tipo
          FROM containers c
          JOIN processos p ON p.id = c.processo_id
@@ -127,8 +128,30 @@ export async function decidirResponsabilidade(
       if (!rocketTemDias) throw new ErroResponsabilidade('SEM_APURACAO_DETERMINAVEL', { motivo: 'relogio_rocket_sem_dias_ok' });
       if (relRocket.data_final_apuracao !== devolucao) throw new ErroResponsabilidade('INTERVALO_ABERTO', { relogio: 'rocket' });
     } else {
-      // NAO_APLICAVEL
+      // NAO_APLICAVEL (v1.1 — ajuste corretivo 1): universo estritamente
+      // restrito. Nunca aceito só porque o cliente está com zero dias — exige
+      // a Rocket com exposição real, os dois relógios fechados na devolução e
+      // uma diferença comercial de Free Time DETERMINÁVEL e efetiva.
+      if (!relCliente || relCliente.estado !== 'OK') {
+        throw new ErroResponsabilidade('SEM_APURACAO_DETERMINAVEL', { motivo: 'relogio_cliente_nao_ok_nao_aplicavel' });
+      }
       if (clienteTemDias) throw new ErroResponsabilidade('BASE_RELOGIO_INVALIDA', { motivo: 'cliente_tem_dias_nao_aplicavel_invalido' });
+      if (relCliente.data_final_apuracao !== devolucao) throw new ErroResponsabilidade('INTERVALO_ABERTO', { relogio: 'cliente' });
+      if (!relRocket || relRocket.estado !== 'OK') {
+        throw new ErroResponsabilidade('NAO_APLICAVEL_INVALIDO', { motivo: 'relogio_rocket_nao_ok' });
+      }
+      if ((relRocket.dias_demurrage ?? 0) < 1) {
+        throw new ErroResponsabilidade('NAO_APLICAVEL_INVALIDO', { motivo: 'ambos_relogios_zero_dias' });
+      }
+      if (relRocket.data_final_apuracao !== devolucao) throw new ErroResponsabilidade('INTERVALO_ABERTO', { relogio: 'rocket' });
+      const houseFt: number | null = c.house_free_time_days ?? null;
+      const masterFt: number | null = c.master_free_time_days ?? null;
+      if (houseFt === null || masterFt === null) {
+        throw new ErroResponsabilidade('NAO_APLICAVEL_INVALIDO', { motivo: 'free_time_indeterminavel' });
+      }
+      if (!(houseFt > masterFt)) {
+        throw new ErroResponsabilidade('NAO_APLICAVEL_INVALIDO', { motivo: 'house_free_time_nao_maior_que_master', houseFt, masterFt });
+      }
     }
 
     // Sequência de versão (o gatilho de INSERT valida de novo — defesa em
@@ -171,10 +194,26 @@ export async function decidirResponsabilidade(
     let valorRocket: number | null = null;
     let valorCliente: number | null = null;
     let moeda: string | null = null;
+    // v1.1 (corretiva #3): retrato do valorApurado do cliente ESPECÍFICO que
+    // sustentou esta divisão — a base financeira fica versionada junto com a
+    // temporal (`clienteInputHash`/`rocketInputHash`). Uma mudança posterior no
+    // valor ativo (nova versão de tabela, tarifa que passa a existir) é
+    // detectável mesmo que o relógio não tenha mudado (trigger em 0033).
+    let valorClienteBase: Record<string, unknown> | null = null;
 
     if (input.baseRelogio === 'RELOGIO_CLIENTE') {
       const motor = c.termo_tipo === 'embarque' ? 'termo_embarque' : c.termo_tipo === 'unico' ? 'termo_unico' : null;
       const ativo = motor ? await new ValorApuradoRepository(client as unknown as Pool).buscarAtivo(input.containerId, 'cliente', motor) : null;
+      valorClienteBase = {
+        id: ativo?.id ?? null,
+        inputHash: ativo?.inputHash ?? null,
+        motorComercial: ativo?.motorComercial ?? motor,
+        tabelaId: ativo?.tabelaId ?? null,
+        versaoTabela: ativo?.versaoTabela ?? null,
+        total: ativo?.total ?? null,
+        moeda: ativo?.moeda ?? null,
+        faixasAplicadasHash: ativo ? hashEstavel(ativo.faixasAplicadas) : null,
+      };
       let diaria = null;
       if (ativo && ativo.total !== null && ativo.confirmationStatus !== 'UNAVAILABLE') {
         diaria = expandirFaixasAplicadas(ativo.faixasAplicadas as any, relCliente.dias_demurrage);
@@ -209,6 +248,9 @@ export async function decidirResponsabilidade(
       clienteDiasDemurrage: relCliente?.dias_demurrage ?? null,
       rocketDiasDemurrage: relRocket?.dias_demurrage ?? null,
       devolucao,
+      // v1.1: só preenchido em RELOGIO_CLIENTE — a base financeira específica
+      // (ver corretiva #3); a exposição da Rocket ao armador nunca entra aqui.
+      valorCliente: valorClienteBase,
     };
     const baseHash = hashEstavel(base);
 

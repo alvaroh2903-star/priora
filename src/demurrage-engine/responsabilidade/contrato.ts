@@ -60,7 +60,11 @@ export type CodigoErroResponsabilidade =
   | 'BASE_RELOGIO_INVALIDA'
   | 'VERSAO_DESATUALIZADA'
   | 'DIA_FORA_DA_BASE'
-  | 'LACUNA';
+  | 'LACUNA'
+  // v1.1 (corretiva): NAO_APLICAVEL só é aceito num universo bem definido —
+  // relógio cliente OK/zero, relógio Rocket OK/positivo, ambos fechados na
+  // devolução, Free Time determinável e House > Master.
+  | 'NAO_APLICAVEL_INVALIDO';
 
 export class ErroResponsabilidade extends Error {
   constructor(public readonly codigo: CodigoErroResponsabilidade, public readonly detalhe: Record<string, unknown> = {}) {
