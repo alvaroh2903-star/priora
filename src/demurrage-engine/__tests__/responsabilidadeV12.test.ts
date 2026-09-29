@@ -550,3 +550,65 @@ test('v1.2 migração 0033 → 0034: decisões existentes preservadas; dias/per�
     await pool.end();
   }
 });
+
+/* ================================================================== *
+ * Precedência validada (2a): VERSAO_DESATUALIZADA antes de RELOGIO_OBSOLETO;
+ * com relógio válido, a ordem da v1.1 é preservada.
+ * ================================================================== */
+
+test('v1.2 precedência: relógio obsoleto + versão desatualizada → VERSAO_DESATUALIZADA; versão correta → RELOGIO_OBSOLETO', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await setupBanco(pool);
+    const c = await cenario(pool, 'PREC1', { discharge: '2026-02-01', houseFT: 5, masterFT: 100, effective: '2026-02-11' });
+    const v1 = await decidir(pool, c, { status: 'CONFIRMADA_CLIENTE', base: 'RELOGIO_CLIENTE', periodos: [{ lado: 'CLIENTE', inicio: '2026-02-06', fim: '2026-02-11' }] });
+    assert.equal(v1.ok, true, JSON.stringify(v1));
+    if (!v1.ok) return;
+    await obs(pool, c, 'houseFreeTimeDays', 7, 'house_document', '2026-02-12T00:00:00Z'); // relógio do cliente fica obsoleto
+    const autorMembershipId = await novoGestor(pool, c.orgId);
+    const base = {
+      organizationId: c.orgId, containerId: c.containerId, autorMembershipId, status: 'CONFIRMADA_CLIENTE' as const, baseRelogio: 'RELOGIO_CLIENTE' as const,
+      periodos: [{ lado: 'CLIENTE' as const, inicio: '2026-02-06', fim: '2026-02-11' }], justificativa: 'j', evidenciaRef: 'e', hojeReferencia: cfg.hoje,
+    };
+
+    // Sem `substitui` (versão desatualizada) e relógio obsoleto → VERSAO_DESATUALIZADA.
+    const semSubstitui = await decidirResponsabilidade(pool, base);
+    assert.equal(semSubstitui.ok, false);
+    if (semSubstitui.ok) return;
+    assert.equal(semSubstitui.codigo, 'VERSAO_DESATUALIZADA');
+
+    // `substitui` apontando para versão inexistente e relógio obsoleto → VERSAO_DESATUALIZADA.
+    const substituiErrado = await decidirResponsabilidade(pool, { ...base, substituiDecisaoId: c.containerId, motivoCorrecao: 'm' });
+    assert.equal(substituiErrado.ok, false);
+    if (substituiErrado.ok) return;
+    assert.equal(substituiErrado.codigo, 'VERSAO_DESATUALIZADA');
+
+    // Versão correta e relógio obsoleto → RELOGIO_OBSOLETO.
+    const versaoCorreta = await decidirResponsabilidade(pool, { ...base, substituiDecisaoId: v1.decisaoId, motivoCorrecao: 'm' });
+    assert.equal(versaoCorreta.ok, false);
+    if (versaoCorreta.ok) return;
+    assert.equal(versaoCorreta.codigo, 'RELOGIO_OBSOLETO');
+  } finally { await pool.end(); }
+});
+
+test('v1.2 precedência: com relógio VÁLIDO, a ordem da v1.1 é preservada — validação de relógio antes de VERSAO_DESATUALIZADA', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await setupBanco(pool);
+    const c = await cenario(pool, 'PREC2', { discharge: '2026-02-01', houseFT: 5, masterFT: 100, effective: '2026-02-11' });
+    const v1 = await decidir(pool, c, { status: 'CONFIRMADA_CLIENTE', base: 'RELOGIO_CLIENTE', periodos: [{ lado: 'CLIENTE', inicio: '2026-02-06', fim: '2026-02-11' }] });
+    assert.equal(v1.ok, true, JSON.stringify(v1));
+
+    // Versão desatualizada (sem `substitui`) E cliente com dias (NAO_APLICAVEL inválido): como na v1.1, vence a validação de relógio.
+    const na = await decidir(pool, c, { status: 'NAO_APLICAVEL', base: 'NAO_APLICAVEL', periodos: [] });
+    assert.equal(na.ok, false);
+    if (na.ok) return;
+    assert.equal(na.codigo, 'BASE_RELOGIO_INVALIDA');
+
+    // Versão desatualizada e relógio válido sem outra falha → VERSAO_DESATUALIZADA.
+    const cli = await decidir(pool, c, { status: 'CONFIRMADA_CLIENTE', base: 'RELOGIO_CLIENTE', periodos: [{ lado: 'CLIENTE', inicio: '2026-02-06', fim: '2026-02-11' }] });
+    assert.equal(cli.ok, false);
+    if (cli.ok) return;
+    assert.equal(cli.codigo, 'VERSAO_DESATUALIZADA');
+  } finally { await pool.end(); }
+});

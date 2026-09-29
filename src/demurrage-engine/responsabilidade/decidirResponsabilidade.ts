@@ -119,11 +119,38 @@ export async function decidirResponsabilidade(
     //  - RELOGIO_CLIENTE: o relógio do cliente;
     //  - RELOGIO_ROCKET: o Rocket e o do cliente (que prova o zero do cliente);
     //  - NAO_APLICAVEL: os dois.
+    //
+    // Precedência (validada): VERSAO_DESATUALIZADA vem ANTES de
+    // RELOGIO_OBSOLETO. Com relógio válido nada muda em relação à v1.1 — as
+    // validações de relógio seguem antes de VERSAO_DESATUALIZADA. Por isso a
+    // MESMA verificação de versão (`verificarVersao`) só é antecipada quando o
+    // relógio está obsoleto.
+    const verificarVersao = async (): Promise<{ vigente: { id: string; versao: number } | null; versaoEsperada: number }> => {
+      // Sequência de versão (o gatilho de INSERT valida de novo — defesa em
+      // profundidade; aqui erramos com um código de negócio legível).
+      const { rows: vig } = await client.query(
+        `SELECT id, versao FROM responsabilidade_decisoes WHERE container_id = $1 ORDER BY versao DESC LIMIT 1`,
+        [input.containerId],
+      );
+      const vigente = vig[0] ?? null;
+      if (input.substituiDecisaoId) {
+        if (!vigente || vigente.id !== input.substituiDecisaoId) {
+          throw new ErroResponsabilidade('VERSAO_DESATUALIZADA', { esperado: vigente?.id ?? null, recebido: input.substituiDecisaoId });
+        }
+      } else if (vigente) {
+        throw new ErroResponsabilidade('VERSAO_DESATUALIZADA', { esperado: vigente.id, recebido: null });
+      }
+      return { vigente, versaoEsperada: vigente ? vigente.versao + 1 : 1 };
+    };
+
     const relogiosExigidos: Array<'cliente' | 'rocket'> = input.baseRelogio === 'RELOGIO_CLIENTE' ? ['cliente'] : ['cliente', 'rocket'];
     const relogioRepo = new RelogioRepository(client as unknown as Pool);
     for (const tipo of relogiosExigidos) {
       const { validade } = await relogioRepo.buscarValido(input.containerId, tipo, devolucao);
-      if (validade !== 'VALIDO') throw new ErroResponsabilidade('RELOGIO_OBSOLETO', { relogio: tipo, validade });
+      if (validade !== 'VALIDO') {
+        await verificarVersao();
+        throw new ErroResponsabilidade('RELOGIO_OBSOLETO', { relogio: tipo, validade });
+      }
     }
 
     const { rows: relRows } = await client.query(
@@ -170,21 +197,7 @@ export async function decidirResponsabilidade(
       }
     }
 
-    // Sequência de versão (o gatilho de INSERT valida de novo — defesa em
-    // profundidade; aqui erramos com um código de negócio legível).
-    const { rows: vig } = await client.query(
-      `SELECT id, versao FROM responsabilidade_decisoes WHERE container_id = $1 ORDER BY versao DESC LIMIT 1`,
-      [input.containerId],
-    );
-    const vigente = vig[0] ?? null;
-    const versaoEsperada = vigente ? vigente.versao + 1 : 1;
-    if (input.substituiDecisaoId) {
-      if (!vigente || vigente.id !== input.substituiDecisaoId) {
-        throw new ErroResponsabilidade('VERSAO_DESATUALIZADA', { esperado: vigente?.id ?? null, recebido: input.substituiDecisaoId });
-      }
-    } else if (vigente) {
-      throw new ErroResponsabilidade('VERSAO_DESATUALIZADA', { esperado: vigente.id, recebido: null });
-    }
+    const { versaoEsperada } = await verificarVersao();
 
     // Dias fora do intervalo real do relógio-base (G9) — erro de negócio
     // legível antes de ir ao banco (o trigger de INSERT também barra).

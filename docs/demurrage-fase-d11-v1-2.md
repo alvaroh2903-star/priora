@@ -95,3 +95,103 @@ atualizados: `migrate`, `responsavelOperacional`, `registroDemurrageV12`.
 | — catálogo de migrations (`migrate`, `migration0007`, `responsavelOperacional`) | 29 | 0 | 0 |
 | V1 | 25 | 0 | 0 |
 | `tsc --noEmit` / `npm run build` | sem erros | — | — |
+
+## Ajustes validados pelo auditor (rodada final da v1.2)
+
+| Ponto | Validação | O que ficou no código |
+|---|---|---|
+| 1 | aprovado | Diária e moeda por dia só quando `valor_status = CALCULADO`. Decisão, cálculo, fotografia, projeção, faixas e motores tarifários inalterados. Único caminho afetado: `INDISPONIVEL` por soma dos dias ≠ total do valor apurado (só alcançável com valor apurado inconsistente) — os dias deixam de guardar diárias parciais. |
+| 2a | **não aprovado** → corrigido | `VERSAO_DESATUALIZADA` é verificada **antes** de `RELOGIO_OBSOLETO`. A mesma verificação de versão (uma função) é antecipada **somente** quando o relógio está obsoleto; com relógio válido a ordem é exatamente a da v1.1 (validações de relógio antes de `VERSAO_DESATUALIZADA`). Nenhuma outra precedência mudou. |
+| 2b | aprovado | Relógio `AUSENTE` → `RELOGIO_OBSOLETO` no serviço. |
+| 2c | aprovado | Ver abaixo. |
+| 2d | aprovado | `RELOGIO_ROCKET` exige relógio Rocket **e** relógio cliente `VALIDO` (a decisão precisa provar o zero do cliente). |
+
+### 2c — `INTERVALO_ABERTO` no serviço
+
+A data final da apuração (a devolução efetiva) compõe o `input_hash` do
+relógio, junto com descarga, Free Time e versão do motor temporal. Por isso,
+**no serviço**, qualquer alteração desses fatos sem recálculo — inclusive da
+devolução — produz `RELOGIO_OBSOLETO` antes de qualquer validação que dependa
+daquele relógio. Consequência explícita e aprovada: um relógio cuja data final
+difere da devolução é sempre obsoleto para o serviço, e **`INTERVALO_ABERTO`
+não é mais alcançável no fluxo normal do serviço**. Ele permanece como
+proteção do **banco** (gatilho de INSERT da decisão, 0031/0033), válida para
+SQL direto.
+
+Mesma consequência, pelo mesmo motivo (o Free Time também compõe o
+`input_hash`): os motivos `free_time_indeterminavel` e
+`house_free_time_nao_maior_que_master` de `NAO_APLICAVEL_INVALIDO` não são
+alcançáveis no serviço com relógios válidos — Free Time alterado sem
+recálculo gera `RELOGIO_OBSOLETO`; Free Time ausente deixa o relógio
+`PENDING`; e cliente zero com Rocket positivo já implica House > Master. As
+duas verificações permanecem no serviço (defesa) e no banco (SQL direto),
+cobertas por teste.
+
+### Ordem final dos erros em `decidirResponsabilidade`
+
+1. Validação pura da entrada (`contrato.ts`, sem banco): `CAMPO_OBRIGATORIO`,
+   `JUSTIFICATIVA_AUSENTE`, `EVIDENCIA_AUSENTE`, `MOTIVO_CORRECAO_AUSENTE`,
+   `PERIODO_INVALIDO` / `PERIODOS_AUSENTES`, `LADO_INCOMPATIVEL_COM_BASE`,
+   `PERIODO_INVALIDO` / `SOBREPOSICAO` (expansão), `STATUS_INCOERENTE`.
+2. `CONTAINER_NAO_ENCONTRADO`
+3. `EXIGE_REABERTURA` (processo FINAL)
+4. `AUTOR_NAO_AUTORIZADO`
+5. `ANTES_DA_DEVOLUCAO`
+6. Relógio exigido não `VALIDO` → primeiro `VERSAO_DESATUALIZADA` (se a versão
+   estiver desatualizada), senão `RELOGIO_OBSOLETO`.
+7. Validações que dependem do relógio (por base): `SEM_APURACAO_DETERMINAVEL`,
+   `BASE_RELOGIO_INVALIDA`, `INTERVALO_ABERTO` (inalcançável no serviço — ver
+   2c), `NAO_APLICAVEL_INVALIDO`.
+8. `VERSAO_DESATUALIZADA` (relógio válido — posição da v1.1)
+9. `DIA_FORA_DA_BASE`
+10. `LACUNA`
+11. Banco: gatilho de INSERT (mesmos códigos, defesa em profundidade) e, no
+    `COMMIT`, o agregado da 0034 (`LACUNA`, `AGREGADO_INVALIDO`,
+    `POSICAO_INVALIDA`, `MOEDA_DIVERGENTE`, `VALOR_DIVERGENTE`,
+    `PERIODO_INCOMPATIVEL`).
+
+Em relação à v1.1, a única diferença de ordem é a inclusão do passo 6.
+
+## Auditoria do banco real (pré-requisito do freeze)
+
+Script **somente leitura**: `scripts/auditoria/auditoria_agregado_0034.sql`.
+Não é migration (o `migrate` só lê `src/demurrage-engine/db/migrations/`),
+não corrige nada, roda em `BEGIN TRANSACTION READ ONLY` e termina em
+`ROLLBACK`. Exige o banco já na 0034.
+
+```
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f scripts/auditoria/auditoria_agregado_0034.sql
+```
+
+Saída: uma linha `NOTICE: VIOLA|<decisao_id>|container=…|versao=…|<status>|<base>|<valor_status>|situacao=…|<motivo>`
+por decisão que viola hoje `responsabilidade_validar_agregado`, e ao final
+`NOTICE: RESUMO|decisoes=N|violam_hoje=V|conformes=C`.
+
+- `situacao=vigente`: a decisão é a projeção atual do contêiner — **é isso que
+  bloqueia o freeze**.
+- `maior_versao_sem_projecao` / `substituida`: histórico; pode "violar hoje"
+  só porque o relógio do contêiner mudou depois da decisão.
+
+Prova automatizada: `__tests__/responsabilidadeAuditoria.test.ts` executa o
+próprio arquivo do repositório sobre um banco reproduzindo a herança da 0033
+(decisões legítimas + as brechas que a 0033 permitia), confere IDs, motivos e
+situações, confirma impressão digital idêntica antes e depois, e que o script
+recusa rodar sem a 0034.
+
+## Validação final da rodada (PostgreSQL 16 real, `priora_test`)
+
+| Suíte | Aprovados | Falhos | Ignorados |
+|---|---|---|---|
+| Engine completa (inclui banco novo 0001→0034) | 569 | 0 | 0 |
+| — D11 (`responsabilidadeDecisao` 25, `V11` 18, `V12` 14, `Auditoria` 2) | 59 | 0 | 0 |
+| — relógios | 6 | 0 | 0 |
+| — tarifas | 35 | 0 | 0 |
+| — apuração e reabertura (`apuracao`, `V12`, `V13`, `V14`) | 31 | 0 | 0 |
+| — fechamento | 21 | 0 | 0 |
+| — D10 e fotografia (`registroDemurrage`, `V11`, `V12`, `demurrageVertical`, `demurrageTickFilas`) | 95 | 0 | 0 |
+| — catálogo de migrations (`migrate`, `migration0007`, `responsavelOperacional`) | 29 | 0 | 0 |
+| V1 | 25 | 0 | 0 |
+| `tsc --noEmit` / `npm run build` | sem erros | — | — |
+
+A D11 **não** está congelada: o freeze depende de executar a auditoria acima
+no banco real e confirmar que não há violação com `situacao=vigente`.
