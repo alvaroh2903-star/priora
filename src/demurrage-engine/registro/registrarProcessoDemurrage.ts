@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { Pool, PoolClient } from 'pg';
 import { getPool } from '../db/pool';
 import { CivilDate } from '../temporal/civilDate';
@@ -65,13 +66,15 @@ export interface OpcoesRegistro {
   pool?: Pool;
   /** Data civil operacional do recálculo pós-commit (default: hojeOperacional()). */
   hojeReferencia?: CivilDate;
+  /** Identificador do worker que reivindica as linhas do outbox (default: único por chamada). */
+  workerId?: string;
   /**
-   * SÓ TESTE (Fase D10 v1.1) — injeta uma falha determinística no reparo
-   * pós-commit de um contêiner específico, simulando um crash entre o COMMIT
-   * principal e o recálculo/fotografia. Nunca usado em produção; nenhuma rota
-   * ou integração expõe este parâmetro.
+   * SÓ TESTE (Fase D10 v1.1/v1.2) — gancho executado depois do claim e antes
+   * do trabalho de um contêiner: pode lançar (simula crash entre o COMMIT
+   * principal e o recálculo/fotografia) ou aguardar (simula worker lento).
+   * Nunca usado em produção; nenhuma rota ou integração expõe este parâmetro.
    */
-  _testeFalhaPosCommit?: (containerId: string) => void;
+  _testeFalhaPosCommit?: (containerId: string) => void | Promise<void>;
 }
 
 /** Pós-commit incompleto: o registro principal (processo/contêineres/ledger)
@@ -176,44 +179,64 @@ async function carregarMapeamentos(db: Db): Promise<{ mappings: EquipmentMapping
   };
 }
 
-/* ------------------------------ governança do manual_fallback (v1.1) ------------------------------ */
+/* ------------------------------ governança do manual_fallback (v1.1/v1.2) ------------------------------ */
 
 /**
- * Grava a governança do `manual_fallback` (Free Time apenas — a matriz do
- * contrato já garante isso): autor validado como membership REAL da mesma
- * organização + justificativa, sempre auditável (Blueprint Cap. 4). Idempotente
- * por `observation_id` — reprocessar a MESMA observação nunca duplica a linha.
+ * Papéis INTERNOS autorizados a registrar um fallback manual — a MESMA regra já
+ * aprovada para o responsável operacional (migration 0007, Decisão 3): ANALYST
+ * (operacional), MANAGER e ADMIN. CLIENT nunca. Nenhum papel novo é criado.
  */
+export const PAPEIS_AUTOR_FALLBACK_MANUAL: readonly string[] = ['ANALYST', 'MANAGER', 'ADMIN'];
+
+/** Gestores que recebem o aviso do fallback manual (mesmo critério dos avisos de divergência de Free Time). */
+const PAPEIS_GESTOR = ['MANAGER', 'ADMIN'];
+
 /**
- * Valida o autor do `manual_fallback` como membership REAL da MESMA organização
- * e devolve o `usuario_id` correspondente — `field_observations.criado_por`
- * referencia `usuarios(id)` (governança já existente desde a Fase 1), nunca um
- * `organization_memberships.id` diretamente.
+ * Valida o autor do `manual_fallback`: membership REAL da MESMA organização e
+ * com papel interno autorizado. Devolve o `usuario_id` correspondente —
+ * `field_observations.criado_por` referencia `usuarios(id)` (governança já
+ * existente desde a Fase 1). `FOR SHARE` impede que o papel mude para CLIENT
+ * enquanto esta transação usa o membership (mesmo cuidado da migration 0007).
  */
 async function resolverAutorManualFallback(db: Db, org: string, autorMembershipId: string): Promise<string> {
   const { rows } = await db.query(
-    `SELECT usuario_id FROM organization_memberships WHERE id = $1 AND organization_id = $2`,
+    `SELECT usuario_id, papel FROM organization_memberships WHERE id = $1 AND organization_id = $2 FOR SHARE`,
     [autorMembershipId, org],
   );
   if (!rows.length) {
     throw new ErroContratoDemurrage('MANUAL_FALLBACK_INCOMPLETO', { motivo: 'autor_membership_invalido', autorMembershipId });
+  }
+  if (!PAPEIS_AUTOR_FALLBACK_MANUAL.includes(rows[0].papel)) {
+    throw new ErroContratoDemurrage('MANUAL_FALLBACK_AUTOR_NAO_AUTORIZADO', { autorMembershipId, papel: rows[0].papel });
   }
   return rows[0].usuario_id;
 }
 
 /**
  * Grava a governança do `manual_fallback` (Free Time apenas — a matriz do
- * contrato já garante isso): autor + justificativa, sempre auditável (Blueprint
- * Cap. 4). Idempotente por `observation_id` — reprocessar a MESMA observação
- * nunca duplica a linha. O autor já foi validado por `resolverAutorManualFallback`.
+ * contrato já garante isso) e o AVISO DURÁVEL aos gestores, na MESMA transação
+ * do registro. Nenhuma comunicação externa acontece aqui: as entregas nascem
+ * PENDING em `demurrage_fallback_manual_avisos` e só o worker
+ * (`processarAvisosFallbackManualPendentes`) fala com o transporte, fora de
+ * qualquer transação. Idempotente: uma justificativa por observação e uma
+ * entrega por (justificativa, gestor) — reprocessar nunca duplica o aviso.
  */
 async function registrarGovernancaManualFallback(
   db: Db, org: string, observationId: string, mf: ManualFallbackGovernanca,
 ): Promise<void> {
-  await db.query(
+  const ins = await db.query(
     `INSERT INTO demurrage_fallback_manual_justificativas (organization_id, observation_id, justificativa, autor_membership_id)
-     VALUES ($1, $2, $3, $4) ON CONFLICT (observation_id) DO NOTHING`,
+     VALUES ($1, $2, $3, $4) ON CONFLICT (observation_id) DO NOTHING RETURNING id`,
     [org, observationId, mf.justificativa.trim(), mf.autorMembershipId],
+  );
+  const justificativaId: string = ins.rows[0]?.id
+    ?? (await db.query(`SELECT id FROM demurrage_fallback_manual_justificativas WHERE observation_id = $1`, [observationId])).rows[0].id;
+  await db.query(
+    `INSERT INTO demurrage_fallback_manual_avisos (organization_id, justificativa_id, destinatario_membership_id)
+     SELECT $1, $2, m.id FROM organization_memberships m
+      WHERE m.organization_id = $1 AND m.papel::text = ANY($3::text[])
+     ON CONFLICT (justificativa_id, destinatario_membership_id) DO NOTHING`,
+    [org, justificativaId, PAPEIS_GESTOR],
   );
 }
 
@@ -244,55 +267,140 @@ export async function registrarProcessoDemurrage(
   // chamada idempotente (mesma entrada/chave) repara sem duplicar nada.
   const { falhas } = await repararPosCommitOutbox(pool, resultado.processoId, {
     hojeReferencia: opcoes.hojeReferencia ?? hojeOperacional(),
-    falhaInjetada: opcoes._testeFalhaPosCommit,
+    workerId: opcoes.workerId,
+    ganchoTeste: opcoes._testeFalhaPosCommit,
   });
   if (falhas.length) throw new PosCommitIncompletoError(resultado.processoId, falhas);
   return resultado;
 }
 
+export interface OpcoesReparoPosCommit {
+  hojeReferencia: CivilDate;
+  /** Dono do claim (default: identificador único desta chamada). */
+  workerId?: string;
+  /** Prazo da posse; PROCESSANDO vencido é recuperável por outro worker. */
+  ttlMs?: number;
+  /** SÓ TESTE: executado depois do claim e antes do trabalho (pode lançar ou aguardar). */
+  ganchoTeste?: (containerId: string) => void | Promise<void>;
+}
+
+export interface ResultadoReparoPosCommit {
+  reparados: string[];
+  falhas: Array<{ containerId: string; erro: string }>;
+  /** Contêineres cuja posse foi perdida (claim vencido e assumido por outro): nada foi finalizado por este worker. */
+  possePerdida: string[];
+}
+
 /**
- * Reparo IDEMPOTENTE e DURÁVEL do outbox de pós-commit (recálculo + fotografia).
- * Só toca contêineres com linha `pendente`/`falha` (nunca `concluido` — reexecutar
- * quando tudo já está completo é NO-OP, sem tocar recálculo/fotografia de novo).
- * Cada contêiner é tentado independentemente: a falha de um nunca impede o
- * reparo dos demais nesta mesma chamada.
+ * Reparo IDEMPOTENTE e DURÁVEL do outbox de pós-commit (recálculo + fotografia),
+ * com CLAIM de posse inequívoca (v1.2 — mesmo padrão de `ft_divergencia_entregas`
+ * e `recalculo_outbox`):
+ *
+ * 1. CLAIM de UMA linha por vez (UPDATE autocommit + `FOR UPDATE SKIP LOCKED`):
+ *    `pendente`, `falha` ou `processando` com prazo vencido vira `processando`
+ *    com `claim_token` novo, `worker_id` e `expira_em`. Dois workers nunca
+ *    reivindicam a mesma linha viva;
+ * 2. confirma a posse e executa recálculo + fotografia FORA de transação longa
+ *    (cada um tem a sua transação curta);
+ * 3. FINALIZA só se o `claim_token` ainda for o vigente: `concluido` (ou de
+ *    volta a `pendente`, se um registro novo incrementou a `geracao` durante o
+ *    claim) ou `falha` com o erro. Worker que perdeu a posse não finaliza nem
+ *    toca a posse do novo dono.
+ *
+ * `concluido` nunca é reivindicado (reexecutar quando tudo está completo é
+ * NO-OP). Uma linha nunca fica presa: `processando` vence e é recuperada;
+ * `falha`/`pendente` são reivindicadas pela próxima chamada. No intervalo
+ * residual de um claim vencido ainda em execução, o recálculo é idempotente
+ * (`input_hash`) e a fotografia é deduplicada por hash sob lock consultivo —
+ * não há fotografia nem valor duplicado.
  */
 export async function repararPosCommitOutbox(
   pool: Pool,
   processoId: string,
-  opts: { hojeReferencia: CivilDate; falhaInjetada?: (containerId: string) => void },
-): Promise<{ reparados: string[]; falhas: Array<{ containerId: string; erro: string }> }> {
-  const { rows } = await pool.query(
-    `SELECT container_id FROM demurrage_pos_commit_outbox WHERE processo_id = $1 AND estado <> 'concluido' ORDER BY container_id`,
-    [processoId],
-  );
-  const reparados: string[] = [];
-  const falhas: Array<{ containerId: string; erro: string }> = [];
-  for (const r of rows) {
-    const containerId: string = r.container_id;
+  opts: OpcoesReparoPosCommit,
+): Promise<ResultadoReparoPosCommit> {
+  const workerId = opts.workerId ?? `registro:${process.pid}:${randomUUID()}`;
+  const ttl = Math.max(1, Math.floor((opts.ttlMs ?? 10 * 60_000) / 1000));
+  const out: ResultadoReparoPosCommit = { reparados: [], falhas: [], possePerdida: [] };
+  const tentados: string[] = [];
+  for (;;) {
+    const { rows } = await pool.query(
+      `UPDATE demurrage_pos_commit_outbox o
+          SET estado = 'processando', claim_token = gen_random_uuid(), worker_id = $2,
+              expira_em = now() + ($3 || ' seconds')::interval, tentativas = o.tentativas + 1, atualizado_em = now()
+        WHERE o.id = (
+          SELECT id FROM demurrage_pos_commit_outbox
+           WHERE processo_id = $1
+             AND (estado IN ('pendente', 'falha') OR (estado = 'processando' AND expira_em < now()))
+             AND NOT (id = ANY($4::uuid[]))
+           ORDER BY container_id, id
+           FOR UPDATE SKIP LOCKED
+           LIMIT 1)
+        RETURNING o.id, o.container_id, o.claim_token, o.geracao`,
+      [processoId, workerId, String(ttl), tentados],
+    );
+    const claim = rows[0];
+    if (!claim) break;
+    tentados.push(claim.id);
+    const containerId: string = claim.container_id;
+    const vigente = `id = $1 AND estado = 'processando' AND claim_token = $2`;
     try {
-      opts.falhaInjetada?.(containerId);
+      await opts.ganchoTeste?.(containerId);
+      // O perdedor (posse vencida e assumida por outro) nem executa o trabalho.
+      const posse = await pool.query(`SELECT 1 FROM demurrage_pos_commit_outbox WHERE ${vigente}`, [claim.id, claim.claim_token]);
+      if (!posse.rowCount) { out.possePerdida.push(containerId); continue; }
       await recalcularApuracaoContainer(pool, containerId, { dataReferencia: opts.hojeReferencia });
       await atualizarFotografia(pool, containerId, { origem: { tipo: 'registro_contrato' } });
-      await pool.query(
+      const fim = await pool.query(
         `UPDATE demurrage_pos_commit_outbox
-            SET estado = 'concluido', concluido_em = now(), atualizado_em = now(), tentativas = tentativas + 1, ultimo_erro = NULL
-          WHERE processo_id = $1 AND container_id = $2`,
-        [processoId, containerId],
+            SET estado = CASE WHEN geracao = $3 THEN 'concluido' ELSE 'pendente' END,
+                concluido_em = CASE WHEN geracao = $3 THEN now() ELSE concluido_em END,
+                claim_token = NULL, worker_id = NULL, expira_em = NULL, ultimo_erro = NULL, atualizado_em = now()
+          WHERE ${vigente}
+        RETURNING estado`,
+        [claim.id, claim.claim_token, claim.geracao],
       );
-      reparados.push(containerId);
+      if (!fim.rowCount) { out.possePerdida.push(containerId); continue; }
+      if (fim.rows[0].estado === 'concluido') out.reparados.push(containerId);
+      else tentados.pop(); // novo pedido chegou durante o claim: reivindica de novo nesta chamada
     } catch (erro) {
       const mensagem = erro instanceof Error ? erro.message : String(erro);
-      await pool.query(
+      const fim = await pool.query(
         `UPDATE demurrage_pos_commit_outbox
-            SET estado = 'falha', atualizado_em = now(), tentativas = tentativas + 1, ultimo_erro = $3
-          WHERE processo_id = $1 AND container_id = $2`,
-        [processoId, containerId, mensagem],
+            SET estado = 'falha', ultimo_erro = $3, claim_token = NULL, worker_id = NULL, expira_em = NULL, atualizado_em = now()
+          WHERE ${vigente}`,
+        [claim.id, claim.claim_token, mensagem.slice(0, 500)],
       );
-      falhas.push({ containerId, erro: mensagem });
+      if (fim.rowCount) out.falhas.push({ containerId, erro: mensagem });
+      else out.possePerdida.push(containerId);
     }
   }
-  return { reparados, falhas };
+  return out;
+}
+
+/**
+ * Varredura de TODO o outbox de pós-commit (qualquer processo com linha
+ * reivindicável). Não é ligada a nenhum loop nesta fase — o scheduler/cadência
+ * está fora do escopo da D10 —, mas garante que uma linha abandonada possa ser
+ * recuperada sem depender de um novo registro do mesmo processo.
+ */
+export async function processarPosCommitOutboxPendentes(
+  pool: Pool, opts: OpcoesReparoPosCommit & { limiteProcessos?: number },
+): Promise<ResultadoReparoPosCommit> {
+  const { rows } = await pool.query(
+    `SELECT DISTINCT processo_id FROM demurrage_pos_commit_outbox
+      WHERE estado IN ('pendente', 'falha') OR (estado = 'processando' AND expira_em < now())
+      LIMIT $1`,
+    [opts.limiteProcessos ?? 100],
+  );
+  const total: ResultadoReparoPosCommit = { reparados: [], falhas: [], possePerdida: [] };
+  for (const r of rows) {
+    const parcial = await repararPosCommitOutbox(pool, r.processo_id, opts);
+    total.reparados.push(...parcial.reparados);
+    total.falhas.push(...parcial.falhas);
+    total.possePerdida.push(...parcial.possePerdida);
+  }
+  return total;
 }
 
 async function aplicar(db: Db, reg: RegistroNormalizado): Promise<ResultadoRegistroDemurrage> {
@@ -550,7 +658,12 @@ async function aplicar(db: Db, reg: RegistroNormalizado): Promise<ResultadoRegis
     await db.query(
       `INSERT INTO demurrage_pos_commit_outbox (organization_id, processo_id, container_id, estado)
        VALUES ($1, $2, $3, 'pendente')
-       ON CONFLICT (processo_id, container_id) DO UPDATE SET estado = 'pendente', atualizado_em = now()`,
+       ON CONFLICT (processo_id, container_id) DO UPDATE SET
+         geracao = demurrage_pos_commit_outbox.geracao + 1,
+         -- em processamento: mantém a posse do worker; a geração nova faz a
+         -- finalização dele devolver a linha a pendente (nada se perde).
+         estado = CASE WHEN demurrage_pos_commit_outbox.estado = 'processando' THEN 'processando' ELSE 'pendente' END,
+         atualizado_em = now()`,
       [org, processoId, tc.id],
     );
   }

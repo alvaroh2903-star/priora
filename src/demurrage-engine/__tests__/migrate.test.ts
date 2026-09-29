@@ -40,6 +40,7 @@ test('migrations: aplica todas as migrations pendentes em um banco novo e é ide
       '0027_captura_pre_alerta.sql',
       '0028_demurrage_registro.sql',
       '0029_demurrage_registro_v1_1.sql',
+      '0030_demurrage_registro_v1_2.sql',
     ];
 
     const first = await runMigrations(pool);

@@ -494,7 +494,7 @@ test('D10: registro/preparação não IMPORTAM nada de Auditoria, Courier, Liber
   // texto livre dos comentários, onde "Auditoria"/"headcargo" aparecem
   // legitimamente (a integração futura e a fonte documental aceita pelo contrato).
   const proibidos = ['auditoria', 'courier', 'liberacao', 'capturapreAlerta', 'capturaPreAlerta', 'msgraph', 'outlook', 'headcargo'].map((s) => s.toLowerCase());
-  for (const arq of ['contrato.ts', 'registrarProcessoDemurrage.ts', 'fotografia.ts', 'situacao.ts']) {
+  for (const arq of ['contrato.ts', 'registrarProcessoDemurrage.ts', 'fotografia.ts', 'situacao.ts', 'avisosFallbackManual.ts']) {
     const conteudo = readFileSync(join(__dirname, '..', 'registro', arq), 'utf8');
     const linhasImport = conteudo.split('\n').filter((l) => /^\s*import\b|require\(/.test(l));
     for (const linha of linhasImport) {

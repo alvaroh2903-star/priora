@@ -136,7 +136,7 @@ test('v1.1 §1: repararPosCommitOutbox isolado é idempotente e não recalcula q
     );
     // Já reparado pela própria chamada (sem falha injetada) — nova chamada ao reparo é NO-OP.
     const rep = await repararPosCommitOutbox(pool, r.processoId, { hojeReferencia: '2026-09-20' });
-    assert.deepEqual(rep, { reparados: [], falhas: [] });
+    assert.deepEqual(rep, { reparados: [], falhas: [], possePerdida: [] });
   } finally { await pool.end(); }
 });
 
@@ -240,12 +240,12 @@ test('v1.1 §2: negativos — governança do manual_fallback incompleta é rejei
   );
   // Justificativa vazia.
   assert.throws(
-    () => validarRegistro(contratoRegistro({ ...base, houseFreeTimeDays: o(10, 'manual_fallback', '2026-09-20T00:00:00Z', null, { justificativa: '   ', autorMembershipId: AUTOR_FAKE }) })),
+    () => validarRegistro(contratoRegistro({ ...base, houseFreeTimeDays: o(10, 'manual_fallback', '2026-09-20T00:00:00Z', 'evid-1', { justificativa: '   ', autorMembershipId: AUTOR_FAKE }) })),
     (e: any) => e.codigo === 'MANUAL_FALLBACK_INCOMPLETO',
   );
   // autorMembershipId não é UUID.
   assert.throws(
-    () => validarRegistro(contratoRegistro({ ...base, houseFreeTimeDays: o(10, 'manual_fallback', '2026-09-20T00:00:00Z', null, { justificativa: 'ok', autorMembershipId: 'não-é-uuid' }) })),
+    () => validarRegistro(contratoRegistro({ ...base, houseFreeTimeDays: o(10, 'manual_fallback', '2026-09-20T00:00:00Z', 'evid-1', { justificativa: 'ok', autorMembershipId: 'não-é-uuid' }) })),
     (e: any) => e.codigo === 'MANUAL_FALLBACK_INCOMPLETO',
   );
 });
@@ -359,8 +359,8 @@ test('v1.1 §2: positivo — manual_fallback completo (justificativa + autor) pr
     const r = await registrarProcessoDemurrage(contratoRegistro({
       organizationId: org.id, numeroProcesso: 'IM-POS-MANUAL',
       containers: [containerContrato(numero)],
-      houseFreeTimeDays: o(12, 'manual_fallback', '2026-09-20T00:00:00Z', null, { justificativa: 'confirmado por telefone com o cliente — sem SI nem House ainda', autorMembershipId: autorId }),
-      masterFreeTimeDays: o(18, 'manual_fallback', '2026-09-20T00:00:00Z', null, { justificativa: 'confirmado por telefone com o armador', autorMembershipId: autorId }),
+      houseFreeTimeDays: o(12, 'manual_fallback', '2026-09-20T00:00:00Z', 'ligacao-cliente-2026-09-20.eml', { justificativa: 'confirmado por telefone com o cliente — sem SI nem House ainda', autorMembershipId: autorId }),
+      masterFreeTimeDays: o(18, 'manual_fallback', '2026-09-20T00:00:00Z', 'ligacao-armador-2026-09-20.eml', { justificativa: 'confirmado por telefone com o armador', autorMembershipId: autorId }),
     }), { pool });
     assert.equal(r.status, 'registrado');
     const containerId = r.containers[0].containerId;
@@ -388,8 +388,8 @@ test('v1.1 §2: positivo — manual_fallback completo (justificativa + autor) pr
     await registrarProcessoDemurrage(contratoRegistro({
       organizationId: org.id, numeroProcesso: 'IM-POS-MANUAL', chaveIdempotencia: 'reprocesso-mesma-observacao-manual',
       containers: [containerContrato(numero)],
-      houseFreeTimeDays: o(12, 'manual_fallback', '2026-09-20T00:00:00Z', null, { justificativa: 'confirmado por telefone com o cliente — sem SI nem House ainda', autorMembershipId: autorId }),
-      masterFreeTimeDays: o(18, 'manual_fallback', '2026-09-20T00:00:00Z', null, { justificativa: 'confirmado por telefone com o armador', autorMembershipId: autorId }),
+      houseFreeTimeDays: o(12, 'manual_fallback', '2026-09-20T00:00:00Z', 'ligacao-cliente-2026-09-20.eml', { justificativa: 'confirmado por telefone com o cliente — sem SI nem House ainda', autorMembershipId: autorId }),
+      masterFreeTimeDays: o(18, 'manual_fallback', '2026-09-20T00:00:00Z', 'ligacao-armador-2026-09-20.eml', { justificativa: 'confirmado por telefone com o armador', autorMembershipId: autorId }),
     }), { pool });
     const { rows: govTotal } = await pool.query(`SELECT count(*)::int n FROM demurrage_fallback_manual_justificativas`);
     assert.equal(govTotal[0].n, 2, 'reprocessar a mesma observação não duplica a governança (1 por observação: house + master)');
@@ -408,7 +408,7 @@ test('v1.1 §2: negativo — autorMembershipId de outra organização é rejeita
     await assert.rejects(
       () => registrarProcessoDemurrage(contratoRegistro({
         organizationId: orgA.id, numeroProcesso: 'IM-NEG-ORG', containers: [containerContrato(numero)],
-        houseFreeTimeDays: o(10, 'manual_fallback', '2026-09-20T00:00:00Z', null, { justificativa: 'tentativa cruzada', autorMembershipId: autorDeB }),
+        houseFreeTimeDays: o(10, 'manual_fallback', '2026-09-20T00:00:00Z', 'evidencia-x', { justificativa: 'tentativa cruzada', autorMembershipId: autorDeB }),
       }), { pool }),
       (e: any) => e instanceof ErroContratoDemurrage && e.codigo === 'MANUAL_FALLBACK_INCOMPLETO',
     );

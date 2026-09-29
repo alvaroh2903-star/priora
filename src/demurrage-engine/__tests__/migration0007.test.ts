@@ -123,7 +123,7 @@ test('0007 — organization_id imutável nas tabelas de tenant', { skip: !url },
       'ft_divergencias', 'ft_divergencia_eventos', 'ft_divergencia_entregas', 'recalculo_outbox',
       'email_caixas', 'email_sync_estado', 'si_conversas_descobertas',
       'demurrage_registros', 'processo_campos_selecionados', 'container_equipamento_original', 'demurrage_pendencias',
-      'demurrage_pos_commit_outbox', 'demurrage_fallback_manual_justificativas'];
+      'demurrage_pos_commit_outbox', 'demurrage_fallback_manual_justificativas', 'demurrage_fallback_manual_avisos'];
     const { rows } = await pool.query(`
       SELECT c.table_name,
              EXISTS (SELECT 1 FROM pg_trigger tg

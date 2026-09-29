@@ -67,7 +67,13 @@ export const FONTES_POR_CAMPO: Readonly<Record<CampoComFonte, ReadonlySet<FonteC
   masterFreeTimeDays: new Set<FonteContrato>(['master_bl', 'shipping_instructions', 'headcargo', 'manual_fallback']),
 };
 
-/** Governança do `manual_fallback` (Free Time apenas): justificativa + autor identificado, sempre auditável. */
+/**
+ * Governança do `manual_fallback` (Free Time apenas): justificativa + autor
+ * identificado + `Observado.evidenciaRef` não vazia (v1.2) — os três exigidos
+ * juntos, sempre auditáveis. O autor precisa ter papel INTERNO (ANALYST,
+ * MANAGER ou ADMIN — a mesma regra do responsável operacional, migration
+ * 0007); CLIENT é recusado.
+ */
 export interface ManualFallbackGovernanca {
   justificativa: string;
   /** organization_memberships.id de quem autorizou o fallback manual (nunca um texto livre). */
@@ -80,7 +86,7 @@ export interface Observado<T> {
   fonte: FonteContrato;
   observadoEm: string;
   evidenciaRef?: string | null;
-  /** OBRIGATÓRIO quando `fonte === 'manual_fallback'`; rejeitado com qualquer outra fonte. */
+  /** OBRIGATÓRIO quando `fonte === 'manual_fallback'` (junto com `evidenciaRef` não vazia); rejeitado com qualquer outra fonte. */
   manualFallback?: ManualFallbackGovernanca | null;
 }
 
@@ -126,7 +132,8 @@ export type CodigoErroContrato =
   | 'VERSAO_NAO_SUPORTADA' | 'CAMPO_OBRIGATORIO' | 'CAMPO_NAO_ACEITO' | 'NUMERO_PROCESSO_INVALIDO'
   | 'CONTAINER_NUMERO_INVALIDO' | 'CONTAINER_DUPLICADO_NA_ENTRADA' | 'FONTE_NAO_ACEITA' | 'OBSERVADO_EM_INVALIDO'
   | 'FREE_TIME_INVALIDO' | 'CONDICAO_INVALIDA' | 'CONTAINER_EM_OUTRO_PROCESSO' | 'CHAVE_IDEMPOTENCIA_REUTILIZADA'
-  | 'PROCESSO_FINAL' | 'ORGANIZACAO_INEXISTENTE' | 'MANUAL_FALLBACK_INCOMPLETO' | 'MANUAL_FALLBACK_NAO_ACEITO';
+  | 'PROCESSO_FINAL' | 'ORGANIZACAO_INEXISTENTE' | 'MANUAL_FALLBACK_INCOMPLETO' | 'MANUAL_FALLBACK_NAO_ACEITO'
+  | 'MANUAL_FALLBACK_AUTOR_NAO_AUTORIZADO';
 
 export class ErroContratoDemurrage extends Error {
   constructor(public readonly codigo: CodigoErroContrato, public readonly detalhe: Record<string, unknown> = {}) {
@@ -208,6 +215,10 @@ function validarObservado(nomeErro: string, campoMatriz: CampoComFonte, o: Obser
     const mf = o.manualFallback;
     if (!mf || typeof mf.justificativa !== 'string' || !mf.justificativa.trim() || !mf.autorMembershipId) {
       throw new ErroContratoDemurrage('MANUAL_FALLBACK_INCOMPLETO', { campo: nomeErro });
+    }
+    // v1.2 — evidência obrigatória: null, vazia ou só espaços é recusada.
+    if (typeof o.evidenciaRef !== 'string' || !o.evidenciaRef.trim()) {
+      throw new ErroContratoDemurrage('MANUAL_FALLBACK_INCOMPLETO', { campo: `${nomeErro}.evidenciaRef` });
     }
     if (!RE_UUID.test(mf.autorMembershipId)) {
       throw new ErroContratoDemurrage('MANUAL_FALLBACK_INCOMPLETO', { campo: `${nomeErro}.manualFallback.autorMembershipId` });
