@@ -136,7 +136,7 @@ test('v1.1 §1: repararPosCommitOutbox isolado é idempotente e não recalcula q
     );
     // Já reparado pela própria chamada (sem falha injetada) — nova chamada ao reparo é NO-OP.
     const rep = await repararPosCommitOutbox(pool, r.processoId, { hojeReferencia: '2026-09-20' });
-    assert.deepEqual(rep, { reparados: [], falhas: [], possePerdida: [] });
+    assert.deepEqual(rep, { reivindicados: 0, reparados: [], falhas: [], possePerdida: [] });
   } finally { await pool.end(); }
 });
 

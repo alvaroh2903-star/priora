@@ -15,8 +15,11 @@ import { Pool } from 'pg';
  * vez com `claim_token`, envio fora de transação, finalização condicionada ao
  * token vigente, PROCESSING vencido recuperável, FAILED reprocessável.
  *
- * Esta fase NÃO liga o worker a nenhum loop (scheduler/cadência fora do escopo
- * da D10): o canal concreto é injetado pela porta `AvisoFallbackManualTransport`.
+ * v1.3: ligado ao tick do scheduler da Demurrage como etapa própria, com o
+ * canal real (Graph) injetado pela porta `AvisoFallbackManualTransport`. Só
+ * entregas cujo destinatário ainda é gestor (MANAGER/ADMIN) são reivindicadas —
+ * um membership rebaixado a CLIENT nunca recebe (a entrega fica parada, sem
+ * envio, e volta a ser elegível só se o papel de gestor for restituído).
  */
 
 export interface AvisoFallbackManual {
@@ -56,13 +59,20 @@ export interface ProcessarAvisosFallbackResultado {
   enviadas: number;
   falhadas: number;
   possePerdida: number;
+  /** Entregas ainda entregáveis ao fim da etapa (não SENT, abaixo do máximo de tentativas, destinatário gestor). */
+  restantes: number;
+  /** Entregas FAILED que atingiram o máximo de tentativas (não são mais reivindicadas automaticamente). */
+  esgotadas: number;
 }
+
+/** Papéis que podem RECEBER o aviso (gestores). CLIENT nunca. */
+const PAPEIS_DESTINATARIO = ['MANAGER', 'ADMIN'];
 
 export async function processarAvisosFallbackManualPendentes(input: ProcessarAvisosFallbackInput): Promise<ProcessarAvisosFallbackResultado> {
   const max = input.maxTentativas ?? 5;
   const limite = input.limite ?? 50;
   const ttl = Math.max(1, Math.floor((input.ttlMs ?? 5 * 60_000) / 1000));
-  const out: ProcessarAvisosFallbackResultado = { reivindicadas: 0, enviadas: 0, falhadas: 0, possePerdida: 0 };
+  const out: ProcessarAvisosFallbackResultado = { reivindicadas: 0, enviadas: 0, falhadas: 0, possePerdida: 0, restantes: 0, esgotadas: 0 };
   const processadas: string[] = [];
   for (let i = 0; i < limite; i++) {
     // 1) CLAIM persistente de exatamente uma entrega.
@@ -71,15 +81,17 @@ export async function processarAvisosFallbackManualPendentes(input: ProcessarAvi
           SET status = 'PROCESSING', claim_token = gen_random_uuid(), worker_id = $1,
               expira_em = now() + ($2 || ' seconds')::interval, tentativas = a.tentativas + 1, atualizado_em = now()
         WHERE a.id = (
-          SELECT id FROM demurrage_fallback_manual_avisos
-           WHERE tentativas < $3
-             AND (status IN ('PENDING', 'FAILED') OR (status = 'PROCESSING' AND expira_em < now()))
-             AND NOT (id = ANY($4::uuid[]))
-           ORDER BY criado_em, id
-           FOR UPDATE SKIP LOCKED
+          SELECT av.id FROM demurrage_fallback_manual_avisos av
+            JOIN organization_memberships m ON m.id = av.destinatario_membership_id
+           WHERE av.tentativas < $3
+             AND (av.status IN ('PENDING', 'FAILED') OR (av.status = 'PROCESSING' AND av.expira_em < now()))
+             AND NOT (av.id = ANY($4::uuid[]))
+             AND m.papel::text = ANY($5::text[])
+           ORDER BY av.criado_em, av.id
+           FOR UPDATE OF av SKIP LOCKED
            LIMIT 1)
         RETURNING a.id, a.claim_token`,
-      [input.workerId, String(ttl), max, processadas],
+      [input.workerId, String(ttl), max, processadas, PAPEIS_DESTINATARIO],
     );
     const claim = claims[0];
     if (!claim) break;
@@ -137,5 +149,15 @@ export async function processarAvisosFallbackManualPendentes(input: ProcessarAvi
     if (!fim.rowCount) { out.possePerdida++; continue; }
     if (r.ok) out.enviadas++; else out.falhadas++;
   }
+  const { rows: cont } = await input.pool.query(
+    `SELECT count(*) FILTER (WHERE av.status <> 'SENT' AND av.tentativas < $1 AND m.papel::text = ANY($2::text[]))::int AS restantes,
+            count(*) FILTER (WHERE av.status = 'FAILED' AND av.tentativas >= $1)::int AS esgotadas
+       FROM demurrage_fallback_manual_avisos av
+       JOIN organization_memberships m ON m.id = av.destinatario_membership_id
+      WHERE av.status <> 'SENT'`,
+    [max, PAPEIS_DESTINATARIO],
+  );
+  out.restantes = cont[0].restantes;
+  out.esgotadas = cont[0].esgotadas;
   return out;
 }

@@ -282,9 +282,13 @@ export interface OpcoesReparoPosCommit {
   ttlMs?: number;
   /** SÓ TESTE: executado depois do claim e antes do trabalho (pode lançar ou aguardar). */
   ganchoTeste?: (containerId: string) => void | Promise<void>;
+  /** Máximo de claims nesta chamada (v1.3 — limite por ciclo do scheduler). Default: sem limite. */
+  limite?: number;
 }
 
 export interface ResultadoReparoPosCommit {
+  /** Claims obtidos nesta chamada (inclui o reclaim de uma linha cuja geração mudou durante o claim). */
+  reivindicados: number;
   reparados: string[];
   falhas: Array<{ containerId: string; erro: string }>;
   /** Contêineres cuja posse foi perdida (claim vencido e assumido por outro): nada foi finalizado por este worker. */
@@ -321,9 +325,10 @@ export async function repararPosCommitOutbox(
 ): Promise<ResultadoReparoPosCommit> {
   const workerId = opts.workerId ?? `registro:${process.pid}:${randomUUID()}`;
   const ttl = Math.max(1, Math.floor((opts.ttlMs ?? 10 * 60_000) / 1000));
-  const out: ResultadoReparoPosCommit = { reparados: [], falhas: [], possePerdida: [] };
+  const out: ResultadoReparoPosCommit = { reivindicados: 0, reparados: [], falhas: [], possePerdida: [] };
   const tentados: string[] = [];
-  for (;;) {
+  const limite = opts.limite ?? Number.POSITIVE_INFINITY;
+  while (out.reivindicados < limite) {
     const { rows } = await pool.query(
       `UPDATE demurrage_pos_commit_outbox o
           SET estado = 'processando', claim_token = gen_random_uuid(), worker_id = $2,
@@ -341,6 +346,7 @@ export async function repararPosCommitOutbox(
     );
     const claim = rows[0];
     if (!claim) break;
+    out.reivindicados++;
     tentados.push(claim.id);
     const containerId: string = claim.container_id;
     const vigente = `id = $1 AND estado = 'processando' AND claim_token = $2`;
@@ -380,27 +386,35 @@ export async function repararPosCommitOutbox(
 
 /**
  * Varredura de TODO o outbox de pós-commit (qualquer processo com linha
- * reivindicável). Não é ligada a nenhum loop nesta fase — o scheduler/cadência
- * está fora do escopo da D10 —, mas garante que uma linha abandonada possa ser
- * recuperada sem depender de um novo registro do mesmo processo.
+ * reivindicável: `pendente`, `falha` ou `processando` vencido). v1.3: ligada ao
+ * tick do scheduler da Demurrage como etapa própria de manutenção — não depende
+ * de um novo registro do processo. `limite` é o orçamento de CLAIMS do ciclo
+ * inteiro (somado entre processos). `restantes` = linhas ainda não concluídas
+ * ao fim da etapa (contagem pelo índice parcial `estado <> 'concluido'`).
  */
 export async function processarPosCommitOutboxPendentes(
   pool: Pool, opts: OpcoesReparoPosCommit & { limiteProcessos?: number },
-): Promise<ResultadoReparoPosCommit> {
+): Promise<ResultadoReparoPosCommit & { restantes: number }> {
+  const orcamento = opts.limite ?? 50;
   const { rows } = await pool.query(
-    `SELECT DISTINCT processo_id FROM demurrage_pos_commit_outbox
+    `SELECT processo_id FROM demurrage_pos_commit_outbox
       WHERE estado IN ('pendente', 'falha') OR (estado = 'processando' AND expira_em < now())
+      GROUP BY processo_id ORDER BY min(atualizado_em)
       LIMIT $1`,
     [opts.limiteProcessos ?? 100],
   );
-  const total: ResultadoReparoPosCommit = { reparados: [], falhas: [], possePerdida: [] };
+  const total: ResultadoReparoPosCommit = { reivindicados: 0, reparados: [], falhas: [], possePerdida: [] };
   for (const r of rows) {
-    const parcial = await repararPosCommitOutbox(pool, r.processo_id, opts);
+    const saldo = orcamento - total.reivindicados;
+    if (saldo <= 0) break;
+    const parcial = await repararPosCommitOutbox(pool, r.processo_id, { ...opts, limite: saldo });
+    total.reivindicados += parcial.reivindicados;
     total.reparados.push(...parcial.reparados);
     total.falhas.push(...parcial.falhas);
     total.possePerdida.push(...parcial.possePerdida);
   }
-  return total;
+  const { rows: rest } = await pool.query(`SELECT count(*)::int AS n FROM demurrage_pos_commit_outbox WHERE estado <> 'concluido'`);
+  return { ...total, restantes: rest[0].n };
 }
 
 async function aplicar(db: Db, reg: RegistroNormalizado): Promise<ResultadoRegistroDemurrage> {

@@ -220,7 +220,7 @@ test('v1.2 §2: falha no transporte mantém a entrega reprocessável; sucesso po
     const r1 = await processarAvisosFallbackManualPendentes({
       pool, workerId: 'w1', transport: { enviar: async () => { throw new Error('SMTP indisponível'); } },
     });
-    assert.deepEqual({ ...r1 }, { reivindicadas: 1, enviadas: 0, falhadas: 1, possePerdida: 0 });
+    assert.deepEqual({ reivindicadas: r1.reivindicadas, enviadas: r1.enviadas, falhadas: r1.falhadas, possePerdida: r1.possePerdida }, { reivindicadas: 1, enviadas: 0, falhadas: 1, possePerdida: 0 });
     const { rows: f } = await pool.query(`SELECT status, erro, tentativas, claim_token FROM demurrage_fallback_manual_avisos`);
     assert.equal(f[0].status, 'FAILED');
     assert.match(f[0].erro, /SMTP indisponível/);
@@ -428,7 +428,7 @@ test('v1.2 §4: perdedor não executa nem toca a posse do dono; dono finaliza', 
     assert.equal(antes.worker_id, 'A');
     let bExecutou = false;
     const b = await repararPosCommitOutbox(pool, processoId, { hojeReferencia: '2026-09-20', workerId: 'B', ganchoTeste: () => { bExecutou = true; } });
-    assert.deepEqual(b, { reparados: [], falhas: [], possePerdida: [] });
+    assert.deepEqual(b, { reivindicados: 0, reparados: [], falhas: [], possePerdida: [] });
     assert.equal(bExecutou, false);
     const durante = await linha(pool, processoId);
     assert.equal(durante.claim_token, antes.claim_token, 'perdedor não alterou o token');
@@ -499,7 +499,7 @@ test('v1.2 §4: falha mantém o item recuperável; concluído é no-op', { skip:
 
     let chamado = false;
     const r3 = await repararPosCommitOutbox(pool, processoId, { hojeReferencia: '2026-09-20', workerId: 'C', ganchoTeste: () => { chamado = true; } });
-    assert.deepEqual(r3, { reparados: [], falhas: [], possePerdida: [] });
+    assert.deepEqual(r3, { reivindicados: 0, reparados: [], falhas: [], possePerdida: [] });
     assert.equal(chamado, false);
     assert.equal((await linha(pool, processoId)).tentativas, ok.tentativas, 'concluído não é reivindicado');
   } finally { await pool.end(); }
