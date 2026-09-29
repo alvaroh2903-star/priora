@@ -64,7 +64,11 @@ export type CodigoErroResponsabilidade =
   // v1.1 (corretiva): NAO_APLICAVEL só é aceito num universo bem definido —
   // relógio cliente OK/zero, relógio Rocket OK/positivo, ambos fechados na
   // devolução, Free Time determinável e House > Master.
-  | 'NAO_APLICAVEL_INVALIDO';
+  | 'NAO_APLICAVEL_INVALIDO'
+  // v1.2 (corretiva final): o relógio persistido que sustentaria a decisão
+  // não corresponde aos fatos atuais do contêiner (OBSOLETO) ou não existe
+  // (AUSENTE) — o pipeline recalcula primeiro, o Gestor decide depois.
+  | 'RELOGIO_OBSOLETO';
 
 export class ErroResponsabilidade extends Error {
   constructor(public readonly codigo: CodigoErroResponsabilidade, public readonly detalhe: Record<string, unknown> = {}) {

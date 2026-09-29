@@ -180,6 +180,7 @@ test('migration 0006: compatibilidade com registros existentes do vínculo antig
       '0031_responsabilidade_decisoes.sql',
       '0032_responsabilidade_projecao_guard.sql',
       '0033_responsabilidade_v1_1_corretiva.sql',
+      '0034_responsabilidade_v1_2_agregado.sql',
     ]);
 
     const processos = new ProcessoRepository(pool);

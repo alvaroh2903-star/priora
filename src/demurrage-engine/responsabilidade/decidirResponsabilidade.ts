@@ -5,6 +5,7 @@ import { hashEstavel } from '../registro/contrato';
 import { atualizarFotografia } from '../registro/fotografia';
 import { repararPosCommitOutbox } from '../registro/registrarProcessoDemurrage';
 import { ValorApuradoRepository } from '../persistence/valorApuradoRepository';
+import { RelogioRepository } from '../persistence/relogioRepository';
 import { ClosingEventRepository, TipoEventoFechamento } from '../persistence/closingEventRepository';
 import { ReaberturaRepository } from '../persistence/reaberturaRepository';
 import {
@@ -109,6 +110,21 @@ export async function decidirResponsabilidade(
 
     const devolucao: CivilDate | null = c.effective_return_date ?? c.tracking_return_date ?? null;
     if (!devolucao) throw new ErroResponsabilidade('ANTES_DA_DEVOLUCAO', { containerId: input.containerId });
+
+    // v1.2 (corretiva 3): nunca decidir sobre um relógio obsoleto. Reutiliza a
+    // validação de cache do RelogioRepository (mesma fórmula de input_hash do
+    // recalculador — nada é duplicado aqui) para os fatos ATUAIS do contêiner
+    // e a data final da devolução. Não recalcula: o pipeline recalcula
+    // primeiro, o Gestor decide depois.
+    //  - RELOGIO_CLIENTE: o relógio do cliente;
+    //  - RELOGIO_ROCKET: o Rocket e o do cliente (que prova o zero do cliente);
+    //  - NAO_APLICAVEL: os dois.
+    const relogiosExigidos: Array<'cliente' | 'rocket'> = input.baseRelogio === 'RELOGIO_CLIENTE' ? ['cliente'] : ['cliente', 'rocket'];
+    const relogioRepo = new RelogioRepository(client as unknown as Pool);
+    for (const tipo of relogiosExigidos) {
+      const { validade } = await relogioRepo.buscarValido(input.containerId, tipo, devolucao);
+      if (validade !== 'VALIDO') throw new ErroResponsabilidade('RELOGIO_OBSOLETO', { relogio: tipo, validade });
+    }
 
     const { rows: relRows } = await client.query(
       `SELECT tipo, estado, dias_demurrage, primeiro_dia_demurrage, data_final_apuracao, input_hash
@@ -280,6 +296,10 @@ export async function decidirResponsabilidade(
         [input.organizationId, decisaoId, p.lado, p.inicio, p.fim],
       );
     }
+    // v1.2: diária e moeda por dia só quando a divisão financeira está
+    // CALCULADA (o banco exige, no COMMIT, que soma e moeda dos dias batam com
+    // a decisão; sem valor calculado, nenhum dia carrega diária).
+    const valorado = valorStatus === 'CALCULADO';
     for (const d of diasValorados) {
       await client.query(
         `INSERT INTO responsabilidade_decisao_dias
@@ -287,7 +307,7 @@ export async function decidirResponsabilidade(
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
         [
           input.organizationId, decisaoId, d.dia, d.lado, d.posicao, d.faixaInicio, d.faixaFim,
-          d.valorDiaCents === null ? null : d.valorDiaCents / 100, d.valorDiaCents === null ? null : moeda,
+          valorado && d.valorDiaCents !== null ? d.valorDiaCents / 100 : null, valorado ? moeda : null,
         ],
       );
     }

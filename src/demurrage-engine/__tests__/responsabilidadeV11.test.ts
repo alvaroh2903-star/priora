@@ -156,7 +156,7 @@ test('v1.1 #1: NAO_APLICAVEL rejeitado quando o cliente tem demurrage', { skip: 
   } finally { await pool.end(); }
 });
 
-test('v1.1 #1: NAO_APLICAVEL rejeitado com Free Time indeterminável e com House ≤ Master (serviço e banco)', { skip: !url }, async () => {
+test('v1.1 #1: NAO_APLICAVEL rejeitado com Free Time indeterminável e com House ≤ Master (serviço: RELOGIO_OBSOLETO desde a v1.2; banco: NAO_APLICAVEL_INVALIDO)', { skip: !url }, async () => {
   const pool = testPool();
   try {
     await setupBanco(pool);
@@ -165,19 +165,21 @@ test('v1.1 #1: NAO_APLICAVEL rejeitado com Free Time indeterminável e com House
     // Free Time corrigido depois produziria antes do recálculo.
     const c = await cenario(pool, 'NAFT', { discharge: '2026-03-01', houseFT: 10, masterFT: 3, effective: '2026-03-05' });
 
+    // v1.2: o serviço agora recusa ANTES, porque o relógio do cliente ficou
+    // obsoleto para os fatos atuais (RELOGIO_OBSOLETO) — mais estrito que a v1.1.
+    // A barreira do banco (NAO_APLICAVEL_INVALIDO) continua valendo por SQL direto.
     await pool.query(`UPDATE containers SET house_free_time_days = NULL WHERE id = $1`, [c.containerId]);
     const r1 = await tentarNaoAplicavel(pool, c);
     assert.equal(r1.ok, false);
     if (r1.ok) return;
-    assert.equal(r1.codigo, 'NAO_APLICAVEL_INVALIDO');
-    assert.equal((r1.detalhe as any).motivo, 'free_time_indeterminavel');
+    assert.equal(r1.codigo, 'RELOGIO_OBSOLETO');
+    assert.equal((r1.detalhe as any).relogio, 'cliente');
 
     await pool.query(`UPDATE containers SET house_free_time_days = 3 WHERE id = $1`, [c.containerId]);
     const r2 = await tentarNaoAplicavel(pool, c);
     assert.equal(r2.ok, false);
     if (r2.ok) return;
-    assert.equal(r2.codigo, 'NAO_APLICAVEL_INVALIDO');
-    assert.equal((r2.detalhe as any).motivo, 'house_free_time_nao_maior_que_master');
+    assert.equal(r2.codigo, 'RELOGIO_OBSOLETO');
 
     // Banco: a mesma decisão inserida por SQL direto (sem o serviço) também é recusada.
     const autor = await novoGestor(pool, c.orgId);
@@ -241,6 +243,12 @@ async function inserirDecisaoSql(
 }
 
 async function inserirDiasSql(client: PoolClient, orgId: string, decisaoId: string, primeiro: string, n: number, lado: 'ROCKET' | 'CLIENTE') {
+  // v1.2: o agregado exige o período declarado correspondente aos dias.
+  await client.query(
+    `INSERT INTO responsabilidade_decisao_periodos (organization_id, decisao_id, lado, inicio, fim)
+     VALUES ($1, $2, $3, $4::date, ($4::date + $5::int))`,
+    [orgId, decisaoId, lado, primeiro, n - 1],
+  );
   for (let i = 0; i < n; i++) {
     await client.query(
       `INSERT INTO responsabilidade_decisao_dias (organization_id, decisao_id, dia, lado, posicao)
@@ -618,7 +626,7 @@ test('v1.1 migração 0032 → 0033: decisões existentes preservadas; a nova re
     const antes = (await pool.query(`SELECT id, versao, status, base, dias_rocket, dias_cliente, valor_cliente FROM responsabilidade_decisoes ORDER BY id`)).rows;
     const diasAntes = (await pool.query(`SELECT count(*)::int AS n FROM responsabilidade_decisao_dias`)).rows[0].n;
 
-    const r = await runMigrations(pool);
+    const r = await runMigrations(pool, { until: '0033_responsabilidade_v1_1_corretiva.sql' });
     assert.deepEqual(r.applied, ['0033_responsabilidade_v1_1_corretiva.sql']);
 
     // Nada existente é reescrito nem invalidado pela migração.
