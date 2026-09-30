@@ -13,6 +13,7 @@ import { processRouter } from './routes/processRoutes';
 import { courierRouter } from './routes/courierRoutes';
 import { trackingRouter } from './routes/trackingRoutes';
 import { demurrageRouter } from './routes/demurrageRoutes';
+import { demurrageV2Router } from './routes/demurrageV2Routes';
 import { auditoriaRouter } from './routes/auditoriaRoutes';
 import { capturaRouter } from './routes/capturaRoutes';
 import { iniciarSchedulerDemurrage } from './demurrage/schedulerBootstrap';
@@ -65,6 +66,12 @@ app.use('/api/parse', parseRouter);
 app.use('/api/processes', processRouter);
 app.use('/api/couriers', courierRouter);
 app.use('/api/tracking', trackingRouter);
+// D12 (leitura interna, V2) montada ANTES da V1 (Q10 do diagnóstico): o
+// router V1 roda seu próprio `requireAuth` para QUALQUER caminho sob
+// '/api/demurrage', inclusive '/v2/...' — montar a V2 primeiro evita esse
+// middleware duplicado. Nenhuma colisão de caminho: a V1 só tem '/' e
+// '/solicitar-minuta'.
+app.use('/api/demurrage/v2', demurrageV2Router);
 app.use('/api/demurrage', demurrageRouter);
 app.use('/api/auditoria', auditoriaRouter);
 app.use('/api/captura', capturaRouter);

@@ -6,7 +6,7 @@ import { derivarEstadoContainer, derivarApuracaoDemurrageStatus } from '../lifec
 import { derivarPrioridadeContainer } from '../lifecycle/priorityEngine';
 import { consolidarProcesso } from '../lifecycle/processConsolidation';
 import { derivarResponsabilidade } from '../lifecycle/responsabilidade';
-import { Badge, ClockFact, ContainerLifecycle, ContainerLifecycleFacts, ContainerStateResult, DocumentaryStatus, ProcessoLifecycleResult, Responsabilidade, ValorFact } from '../lifecycle/types';
+import { Badge, ClockFact, ContainerLifecycle, ContainerLifecycleFacts, ContainerStateResult, DocumentaryStatus, PrioridadeBalde, ProcessoLifecycleResult, Responsabilidade, ValorFact } from '../lifecycle/types';
 import { MinutaRepository } from './minutaRepository';
 import { RelogioRepository } from './relogioRepository';
 
@@ -52,129 +52,212 @@ function lastFreeDay(discharge: CivilDate | null, ft: number | null): CivilDate 
   return `${dt.getUTCFullYear()}-${p(dt.getUTCMonth() + 1)}-${p(dt.getUTCDate())}`;
 }
 
+/**
+ * Reconstrução PURA (sem I/O) do pacote de ciclo a partir de uma linha de
+ * `containers` já carregada + fatos já montados. Extraída para ser chamada
+ * tanto pelo caminho unitário quanto pelo caminho em lote (Fase D12, Q7) —
+ * uma só implementação, nenhuma regra de estado/prioridade duplicada aqui
+ * (delega a `derivarPrioridadeContainer`, congelada na Fase 7).
+ */
+function montarContainerLifecycleDeRow(
+  row: { id: string; estado: string | null; estado_badges: string[] | null; documentary_status: string | null; escalation_required: boolean | null; severidade_dias: number | null; prioridade_balde: PrioridadeBalde | null; prioridade_motivo: string | null },
+  facts: ContainerLifecycleFacts,
+): ContainerLifecycle {
+  const badges = (row.estado_badges ?? []) as Badge[];
+  const state: ContainerStateResult = {
+    estado: row.estado as any,
+    escalationRequired: row.escalation_required === true,
+    severidadeDias: row.severidade_dias ?? 0,
+    clienteEmDemurrage: badges.includes('clienteEmDemurrage'),
+    rocketExposta: badges.includes('rocketExposta'),
+    apuracaoDemurrageStatus: facts.apuracaoDemurrageStatus,
+    badges,
+    documentaryStatus: (row.documentary_status ?? 'NAO_APLICAVEL') as DocumentaryStatus,
+    motivo: row.prioridade_motivo ?? '',
+  };
+  const priority = { balde: row.prioridade_balde as PrioridadeBalde, promocaoTopo: derivarPrioridadeContainer(state).promocaoTopo };
+  return { facts, state, priority };
+}
+
 export class LifecycleRepository {
   constructor(private pool: Pool = getPool()) {}
 
-  /** Monta os fatos puros de um contêiner a partir do banco. */
+  /**
+   * Monta os fatos puros de um contêiner a partir do banco. Delega ao LOTE de
+   * um único elemento (Fase D12, Q7) — existe UMA SÓ implementação da
+   * montagem de fatos; nenhuma regra de lifecycle/prioridade é duplicada
+   * entre o caminho unitário (pipeline/gates) e o caminho em lote (leitura
+   * operacional da D12, que precisa de custo constante por requisição).
+   */
   async montarFatos(containerId: string, config: LifecycleConfig): Promise<ContainerLifecycleFacts> {
+    const lote = await this.montarFatosEmLote([containerId], config);
+    const facts = lote.get(containerId);
+    if (!facts) throw new Error(`lifecycle: contêiner ${containerId} não encontrado`);
+    return facts;
+  }
+
+  /**
+   * Monta os fatos de VÁRIOS contêineres com um número de consultas CONSTANTE
+   * (não proporcional à quantidade de contêineres) — sempre as mesmas 7
+   * consultas (`= ANY($1)`), qualquer que seja o tamanho de `containerIds`.
+   * Usado pela fila operacional da D12 (Gate G2) para eliminar o N+1 que a
+   * chamada unitária tinha quando repetida por processo. O resultado para
+   * cada id é ESTRUTURALMENTE IDÊNTICO ao que `montarFatos(id, config)`
+   * devolveria (mesma implementação, mesmas regras) — não há um segundo
+   * caminho de cálculo.
+   */
+  async montarFatosEmLote(containerIds: string[], config: LifecycleConfig): Promise<Map<string, ContainerLifecycleFacts>> {
+    const resultado = new Map<string, ContainerLifecycleFacts>();
+    if (containerIds.length === 0) return resultado;
+    const ids = Array.from(new Set(containerIds));
+
     const { rows: cr } = await this.pool.query(
-      `SELECT discharge_date, house_free_time_days, master_free_time_days,
+      `SELECT id, discharge_date, house_free_time_days, master_free_time_days,
               tracking_return_date, effective_return_date, responsabilidade
-         FROM containers WHERE id = $1`,
-      [containerId],
+         FROM containers WHERE id = ANY($1)`,
+      [ids],
     );
-    if (!cr.length) throw new Error(`lifecycle: contêiner ${containerId} não encontrado`);
-    const c = cr[0];
-    const emptyReturnDate: CivilDate | null = c.effective_return_date ?? c.tracking_return_date ?? null;
-    const emptyReturn = emptyReturnDate !== null;
+    const containerRowById = new Map<string, any>(cr.map((r) => [r.id, r]));
+    const faltando = ids.filter((id) => !containerRowById.has(id));
+    if (faltando.length) throw new Error(`lifecycle: contêiner(es) não encontrado(s): ${faltando.join(', ')}`);
 
     // Relógios = ÚNICA projeção: LEMOS o cache persistido (não recalculamos aqui).
     const { rows: relRows } = await this.pool.query(
-      `SELECT tipo, estado, dias_demurrage, ultimo_dia_livre FROM relogios WHERE container_id = $1`,
-      [containerId],
+      `SELECT container_id, tipo, estado, dias_demurrage, ultimo_dia_livre FROM relogios WHERE container_id = ANY($1)`,
+      [ids],
     );
-    const relCliente = relRows.find((r) => r.tipo === 'cliente');
-    const relRocket = relRows.find((r) => r.tipo === 'rocket');
-    const clocks = { cliente: clockFactDoCache(relCliente), rocket: clockFactDoCache(relRocket) };
+    const relPorContainer = new Map<string, any[]>();
+    for (const r of relRows) {
+      if (!relPorContainer.has(r.container_id)) relPorContainer.set(r.container_id, []);
+      relPorContainer.get(r.container_id)!.push(r);
+    }
 
     // Valores (Fase 4): valorCliente + exposicaoRocket. Clarificação B: só o motor
     // do modelo comercial ATUAL do processo é elegível para o cliente — um cálculo
     // histórico do outro modelo (superseded) nunca é ativo, mas filtramos por
     // segurança para que jamais concorra no lifecycle/consolidação/desempate.
     const { rows: vr } = await this.pool.query(
-      `SELECT relogio_tipo, motor_comercial, total, moeda, confirmation_status, dias_cobrados
+      `SELECT container_id, relogio_tipo, motor_comercial, total, moeda, confirmation_status, dias_cobrados
          FROM valores_apurados
-        WHERE container_id = $1 AND calculation_status IN ('OPEN', 'FINAL')`,
-      [containerId],
+        WHERE container_id = ANY($1) AND calculation_status IN ('OPEN', 'FINAL')`,
+      [ids],
     );
-    const { rows: cond } = await this.pool.query(
-      `SELECT cc.termo_tipo FROM processos p
-         JOIN containers c ON c.processo_id = p.id
-         LEFT JOIN condicoes_comerciais cc ON cc.id = p.condicao_comercial_id
-        WHERE c.id = $1`,
-      [containerId],
-    );
-    const motorClienteAplicavel = cond[0]?.termo_tipo === 'embarque' ? 'termo_embarque'
-      : cond[0]?.termo_tipo === 'unico' ? 'termo_unico' : null;
-    const melhorValor = (tipo: 'cliente' | 'rocket'): ValorFact => {
-      const candidatos = vr
-        .filter((v) => v.relogio_tipo === tipo && v.total !== null && v.confirmation_status !== 'UNAVAILABLE'
-          && (tipo !== 'cliente' || motorClienteAplicavel === null || v.motor_comercial === motorClienteAplicavel))
-        .map((v) => ({ total: parseFloat(v.total), moeda: v.moeda as string | null }));
-      if (!candidatos.length) return { total: null, moeda: null, disponivel: false };
-      const best = candidatos.reduce((a, b) => (b.total > a.total ? b : a));
-      return { total: best.total, moeda: best.moeda, disponivel: true };
-    };
-
-    // Tracking (Fases 5/6): última consulta válida, falha ativa, cadência vencida.
-    const { rows: fr } = await this.pool.query(
-      `SELECT max(f.finalizado_em)::date AS d
-         FROM tracking_fetches f
-         JOIN container_tracking_targets ctt ON ctt.tracking_target_id = f.tracking_target_id
-        WHERE ctt.container_id = $1 AND f.status IN ('ok', 'parcial')`,
-      [containerId],
-    );
-    const ultimaConsultaValida: CivilDate | null = fr[0]?.d ?? null;
-    const { rows: ir } = await this.pool.query(
-      `SELECT EXISTS(
-         SELECT 1 FROM tracking_incidents i
-           JOIN container_tracking_targets ctt ON ctt.tracking_target_id = i.tracking_target_id
-          WHERE ctt.container_id = $1 AND i.fechado_em IS NULL
-       ) AS e`,
-      [containerId],
-    );
-    const falhaTrackingAtiva = ir[0]?.e === true;
-
-    const houseLFD = lastFreeDay(c.discharge_date, c.house_free_time_days);
-    const masterLFD = lastFreeDay(c.discharge_date, c.master_free_time_days);
-    const cadInput: CadenciaInput = {
-      dischargeDate: c.discharge_date,
-      houseLastFreeDay: houseLFD,
-      masterLastFreeDay: masterLFD,
-      emptyReturn: emptyReturnDate,
-      algumEmDemurrage:
-        (clocks.cliente.status === 'OK' && clocks.cliente.diasDemurrage >= 1) ||
-        (clocks.rocket.status === 'OK' && clocks.rocket.diasDemurrage >= 1),
-      hoje: config.hoje,
-    };
-    const suspenso = avaliarCadencia(cadInput).automaticTracking === 'SUSPENDED';
-    // Desatualizado = havia resposta válida e a janela prevista pela cadência não
-    // foi atendida. Suspensão (30d) não conta: nela a cadência não prevê consulta.
-    const cadenciaVencida = !suspenso && ultimaConsultaValida !== null && deveConsultarAgora(cadInput, ultimaConsultaValida);
-
-    const clienteClock = clocks.cliente;
-    const rocketClock = clocks.rocket;
-    // Existência da demurrage vem dos RELÓGIOS (v4.1), nunca de valores_apurados.
-    const apuracaoDemurrageStatus = derivarApuracaoDemurrageStatus(clienteClock, rocketClock);
-
-    // Derivação aprovada (Fase 8, validação 1): o badge da Fase 7 reflete o fato
-    // real da dimensão responsabilidade (stored da Fase 11, senão derivado).
-    const responsabilidade = derivarResponsabilidade(apuracaoDemurrageStatus, c.responsabilidade ?? null);
-
-    // Derivação aprovada (Fase 8, decisão 6): documentaryStatus vem da minuta.
-    let documentaryStatus: ContainerLifecycleFacts['documentaryStatus'] = 'NAO_APLICAVEL';
-    if (emptyReturn) {
-      const temMinuta = await new MinutaRepository(this.pool).temRecebidaOuValidada(containerId);
-      documentaryStatus = temMinuta ? 'MINUTA_RECEBIDA' : 'MINUTA_PENDENTE';
+    const valoresPorContainer = new Map<string, any[]>();
+    for (const v of vr) {
+      if (!valoresPorContainer.has(v.container_id)) valoresPorContainer.set(v.container_id, []);
+      valoresPorContainer.get(v.container_id)!.push(v);
     }
 
-    return {
-      containerId,
-      hoje: config.hoje,
-      clienteClock,
-      rocketClock,
-      emptyReturn,
-      apuracaoDemurrageStatus,
-      responsabilidadeEmAnalise: responsabilidade === 'EM_ANALISE',
-      divergenciaValor: false,
-      documentaryStatus,
-      cadenciaVencida,
-      ultimaConsultaValida,
-      falhaTrackingAtiva,
-      valorCliente: melhorValor('cliente'),
-      exposicaoRocket: melhorValor('rocket'),
-      prazoProximoThresholdDias: config.prazoProximoThresholdDias ?? null,
-    };
+    const { rows: cond } = await this.pool.query(
+      `SELECT c.id AS container_id, cc.termo_tipo FROM processos p
+         JOIN containers c ON c.processo_id = p.id
+         LEFT JOIN condicoes_comerciais cc ON cc.id = p.condicao_comercial_id
+        WHERE c.id = ANY($1)`,
+      [ids],
+    );
+    const termoTipoPorContainer = new Map<string, string | null>(cond.map((r) => [r.container_id, r.termo_tipo ?? null]));
+
+    // Tracking (Fases 5/6): última consulta válida por contêiner.
+    const { rows: fr } = await this.pool.query(
+      `SELECT ctt.container_id, max(f.finalizado_em)::date AS d
+         FROM tracking_fetches f
+         JOIN container_tracking_targets ctt ON ctt.tracking_target_id = f.tracking_target_id
+        WHERE ctt.container_id = ANY($1) AND f.status IN ('ok', 'parcial')
+        GROUP BY ctt.container_id`,
+      [ids],
+    );
+    const ultimaConsultaPorContainer = new Map<string, CivilDate | null>(fr.map((r) => [r.container_id, r.d]));
+
+    // Falha de tracking ativa por contêiner.
+    const { rows: ir } = await this.pool.query(
+      `SELECT DISTINCT ctt.container_id
+         FROM tracking_incidents i
+         JOIN container_tracking_targets ctt ON ctt.tracking_target_id = i.tracking_target_id
+        WHERE ctt.container_id = ANY($1) AND i.fechado_em IS NULL`,
+      [ids],
+    );
+    const falhaTrackingPorContainer = new Set<string>(ir.map((r) => r.container_id));
+
+    // Minuta recebida/validada por contêiner — só é USADA quando emptyReturn é
+    // true (abaixo), mas é buscada para todo o lote para manter o número de
+    // consultas constante (nunca condicional por item).
+    const { rows: mr } = await this.pool.query(
+      `SELECT container_id, bool_or(estado_minuta IN ('RECEBIDA', 'VALIDADA')) AS tem
+         FROM minutas WHERE container_id = ANY($1) GROUP BY container_id`,
+      [ids],
+    );
+    const temMinutaPorContainer = new Map<string, boolean>(mr.map((r) => [r.container_id, r.tem === true]));
+
+    for (const containerId of ids) {
+      const c = containerRowById.get(containerId);
+      const emptyReturnDate: CivilDate | null = c.effective_return_date ?? c.tracking_return_date ?? null;
+      const emptyReturn = emptyReturnDate !== null;
+
+      const relRowsC = relPorContainer.get(containerId) ?? [];
+      const relCliente = relRowsC.find((r) => r.tipo === 'cliente');
+      const relRocket = relRowsC.find((r) => r.tipo === 'rocket');
+      const clocks = { cliente: clockFactDoCache(relCliente), rocket: clockFactDoCache(relRocket) };
+
+      const vrC = valoresPorContainer.get(containerId) ?? [];
+      const motorClienteAplicavel = termoTipoPorContainer.get(containerId) === 'embarque' ? 'termo_embarque'
+        : termoTipoPorContainer.get(containerId) === 'unico' ? 'termo_unico' : null;
+      const melhorValor = (tipo: 'cliente' | 'rocket'): ValorFact => {
+        const candidatos = vrC
+          .filter((v) => v.relogio_tipo === tipo && v.total !== null && v.confirmation_status !== 'UNAVAILABLE'
+            && (tipo !== 'cliente' || motorClienteAplicavel === null || v.motor_comercial === motorClienteAplicavel))
+          .map((v) => ({ total: parseFloat(v.total), moeda: v.moeda as string | null }));
+        if (!candidatos.length) return { total: null, moeda: null, disponivel: false };
+        const best = candidatos.reduce((a, b) => (b.total > a.total ? b : a));
+        return { total: best.total, moeda: best.moeda, disponivel: true };
+      };
+
+      const ultimaConsultaValida: CivilDate | null = ultimaConsultaPorContainer.get(containerId) ?? null;
+      const falhaTrackingAtiva = falhaTrackingPorContainer.has(containerId);
+
+      const houseLFD = lastFreeDay(c.discharge_date, c.house_free_time_days);
+      const masterLFD = lastFreeDay(c.discharge_date, c.master_free_time_days);
+      const cadInput: CadenciaInput = {
+        dischargeDate: c.discharge_date,
+        houseLastFreeDay: houseLFD,
+        masterLastFreeDay: masterLFD,
+        emptyReturn: emptyReturnDate,
+        algumEmDemurrage:
+          (clocks.cliente.status === 'OK' && clocks.cliente.diasDemurrage >= 1) ||
+          (clocks.rocket.status === 'OK' && clocks.rocket.diasDemurrage >= 1),
+        hoje: config.hoje,
+      };
+      const suspenso = avaliarCadencia(cadInput).automaticTracking === 'SUSPENDED';
+      const cadenciaVencida = !suspenso && ultimaConsultaValida !== null && deveConsultarAgora(cadInput, ultimaConsultaValida);
+
+      const clienteClock = clocks.cliente;
+      const rocketClock = clocks.rocket;
+      const apuracaoDemurrageStatus = derivarApuracaoDemurrageStatus(clienteClock, rocketClock);
+      const responsabilidade = derivarResponsabilidade(apuracaoDemurrageStatus, c.responsabilidade ?? null);
+
+      let documentaryStatus: ContainerLifecycleFacts['documentaryStatus'] = 'NAO_APLICAVEL';
+      if (emptyReturn) {
+        documentaryStatus = temMinutaPorContainer.get(containerId) ? 'MINUTA_RECEBIDA' : 'MINUTA_PENDENTE';
+      }
+
+      resultado.set(containerId, {
+        containerId,
+        hoje: config.hoje,
+        clienteClock,
+        rocketClock,
+        emptyReturn,
+        apuracaoDemurrageStatus,
+        responsabilidadeEmAnalise: responsabilidade === 'EM_ANALISE',
+        divergenciaValor: false,
+        documentaryStatus,
+        cadenciaVencida,
+        ultimaConsultaValida,
+        falhaTrackingAtiva,
+        valorCliente: melhorValor('cliente'),
+        exposicaoRocket: melhorValor('rocket'),
+        prazoProximoThresholdDias: config.prazoProximoThresholdDias ?? null,
+      });
+    }
+    return resultado;
   }
 
   /**
@@ -249,20 +332,34 @@ export class LifecycleRepository {
    */
   private async reconstruirLifecyclePersistido(row: any, config: LifecycleConfig): Promise<ContainerLifecycle> {
     const facts = await this.montarFatos(row.id, config);
-    const badges = (row.estado_badges ?? []) as Badge[];
-    const state: ContainerStateResult = {
-      estado: row.estado,
-      escalationRequired: row.escalation_required === true,
-      severidadeDias: row.severidade_dias ?? 0,
-      clienteEmDemurrage: badges.includes('clienteEmDemurrage'),
-      rocketExposta: badges.includes('rocketExposta'),
-      apuracaoDemurrageStatus: facts.apuracaoDemurrageStatus,
-      badges,
-      documentaryStatus: (row.documentary_status ?? 'NAO_APLICAVEL') as DocumentaryStatus,
-      motivo: row.prioridade_motivo ?? '',
-    };
-    const priority = { balde: row.prioridade_balde, promocaoTopo: derivarPrioridadeContainer(state).promocaoTopo };
-    return { facts, state, priority };
+    return montarContainerLifecycleDeRow(row, facts);
+  }
+
+  /**
+   * Reconstrói o pacote de ciclo (estado + prioridade + fatos) de VÁRIOS
+   * contêineres a partir das colunas JÁ PERSISTIDAS — sem recalcular relógios
+   * e com custo de consulta CONSTANTE (usa `montarFatosEmLote`). Público para
+   * a leitura operacional da D12 (Gate G2): a fila usa isto para montar o
+   * pacote do contêiner-líder de cada processo sem reabrir o N+1 que existia
+   * antes da versão em lote. Mesma regra de reconstrução do caminho privado
+   * acima — nenhuma duplicação de lógica.
+   */
+  async reconstruirEmLote(
+    rows: Array<{
+      id: string; estado: string | null; estado_badges: string[] | null; documentary_status: string | null;
+      escalation_required: boolean | null; severidade_dias: number | null; prioridade_balde: PrioridadeBalde | null;
+      prioridade_motivo: string | null;
+    }>,
+    config: LifecycleConfig,
+  ): Promise<Map<string, ContainerLifecycle>> {
+    const fatos = await this.montarFatosEmLote(rows.map((r) => r.id), config);
+    const resultado = new Map<string, ContainerLifecycle>();
+    for (const row of rows) {
+      const facts = fatos.get(row.id);
+      if (!facts) continue;
+      resultado.set(row.id, montarContainerLifecycleDeRow(row, facts));
+    }
+    return resultado;
   }
 
   /**

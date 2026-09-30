@@ -1,4 +1,4 @@
-import { ContainerLifecycle, ProcessoLifecycleResult } from './types';
+import { ContainerLifecycle, EstadoOperacional, ProcessoLifecycleResult } from './types';
 import { ordenarTodos } from './priorityEngine';
 
 /**
@@ -9,25 +9,39 @@ import { ordenarTodos } from './priorityEngine';
  * nunca mascara outro em demurrage/pendente. A composição preserva a contagem
  * por categoria (o detalhe por contêiner nunca é apagado).
  */
-export function consolidarProcesso(containers: ContainerLifecycle[]): ProcessoLifecycleResult | null {
-  if (containers.length === 0) return null;
-  const ordenados = ordenarTodos(containers);
-  const lider = ordenados[0];
-
+/**
+ * Contagem PURA da composição (Fase D12, Q8): extraída do loop que já vivia
+ * dentro de `consolidarProcesso`, sem qualquer mudança de regra — "devolvido",
+ * "em demurrage", "com pendência" e "concluído" continuam exatamente os
+ * mesmos estados de antes. Aceita `estado` possivelmente nulo (contêiner
+ * ainda sem lifecycle derivado) só para servir também à leitura operacional
+ * da D12, que soma contêineres além do líder sem reconstruir o lifecycle
+ * completo de cada um — `total` reflete TODOS os itens recebidos, derivados
+ * ou não.
+ */
+export function composicaoDeEstados(estados: Array<EstadoOperacional | null>): ProcessoLifecycleResult['composicao'] {
   const composicao = {
-    total: containers.length,
+    total: estados.length,
     emDemurrage: 0,
     devolvidos: 0,
     comPendencia: 0,
     concluidos: 0,
   };
-  for (const c of containers) {
-    const e = c.state.estado;
+  for (const e of estados) {
     if (e === 'EM_DEMURRAGE_ATENCAO' || e === 'EM_DEMURRAGE_CRITICO') composicao.emDemurrage++;
     if (e === 'DEVOLVIDO_AGUARDANDO_TRATAMENTO' || e === 'CONCLUIDO_PARA_ROCKET') composicao.devolvidos++;
     if (e === 'PENDENCIA_DE_DADOS') composicao.comPendencia++;
     if (e === 'CONCLUIDO_PARA_ROCKET') composicao.concluidos++;
   }
+  return composicao;
+}
+
+export function consolidarProcesso(containers: ContainerLifecycle[]): ProcessoLifecycleResult | null {
+  if (containers.length === 0) return null;
+  const ordenados = ordenarTodos(containers);
+  const lider = ordenados[0];
+
+  const composicao = composicaoDeEstados(containers.map((c) => c.state.estado));
 
   return {
     estadoMaisRelevante: lider.state.estado,
