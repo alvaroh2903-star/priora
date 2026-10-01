@@ -164,32 +164,50 @@ test('D12 G7 — recurso de outra organização devolve 404 idêntico ao inexist
   } finally { await app.close(); await pool.end(); }
 });
 
-test('D12 G7 — GETs não gravam nem recalculam nada (fingerprint do banco idêntico antes/depois de bater todas as rotas)', { skip: !url }, async () => {
+test('D12 G7 — GETs não gravam nem recalculam nada (fingerprint de TODAS as tabelas antes/depois de bater todas as rotas, com filtros e cursores)', { skip: !url }, async () => {
   const pool = testPool();
   const app = await subirApp(pool);
   try {
     const org = await setup(pool);
     const home = await usuarioInterno(pool, org.id, 'ADMIN');
     const { processoId, containerId } = await processoReal(pool, org.id, 'IM-D12-G7-3', 'GSCC');
+    await processoReal(pool, org.id, 'IM-D12-G7-3B', 'GSCD');
     const hdr = { 'x-test-home-account-id': home };
 
+    // Todas as tabelas-base do schema (não uma lista escolhida à mão).
+    const { rows: tabelas } = await pool.query(
+      `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE' ORDER BY table_name`,
+    );
+    assert.ok(tabelas.length > 50, 'cobre o schema inteiro');
     const fingerprint = async () => {
-      const tabelas = ['processos', 'containers', 'relogios', 'valores_apurados', 'closing_events', 'snapshots', 'tracking_events'];
       const partes: string[] = [];
-      for (const t of tabelas) {
-        const { rows } = await pool.query(`SELECT md5(coalesce(array_agg(t.*::text ORDER BY t.*::text)::text, '')) AS h FROM ${t} t`);
-        partes.push(`${t}:${rows[0].h}`);
+      for (const { table_name: t } of tabelas) {
+        const { rows } = await pool.query(`SELECT md5(coalesce(array_agg(t.*::text ORDER BY t.*::text)::text, '')) AS h, count(*)::int AS n FROM "${t}" t`);
+        partes.push(`${t}:${rows[0].n}:${rows[0].h}`);
       }
       return partes.join('|');
     };
 
     const antes = await fingerprint();
-    await fetch(`${app.base}/processos`, { headers: hdr });
-    await fetch(`${app.base}/processos/${processoId}`, { headers: hdr });
-    await fetch(`${app.base}/processos/${processoId}/timeline`, { headers: hdr });
-    await fetch(`${app.base}/containers/${containerId}`, { headers: hdr });
-    await fetch(`${app.base}/filtros`, { headers: hdr });
+    const respostas: number[] = [];
+    const get = async (caminho: string) => {
+      const r = await fetch(`${app.base}${caminho}`, { headers: hdr });
+      respostas.push(r.status);
+      return r.json();
+    };
+    await get('/processos');
+    await get('/processos?incluirSilenciosos=true');
+    await get('/processos?emDemurrage=true&devolvido=false&periodoCampo=descarga&periodoInicio=2026-01-01&periodoFim=2026-12-31');
+    await get('/processos?busca=GSCC&dentroDoFreeTime=true');
+    const pagina1 = await get('/processos?limite=1');
+    if (pagina1.cursor) await get(`/processos?limite=1&cursor=${encodeURIComponent(pagina1.cursor)}`);
+    await get(`/processos/${processoId}`);
+    const tl = await get(`/processos/${processoId}/timeline?limite=1`);
+    if (tl.cursor) await get(`/processos/${processoId}/timeline?limite=2&cursor=${encodeURIComponent(tl.cursor)}`);
+    await get(`/containers/${containerId}`);
+    await get('/filtros');
     const depois = await fingerprint();
+    assert.ok(respostas.every((s) => s === 200), `todas as leituras responderam 200: ${respostas.join(',')}`);
     assert.equal(antes, depois);
   } finally { await app.close(); await pool.end(); }
 });

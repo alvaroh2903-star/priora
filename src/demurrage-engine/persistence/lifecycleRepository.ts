@@ -6,7 +6,7 @@ import { derivarEstadoContainer, derivarApuracaoDemurrageStatus } from '../lifec
 import { derivarPrioridadeContainer } from '../lifecycle/priorityEngine';
 import { consolidarProcesso } from '../lifecycle/processConsolidation';
 import { derivarResponsabilidade } from '../lifecycle/responsabilidade';
-import { Badge, ClockFact, ContainerLifecycle, ContainerLifecycleFacts, ContainerStateResult, DocumentaryStatus, PrioridadeBalde, ProcessoLifecycleResult, Responsabilidade, ValorFact } from '../lifecycle/types';
+import { Badge, ClockFact, ContainerLifecycle, ContainerLifecycleFacts, ContainerStateResult, DocumentaryStatus, ProcessoLifecycleResult, Responsabilidade, ValorFact } from '../lifecycle/types';
 import { MinutaRepository } from './minutaRepository';
 import { RelogioRepository } from './relogioRepository';
 
@@ -50,33 +50,6 @@ function lastFreeDay(discharge: CivilDate | null, ft: number | null): CivilDate 
   const dt = new Date(ord * 86400000);
   const p = (n: number) => String(n).padStart(2, '0');
   return `${dt.getUTCFullYear()}-${p(dt.getUTCMonth() + 1)}-${p(dt.getUTCDate())}`;
-}
-
-/**
- * Reconstrução PURA (sem I/O) do pacote de ciclo a partir de uma linha de
- * `containers` já carregada + fatos já montados. Extraída para ser chamada
- * tanto pelo caminho unitário quanto pelo caminho em lote (Fase D12, Q7) —
- * uma só implementação, nenhuma regra de estado/prioridade duplicada aqui
- * (delega a `derivarPrioridadeContainer`, congelada na Fase 7).
- */
-function montarContainerLifecycleDeRow(
-  row: { id: string; estado: string | null; estado_badges: string[] | null; documentary_status: string | null; escalation_required: boolean | null; severidade_dias: number | null; prioridade_balde: PrioridadeBalde | null; prioridade_motivo: string | null },
-  facts: ContainerLifecycleFacts,
-): ContainerLifecycle {
-  const badges = (row.estado_badges ?? []) as Badge[];
-  const state: ContainerStateResult = {
-    estado: row.estado as any,
-    escalationRequired: row.escalation_required === true,
-    severidadeDias: row.severidade_dias ?? 0,
-    clienteEmDemurrage: badges.includes('clienteEmDemurrage'),
-    rocketExposta: badges.includes('rocketExposta'),
-    apuracaoDemurrageStatus: facts.apuracaoDemurrageStatus,
-    badges,
-    documentaryStatus: (row.documentary_status ?? 'NAO_APLICAVEL') as DocumentaryStatus,
-    motivo: row.prioridade_motivo ?? '',
-  };
-  const priority = { balde: row.prioridade_balde as PrioridadeBalde, promocaoTopo: derivarPrioridadeContainer(state).promocaoTopo };
-  return { facts, state, priority };
 }
 
 export class LifecycleRepository {
@@ -332,32 +305,39 @@ export class LifecycleRepository {
    */
   private async reconstruirLifecyclePersistido(row: any, config: LifecycleConfig): Promise<ContainerLifecycle> {
     const facts = await this.montarFatos(row.id, config);
-    return montarContainerLifecycleDeRow(row, facts);
+    const badges = (row.estado_badges ?? []) as Badge[];
+    const state: ContainerStateResult = {
+      estado: row.estado,
+      escalationRequired: row.escalation_required === true,
+      severidadeDias: row.severidade_dias ?? 0,
+      clienteEmDemurrage: badges.includes('clienteEmDemurrage'),
+      rocketExposta: badges.includes('rocketExposta'),
+      apuracaoDemurrageStatus: facts.apuracaoDemurrageStatus,
+      badges,
+      documentaryStatus: (row.documentary_status ?? 'NAO_APLICAVEL') as DocumentaryStatus,
+      motivo: row.prioridade_motivo ?? '',
+    };
+    const priority = { balde: row.prioridade_balde, promocaoTopo: derivarPrioridadeContainer(state).promocaoTopo };
+    return { facts, state, priority };
   }
 
   /**
-   * Reconstrói o pacote de ciclo (estado + prioridade + fatos) de VÁRIOS
-   * contêineres a partir das colunas JÁ PERSISTIDAS — sem recalcular relógios
-   * e com custo de consulta CONSTANTE (usa `montarFatosEmLote`). Público para
-   * a leitura operacional da D12 (Gate G2): a fila usa isto para montar o
-   * pacote do contêiner-líder de cada processo sem reabrir o N+1 que existia
-   * antes da versão em lote. Mesma regra de reconstrução do caminho privado
-   * acima — nenhuma duplicação de lógica.
+   * Fase D12 v1.1 — deriva estado + prioridade de VÁRIOS contêineres com o
+   * `hoje` informado, SEM PERSISTIR NADA. Mesmos passos de
+   * `derivarEstadoEPersistir` (montagem de fatos → `derivarEstadoContainer`
+   * → `derivarPrioridadeContainer`, funções congeladas da Fase 7), sem o
+   * `UPDATE`. Relógios e valores continuam LIDOS do cache (nada é
+   * recalculado). Custo de consulta constante (`montarFatosEmLote`).
+   * Usado pela leitura operacional para que a passagem do tempo (cadência
+   * vencida, prazo próximo) apareça mesmo antes do próximo tick persistir.
    */
-  async reconstruirEmLote(
-    rows: Array<{
-      id: string; estado: string | null; estado_badges: string[] | null; documentary_status: string | null;
-      escalation_required: boolean | null; severidade_dias: number | null; prioridade_balde: PrioridadeBalde | null;
-      prioridade_motivo: string | null;
-    }>,
-    config: LifecycleConfig,
-  ): Promise<Map<string, ContainerLifecycle>> {
-    const fatos = await this.montarFatosEmLote(rows.map((r) => r.id), config);
+  async derivarEmLote(containerIds: string[], config: LifecycleConfig): Promise<Map<string, ContainerLifecycle>> {
+    const fatos = await this.montarFatosEmLote(containerIds, config);
     const resultado = new Map<string, ContainerLifecycle>();
-    for (const row of rows) {
-      const facts = fatos.get(row.id);
-      if (!facts) continue;
-      resultado.set(row.id, montarContainerLifecycleDeRow(row, facts));
+    for (const [id, facts] of fatos) {
+      const state = derivarEstadoContainer(facts);
+      const priority = derivarPrioridadeContainer(state);
+      resultado.set(id, { facts, state, priority });
     }
     return resultado;
   }
