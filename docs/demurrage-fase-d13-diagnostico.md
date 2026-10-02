@@ -662,5 +662,47 @@ Ações operacionais, Portal do Cliente, Supabase, Liberação, HeadCargo,
 indicadores de Gestão (Cap. 30, D14), qualquer alteração de D10/D11/D12 sem
 sua autorização expressa, migrations e D14.
 
-Aguardo a validação das decisões U-01 a U-12 e das divergências DV-01, DV-03,
-DV-04 e DV-05 antes de implementar.
+## 17. Decisões visuais aprovadas (registro — ainda SEM implementação)
+
+Este diagnóstico foi aprovado (commit `3eb89aa`). As divergências DV-01,
+DV-03, DV-04 e DV-05 identificadas acima foram corrigidas no contrato
+operacional pela **D12 v1.2** (aditiva sobre `1bdd406`, relatório em
+`docs/demurrage-fase-d12-v1-2.md`) — a fila, o detalhe de processo, o
+detalhe de contêiner e `/filtros` agora compartilham a mesma derivação
+atual, carregam o contêiner líder (DV-03), a agregação financeira por
+processo/moeda/lado (DV-01) e o bloco de prazo por relógio + próximo
+vencimento do processo (DV-05). A D12 v1.2 tem sua própria validação e
+**não foi declarada aprovada nem congelada** nesta entrega; a D13 continua
+sem iniciar até isso ocorrer e até autorização explícita separada.
+
+As decisões visuais abaixo ficam **registradas** para quando a implementação
+da D13 for autorizada — nenhuma delas é código nem UI nesta entrega:
+
+- a nova tela passa a ser a **entrada principal** de Demurrage no menu;
+- a tela legada **permanece no código** durante a transição, mas deixa de
+  ser o item principal do menu;
+- **tabela no desktop e cartões em telas menores** (o mesmo dado, duas
+  apresentações);
+- **totais do processo por moeda no cartão** — o `agregadoFinanceiro` da
+  D12 v1.2, nunca a soma feita no navegador;
+- **contêiner líder identificado separadamente** no cartão/linha — o bloco
+  `lider` da D12 v1.2, nunca uma nova escolha no frontend;
+- busca ativa liga **"Incluir silenciosos"** automaticamente e de forma
+  **visível** (o usuário vê que a busca ampliou o filtro, não é silencioso);
+- navegação interna só pelo `PrioraBus` (nunca `location.href`/link direto
+  entre módulos `.dc.html`);
+- **CLIENT vê "acesso restrito"** (nunca a tela operacional, nunca um erro
+  técnico);
+- **"status financeiro indisponível" aparece uma única vez** no detalhe
+  (não repetido por contêiner nem por relógio);
+- filtros persistidos em `sessionStorage` (por sessão de aba, não entre
+  dispositivos/usuários);
+- testes de navegador (E2E) aprovados antes de qualquer merge da D13;
+- **nunca usar o rótulo "registrado no último processamento"** para
+  estado/prioridade — esse rótulo descrevia exatamente o defeito que a
+  DV-04 corrigiu (valor persistido potencialmente atrasado); o rótulo certo
+  é o da derivação atual (`hojeOperacional()` da requisição).
+
+Nenhum destes itens altera o escopo, os limites ou os gates G1–G7 já
+registrados neste documento — são refinamentos visuais sobre o mesmo plano,
+aguardando a mesma autorização explícita para começar a implementação.

@@ -1,5 +1,6 @@
 import { CivilDate } from '../temporal/civilDate';
 import { Badge, EstadoOperacional, PrioridadeBalde, Responsabilidade } from '../lifecycle/types';
+import { BlocoPrazoRelogio } from '../lifecycle/prazoFreeTime';
 
 /**
  * Fase D12 (Gate G1) — Contrato operacional e API interna da Demurrage.
@@ -104,12 +105,29 @@ export interface TabelaComercialLeitura {
   vigenciaFim: string | null;
 }
 
+/**
+ * Bloco de prazo do relógio (D12 v1.2, DV-05) — `dataFinalApuracao` (abaixo) já
+ * é a data "apurado até"; aqui só o que falta: dias restantes até o fim do
+ * Free Time, se está dentro/em Prazo Próximo/vencido, e o próximo marco. Vem
+ * de `blocoPrazoRelogio` (fonte única, `lifecycle/prazoFreeTime.ts`), sobre o
+ * MESMO `ClockFact` que decide o estado do contêiner — nunca um cálculo
+ * paralelo.
+ */
+export interface PrazoRelogioLeitura {
+  diasRestantes: number | null;
+  dentroDoFreeTime: boolean;
+  emPrazoProximo: boolean;
+  vencido: boolean;
+  proximoMarco: { tipo: 'FIM_FREE_TIME'; data: string; diasRestantes: number } | null;
+}
+
 /** Forma comum aos dois relógios (cliente e rocket) — ver seção 3 do diagnóstico. */
-export interface RelogioLeitura {
+export interface RelogioLeitura extends PrazoRelogioLeitura {
   descarga: { data: string | null; fonte: string | null; observadoEm: string | null; evidenciaRef: string | null };
   freeTime: FreeTimeLeitura;
   ultimoDiaLivre: string | null;
   primeiroDiaDemurrage: string | null;
+  /** Data até a qual o valor foi apurado — a mesma resposta de "apurado até" (DV-05). */
   dataFinalApuracao: string | null;
   /** diasDemurrage (relógio cliente) ou diasExposicao (relógio rocket) — mesmo campo, semântica documentada no rótulo do relógio. */
   dias: number | null;
@@ -121,6 +139,17 @@ export interface RelogioLeitura {
   cache: 'VALIDO' | 'OBSOLETO' | 'AUSENTE';
   valor: ValorEnvelope;
   tabela: TabelaComercialLeitura | null;
+}
+
+/** Converte o bloco puro de `prazoFreeTime.ts` para a forma de saída do contrato (datas como string). */
+export function prazoRelogioLeituraDe(bloco: BlocoPrazoRelogio): PrazoRelogioLeitura {
+  return {
+    diasRestantes: bloco.diasRestantes,
+    dentroDoFreeTime: bloco.dentroDoFreeTime,
+    emPrazoProximo: bloco.emPrazoProximo,
+    vencido: bloco.vencido,
+    proximoMarco: bloco.proximoMarco ? { tipo: bloco.proximoMarco.tipo, data: bloco.proximoMarco.data, diasRestantes: bloco.proximoMarco.diasRestantes } : null,
+  };
 }
 
 export interface DoisRelogiosLeitura {
@@ -247,6 +276,114 @@ export function motorClienteAplicavelDe(termoTipo: string | null): string | null
 }
 
 /* ------------------------------------------------------------------ *
+ * Contêiner líder (D12 v1.2, DV-03) — exclusivamente o resultado de
+ * `consolidarProcesso` (congelada). Nenhuma nova ordenação/escolha aqui;
+ * esta forma só traduz o `ContainerLifecycle` do líder para a saída.
+ * ------------------------------------------------------------------ */
+
+export interface LiderLeitura {
+  containerId: string;
+  numero: string;
+  estado: { codigo: EstadoOperacional | 'NAO_DERIVADO'; rotulo: string };
+  prioridade: { balde: PrioridadeBalde; promocaoTopo: boolean };
+  motivoPrioridade: string | null;
+  /** Sempre true quando presente: marca explicitamente que este é o contêiner
+   * que determinou a prioridade/estado consolidados do processo (DV-03). */
+  determinaPrioridadeConsolidada: true;
+}
+
+/* ------------------------------------------------------------------ *
+ * Próximo vencimento do processo (D12 v1.2, DV-05) — o marco futuro mais
+ * próximo entre TODOS os contêineres/relógios do processo. Vem de
+ * `escolherProximoVencimentoProcesso` (fonte única, `prazoFreeTime.ts`).
+ * ------------------------------------------------------------------ */
+
+export interface ProximoVencimentoLeitura {
+  containerId: string;
+  numero: string;
+  relogio: 'cliente' | 'rocket';
+  data: string;
+  diasRestantes: number;
+  tipo: 'FIM_FREE_TIME';
+}
+
+/* ------------------------------------------------------------------ *
+ * Agregação financeira do processo por moeda e por lado (D12 v1.2, DV-01).
+ * Função PURA sobre os envelopes já traduzidos (`envelopeDeValor`) de CADA
+ * contêiner do processo — nunca soma moedas diferentes, nunca cruza cliente
+ * × Rocket. `moeda: null` é o grupo "sem moeda determinável": junta
+ * pendentes, indisponíveis e sem-aplicação (que não têm moeda na origem —
+ * `envelopeDeValor` só preenche `moeda` para CONFIRMADO/ESTIMADO/
+ * ESTIMADO_PROVISORIO). `completo` nesse grupo é só sobre pendente/
+ * indisponível: "sem aplicação" (sem demurrage) nunca marca o grupo como
+ * incompleto — são coisas diferentes (seção DV-01).
+ * ------------------------------------------------------------------ */
+
+export interface GrupoFinanceiroPorMoeda {
+  moeda: string | null;
+  /** Soma de CONFIRMADO + ESTIMADO + ESTIMADO_PROVISORIO nesta moeda; nunca
+   * tratado como total definitivo quando `completo=false`. null no grupo
+   * `moeda=null` (nada de conhecido a somar ali). */
+  subtotalConhecido: number | null;
+  confirmados: number;
+  estimados: number;
+  estimativasProvisorias: number;
+  pendentes: number;
+  indisponiveis: number;
+  semAplicacao: number;
+  completo: boolean;
+}
+
+export interface AgregadoFinanceiroLeitura {
+  cliente: GrupoFinanceiroPorMoeda[];
+  rocket: GrupoFinanceiroPorMoeda[];
+}
+
+function agregarLado(envelopes: ValorEnvelope[]): GrupoFinanceiroPorMoeda[] {
+  const porMoeda = new Map<string, GrupoFinanceiroPorMoeda>();
+  const semMoeda: GrupoFinanceiroPorMoeda = {
+    moeda: null, subtotalConhecido: null, confirmados: 0, estimados: 0, estimativasProvisorias: 0,
+    pendentes: 0, indisponiveis: 0, semAplicacao: 0, completo: true,
+  };
+  for (const env of envelopes) {
+    if (env.situacao === 'PENDENTE') { semMoeda.pendentes++; semMoeda.completo = false; continue; }
+    if (env.situacao === 'INDISPONIVEL') { semMoeda.indisponiveis++; semMoeda.completo = false; continue; }
+    if (env.situacao === 'NAO_APLICAVEL') { semMoeda.semAplicacao++; continue; }
+    // CONFIRMADO / ESTIMADO / ESTIMADO_PROVISORIO sempre carregam moeda (envelopeDeValor).
+    const moeda = env.moeda as string;
+    if (!porMoeda.has(moeda)) {
+      porMoeda.set(moeda, {
+        moeda, subtotalConhecido: 0, confirmados: 0, estimados: 0, estimativasProvisorias: 0,
+        pendentes: 0, indisponiveis: 0, semAplicacao: 0, completo: true,
+      });
+    }
+    const grupo = porMoeda.get(moeda)!;
+    const total = env.total ?? 0;
+    grupo.subtotalConhecido = (grupo.subtotalConhecido ?? 0) + total;
+    if (env.situacao === 'CONFIRMADO') grupo.confirmados++;
+    else if (env.situacao === 'ESTIMADO') grupo.estimados++;
+    else grupo.estimativasProvisorias++;
+  }
+  const grupos = Array.from(porMoeda.values()).sort((a, b) => (a.moeda! < b.moeda! ? -1 : a.moeda! > b.moeda! ? 1 : 0));
+  // O grupo sem moeda só aparece quando há algo para contar ali (nunca um grupo vazio "fantasma").
+  if (semMoeda.pendentes || semMoeda.indisponiveis || semMoeda.semAplicacao) grupos.push(semMoeda);
+  return grupos;
+}
+
+/**
+ * Agrega os envelopes de TODOS os contêineres do processo, lado cliente e
+ * lado Rocket SEMPRE separados (nunca somados entre si). Nenhuma soma
+ * cruzando moeda; `null`/UNAVAILABLE/pendente nunca viram zero — só contados
+ * em categorias próprias.
+ */
+export function agregarFinanceiroProcesso(containers: Array<{ cliente: ValorEnvelope; rocket: ValorEnvelope }>): AgregadoFinanceiroLeitura {
+  return {
+    cliente: agregarLado(containers.map((c) => c.cliente)),
+    rocket: agregarLado(containers.map((c) => c.rocket)),
+  };
+}
+
+/* ------------------------------------------------------------------ *
  * Fila operacional (seção 2) — item por processo, consolidação de
  * contêineres pela regra oficial já persistida (Q8).
  * ------------------------------------------------------------------ */
@@ -278,12 +415,19 @@ export interface FilaItemV1 {
   estadoMaisRelevante: { codigo: EstadoOperacional | 'NAO_DERIVADO'; rotulo: string };
   prioridade: { balde: PrioridadeBalde; promocaoTopo: boolean };
   motivoPrioridade: string | null;
+  /** Contêiner que determinou a prioridade/estado consolidados (DV-03). null quando o processo não tem contêiner. */
+  lider: LiderLeitura | null;
   badges: Badge[];
   ultimaAtualizacao: string | null;
   trackingAtualizadoEm: string | null;
   pendenciasAbertas: ContagemPorTipo;
   falhasTecnicas: ContagemPorTipo;
+  /** Envelope do contêiner-líder apenas (compatibilidade); o total do PROCESSO está em `agregadoFinanceiro` (DV-01). */
   exposicaoFinanceira: { valorCliente: ValorEnvelope; exposicaoRocket: ValorEnvelope };
+  /** Agregação financeira de TODOS os contêineres do processo, por moeda e lado (DV-01). */
+  agregadoFinanceiro: AgregadoFinanceiroLeitura;
+  /** Marco futuro mais próximo entre todos os contêineres/relógios do processo (DV-05). null quando não há nenhum. */
+  proximoVencimento: ProximoVencimentoLeitura | null;
   derivadoEm: string | null;
 }
 
@@ -339,10 +483,16 @@ export interface ProcessoDetalheV1 {
   estadoMaisRelevante: { codigo: EstadoOperacional | 'NAO_DERIVADO'; rotulo: string };
   prioridade: { balde: PrioridadeBalde; promocaoTopo: boolean };
   motivoPrioridade: string | null;
+  /** Contêiner que determinou a prioridade/estado consolidados (DV-03). null quando o processo não tem contêiner. */
+  lider: LiderLeitura | null;
   conteineres: ContainerDetalheV1[];
   composicao: ComposicaoContainers;
   pendenciasAbertas: ContagemPorTipo;
   falhasTecnicas: ContagemPorTipo;
+  /** Agregação financeira de TODOS os contêineres do processo, por moeda e lado (DV-01). */
+  agregadoFinanceiro: AgregadoFinanceiroLeitura;
+  /** Marco futuro mais próximo entre todos os contêineres/relógios do processo (DV-05). null quando não há nenhum. */
+  proximoVencimento: ProximoVencimentoLeitura | null;
   fechamento: { realizadoPor: string | null; justificativa: string | null; em: string } | null;
   reaberturas: Array<{ id: string; estado: string; solicitadaPor: string | null; autorizadaPor: string | null; justificativa: string | null; criadoEm: string }>;
 }

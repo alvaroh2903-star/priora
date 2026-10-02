@@ -1,25 +1,36 @@
 import { Pool } from 'pg';
 import { LifecycleRepository } from '../persistence/lifecycleRepository';
-import { RelogioRepository } from '../persistence/relogioRepository';
+import { RelogioRepository, ValidadeCache } from '../persistence/relogioRepository';
 import { derivarResponsabilidade } from '../lifecycle/responsabilidade';
-import { composicaoDeEstados } from '../lifecycle/processConsolidation';
+import { consolidarProcesso } from '../lifecycle/processConsolidation';
 import { CivilDate } from '../temporal/civilDate';
 import { hojeOperacional } from '../time/operationalDate';
-import { ContainerLifecycleFacts } from '../lifecycle/types';
+import { ContainerLifecycle } from '../lifecycle/types';
+import { blocoPrazoRelogio, escolherProximoVencimentoProcesso, CandidatoProximoVencimento } from '../lifecycle/prazoFreeTime';
 import {
-  AutorLeitura, CONTRATO_LEITURA_V1, ContainerDetalheV1, DecisaoResponsabilidadeLeitura, DoisRelogiosLeitura,
+  AutorLeitura, CONTRATO_LEITURA_V1, ContainerDetalheV1, DecisaoResponsabilidadeLeitura, DoisRelogiosLeitura, LiderLeitura,
   ProcessoDetalheV1, RelogioLeitura, ResponsabilidadeLeitura, TabelaComercialLeitura,
-  envelopeDeValor, isoTimestamp, motorClienteAplicavelDe, normalizarMotivoInvalidacao, rotularEstado, selecionarValorAtivo,
+  envelopeDeValor, isoTimestamp, motorClienteAplicavelDe, normalizarMotivoInvalidacao, prazoRelogioLeituraDe,
+  rotularEstado, selecionarValorAtivo, agregarFinanceiroProcesso,
 } from './contrato';
 
 /**
- * Fase D12 (Gate G3) — detalhe de processo e contêiner. SOMENTE LEITURA: os
- * dois relógios continuam SEPARADOS (nunca um "status geral"), o bloco de
- * responsabilidade fica isolado em `interno.responsabilidade`, e nenhuma
- * consulta aqui recalcula relógio, valor ou decisão — tudo é traduzido do
- * que já está persistido (o mesmo `RelogioRepository.buscarValido` usado
- * pelo pipeline só INFORMA se o cache está `VALIDO`/`OBSOLETO`, nunca
- * recalcula por conta própria).
+ * Fase D12 (Gate G3, v1.2 DV-04) — detalhe de processo e contêiner. SOMENTE
+ * LEITURA: os dois relógios continuam SEPARADOS (nunca um "status geral"), o
+ * bloco de responsabilidade fica isolado em `interno.responsabilidade`, e
+ * nenhuma consulta aqui recalcula relógio, valor ou decisão.
+ *
+ * DV-04 (v1.2): estado, badges, prioridade e `promocaoTopo` do contêiner e do
+ * processo NÃO vêm mais das colunas persistidas — vêm da MESMA derivação
+ * atual da fila (`LifecycleRepository.derivarEmLote`, funções congeladas da
+ * Fase 7, sobre o `hoje` operacional desta requisição), para que fila,
+ * detalhe de processo, detalhe de contêiner e `/filtros` concordem sempre. O
+ * `RelogioRepository.buscarValido`/`buscarValidosEmLote` usado aqui só
+ * INFORMA se o cache `relogios` está `VALIDO`/`OBSOLETO`, nunca recalcula.
+ *
+ * O detalhe de processo deriva TODOS os seus contêineres em LOTE (D12 v1.2):
+ * uma única passada por `derivarEmLote` e pelas consultas em lote abaixo —
+ * nunca uma consulta por contêiner (eliminado o N+1 da v1.1).
  */
 
 async function ultimaObservacaoPorCampo(
@@ -54,28 +65,137 @@ function tabelaDe(row: TabelaRow | undefined): TabelaComercialLeitura | null {
   };
 }
 
-/** Monta o histórico + a decisão vigente + a invalidação (seção 4). */
-async function buscarResponsabilidade(
-  pool: Pool, containerId: string, containerResponsabilidade: string | null, containerDecisaoId: string | null,
-  facts: ContainerLifecycleFacts,
-): Promise<ResponsabilidadeLeitura> {
-  const estadoDerivado = derivarResponsabilidade(facts.apuracaoDemurrageStatus, containerResponsabilidade as any);
+/** Fallback manual (house/master) já resolvido de UM contêiner. */
+interface FallbackManualPorContainer {
+  house: { justificativa: string; autorMembershipId: string; criadoEm: string } | null;
+  master: { justificativa: string; autorMembershipId: string; criadoEm: string } | null;
+}
+
+/**
+ * Carrega, em consultas de custo CONSTANTE (sempre `= ANY($1)`, nunca uma por
+ * contêiner), tudo que `montarDetalheContainerDeDados` precisa para VÁRIOS
+ * contêineres de uma vez: relógios, valores apurados + tabela, validade do
+ * cache, observações de campo, fallback manual, minutas e responsabilidade.
+ */
+async function buscarDadosBatchContainers(
+  pool: Pool,
+  containerRows: Array<{ id: string; responsabilidade: string | null; responsabilidade_decisao_id: string | null }>,
+  dataFinalPorContainer: Map<string, CivilDate>,
+  factsApuracaoPorContainer: Map<string, { apuracaoDemurrageStatus: any }>,
+) {
+  const containerIds = containerRows.map((r) => r.id);
+  if (!containerIds.length) {
+    return {
+      relogiosPorContainer: new Map<string, { cliente?: any; rocket?: any }>(),
+      valoresPorContainer: new Map<string, any[]>(),
+      cachePorContainer: new Map<string, { cliente: { validade: ValidadeCache }; rocket: { validade: ValidadeCache } }>(),
+      obsMap: new Map<string, { fonte: string; observadoEm: string; evidenciaRef: string | null }>(),
+      fallbackPorContainer: new Map<string, FallbackManualPorContainer>(),
+      minutasPorContainer: new Map<string, any[]>(),
+      responsabilidadePorContainer: new Map<string, ResponsabilidadeLeitura>(),
+    };
+  }
+
+  const { rows: relRows } = await pool.query(`SELECT * FROM relogios WHERE container_id = ANY($1)`, [containerIds]);
+  const relogiosPorContainer = new Map<string, { cliente?: any; rocket?: any }>();
+  for (const r of relRows) {
+    if (!relogiosPorContainer.has(r.container_id)) relogiosPorContainer.set(r.container_id, {});
+    relogiosPorContainer.get(r.container_id)![r.tipo as 'cliente' | 'rocket'] = r;
+  }
+
+  const { rows: valRows } = await pool.query(
+    `SELECT va.container_id, va.relogio_tipo, va.motor_comercial, va.total, va.moeda, va.confirmation_status,
+            va.tabela_id, va.versao_tabela, tt.fonte AS tt_fonte, tt.qualidade_fonte AS tt_qualidade,
+            tt.vigencia_inicio AS tt_vigencia_inicio, tt.vigencia_fim AS tt_vigencia_fim
+       FROM valores_apurados va
+       LEFT JOIN tariff_tables tt ON tt.id = va.tabela_id
+      WHERE va.container_id = ANY($1) AND va.calculation_status IN ('OPEN', 'FINAL')`,
+    [containerIds],
+  );
+  const valoresPorContainer = new Map<string, any[]>();
+  for (const v of valRows) {
+    if (!valoresPorContainer.has(v.container_id)) valoresPorContainer.set(v.container_id, []);
+    valoresPorContainer.get(v.container_id)!.push(v);
+  }
+
+  const cachePorContainer = await new RelogioRepository(pool).buscarValidosEmLote(
+    containerIds.map((id) => ({ containerId: id, dataFinal: dataFinalPorContainer.get(id)! })),
+  );
+
+  const obsMap = await ultimaObservacaoPorCampo(pool, containerIds, ['dischargeDate', 'houseFreeTimeDays', 'masterFreeTimeDays']);
+
+  // Fallback manual (D10 v1.2): governança adicional quando a fonte vencedora foi 'manual_fallback'.
+  const { rows: obsIds } = await pool.query(
+    `SELECT entidade_id AS container_id, campo, id FROM field_observations WHERE entidade_tipo = 'container' AND entidade_id = ANY($1)
+       AND campo IN ('houseFreeTimeDays', 'masterFreeTimeDays') AND fonte = 'manual_fallback'
+      ORDER BY entidade_id, observado_em DESC`,
+    [containerIds],
+  );
+  const idsPorContainerCampo = new Map<string, Map<string, string>>();
+  for (const r of obsIds) {
+    if (!idsPorContainerCampo.has(r.container_id)) idsPorContainerCampo.set(r.container_id, new Map());
+    const porCampo = idsPorContainerCampo.get(r.container_id)!;
+    if (!porCampo.has(r.campo)) porCampo.set(r.campo, r.id);
+  }
+  const todosObsIds = Array.from(idsPorContainerCampo.values()).flatMap((m) => Array.from(m.values()));
+  const { rows: fallbackRows } = todosObsIds.length
+    ? await pool.query(
+        `SELECT observation_id, justificativa, autor_membership_id, criado_em FROM demurrage_fallback_manual_justificativas WHERE observation_id = ANY($1)`,
+        [todosObsIds],
+      )
+    : { rows: [] as any[] };
+  const fallbackPorObsId = new Map(fallbackRows.map((f) => [f.observation_id, { justificativa: f.justificativa, autorMembershipId: f.autor_membership_id, criadoEm: isoTimestamp(f.criado_em)! }]));
+  const fallbackPorContainer = new Map<string, FallbackManualPorContainer>();
+  for (const containerId of containerIds) {
+    const porCampo = idsPorContainerCampo.get(containerId);
+    fallbackPorContainer.set(containerId, {
+      house: porCampo?.has('houseFreeTimeDays') ? fallbackPorObsId.get(porCampo.get('houseFreeTimeDays')!) ?? null : null,
+      master: porCampo?.has('masterFreeTimeDays') ? fallbackPorObsId.get(porCampo.get('masterFreeTimeDays')!) ?? null : null,
+    });
+  }
+
+  const { rows: minutasRows } = await pool.query(
+    `SELECT id, container_id, estado_minuta, numero_informado, data_informada, data_validada, divergente_do_tracking, motivo_rejeicao, criado_em
+       FROM minutas WHERE container_id = ANY($1) ORDER BY container_id, criado_em`,
+    [containerIds],
+  );
+  const minutasPorContainer = new Map<string, any[]>();
+  for (const m of minutasRows) {
+    if (!minutasPorContainer.has(m.container_id)) minutasPorContainer.set(m.container_id, []);
+    minutasPorContainer.get(m.container_id)!.push(m);
+  }
+
+  const responsabilidadePorContainer = await buscarResponsabilidadeEmLote(pool, containerRows, factsApuracaoPorContainer);
+
+  return { relogiosPorContainer, valoresPorContainer, cachePorContainer, obsMap, fallbackPorContainer, minutasPorContainer, responsabilidadePorContainer };
+}
+
+/** Monta histórico + decisão vigente + invalidação (seção 4) de VÁRIOS contêineres, custo constante. */
+async function buscarResponsabilidadeEmLote(
+  pool: Pool,
+  containerRows: Array<{ id: string; responsabilidade: string | null; responsabilidade_decisao_id: string | null }>,
+  factsApuracaoPorContainer: Map<string, { apuracaoDemurrageStatus: any }>,
+): Promise<Map<string, ResponsabilidadeLeitura>> {
+  const containerIds = containerRows.map((r) => r.id);
+  const resultado = new Map<string, ResponsabilidadeLeitura>();
+  if (!containerIds.length) return resultado;
 
   const { rows: decisoes } = await pool.query(
-    `SELECT d.id, d.versao, d.status, d.base_relogio, d.dias_rocket, d.dias_cliente, d.valor_status,
+    `SELECT d.container_id, d.id, d.versao, d.status, d.base_relogio, d.dias_rocket, d.dias_cliente, d.valor_status,
             d.valor_rocket, d.valor_cliente, d.moeda, d.justificativa, d.evidencia_ref, d.decidido_em,
             d.substitui_decisao_id, d.motivo_correcao, d.autor_membership_id, d.autor_papel, u.nome AS autor_nome
        FROM responsabilidade_decisoes d
        LEFT JOIN organization_memberships m ON m.id = d.autor_membership_id
        LEFT JOIN usuarios u ON u.id = m.usuario_id
-      WHERE d.container_id = $1
-      ORDER BY d.versao`,
-    [containerId],
+      WHERE d.container_id = ANY($1)
+      ORDER BY d.container_id, d.versao`,
+    [containerIds],
   );
-  const { rows: periodosRows } = decisoes.length
+  const decisaoIds = decisoes.map((d: any) => d.id);
+  const { rows: periodosRows } = decisaoIds.length
     ? await pool.query(
         `SELECT decisao_id, lado, inicio, fim FROM responsabilidade_decisao_periodos WHERE decisao_id = ANY($1) ORDER BY inicio`,
-        [decisoes.map((d) => d.id)],
+        [decisaoIds],
       )
     : { rows: [] as any[] };
   const periodosPorDecisao = new Map<string, Array<{ lado: 'ROCKET' | 'CLIENTE'; inicio: string; fim: string }>>();
@@ -98,38 +218,54 @@ async function buscarResponsabilidade(
     motivoCorrecao: d.motivo_correcao,
   });
 
-  const historico = decisoes.map(mapear);
-  const decisaoVigente = containerDecisaoId ? historico.find((d) => d.id === containerDecisaoId) ?? null : null;
-
-  let invalidada: ResponsabilidadeLeitura['invalidada'] = null;
-  if (!decisaoVigente && historico.length > 0) {
-    const { rows: inv } = await pool.query(
-      `SELECT (payload->>'decisaoId') AS decisao_id, (payload->>'versao')::int AS versao,
-              (payload->>'motivo') AS motivo, criado_em
-         FROM closing_events
-        WHERE container_id = $1 AND tipo_evento = 'RESPONSABILIDADE_INVALIDADA'
-        ORDER BY criado_em DESC LIMIT 1`,
-      [containerId],
-    );
-    if (inv.length) {
-      invalidada = { decisaoId: inv[0].decisao_id, versao: inv[0].versao, motivo: normalizarMotivoInvalidacao(inv[0].motivo), em: isoTimestamp(inv[0].criado_em)! };
-    }
+  const historicoPorContainer = new Map<string, DecisaoResponsabilidadeLeitura[]>();
+  for (const d of decisoes) {
+    if (!historicoPorContainer.has(d.container_id)) historicoPorContainer.set(d.container_id, []);
+    historicoPorContainer.get(d.container_id)!.push(mapear(d));
   }
 
-  return { estadoDerivado, decisaoVigente, invalidada, historico };
+  const comHistorico = containerIds.filter((id) => (historicoPorContainer.get(id) ?? []).length > 0);
+  const { rows: invRows } = comHistorico.length
+    ? await pool.query(
+        `SELECT container_id, (payload->>'decisaoId') AS decisao_id, (payload->>'versao')::int AS versao,
+                (payload->>'motivo') AS motivo, criado_em
+           FROM closing_events
+          WHERE container_id = ANY($1) AND tipo_evento = 'RESPONSABILIDADE_INVALIDADA'
+          ORDER BY container_id, criado_em DESC`,
+        [comHistorico],
+      )
+    : { rows: [] as any[] };
+  const invalidadaPorContainer = new Map<string, ResponsabilidadeLeitura['invalidada']>();
+  for (const r of invRows) {
+    if (invalidadaPorContainer.has(r.container_id)) continue; // já temos a mais recente (ORDER BY container_id, criado_em DESC).
+    invalidadaPorContainer.set(r.container_id, { decisaoId: r.decisao_id, versao: r.versao, motivo: normalizarMotivoInvalidacao(r.motivo), em: isoTimestamp(r.criado_em)! });
+  }
+
+  for (const row of containerRows) {
+    const facts = factsApuracaoPorContainer.get(row.id);
+    const estadoDerivado = derivarResponsabilidade(facts?.apuracaoDemurrageStatus ?? 'INDETERMINADA', row.responsabilidade as any);
+    const historico = historicoPorContainer.get(row.id) ?? [];
+    const decisaoVigente = row.responsabilidade_decisao_id ? historico.find((d) => d.id === row.responsabilidade_decisao_id) ?? null : null;
+    const invalidada = !decisaoVigente && historico.length > 0 ? invalidadaPorContainer.get(row.id) ?? null : null;
+    resultado.set(row.id, { estadoDerivado, decisaoVigente, invalidada, historico });
+  }
+
+  return resultado;
 }
 
-/** Constrói o RelogioLeitura de um tipo ('cliente'|'rocket') a partir das linhas já carregadas. */
+/** Constrói o RelogioLeitura de um tipo ('cliente'|'rocket') a partir das linhas já carregadas + do bloco de prazo (DV-05). */
 function construirRelogio(params: {
-  tipo: 'cliente' | 'rocket';
   relogioRow: any | undefined;
-  cache: 'VALIDO' | 'OBSOLETO' | 'AUSENTE';
+  cache: ValidadeCache;
   valorAtivo: { confirmationStatus: any; total: number | null; moeda: string | null } | null;
   tabela: TabelaComercialLeitura | null;
   descarga: { data: string | null; fonte: string | null; observadoEm: string | null; evidenciaRef: string | null };
   freeTimeDias: number | null;
   freeTimeObs: { fonte: string; observadoEm: string; evidenciaRef: string | null } | undefined;
   fallbackManual: { justificativa: string; autorMembershipId: string; criadoEm: string } | null;
+  clock: ContainerLifecycle['facts']['clienteClock'];
+  hoje: CivilDate;
+  limiar: number | null;
 }): RelogioLeitura {
   const r = params.relogioRow;
   const status: RelogioLeitura['status'] = r?.estado ?? 'PENDING';
@@ -154,106 +290,72 @@ function construirRelogio(params: {
     cache: params.cache,
     valor: envelopeDeValor({ relogioStatus: status, diasDemurrage: dias, valor: params.valorAtivo }),
     tabela: params.tabela,
+    ...prazoRelogioLeituraDe(blocoPrazoRelogio(params.clock, params.hoje, params.limiar)),
   };
 }
 
-export async function buscarDetalheContainer(pool: Pool, organizationId: string, containerId: string, hoje?: CivilDate): Promise<ContainerDetalheV1 | null> {
-  const { rows: cr } = await pool.query(
-    `SELECT c.*, p.condicao_comercial_id, cc.termo_tipo
-       FROM containers c
-       LEFT JOIN processos p ON p.id = c.processo_id
-       LEFT JOIN condicoes_comerciais cc ON cc.id = p.condicao_comercial_id
-      WHERE c.id = $1 AND c.organization_id = $2`,
-    [containerId, organizationId],
-  );
-  if (!cr.length) return null;
-  return montarDetalheContainer(pool, cr[0], hoje ?? hojeOperacional());
-}
-
-async function montarDetalheContainer(pool: Pool, row: any, hoje: CivilDate): Promise<ContainerDetalheV1> {
+/**
+ * Monta o `ContainerDetalheV1` de UM contêiner a partir de dados JÁ
+ * carregados em lote — função pura de montagem, nenhuma consulta aqui. O
+ * pacote `ContainerLifecycle` (DV-04) é a MESMA derivação atual usada pela
+ * fila: estado, badges e prioridade nunca vêm das colunas persistidas.
+ */
+function montarDetalheContainerDeDados(
+  row: any,
+  pacote: ContainerLifecycle,
+  dados: {
+    relogiosPorContainer: Map<string, { cliente?: any; rocket?: any }>;
+    valoresPorContainer: Map<string, any[]>;
+    cachePorContainer: Map<string, { cliente: { validade: ValidadeCache }; rocket: { validade: ValidadeCache } }>;
+    obsMap: Map<string, { fonte: string; observadoEm: string; evidenciaRef: string | null }>;
+    fallbackPorContainer: Map<string, FallbackManualPorContainer>;
+    minutasPorContainer: Map<string, any[]>;
+    responsabilidadePorContainer: Map<string, ResponsabilidadeLeitura>;
+  },
+  hoje: CivilDate,
+): ContainerDetalheV1 {
   const containerId = row.id;
-  const lifecycleRepo = new LifecycleRepository(pool);
-  const facts = await lifecycleRepo.montarFatos(containerId, { hoje });
-  const dataFinalApuracao: CivilDate = row.effective_return_date ?? row.tracking_return_date ?? hoje;
+  const rel = dados.relogiosPorContainer.get(containerId) ?? {};
+  const valRows = dados.valoresPorContainer.get(containerId) ?? [];
+  const cache = dados.cachePorContainer.get(containerId);
 
-  const { rows: relRows } = await pool.query(`SELECT * FROM relogios WHERE container_id = $1`, [containerId]);
-  const relCliente = relRows.find((r) => r.tipo === 'cliente');
-  const relRocket = relRows.find((r) => r.tipo === 'rocket');
-
-  const { rows: valRows } = await pool.query(
-    `SELECT va.relogio_tipo, va.motor_comercial, va.total, va.moeda, va.confirmation_status,
-            va.tabela_id, va.versao_tabela, tt.fonte AS tt_fonte, tt.qualidade_fonte AS tt_qualidade,
-            tt.vigencia_inicio AS tt_vigencia_inicio, tt.vigencia_fim AS tt_vigencia_fim
-       FROM valores_apurados va
-       LEFT JOIN tariff_tables tt ON tt.id = va.tabela_id
-      WHERE va.container_id = $1 AND va.calculation_status IN ('OPEN', 'FINAL')`,
-    [containerId],
-  );
   const motorAplicavel = motorClienteAplicavelDe(row.termo_tipo ?? null);
   const valorClienteAtivo = selecionarValorAtivo(valRows, 'cliente', motorAplicavel);
   const valorRocketAtivo = selecionarValorAtivo(valRows, 'rocket', null);
   const tabelaClienteRow = valRows.find((v) => v.relogio_tipo === 'cliente' && (motorAplicavel === null || v.motor_comercial === motorAplicavel));
   const tabelaRocketRow = valRows.find((v) => v.relogio_tipo === 'rocket');
 
-  const [cacheCliente, cacheRocket] = await Promise.all([
-    new RelogioRepository(pool).buscarValido(containerId, 'cliente', dataFinalApuracao),
-    new RelogioRepository(pool).buscarValido(containerId, 'rocket', dataFinalApuracao),
-  ]);
-
-  const obsMap = await ultimaObservacaoPorCampo(pool, [containerId], ['dischargeDate', 'houseFreeTimeDays', 'masterFreeTimeDays']);
-  const obsDescarga = obsMap.get(`${containerId}:dischargeDate`);
-  const obsHouseFt = obsMap.get(`${containerId}:houseFreeTimeDays`);
-  const obsMasterFt = obsMap.get(`${containerId}:masterFreeTimeDays`);
-
-  // Fallback manual (D10 v1.2): governança adicional quando a fonte vencedora foi 'manual_fallback'.
-  const observationIds: string[] = [];
-  const { rows: obsIds } = await pool.query(
-    `SELECT campo, id FROM field_observations WHERE entidade_tipo = 'container' AND entidade_id = $1
-       AND campo IN ('houseFreeTimeDays', 'masterFreeTimeDays') AND fonte = 'manual_fallback'
-      ORDER BY observado_em DESC`,
-    [containerId],
-  );
-  const idsPorCampo = new Map<string, string>();
-  for (const r of obsIds) if (!idsPorCampo.has(r.campo)) idsPorCampo.set(r.campo, r.id);
-  const { rows: fallbackRows } = idsPorCampo.size
-    ? await pool.query(
-        `SELECT observation_id, justificativa, autor_membership_id, criado_em FROM demurrage_fallback_manual_justificativas WHERE observation_id = ANY($1)`,
-        [Array.from(idsPorCampo.values())],
-      )
-    : { rows: [] as any[] };
-  const fallbackPorObsId = new Map(fallbackRows.map((f) => [f.observation_id, { justificativa: f.justificativa, autorMembershipId: f.autor_membership_id, criadoEm: isoTimestamp(f.criado_em)! }]));
-  const fallbackHouse = idsPorCampo.has('houseFreeTimeDays') ? fallbackPorObsId.get(idsPorCampo.get('houseFreeTimeDays')!) ?? null : null;
-  const fallbackMaster = idsPorCampo.has('masterFreeTimeDays') ? fallbackPorObsId.get(idsPorCampo.get('masterFreeTimeDays')!) ?? null : null;
-
+  const obsDescarga = dados.obsMap.get(`${containerId}:dischargeDate`);
+  const obsHouseFt = dados.obsMap.get(`${containerId}:houseFreeTimeDays`);
+  const obsMasterFt = dados.obsMap.get(`${containerId}:masterFreeTimeDays`);
+  const fallback = dados.fallbackPorContainer.get(containerId);
   const descarga = { data: row.discharge_date, fonte: obsDescarga?.fonte ?? null, observadoEm: obsDescarga?.observadoEm ?? null, evidenciaRef: obsDescarga?.evidenciaRef ?? null };
+  const limiar = pacote.facts.prazoProximoThresholdDias;
 
   const relogios: DoisRelogiosLeitura = {
     cliente: construirRelogio({
-      tipo: 'cliente', relogioRow: relCliente, cache: cacheCliente.validade, valorAtivo: valorClienteAtivo,
+      relogioRow: rel.cliente, cache: cache?.cliente.validade ?? 'AUSENTE', valorAtivo: valorClienteAtivo,
       tabela: tabelaDe(tabelaClienteRow), descarga, freeTimeDias: row.house_free_time_days,
-      freeTimeObs: obsHouseFt, fallbackManual: fallbackHouse,
+      freeTimeObs: obsHouseFt, fallbackManual: fallback?.house ?? null, clock: pacote.facts.clienteClock, hoje, limiar,
     }),
     rocket: construirRelogio({
-      tipo: 'rocket', relogioRow: relRocket, cache: cacheRocket.validade, valorAtivo: valorRocketAtivo,
+      relogioRow: rel.rocket, cache: cache?.rocket.validade ?? 'AUSENTE', valorAtivo: valorRocketAtivo,
       tabela: tabelaDe(tabelaRocketRow), descarga, freeTimeDias: row.master_free_time_days,
-      freeTimeObs: obsMasterFt, fallbackManual: fallbackMaster,
+      freeTimeObs: obsMasterFt, fallbackManual: fallback?.master ?? null, clock: pacote.facts.rocketClock, hoje, limiar,
     }),
   };
 
-  const responsabilidade = await buscarResponsabilidade(pool, containerId, row.responsabilidade, row.responsabilidade_decisao_id, facts);
-  const { rows: minutas } = await pool.query(
-    `SELECT id, estado_minuta, numero_informado, data_informada, data_validada, divergente_do_tracking, motivo_rejeicao, criado_em
-       FROM minutas WHERE container_id = $1 ORDER BY criado_em`,
-    [containerId],
-  );
+  const responsabilidade = dados.responsabilidadePorContainer.get(containerId)
+    ?? { estadoDerivado: derivarResponsabilidade(pacote.facts.apuracaoDemurrageStatus, row.responsabilidade ?? null), decisaoVigente: null, invalidada: null, historico: [] };
+  const minutas = dados.minutasPorContainer.get(containerId) ?? [];
 
   return {
     contrato: CONTRATO_LEITURA_V1,
     containerId,
     numero: row.numero,
-    estado: rotularEstado(row.estado),
-    badges: row.estado_badges ?? [],
-    documentaryStatus: row.documentary_status ?? null,
+    estado: rotularEstado(pacote.state.estado),
+    badges: pacote.state.badges,
+    documentaryStatus: pacote.state.documentaryStatus ?? null,
     relogios,
     interno: { responsabilidade },
     emptyReturn: row.effective_return_date ?? row.tracking_return_date ?? null,
@@ -264,9 +366,32 @@ async function montarDetalheContainer(pool: Pool, row: any, hoje: CivilDate): Pr
       divergenteDoTracking: m.divergente_do_tracking ?? false,
       motivoRejeicao: m.motivo_rejeicao ?? null, criadoEm: isoTimestamp(m.criado_em)!,
     })),
-    trackingAtualizadoEm: facts.ultimaConsultaValida,
-    falhaTrackingAtiva: facts.falhaTrackingAtiva,
+    trackingAtualizadoEm: pacote.facts.ultimaConsultaValida,
+    falhaTrackingAtiva: pacote.facts.falhaTrackingAtiva,
   };
+}
+
+export async function buscarDetalheContainer(pool: Pool, organizationId: string, containerId: string, hoje?: CivilDate): Promise<ContainerDetalheV1 | null> {
+  const h = hoje ?? hojeOperacional();
+  const { rows: cr } = await pool.query(
+    `SELECT c.*, p.condicao_comercial_id, cc.termo_tipo
+       FROM containers c
+       LEFT JOIN processos p ON p.id = c.processo_id
+       LEFT JOIN condicoes_comerciais cc ON cc.id = p.condicao_comercial_id
+      WHERE c.id = $1 AND c.organization_id = $2`,
+    [containerId, organizationId],
+  );
+  if (!cr.length) return null;
+  const row = cr[0];
+
+  const pacotes = await new LifecycleRepository(pool).derivarEmLote([containerId], { hoje: h });
+  const pacote = pacotes.get(containerId)!;
+  const dataFinalApuracao: CivilDate = row.effective_return_date ?? row.tracking_return_date ?? h;
+  const dados = await buscarDadosBatchContainers(
+    pool, [row], new Map([[containerId, dataFinalApuracao]]),
+    new Map([[containerId, { apuracaoDemurrageStatus: pacote.facts.apuracaoDemurrageStatus }]]),
+  );
+  return montarDetalheContainerDeDados(row, pacote, dados, h);
 }
 
 export async function buscarDetalheProcesso(pool: Pool, organizationId: string, processoId: string, hoje?: CivilDate): Promise<ProcessoDetalheV1 | null> {
@@ -290,11 +415,52 @@ export async function buscarDetalheProcesso(pool: Pool, organizationId: string, 
       WHERE c.processo_id = $1 ORDER BY c.numero`,
     [processoId, p.condicao_comercial_id],
   );
+  const containerIds: string[] = containerRows.map((r: any) => r.id);
 
-  const conteineres: ContainerDetalheV1[] = [];
-  for (const row of containerRows) conteineres.push(await montarDetalheContainer(pool, row, h));
+  // DV-04: TODOS os contêineres do processo derivados em UM lote (mesma função
+  // congelada da fila) — custo constante, qualquer que seja a quantidade.
+  const pacotes = await new LifecycleRepository(pool).derivarEmLote(containerIds, { hoje: h });
+  const dataFinalPorContainer = new Map<string, CivilDate>(
+    containerRows.map((r: any) => [r.id, r.effective_return_date ?? r.tracking_return_date ?? h]),
+  );
+  const factsApuracaoPorContainer = new Map<string, { apuracaoDemurrageStatus: any }>(
+    containerIds.map((id) => [id, { apuracaoDemurrageStatus: pacotes.get(id)!.facts.apuracaoDemurrageStatus }]),
+  );
+  const dados = await buscarDadosBatchContainers(pool, containerRows, dataFinalPorContainer, factsApuracaoPorContainer);
 
-  const composicao = composicaoDeEstados(containerRows.map((r) => r.estado));
+  const conteineres: ContainerDetalheV1[] = containerRows.map((row: any) => montarDetalheContainerDeDados(row, pacotes.get(row.id)!, dados, h));
+  const numeroPorContainerId = new Map<string, string>(containerRows.map((r: any) => [r.id, r.numero]));
+
+  // DV-03/DV-04: consolidação ATUAL (mesma função congelada da fila) sobre o lote derivado agora.
+  const consolidado = consolidarProcesso(Array.from(pacotes.values()));
+  const liderPacote = consolidado ? pacotes.get(consolidado.containerLiderId) ?? null : null;
+  const lider: LiderLeitura | null = liderPacote ? {
+    containerId: liderPacote.facts.containerId,
+    numero: numeroPorContainerId.get(liderPacote.facts.containerId) ?? '',
+    estado: rotularEstado(liderPacote.state.estado),
+    prioridade: { balde: liderPacote.priority.balde, promocaoTopo: liderPacote.priority.promocaoTopo },
+    motivoPrioridade: consolidado ? consolidado.motivo || null : null,
+    determinaPrioridadeConsolidada: true,
+  } : null;
+
+  // DV-01: agregação financeira de TODOS os contêineres, reaproveitando os envelopes já montados em `conteineres`.
+  const agregadoFinanceiro = agregarFinanceiroProcesso(
+    conteineres.map((c) => ({ cliente: c.relogios.cliente.valor, rocket: c.relogios.rocket.valor })),
+  );
+
+  // DV-05: marco futuro mais próximo entre todos os contêineres/relógios do processo.
+  const candidatosVencimento: CandidatoProximoVencimento[] = [];
+  for (const pacote of pacotes.values()) {
+    const numero = numeroPorContainerId.get(pacote.facts.containerId) ?? '';
+    for (const relogio of ['cliente', 'rocket'] as const) {
+      const clock = relogio === 'cliente' ? pacote.facts.clienteClock : pacote.facts.rocketClock;
+      const bloco = blocoPrazoRelogio(clock, h, pacote.facts.prazoProximoThresholdDias);
+      if (bloco.proximoMarco) candidatosVencimento.push({ containerId: pacote.facts.containerId, numero, relogio, marco: bloco.proximoMarco });
+    }
+  }
+  const proximoVencimento = escolherProximoVencimentoProcesso(candidatosVencimento);
+
+  const composicao = consolidado ? consolidado.composicao : { total: 0, emDemurrage: 0, devolvidos: 0, comPendencia: 0, concluidos: 0 };
 
   const { rows: pendRows } = await pool.query(
     `SELECT tipo, count(*)::int AS n FROM (
@@ -358,13 +524,16 @@ export async function buscarDetalheProcesso(pool: Pool, organizationId: string, 
     responsavelOperacional: p.responsavel_operacional_membership_id ? { membershipId: p.responsavel_operacional_membership_id, nome: p.responsavel_nome ?? '' } : null,
     apuracaoStatus: p.apuracao_status,
     fechadoEm: isoTimestamp(p.fechado_em),
-    estadoMaisRelevante: rotularEstado(p.estado_mais_relevante),
-    prioridade: { balde: p.prioridade_balde, promocaoTopo: false },
-    motivoPrioridade: p.prioridade_motivo,
+    estadoMaisRelevante: rotularEstado(consolidado ? consolidado.estadoMaisRelevante : null),
+    prioridade: liderPacote ? { balde: liderPacote.priority.balde, promocaoTopo: liderPacote.priority.promocaoTopo } : { balde: 'SILENCIOSO', promocaoTopo: false },
+    motivoPrioridade: consolidado ? consolidado.motivo || null : null,
+    lider,
     conteineres,
     composicao,
     pendenciasAbertas,
     falhasTecnicas,
+    agregadoFinanceiro,
+    proximoVencimento,
     fechamento,
     reaberturas: reabRows.map((r) => ({ id: r.id, estado: r.estado, solicitadaPor: r.solicitada_por_nome, autorizadaPor: r.autorizada_por_nome, justificativa: r.justificativa, criadoEm: isoTimestamp(r.criado_em)! })),
   };

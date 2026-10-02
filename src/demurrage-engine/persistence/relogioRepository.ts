@@ -178,26 +178,63 @@ export class RelogioRepository {
    * Recalcula o input_hash a partir das entradas ATUAIS do contêiner e compara
    * com o gravado: divergência (FT mudou, descarga mudou, data final outra,
    * versão do motor outra) => OBSOLETO. Sem linha => AUSENTE.
+   *
+   * Delega ao lote de um único elemento (D12 v1.2, DV-04): mesma implementação
+   * do caminho em lote, usado pelo detalhe de processo para custo constante.
    */
   async buscarValido(containerId: string, tipo: TipoRelogio, dataFinal: CivilDate): Promise<RelogioComValidade> {
-    const { rows } = await this.pool.query(
-      `SELECT * FROM relogios WHERE container_id = $1 AND tipo = $2`,
-      [containerId, tipo],
-    );
-    if (rows.length === 0) return { validade: 'AUSENTE', relogio: null };
+    const lote = await this.buscarValidosEmLote([{ containerId, dataFinal }]);
+    const porTipo = lote.get(containerId);
+    return porTipo ? porTipo[tipo] : { validade: 'AUSENTE', relogio: null };
+  }
 
-    const relogio = mapRow(rows[0]);
-    const entradas = await this.lerEntradas(this.pool, containerId);
-    const hashEsperado = calcularInputHash({
-      tipo,
-      dischargeDate: entradas.dischargeDate,
-      freeTimeDays: this.freeTimeDoTipo(entradas, tipo),
-      finalDate: dataFinal,
-    });
-    return {
-      validade: relogio.inputHash === hashEsperado ? 'VALIDO' : 'OBSOLETO',
-      relogio,
-    };
+  /**
+   * Mesma verificação de validade de `buscarValido`, para VÁRIOS contêineres
+   * (cada um com sua própria data final) com número de consultas CONSTANTE —
+   * sempre 2 (`relogios` + `containers`, ambas com `= ANY($1)`), nunca 2 por
+   * contêiner. Usado pelo detalhe de processo (D12 v1.2) para eliminar o N+1
+   * que a chamada unitária, repetida por contêiner × tipo, produzia.
+   */
+  async buscarValidosEmLote(
+    itens: Array<{ containerId: string; dataFinal: CivilDate }>,
+  ): Promise<Map<string, { cliente: RelogioComValidade; rocket: RelogioComValidade }>> {
+    const resultado = new Map<string, { cliente: RelogioComValidade; rocket: RelogioComValidade }>();
+    if (itens.length === 0) return resultado;
+    const ids = Array.from(new Set(itens.map((i) => i.containerId)));
+    const dataFinalPorContainer = new Map(itens.map((i) => [i.containerId, i.dataFinal]));
+
+    const { rows: relRows } = await this.pool.query(`SELECT * FROM relogios WHERE container_id = ANY($1)`, [ids]);
+    const relPorContainer = new Map<string, Map<TipoRelogio, RelogioCache>>();
+    for (const r of relRows) {
+      if (!relPorContainer.has(r.container_id)) relPorContainer.set(r.container_id, new Map());
+      relPorContainer.get(r.container_id)!.set(r.tipo, mapRow(r));
+    }
+
+    const { rows: containerRows } = await this.pool.query(
+      `SELECT id, discharge_date, house_free_time_days, master_free_time_days FROM containers WHERE id = ANY($1)`,
+      [ids],
+    );
+    const entradasPorContainer = new Map<string, EntradasContainer>(
+      containerRows.map((r) => [r.id, {
+        dischargeDate: r.discharge_date, houseFreeTimeDays: r.house_free_time_days, masterFreeTimeDays: r.master_free_time_days,
+      }]),
+    );
+
+    for (const containerId of ids) {
+      const entradas = entradasPorContainer.get(containerId);
+      const dataFinal = dataFinalPorContainer.get(containerId)!;
+      const porTipo = relPorContainer.get(containerId);
+      const avaliarTipo = (tipo: TipoRelogio): RelogioComValidade => {
+        const relogio = porTipo?.get(tipo) ?? null;
+        if (!relogio || !entradas) return { validade: 'AUSENTE', relogio: null };
+        const hashEsperado = calcularInputHash({
+          tipo, dischargeDate: entradas.dischargeDate, freeTimeDays: this.freeTimeDoTipo(entradas, tipo), finalDate: dataFinal,
+        });
+        return { validade: relogio.inputHash === hashEsperado ? 'VALIDO' : 'OBSOLETO', relogio };
+      };
+      resultado.set(containerId, { cliente: avaliarTipo('cliente'), rocket: avaliarTipo('rocket') });
+    }
+    return resultado;
   }
 
   async listarPorContainer(containerId: string): Promise<RelogioCache[]> {

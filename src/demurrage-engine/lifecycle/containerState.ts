@@ -1,4 +1,4 @@
-import { toOrdinal } from '../temporal/civilDate';
+import { diasAteUltimoDiaLivre, estaEmPrazoProximo } from './prazoFreeTime';
 import { ApuracaoDemurrageStatus, Badge, ClockFact, ContainerLifecycleFacts, ContainerStateResult, EstadoOperacional } from './types';
 
 /**
@@ -32,11 +32,10 @@ export function derivarApuracaoDemurrageStatus(cliente: ClockFact, rocket: Clock
 
 /** Dias até o vencimento mais próximo entre relógios OK dentro do prazo (null se nenhum). */
 function menorDiasAteVencimento(facts: ContainerLifecycleFacts): number | null {
-  const hoje = toOrdinal(facts.hoje);
   const candidatos: number[] = [];
   for (const clock of [facts.clienteClock, facts.rocketClock]) {
     if (clock.status === 'OK' && clock.diasDemurrage === 0 && clock.ultimoDiaLivre) {
-      const dias = toOrdinal(clock.ultimoDiaLivre) - hoje;
+      const dias = diasAteUltimoDiaLivre(clock.ultimoDiaLivre, facts.hoje);
       if (dias >= 0) candidatos.push(dias);
     }
   }
@@ -44,10 +43,9 @@ function menorDiasAteVencimento(facts: ContainerLifecycleFacts): number | null {
 }
 
 function ehPrazoProximo(facts: ContainerLifecycleFacts): boolean {
-  // Limiar TBD (null) → PRAZO_PROXIMO nunca é emitido (§7): nada de valor arbitrário.
-  if (facts.prazoProximoThresholdDias === null) return false;
+  // Limiar null → desligado (estaEmPrazoProximo trata); fonte única em prazoFreeTime.ts.
   const dias = menorDiasAteVencimento(facts);
-  return dias !== null && dias <= facts.prazoProximoThresholdDias;
+  return estaEmPrazoProximo(dias, facts.prazoProximoThresholdDias);
 }
 
 function motivoDe(estado: EstadoOperacional, facts: ContainerLifecycleFacts, badges: Badge[], severidadeDias: number): string {

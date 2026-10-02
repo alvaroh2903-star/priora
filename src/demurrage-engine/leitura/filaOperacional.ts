@@ -3,11 +3,12 @@ import { LifecycleRepository } from '../persistence/lifecycleRepository';
 import { ordenarFila, ordenarTodos, compararDesempate } from '../lifecycle/priorityEngine';
 import { composicaoDeEstados, consolidarProcesso } from '../lifecycle/processConsolidation';
 import { ContainerLifecycle, ProcessoLifecycleResult } from '../lifecycle/types';
+import { blocoPrazoRelogio, escolherProximoVencimentoProcesso, CandidatoProximoVencimento } from '../lifecycle/prazoFreeTime';
 import { hojeOperacional } from '../time/operationalDate';
 import { CivilDate } from '../temporal/civilDate';
 import {
-  CONTRATO_FILA_ITEM_V1, CONTRATO_LEITURA_V1, ErroLeitura, FilaItemV1, FilaRespostaV1, FiltroFila,
-  envelopeDeValor, isoTimestamp, motorClienteAplicavelDe, rotularEstado, selecionarValorAtivo,
+  CONTRATO_FILA_ITEM_V1, CONTRATO_LEITURA_V1, ErroLeitura, FilaItemV1, FilaRespostaV1, FiltroFila, LiderLeitura,
+  envelopeDeValor, isoTimestamp, motorClienteAplicavelDe, rotularEstado, selecionarValorAtivo, agregarFinanceiroProcesso, filtroFilaVazio,
 } from './contrato';
 import { codificarCursorAssinado, decodificarCursorAssinado, hmacLeitura } from './cursorAssinado';
 
@@ -407,9 +408,11 @@ export async function buscarFilaOperacional(pool: Pool, input: BuscarFilaInput):
   const candidatos = await buscarProcessosCandidatos(pool, input.organizationId, f);
   const containers = await buscarContainersDosCandidatos(pool, input.organizationId, candidatos.map((c) => c.processo_id));
   const containersPorProcesso = new Map<string, ContainerCandidato[]>();
+  const numeroPorContainerId = new Map<string, string>();
   for (const c of containers) {
     if (!containersPorProcesso.has(c.processo_id)) containersPorProcesso.set(c.processo_id, []);
     containersPorProcesso.get(c.processo_id)!.push(c);
+    numeroPorContainerId.set(c.id, c.numero);
   }
 
   // 2) Pacote ATUAL de cada contêiner (funções congeladas, hoje operacional, sem persistir).
@@ -459,12 +462,14 @@ export async function buscarFilaOperacional(pool: Pool, input: BuscarFilaInput):
   }
   const pagina = ordem.slice(offset, offset + limite);
 
-  // 5) Agregados e valores só da página.
+  // 5) Agregados e valores de TODOS os contêineres da página (não só do líder)
+  // — DV-01 precisa do processo inteiro para agregar; custo ainda CONSTANTE
+  // por página (uma consulta com `= ANY`, nunca uma por contêiner).
   const { pendenciasPorProcesso, falhasPorProcesso, trackingPorProcesso } = await buscarAgregadosPorProcesso(
     pool, pagina.map((a) => a.candidato.processo_id),
   );
-  const liderIdsPagina = pagina.map((a) => a.lider?.facts.containerId).filter((x): x is string => !!x);
-  const { rows: valoresLideres } = liderIdsPagina.length
+  const containerIdsPagina = pagina.flatMap((a) => (containersPorProcesso.get(a.candidato.processo_id) ?? []).map((c) => c.id));
+  const { rows: valoresPagina } = containerIdsPagina.length
     ? await pool.query(
         `SELECT c.id AS container_id, cc.termo_tipo, va.relogio_tipo, va.motor_comercial, va.total, va.moeda, va.confirmation_status
            FROM containers c
@@ -472,40 +477,74 @@ export async function buscarFilaOperacional(pool: Pool, input: BuscarFilaInput):
            LEFT JOIN condicoes_comerciais cc ON cc.id = p2.condicao_comercial_id
            LEFT JOIN valores_apurados va ON va.container_id = c.id AND va.calculation_status IN ('OPEN', 'FINAL')
           WHERE c.id = ANY($1) AND c.organization_id = $2`,
-        [liderIdsPagina, input.organizationId],
+        [containerIdsPagina, input.organizationId],
       )
     : { rows: [] as any[] };
-  const valoresPorLider = new Map<string, any[]>();
-  const termoTipoPorLider = new Map<string, string | null>();
-  for (const r of valoresLideres) {
-    termoTipoPorLider.set(r.container_id, r.termo_tipo ?? null);
+  const valoresPorContainer = new Map<string, any[]>();
+  const termoTipoPorContainer = new Map<string, string | null>();
+  for (const r of valoresPagina) {
+    termoTipoPorContainer.set(r.container_id, r.termo_tipo ?? null);
     if (r.relogio_tipo) {
-      if (!valoresPorLider.has(r.container_id)) valoresPorLider.set(r.container_id, []);
-      valoresPorLider.get(r.container_id)!.push(r);
+      if (!valoresPorContainer.has(r.container_id)) valoresPorContainer.set(r.container_id, []);
+      valoresPorContainer.get(r.container_id)!.push(r);
     }
   }
 
+  /** Envelope cliente/rocket de UM contêiner (mesma tradução do envelope do líder, D12 v1.1), sobre o pacote ATUAL. */
+  function envelopesDoContainer(pacote: ContainerLifecycle): { cliente: ReturnType<typeof envelopeDeValor>; rocket: ReturnType<typeof envelopeDeValor> } {
+    const vrows = valoresPorContainer.get(pacote.facts.containerId) ?? [];
+    const motorAplicavel = motorClienteAplicavelDe(termoTipoPorContainer.get(pacote.facts.containerId) ?? null);
+    return {
+      cliente: envelopeDeValor({
+        relogioStatus: pacote.facts.clienteClock.status,
+        diasDemurrage: pacote.facts.clienteClock.status === 'OK' ? pacote.facts.clienteClock.diasDemurrage : null,
+        valor: selecionarValorAtivo(vrows, 'cliente', motorAplicavel),
+      }),
+      rocket: envelopeDeValor({
+        relogioStatus: pacote.facts.rocketClock.status,
+        diasDemurrage: pacote.facts.rocketClock.status === 'OK' ? pacote.facts.rocketClock.diasDemurrage : null,
+        valor: selecionarValorAtivo(vrows, 'rocket', null),
+      }),
+    };
+  }
+
   const itens: FilaItemV1[] = pagina.map(({ candidato, consolidado, lider, conteineresQueCasaram }) => {
+    const doProcesso = containersPorProcesso.get(candidato.processo_id) ?? [];
+    const pacotesDoProcesso = doProcesso.map((c) => pacotes.get(c.id)).filter((x): x is ContainerLifecycle => !!x);
+
     let exposicaoFinanceira: FilaItemV1['exposicaoFinanceira'] = {
       valorCliente: { situacao: 'PENDENTE', total: null, moeda: null },
       exposicaoRocket: { situacao: 'PENDENTE', total: null, moeda: null },
     };
+    let liderBloco: LiderLeitura | null = null;
     if (lider) {
-      const liderId = lider.facts.containerId;
-      const vrows = valoresPorLider.get(liderId) ?? [];
-      exposicaoFinanceira = {
-        valorCliente: envelopeDeValor({
-          relogioStatus: lider.facts.clienteClock.status,
-          diasDemurrage: lider.facts.clienteClock.status === 'OK' ? lider.facts.clienteClock.diasDemurrage : null,
-          valor: selecionarValorAtivo(vrows, 'cliente', motorClienteAplicavelDe(termoTipoPorLider.get(liderId) ?? null)),
-        }),
-        exposicaoRocket: envelopeDeValor({
-          relogioStatus: lider.facts.rocketClock.status,
-          diasDemurrage: lider.facts.rocketClock.status === 'OK' ? lider.facts.rocketClock.diasDemurrage : null,
-          valor: selecionarValorAtivo(vrows, 'rocket', null),
-        }),
+      const env = envelopesDoContainer(lider);
+      exposicaoFinanceira = { valorCliente: env.cliente, exposicaoRocket: env.rocket };
+      liderBloco = {
+        containerId: lider.facts.containerId,
+        numero: numeroPorContainerId.get(lider.facts.containerId) ?? '',
+        estado: rotularEstado(lider.state.estado),
+        prioridade: { balde: lider.priority.balde, promocaoTopo: lider.priority.promocaoTopo },
+        motivoPrioridade: consolidado ? consolidado.motivo || null : null,
+        determinaPrioridadeConsolidada: true,
       };
     }
+
+    // DV-01: agregação financeira de TODOS os contêineres do processo, lado cliente/rocket sempre separados.
+    const agregadoFinanceiro = agregarFinanceiroProcesso(pacotesDoProcesso.map((p) => envelopesDoContainer(p)));
+
+    // DV-05: marco futuro mais próximo entre todos os contêineres/relógios do processo.
+    const candidatosVencimento: CandidatoProximoVencimento[] = [];
+    for (const pacote of pacotesDoProcesso) {
+      const numero = numeroPorContainerId.get(pacote.facts.containerId) ?? '';
+      for (const relogio of ['cliente', 'rocket'] as const) {
+        const clock = relogio === 'cliente' ? pacote.facts.clienteClock : pacote.facts.rocketClock;
+        const bloco = blocoPrazoRelogio(clock, hoje, pacote.facts.prazoProximoThresholdDias);
+        if (bloco.proximoMarco) candidatosVencimento.push({ containerId: pacote.facts.containerId, numero, relogio, marco: bloco.proximoMarco });
+      }
+    }
+    const proximoVencimento = escolherProximoVencimentoProcesso(candidatosVencimento);
+
     const calculadoEm = isoTimestamp(candidato.processo_calc_em);
     return {
       contrato: CONTRATO_FILA_ITEM_V1,
@@ -521,12 +560,15 @@ export async function buscarFilaOperacional(pool: Pool, input: BuscarFilaInput):
       estadoMaisRelevante: rotularEstado(consolidado ? consolidado.estadoMaisRelevante : null),
       prioridade: lider ? { balde: lider.priority.balde, promocaoTopo: lider.priority.promocaoTopo } : { balde: 'SILENCIOSO', promocaoTopo: false },
       motivoPrioridade: consolidado ? consolidado.motivo || null : null,
+      lider: liderBloco,
       badges: lider ? lider.state.badges : [],
       ultimaAtualizacao: calculadoEm,
       trackingAtualizadoEm: isoTimestamp(trackingPorProcesso.get(candidato.processo_id) ?? null),
       pendenciasAbertas: contagem(pendenciasPorProcesso.get(candidato.processo_id)),
       falhasTecnicas: contagem(falhasPorProcesso.get(candidato.processo_id)),
       exposicaoFinanceira,
+      agregadoFinanceiro,
+      proximoVencimento,
       derivadoEm: calculadoEm,
     };
   });
@@ -548,3 +590,40 @@ export async function buscarFilaOperacional(pool: Pool, input: BuscarFilaInput):
 
 // Reexportado para os testes de equivalência/desempate (G2).
 export { compararDesempate };
+
+/**
+ * D12 v1.2, item 5 — contagem por estado e por balde para `/filtros`, com a
+ * MESMA derivação atual da fila (nenhuma regra duplicada: reaproveita
+ * `buscarProcessosCandidatos`/`buscarContainersDosCandidatos`/`derivarEmLote`/
+ * `consolidarProcesso`, todas já congeladas/compartilhadas). SEM filtro de
+ * processo (conta TODOS, inclusive SILENCIOSO — a tela decide depois o que
+ * exibir) e SEM paginação — só a contagem. Custo constante (as mesmas
+ * consultas em lote da fila, nunca uma por processo).
+ */
+export async function contarEstadosEBaldes(pool: Pool, organizationId: string, hoje?: CivilDate): Promise<{ estados: Array<{ codigo: string; total: number }>; baldes: Array<{ codigo: string; total: number }> }> {
+  const h = hoje ?? hojeOperacional();
+  const candidatos = await buscarProcessosCandidatos(pool, organizationId, filtroFilaVazio());
+  const containers = await buscarContainersDosCandidatos(pool, organizationId, candidatos.map((c) => c.processo_id));
+  const containersPorProcesso = new Map<string, ContainerCandidato[]>();
+  for (const c of containers) {
+    if (!containersPorProcesso.has(c.processo_id)) containersPorProcesso.set(c.processo_id, []);
+    containersPorProcesso.get(c.processo_id)!.push(c);
+  }
+  const pacotes = await new LifecycleRepository(pool).derivarEmLote(containers.map((c) => c.id), { hoje: h });
+
+  const porEstado = new Map<string, number>();
+  const porBalde = new Map<string, number>();
+  for (const candidato of candidatos) {
+    const doProcesso = containersPorProcesso.get(candidato.processo_id) ?? [];
+    const lifecycles = doProcesso.map((c) => pacotes.get(c.id)).filter((x): x is ContainerLifecycle => !!x);
+    const consolidado = consolidarProcesso(lifecycles);
+    const estadoCodigo = consolidado ? consolidado.estadoMaisRelevante : 'NAO_DERIVADO';
+    const baldeCodigo = consolidado ? consolidado.prioridadeBalde : 'SILENCIOSO';
+    porEstado.set(estadoCodigo, (porEstado.get(estadoCodigo) ?? 0) + 1);
+    porBalde.set(baldeCodigo, (porBalde.get(baldeCodigo) ?? 0) + 1);
+  }
+  return {
+    estados: Array.from(porEstado.entries()).map(([codigo, total]) => ({ codigo, total })),
+    baldes: Array.from(porBalde.entries()).map(([codigo, total]) => ({ codigo, total })),
+  };
+}

@@ -4,6 +4,7 @@ import { CivilDate } from '../temporal/civilDate';
 import { avaliarCadencia, deveConsultarAgora, CadenciaInput } from '../scheduler/cadencePolicy';
 import { derivarEstadoContainer, derivarApuracaoDemurrageStatus } from '../lifecycle/containerState';
 import { derivarPrioridadeContainer } from '../lifecycle/priorityEngine';
+import { PRAZO_PROXIMO_DIAS_PADRAO } from '../lifecycle/prazoFreeTime';
 import { consolidarProcesso } from '../lifecycle/processConsolidation';
 import { derivarResponsabilidade } from '../lifecycle/responsabilidade';
 import { Badge, ClockFact, ContainerLifecycle, ContainerLifecycleFacts, ContainerStateResult, DocumentaryStatus, ProcessoLifecycleResult, Responsabilidade, ValorFact } from '../lifecycle/types';
@@ -28,7 +29,10 @@ import { RelogioRepository } from './relogioRepository';
  *    entram com Liberação/minuta nas Fases 8/11).
  *  - `documentaryStatus` = MINUTA_PENDENTE quando há Empty Return, senão NAO_APLICAVEL
  *    (provisório; a validação real da minuta é da Fase 8).
- *  - `prazoProximoThresholdDias` = env DEMURRAGE_PRAZO_PROXIMO_DIAS quando definido; senão null (TBD).
+ *  - `prazoProximoThresholdDias` = `config.prazoProximoThresholdDias` quando o chamador passa
+ *    um valor explícito (incluindo `null` para desligar); senão o padrão operacional
+ *    `PRAZO_PROXIMO_DIAS_PADRAO` (4 dias corridos, D12 v1.2 DV-05), usado por pipeline, tick
+ *    diário e leitura — fonte única em `lifecycle/prazoFreeTime.ts`.
  */
 
 export interface LifecycleConfig {
@@ -227,7 +231,8 @@ export class LifecycleRepository {
         falhaTrackingAtiva,
         valorCliente: melhorValor('cliente'),
         exposicaoRocket: melhorValor('rocket'),
-        prazoProximoThresholdDias: config.prazoProximoThresholdDias ?? null,
+        prazoProximoThresholdDias:
+          config.prazoProximoThresholdDias === undefined ? PRAZO_PROXIMO_DIAS_PADRAO : config.prazoProximoThresholdDias,
       });
     }
     return resultado;

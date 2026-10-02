@@ -1,4 +1,5 @@
 import { toOrdinal } from '../temporal/civilDate';
+import { diasAteUltimoDiaLivre } from './prazoFreeTime';
 import {
   ContainerLifecycle,
   ContainerLifecycleFacts,
@@ -65,11 +66,10 @@ function urgenciaTracking(facts: ContainerLifecycleFacts): { falha: boolean; ord
 
 /** Menor tempo até o vencimento (só quando dentro do prazo); null quando não aplicável. */
 function diasAteVencimento(facts: ContainerLifecycleFacts): number | null {
-  const hoje = toOrdinal(facts.hoje);
   const candidatos: number[] = [];
   for (const clock of [facts.clienteClock, facts.rocketClock]) {
     if (clock.status === 'OK' && clock.diasDemurrage === 0 && clock.ultimoDiaLivre) {
-      const d = toOrdinal(clock.ultimoDiaLivre) - hoje;
+      const d = diasAteUltimoDiaLivre(clock.ultimoDiaLivre, facts.hoje);
       if (d >= 0) candidatos.push(d);
     }
   }

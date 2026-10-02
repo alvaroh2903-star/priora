@@ -1,13 +1,23 @@
 import { Pool } from 'pg';
 import { ESTADOS_OPERACIONAIS, EstadoOperacional, ORDEM_BALDE, PrioridadeBalde } from '../lifecycle/types';
+import { CivilDate } from '../temporal/civilDate';
 import { CampoPeriodo, CONTRATO_LEITURA_V1, ErroLeitura, FiltroFila, FiltrosDisponiveisV1, filtroFilaVazio } from './contrato';
+import { contarEstadosEBaldes } from './filaOperacional';
 
 /**
- * Fase D12 (Gate G5) — normalização dos filtros da query string (seção 6) e
- * o agregado de `GET /filtros`. A tradução filtro→SQL fica só em
+ * Fase D12 (Gate G5, v1.2 item 5) — normalização dos filtros da query string
+ * (seção 6) e o agregado de `GET /filtros`. A tradução filtro→SQL fica só em
  * `filaOperacional.ts` (nenhuma regra duplicada); este módulo só garante que
  * a entrada é válida ANTES de chegar lá, com erro explícito (`400
  * valor_invalido`) em vez de ignorar silenciosamente um parâmetro estranho.
+ *
+ * DV-04 (v1.2): as contagens por estado/balde usavam `GROUP BY` sobre as
+ * colunas persistidas (`estado_mais_relevante`/`prioridade_balde`), que podem
+ * estar atrasadas em relação ao `hoje` operacional — exatamente a
+ * inconsistência que a fila já tinha corrigido na v1.1. Agora vêm de
+ * `contarEstadosEBaldes` (mesma derivação atual, mesmas funções congeladas),
+ * para que fila, detalhe e `/filtros` concordem sempre sobre o mesmo
+ * instante. Nenhuma soma financeira aqui (DV-01 fica só na fila/detalhe).
  */
 
 const RE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -114,9 +124,15 @@ export function normalizarFiltrosFila(query: Record<string, unknown>): FiltroFil
   return f;
 }
 
-/** `GET /filtros` (seção 6): opções em uso na organização + contagens por estado/balde, via `GROUP BY` sobre colunas persistidas. */
-export async function buscarOpcoesFiltros(pool: Pool, organizationId: string): Promise<FiltrosDisponiveisV1> {
-  const [responsaveis, clientes, armadores, estados, baldes] = await Promise.all([
+/**
+ * `GET /filtros` (seção 6, v1.2 item 5): opções em uso na organização +
+ * contagens por estado/balde com a derivação ATUAL (`contarEstadosEBaldes`,
+ * mesmas funções congeladas da fila) — nunca `GROUP BY` sobre coluna
+ * persistida. Aditivo: o resumo futuro da D13 lê as contagens já prontas
+ * daqui, sem precisar chamar a fila uma vez por balde.
+ */
+export async function buscarOpcoesFiltros(pool: Pool, organizationId: string, hoje?: CivilDate): Promise<FiltrosDisponiveisV1> {
+  const [responsaveis, clientes, armadores, contagens] = await Promise.all([
     pool.query(
       `SELECT DISTINCT m.id AS membership_id, u.nome
          FROM processos p
@@ -136,16 +152,7 @@ export async function buscarOpcoesFiltros(pool: Pool, organizationId: string): P
         WHERE p.organization_id = $1 ORDER BY a.nome`,
       [organizationId],
     ),
-    pool.query(
-      `SELECT estado_mais_relevante AS codigo, count(*)::int AS total FROM processos
-        WHERE organization_id = $1 AND estado_mais_relevante IS NOT NULL GROUP BY estado_mais_relevante`,
-      [organizationId],
-    ),
-    pool.query(
-      `SELECT prioridade_balde AS codigo, count(*)::int AS total FROM processos
-        WHERE organization_id = $1 AND prioridade_balde IS NOT NULL GROUP BY prioridade_balde`,
-      [organizationId],
-    ),
+    contarEstadosEBaldes(pool, organizationId, hoje),
   ]);
 
   return {
@@ -153,7 +160,7 @@ export async function buscarOpcoesFiltros(pool: Pool, organizationId: string): P
     responsaveis: responsaveis.rows.map((r) => ({ membershipId: r.membership_id, nome: r.nome })),
     clientes: clientes.rows.map((r) => ({ id: r.id, nome: r.nome })),
     armadores: armadores.rows.map((r) => ({ id: r.id, codigo: r.codigo_interno, nome: r.nome })),
-    estados: estados.rows.map((r) => ({ codigo: r.codigo, total: r.total })),
-    baldes: baldes.rows.map((r) => ({ codigo: r.codigo, total: r.total })),
+    estados: contagens.estados,
+    baldes: contagens.baldes,
   };
 }
