@@ -189,10 +189,19 @@ existe.
 
 | Suíte | Resultado |
 |---|---|
-| Engine completa (`npm run test:demurrage-engine`, inclui D10, D11, D12 completa — G1–G7, v1.1, v1.2 —, lifecycle/prioridade, relógios, tarifas/apuração, rotas V2, os novos `prazoFreeTimeV12.test.ts` e `leituraD12V12.test.ts`) | **PREENCHER (pass/fail/total) após a corrida final** |
+| Engine completa (`npm run test:demurrage-engine`, inclui D10, D11, D12 completa — G1–G7, v1.1, v1.2 —, lifecycle/prioridade, relógios, tarifas/apuração, rotas V2, os novos `prazoFreeTimeV12.test.ts` e `leituraD12V12.test.ts`) | **662/662** (626 da base v1.1 + 25 de `prazoFreeTimeV12.test.ts`¹ + 11 de `leituraD12V12.test.ts`) |
 | V1 (`npm test`) | 25/25 |
 | `tsc --noEmit` | limpo |
 | `npm run build` | limpo |
+
+¹ A primeira corrida da engine completa foi feita duas vezes em paralelo com
+o benchmark de queries (abaixo) e mostrou 29–33 falhas transitórias — todas
+em arquivos sem relação com esta entrega (ex.: `vesselSharing.test.ts`,
+erro genérico de pool do `pg`), reproduzidas só sob disputa de conexões
+Postgres entre a suíte e o benchmark correndo ao mesmo tempo. Uma corrida
+**isolada** (nada mais acessando o banco), registrada no log completo de
+4.042 linhas sem nenhuma ocorrência de `not ok`, deu **662/662** — o número
+reportado acima. Nenhum teste foi pulado para obter este resultado.
 
 Zero escrita: a suíte `demurrageV2Routes.test.ts` (G7, já existente, roda
 contra o schema inteiro) e os testes desta entrega (fingerprint
