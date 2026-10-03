@@ -1,856 +1,866 @@
-# Fase D14 — Gestão e Indicadores: diagnóstico e plano de implementação (NÃO aprovado, NÃO implementado)
+# Fase D14 — Gestão e Indicadores: diagnóstico e plano de implementação (v1.1 CORRETIVO — NÃO aprovado, NÃO implementado)
 
-> **Status:** diagnóstico apenas. Nenhum código foi alterado. D10, D11 e D12
-> v1.2.3 (`f7ba55b`) permanecem congelados. D13 (`fe37daf`) é um protótipo
-> técnico de frontend — prova que os contratos V2 alimentam uma interface,
-> mas seu desenho visual foi rejeitado; **não** é referência visual para a
-> D14 nem para o frontend definitivo, que será redesenhado depois de o
-> comportamento de backend estar completo. A D14 aqui descrita é
-> **backend-first e independente de UI**. Fonte: `Blueprint Demurrage
-> Priora V1 Revisado V2` (capítulos 1–32), cruzado com o schema e o código
-> realmente existentes em `src/demurrage-engine/**` nesta base.
+> **Status:** diagnóstico apenas. Nenhum código foi alterado. D10, D11,
+> D12 v1.2.3 (`f7ba55b`) e D13 (`fe37daf`) permanecem congelados/intocados.
+> D13 é um protótipo técnico de frontend — prova que os contratos V2
+> alimentam uma interface, mas **não** é referência visual para a D14 nem
+> para o frontend definitivo. A D14 é **backend-first e independente de
+> UI**.
+>
+> **Esta é a revisão corretiva do diagnóstico `bd721a9`.** O usuário
+> aprovou a direção geral, mas apontou 4 problemas de modelagem
+> bloqueantes e resolveu 14 decisões de negócio que no documento anterior
+> estavam em aberto. Esta versão corrige os 4 bloqueios, aplica as 14
+> decisões already aprovadas, acrescenta a exigência de frescor
+> operacional do Grupo A, e documenta a investigação conclusiva de código
+> para as métricas de tracking (G-E3/G-E9). Nenhuma outra premissa do
+> documento anterior foi reaberta sem necessidade.
+
+---
+
+## 0. O que mudou nesta revisão (sumário das 4 correções bloqueantes)
+
+1. **Seleção financeira.** O documento anterior agregava toda linha
+   ATIVA de `valores_apurados` e argumentava que o índice único evitava
+   duplicata. Isso é insuficiente: o grão do índice é
+   `(container_id, relogio_tipo, motor_comercial)` — mais de um motor
+   comercial pode ter linha ativa para o MESMO contêiner/lado. A D14
+   agora usa, obrigatoriamente, a mesma função de seleção já congelada
+   pela D12 (`selecionarValorAtivo`) **antes** de qualquer agregação de
+   organização — nunca uma regra nova (§6).
+2. **Conclusão "com/sem custo".** Os indicadores ambíguos G-D7/G-D8 foram
+   substituídos por 8 indicadores separados e precisos, cada um com
+   tratamento explícito de pendente/indisponível (§5, Grupo D).
+3. **Independência das dimensões operacionais.** Removida a afirmação de
+   que o Grupo A é mutuamente exclusivo como um todo. Cada indicador
+   agora carrega a dimensão a que pertence; dimensões diferentes são
+   independentes e um processo aparece em vários indicadores ao mesmo
+   tempo — nunca somados a 100% (§5, Grupo A; §12-bis metadado de
+   contrato).
+4. **Snapshot histórico.** Removido da V1. Nenhuma migration `0035`,
+   nenhum materializador, nenhum gate de snapshot nesta fase. A V1 cobre
+   só indicadores vivos + histórico-por-período reconstruível de fatos já
+   fechados + drill-down. O desenho do snapshot fica para uma fase
+   controlada futura, com os campos tipados que o usuário exigiu (§9).
+
+Também aplicadas: as 14 decisões de negócio do usuário (§21, agora
+"decisões aprovadas", não mais em aberto), a exigência de frescor
+operacional do Grupo A (§5-A, §10), e a investigação conclusiva de
+`avaliarCadencia`/`schedulerWorker.ts` para G-E3/G-E9 (§4, §5-E).
 
 ---
 
 ## 1. Propósito e limites
 
-A D14 constrói a camada de **Gestão e Indicadores** do Cap. 30 do
-Blueprint: visão operacional, visão financeira (somente leitura),
-responsabilidade da Rocket, eficiência operacional, qualidade de dados e
-tracking, e separação por moeda — tudo sobre os fatos já persistidos pelas
-fases D10 (registro/observações), D11 (responsabilidade) e D12 v1.2.3
-(leitura operacional). **Nenhum dado novo de negócio é inventado nesta
-fase**: todo indicador deriva de fato já gravado por uma fase anterior, ou
-é explicitamente adiado por falta de fonte.
-
-Limites explícitos desta fase:
-
-- **Backend only.** Contratos de leitura (`GET`) e, se aprovado, um
-  materializador de histórico. Nenhuma tela é desenhada ou implementada
-  aqui.
-- **Sem escrita de negócio nova.** Nenhuma correção, confirmação de
-  responsabilidade, fechamento ou tracking manual é criada ou alterada
-  por esta fase — esses fluxos já existem (D10/D11) e continuam intocados.
-- **Sem integração financeira nova.** HeadCargo (faturamento, recebimento,
-  saldo) continua sem integração nesta base de código (confirmado por
-  busca: zero referências). Os três indicadores do Cap. 30.2 que dependem
-  dele ficam como "Status financeiro não disponível" (mesmo texto fixo já
-  usado pelo Cap. 27.3/D13), nunca um valor fabricado.
-- **Sem alteração de D10/D11/D12/D13**, rotas V1, Portal, Supabase,
-  HeadCargo, Auditoria, Courier, Release, cadência de tracking, motores
-  tarifários, relógios, responsabilidade ou fechamento.
+(inalterado do diagnóstico anterior) A D14 constrói a camada de **Gestão
+e Indicadores** do Cap. 30 do Blueprint sobre os fatos já persistidos por
+D10/D11/D12 v1.2.3. Nenhum dado novo de negócio é inventado. Backend only,
+sem escrita de negócio nova, sem integração financeira nova (HeadCargo
+continua sem integração — Cap. 27.3, texto fixo "Status financeiro não
+disponível"). Sem alteração de D10/D11/D12/D13, rotas V1, Portal,
+Supabase, HeadCargo, Auditoria, Courier, Release, cadência de tracking,
+motores tarifários, relógios, responsabilidade ou fechamento.
 
 ---
 
 ## 2. Matriz de rastreabilidade com o Blueprint
 
-| Indicador/área | Capítulo | Fato(s) de origem persistido(s) |
+(inalterada — ver detalhamento completo nas tabelas do §5; resumo mantido)
+
+| Área | Capítulo | Fato(s) de origem |
 |---|---|---|
-| Visão operacional (contagens por estado/balde) | 30.1 | `containers.estado`, `containers.prioridade_balde`, `processos.estado_mais_relevante`, `processos.prioridade_balde` (0015) — ou re-derivação em lote congelada (Cap. 21/22) |
-| Separação por cliente/armador/responsável/tipo/período | 30.1 | `processos.cliente_id/armador_id/responsavel_operacional_id` (0003); `containers.container_type_id` (0004); `containers.discharge_date`, `effective_return_date` (0004); `processos.fechado_em` (0016) |
-| Valor bruto do cliente / exposição Rocket (estimada/confirmada) | 30.2, 24, 25 | `valores_apurados` (0009): `relogio_tipo`, `confirmation_status`, `total`, `moeda`, `calculation_status` |
-| Valor efetivamente atribuído ao cliente / à Rocket | 30.2, 26 | `responsabilidade_decisoes.valor_cliente/valor_rocket/valor_status` (0031) |
-| Diferença potencial interna | 30.2, 11, 24.3, 25 | `valores_apurados` ativo de cliente × Rocket do mesmo contêiner, mesma moeda (ver §7) |
-| Faturado / recebido / saldo | 30.2, 27.2 | **Sem fonte nesta base** — HeadCargo não integrado. Adiado. |
-| Responsabilidade da Rocket (sugerida/confirmada/diárias/valor) | 30.3, 26 | `responsabilidade_decisoes` + `responsabilidade_decisao_dias/_periodos` (0031); sugestão pura (`sugerirResponsabilidade`, não persistida) depende de dados da Liberação, que não existe nesta base (gap pré-existente, confirmado pelo diagnóstico do gap-analysis) |
-| % devolvido dentro do House/Master FT | 30.4 | `containers.discharge_date`, `effective_return_date`, `house_free_time_days`, `master_free_time_days` (0004) |
-| Média de dias descarga→Empty Return | 30.4 | `containers.discharge_date`, `tracking_return_date`/`effective_return_date` |
-| Média de dias de demurrage por contêiner | 30.4 | `relogios.dias_demurrage` (cache atual) OU `valores_apurados.dias_cobrados` FINAL (histórico reconstruível) |
-| Tempo médio Empty Return → conclusão operacional | 30.4 | `containers.effective_return_date` → `closing_events` tipo `FECHAMENTO_FINAL`/`processos.fechado_em` (0016) |
-| Tempo médio de resolução de pendências | 30.4 | `demurrage_pendencias.criado_em/resolvido_em` (0028) |
-| Processos concluídos com/sem custo | 30.4 | `processos.apuracao_status='FINAL'` + `valores_apurados` ativo do processo (algum >0 ou todos NAO_APLICAVEL/0) |
-| Consultas de tracking / cache / taxa de sucesso por armador | 30.5 | `tracking_fetches` (0011): `cached`, `status`, `carrier`, join por `container_tracking_targets` |
-| Conectores com 3+ falhas consecutivas | 30.5, 18 | `tracking_incidents` (0013, **GLOBAL**, ver §4) |
-| House/Master FT por fonte automática × MANUAL_FALLBACK | 30.5, 4, 10 | `field_observations.fonte`/`manual_fallback` (0004/D10 v1.1-v1.2) |
-| Tipos de contêiner não reconhecidos | 30.5, 9 | `demurrage_pendencias.tipo IN ('tipo_ausente','tipo_nao_reconhecido')` (0028) |
-| Tabelas/faixas indisponíveis | 30.5, 8 | `valores_apurados.confirmation_status='UNAVAILABLE'` |
-| Tracking suspenso após 30 dias | 30.5, 16 | política de cadência (`src/demurrage-engine/scheduler`) — confirmar se o estado "suspenso" é persistido (ver §4) |
-| Separação por moeda, sem soma USD/BRL | 30.6 | `valores_apurados.moeda`, `tariff_brackets.moeda` — já é a regra em vigor em `agregarLado`/`moedaExata.ts` (D12 v1.2.1) |
-| Composição aberta de todo indicador | 30.7 | drill-down = os mesmos filtros/paginação da D12, aplicados ao conjunto que compõe o número |
+| Visão operacional | 30.1 | `containers.estado/prioridade_balde`, `processos.estado_mais_relevante/prioridade_balde` (0015) |
+| Visão financeira | 30.2, 24, 25 | `valores_apurados` (0009) **após seleção por `selecionarValorAtivo`** (ver §6) |
+| Responsabilidade | 30.3, 26 | `responsabilidade_decisoes` + `_dias`/`_periodos` (0031) |
+| Eficiência operacional | 30.4 | `containers.discharge_date/effective_return_date`, `processos.fechado_em`, `valores_apurados.dias_cobrados` FINAL, `demurrage_pendencias` |
+| Qualidade/tracking | 30.5 | `tracking_fetches`/`tracking_incidents` (0011/0013, globais — ver §4), `cadencePolicy.ts` (ver §4) |
+| Moeda | 30.6 | `moedaExata.ts`, `agregarLado` generalizada |
 
 ---
 
-## 3. Fatos autoritativos já existentes (reaproveitáveis sem migration)
+## 3. Fatos autoritativos já existentes
 
-Inventariado em `src/demurrage-engine/db/migrations/0001`–`0034`:
+(inalterado — ver inventário completo no diagnóstico original; reconfirmado
+nesta revisão sem alteração: `valores_apurados`, `responsabilidade_decisoes`,
+`closing_events`, `reaberturas`, `snapshots`, `demurrage_registros`,
+`demurrage_pendencias`, `tracking_fetches`, `tracking_incidents`,
+`containers.estado/prioridade_balde`, `field_observations`,
+`processo_campos_selecionados`.)
 
-- **`valores_apurados`** (0009) — memória de cálculo append-only por
-  contêiner/relógio/motor comercial: `confirmation_status`,
-  `calculation_status` (`OPEN`→`FINAL`→`SUPERSEDED` via `supersedes_id`),
-  `total NUMERIC(14,2)`, `moeda`, `dias_cobrados`, `calculated_at`,
-  `input_hash`. Nenhum `UPDATE` de memória de cálculo — só a transição de
-  `calculation_status` e a confirmação de custo real. **Única linha ATIVA
-  por `(container_id, relogio_tipo, motor_comercial)`** garantida por
-  índice único parcial.
-- **`responsabilidade_decisoes`** (0031) + `_dias`/`_periodos` — decisão
-  versionada (`versao`, `substitui_decisao_id`, `motivo_correcao`
-  obrigatório a partir da v2), autor restrito a `MANAGER`/`ADMIN`,
-  `valor_rocket`/`valor_cliente`/`valor_status` coerentes por `CHECK` e
-  por trigger de agregado (0034) que garante que os dias gravados batem
-  com o relógio-base.
-- **`closing_events`** (0016) — timeline append-only de todo o ciclo de
-  fechamento (`EMPTY_RETURN`, `MINUTA_VALIDADA`, `FECHAMENTO_FINAL`,
-  `REABERTURA*`, `RECALCULO`), com `origem` automático/humano.
-- **`reaberturas`** (0016) — preserva `valores_anteriores` (JSONB,
-  snapshot não sobrescrito) a cada reabertura.
-- **`snapshots`** (0004, D10) — fotografia versionada por contêiner,
-  `forbid_mutation` (append-only).
-- **`demurrage_registros`** (0028, D10 v1.2) — log de ingestão
-  idempotente (`chave_idempotencia` única por organização),
-  `forbid_mutation`.
-- **`demurrage_pendencias`** (0028) — pendência aberta/resolvida com
-  `criado_em`/`resolvido_em` preservados (não apaga ao resolver).
-- **`tracking_fetches`** (0011, append-only) — toda consulta de tracking,
-  com `cached`/`status`/`carrier`/`finalizado_em`.
-- **`tracking_incidents`** (0013) — incidente técnico por
-  `tracking_target_id`, mas **GLOBAL** (sem `organization_id` direto —
-  ver risco no §4).
-- **`containers.estado`/`prioridade_balde`** e
-  **`processos.estado_mais_relevante`/`prioridade_balde`** (0015) — cache
-  regenerável (não fonte de verdade), mas já é o mesmo projeção usada pela
-  fila D12 e consistente com ela.
-- **`field_observations`** (0004) — toda observação de campo com fonte e
-  timestamp (base do Cap. 4/10).
-- **`processo_campos_selecionados`** (0028) — qual fonte venceu, por
-  campo, por processo.
+**Adição desta revisão — a cadeia de seleção financeira já congelada pela
+D12** (base da correção §6):
 
-**Já existe código de agregação financeira exata e reutilizável:**
-`agregarFinanceiroProcesso`/`agregarLado`
-(`src/demurrage-engine/leitura/contrato.ts:449`) soma por moeda em
-**centavos `bigint`** via `moedaExata.ts` (`centavosExatos`,
-`somarCentavosExatos`, `formatarCentavos`), nunca `Number`/`+`. Hoje opera
-só no nível de UM processo (array de envelopes de seus contêineres). A
-D14 deve **generalizar esta mesma função** (extrair `agregarLado` para
-aceitar qualquer lista de envelopes) em vez de duplicar a lógica de soma
-exata para o nível de organização.
+`src/demurrage-engine/leitura/contrato.ts`:
+- `selecionarValorAtivo(rows, relogioTipo, motorClienteAplicavel)` (linha
+  280) — recebe TODAS as linhas ativas (`calculation_status IN
+  ('OPEN','FINAL')`) de um contêiner, filtra pelo motor aplicável (só para
+  o lado cliente) e escolhe **no máximo uma** linha por lado.
+- `motorClienteAplicavelDe(termoTipo)` (linha 319) — traduz
+  `condicoes_comerciais.termo_tipo` (`'embarque'|'unico'|null`) no motor
+  comercial do cliente (`'termo_embarque'|'termo_unico'|null`).
+- `envelopeDeValor`/`envelopeDoRelogio` — transformam a linha escolhida em
+  `ValorEnvelope` (CONFIRMADO/ESTIMADO/ESTIMADO_PROVISORIO/PENDENTE/
+  INDISPONIVEL/NAO_APLICAVEL), aplicando o frescor por `dias_cobrados`
+  (D12 v1.2.3).
+
+Chamadores (já em produção, D12): `filaOperacional.ts:499-500` e
+`detalhe.ts:328-329`, ambos sobre uma consulta que já filtra
+`calculation_status IN ('OPEN','FINAL')` por `container_id = ANY($1)`
+(`detalhe.ts:105-112`, `filaOperacional.ts:468-491`).
 
 ---
 
-## 4. Lacunas de dados atuais
+## 4. Lacunas de dados — investigação conclusiva (revisada)
 
-1. **`tracking_incidents` e `tracking_fetches` são GLOBAIS por
-   `tracking_target_id`**, não por organização — um mesmo MBL
-   compartilhado entre organizações (vessel sharing, F9v1.1) pode ter um
-   único incidente/fetch relevante para mais de uma organização
-   simultaneamente. O padrão de join já usado em
-   `filaOperacional.ts:buscarAgregadosPorProcesso` (join
-   `tracking_incidents`/`tracking_fetches` → `container_tracking_targets`
-   → `containers.processo_id/organization_id`) resolve o escopo por
-   organização corretamente — **a D14 deve reusar exatamente este
-   padrão**, nunca contar incidentes/fetches no nível do `tracking_target`
-   compartilhado diretamente (dobraria a contagem entre organizações que
-   compartilham o mesmo MBL).
-2. **"Consultas evitadas" (30.5) não tem fonte persistida identificada.**
-   A política de cadência (`src/demurrage-engine/scheduler/cadencia.ts` e
-   afins) decide quando NÃO consultar, mas não encontrei uma tabela que
-   registre essa decisão como evento (só o que FOI consultado, em
-   `tracking_fetches`). **Requer confirmação de código antes da
-   implementação** — se não existir, o indicador é adiado ou
-   redefinido como "consultas previstas pela cadência menos consultas
-   realizadas" (uma estimativa, não uma contagem direta — precisa decisão
-   do usuário se essa aproximação é aceitável).
-3. **"Tracking automático suspenso após 30 dias" (30.5) — persistência não
-   confirmada.** Não localizei uma coluna/flag "suspenso" em
-   `tracking_targets`/`container_tracking_targets`. Se a suspensão for só
-   um efeito да política de cadência calculado em tempo de execução (sem
-   persistir), o indicador precisa ser recomputado por filtro
-   (`dias_demurrage > 30` sobre o relógio aplicável), não lido de uma
-   coluna de estado. **Decisão a confirmar em G1** (grep dedicado antes de
-   escrever a query).
-4. **"Possível responsabilidade sugerida" (30.3) não é persistida.**
-   `sugerirResponsabilidade` (`liberacaoPort.ts`) é uma função pura que
-   depende de dados da timeline do módulo Liberação — e o Liberação não
-   tem backend nesta base (confirmado: só existe `Liberacao.dc.html`
-   estático, sem rota). **Este indicador fica fora do escopo da D14**,
-   coerente com o gap já registrado desde o diagnóstico original do
-   Blueprint; só "responsabilidade confirmada" (persistida em
-   `responsabilidade_decisoes`) é implementável agora.
-5. **Nenhuma tabela agrega valores no nível de ORGANIZAÇÃO.** Toda
-   agregação financeira hoje para no nível do processo
-   (`agregarFinanceiroProcesso`). Somar por organização exige nova
-   consulta (não nova tabela de fonte — ver §6/§14).
-6. **`processos_prioridade_balde_idx` (0015) não é composto com
-   `organization_id`.** Toda consulta real desta coluna já filtra por
-   organização primeiro (nenhuma tabela de fila/estado é "global"), mas o
-   índice atual não ajuda o planner a combinar os dois filtros — ver
-   risco de performance no §14.
-7. **Nenhum histórico ponto-no-tempo da fila/contagens existe.** `relogios`
-   e as colunas de 0015 são cache regenerável (podem ser recalculadas a
-   qualquer momento, mutáveis) — não servem para responder "quantos
-   processos estavam em demurrage crítico em 1º de setembro". Ver §9.
+Itens 1, 4, 5, 6, 7 do diagnóstico anterior permanecem válidos sem
+alteração (join de escopo de organização sobre tabelas globais de
+tracking; sugestão de responsabilidade fora de escopo; nenhuma agregação
+de organização existe hoje; índice `processos_prioridade_balde_idx` sem
+`organization_id`; nenhum snapshot ponto-no-tempo existe).
+
+**Itens 2 e 3 — investigados conclusivamente nesta revisão:**
+
+### 4.2 "Consultas evitadas" (G-E3)
+
+**Arquivo:** `src/demurrage-engine/scheduler/schedulerWorker.ts`,
+função `runSchedulerOnce` (linha 92).
+
+A cada tick, a função calcula `naJanela` (contêineres devidos para
+consulta) e `suspensos` (contêineres com cadência suspensa) como
+**contadores em memória**, devolvidos em `RunSchedulerOnceResultado`
+(linha 70). Busquei por uma tabela que persista esse resultado tick a
+tick (`scheduler_run`/`scheduler_tick`/`scheduler_log`) em todas as 34
+migrations — **não existe**. `RunSchedulerOnceResultado` não é gravado em
+nenhuma tabela; é só o retorno da função para quem chamou o tick
+(provavelmente só logado em texto, fora do banco).
+
+**Conclusão: G-E3 não tem fonte persistida. Fica ADIADO — nenhuma
+estimativa é implementada.** Se o usuário quiser este indicador no
+futuro, a correção mínima é persistir um resumo por tick (não por
+contêiner) numa tabela `scheduler_tick_log` — fora do escopo da D14.
+
+### 4.3 Suspensão de tracking após 30 dias (G-E9)
+
+**Arquivos:** `src/demurrage-engine/scheduler/cadencePolicy.ts`
+(`avaliarCadencia`, linha 78; `LIMITE_DIAS_DEMURRAGE = 30`, linha 30;
+`FaseCadencia` inclui `'suspenso_30_dias'`, linha 26) e
+`schedulerWorker.ts:96-108`, que chama `avaliarCadencia(cad)` e testa
+`.automaticTracking === 'SUSPENDED'` a cada tick, sem persistir o
+resultado por contêiner (só o contador agregado do tick, já coberto em
+§4.2).
+
+Busquei em `tracking_targets` (0011) e `container_tracking_targets`
+(0011/0013) por uma coluna de fase/estado de suspensão — **não existe**
+(0013 só acrescenta `ultima_consulta_manual_em`, nada sobre fase ou
+suspensão). A suspensão é **recalculada a cada tick a partir dos fatos
+correntes** (`discharge_date`, `house/master_free_time_days`/último dia
+livre, `effective_return_date`, "algum relógio em demurrage"), nunca
+gravada como evento com data de início.
+
+**Conclusão:**
+- **Série histórica de suspensão: impossível** — não há fato auditável de
+  "quando" um contêiner entrou em suspensão. **Nenhuma métrica histórica
+  de suspensão é exposta** (conforme instrução do usuário).
+- **Contagem VIVA é legítima** — "quantos contêineres estão SUSPENSOS
+  agora" pode ser respondida **reexecutando a própria `avaliarCadencia`
+  (pura, congelada, sem duplicar a regra)** sobre os fatos atuais de cada
+  contêiner rastreável da organização, em lote (`= ANY($1)`, mesmo padrão
+  de `SchedulerRepository.carregarContainersRastreaveis`). G-E9 passa a
+  ser um indicador **vivo apenas** (nunca histórico), reutilizando a
+  função importada de `cadencePolicy.ts`, nunca uma reimplementação do
+  limiar de 30 dias.
 
 ---
 
-## 5. Catálogo completo de indicadores
+## 5. Catálogo completo de indicadores (revisado)
 
-Convenção de ID: `G-<grupo><número>`. Todos herdam: organização **apenas
-do membership autenticado**; CLIENT nunca acessa; moedas nunca somadas
-entre si; pendente/indisponível nunca viram zero (aparecem como contagem
-própria ao lado do total, nunca dentro dele).
+Convenção mantida: ID `G-<grupo><número>`; organização só do membership;
+CLIENT nunca acessa; moedas nunca somadas; pendente/indisponível nunca
+viram zero.
 
-### Grupo A — Visão operacional (Cap. 30.1)
+### Grupo A — Visão operacional (Cap. 30.1) — **dimensões independentes, não partes de um total**
 
-| ID | Nome (PT) | Grão | Regra de seleção | Fonte | Natureza |
-|---|---|---|---|---|---|
-| G-A1 | Contêineres em monitoramento | contêiner | `estado IS NOT NULL` (qualquer estado derivado, inclusive silencioso) | `containers.estado` | Vivo |
-| G-A2 | Contêineres com prazo próximo | contêiner | `estado = 'PRAZO_PROXIMO'` | `containers.estado` | Vivo |
-| G-A3 | Em demurrage — Atenção (1–6) | contêiner | `estado = 'EM_DEMURRAGE_ATENCAO'` | idem | Vivo |
-| G-A4 | Em demurrage — Crítico (7–14) | processo | `prioridade_balde = 'CRITICA_7_14'` | `processos.prioridade_balde` | Vivo |
-| G-A5 | Críticos 15+ dias | processo | `prioridade_balde = 'CRITICA_15'` | idem | Vivo |
-| G-A6 | Contêineres com exposição Rocket | contêiner | relógio Rocket com `estado='OK'` e `dias_demurrage > 0` (a tabela/valor pode estar indisponível — isso é outro indicador, G-E6) | `relogios` tipo=rocket | Vivo |
-| G-A7 | Processos com tracking desatualizado | processo | badge `TRACKING_DESATUALIZADO` presente (`estado_badges`) | `containers.estado_badges` | Vivo |
-| G-A8 | Processos com dados críticos pendentes | processo | `estado = 'PENDENCIA_DE_DADOS'` OU `demurrage_pendencias` aberta do processo | `containers.estado` + `demurrage_pendencias` | Vivo |
-| G-A9 | Processos aguardando tratamento | processo | `estado_mais_relevante = 'DEVOLVIDO_AGUARDANDO_TRATAMENTO'` | `processos.estado_mais_relevante` | Vivo |
-| G-A10 | Processos concluídos operacionalmente | processo | `apuracao_status = 'FINAL'` | `processos.apuracao_status` | Vivo (mas a TRANSIÇÃO para FINAL é um evento — ver G-D5) |
+> **Correção bloqueante 3.** Os indicadores abaixo NÃO são mutuamente
+> exclusivos como grupo. Cada um pertence a uma DIMENSÃO; só indicadores
+> da MESMA dimensão são mutuamente exclusivos entre si. Um processo pode
+> aparecer em vários indicadores de dimensões diferentes simultaneamente
+> (ex.: um processo pode estar em `CRITICA_15`, ter exposição Rocket E
+> ter uma pendência de dados técnica, tudo ao mesmo tempo). **A soma dos
+> cartões do Grupo A nunca deve ser interpretada como 100% de nada.**
 
-Separáveis por cliente (`processos.cliente_id`), armador
-(`processos.armador_id`), responsável
-(`processos.responsavel_operacional_id`), tipo de equipamento
-(`containers.container_type_id`) e período (ver §11). Risco de dupla
-contagem: **nenhum** nesta tabela — cada linha é um `COUNT` sobre um
-conjunto mutuamente exclusivo por definição do próprio estado/balde
-(Cap. 21.10 garante um único estado por contêiner/processo). Visibilidade:
-`ANALYST`/`MANAGER`/`ADMIN` — nenhum destes é financeiro nem expõe
-Rocket além da MERA contagem de contêineres expostos (G-A6 não expõe
-valor).
+| ID | Nome (PT) | Grão | Dimensão | Mutuamente exclusivo com | Regra de seleção | Fonte |
+|---|---|---|---|---|---|---|
+| G-A1 | Contêineres em monitoramento | contêiner | populacional (superconjunto) | — (contém todos os demais) | `estado IS NOT NULL` | `containers.estado` |
+| G-A2 | Contêineres com prazo próximo | contêiner | **estado** | G-A3, G-A9-subset (demais valores do enum `estado`) | `estado = 'PRAZO_PROXIMO'` | idem |
+| G-A3 | Em demurrage — Atenção (1–6) | contêiner | **estado** | G-A2 e demais valores do enum | `estado = 'EM_DEMURRAGE_ATENCAO'` | idem |
+| G-A4 | Em demurrage — Crítico (7–14) | processo | **balde** (dimensão própria, derivada por regra diferente de `estado` — pode divergir do estado do mesmo contêiner) | G-A5 e demais baldes | `prioridade_balde = 'CRITICA_7_14'` | `processos.prioridade_balde` |
+| G-A5 | Críticos 15+ dias | processo | **balde** | G-A4 e demais baldes | `prioridade_balde = 'CRITICA_15'` | idem |
+| G-A6 | Contêineres com exposição Rocket | contêiner | **independente** (flag financeiro-operacional; coexiste com qualquer estado/balde) | nenhum | relógio Rocket `estado='OK'` e `dias_demurrage > 0` | `relogios` tipo=rocket |
+| G-A7 | Processos com tracking desatualizado | processo | **independente** (badge de qualidade de dado) | nenhum | badge `TRACKING_DESATUALIZADO` presente | `containers.estado_badges` |
+| G-A8 | Processos com dados críticos pendentes | processo | **independente** (pode coexistir com qualquer balde/estado — um processo crítico TAMBÉM pode ter pendência) | nenhum | `estado = 'PENDENCIA_DE_DADOS'` OU `demurrage_pendencias` aberta do processo | `containers.estado` + `demurrage_pendencias` |
+| G-A9 | Processos aguardando tratamento | processo | **estado** (consolidado do processo) | demais valores de `estado_mais_relevante` | `estado_mais_relevante = 'DEVOLVIDO_AGUARDANDO_TRATAMENTO'` | `processos.estado_mais_relevante` |
+| G-A10 | Processos concluídos operacionalmente | processo | **fechamento** (dimensão própria, independente de estado/balde — um processo FINAL não participa mais da dimensão `estado` ativa) | nenhum (não compete com estado/balde) | `apuracao_status = 'FINAL'` | `processos.apuracao_status` |
+
+**Frescor obrigatório (exigência adicional do usuário).** Toda resposta do
+Grupo A inclui, ao lado das contagens:
+
+```
+{
+  dataOperacional: "AAAA-MM-DD",            // dia civil operacional usado na consulta
+  projecaoAtualizadaEm: {
+    minima: "ISO-8601",                      // lifecycle_calculated_at mais antigo entre os registros contados
+    maxima: "ISO-8601"                       // mais recente
+  },
+  statusFrescor: "atual" | "parcialmente_desatualizada" | "indeterminada",
+  registrosComProjecaoDesatualizadaOuAusente: <int>
+}
+```
+
+- `registrosComProjecaoDesatualizadaOuAusente` conta contêineres com
+  `lifecycle_calculated_at IS NULL` (nunca derivado) OU cuja data civil
+  de `lifecycle_calculated_at` é anterior à `dataOperacional` corrente —
+  ou seja, que ainda não passaram pelo recálculo do dia civil atual. A
+  regra exata de "quando a projeção deveria ter sido recalculada hoje"
+  depende do ciclo de calendário interno
+  (`src/demurrage-engine/lifecycle`/`passagemCalendario.ts`) e **precisa
+  ser confirmada contra esse código na implementação** (G1) antes de
+  fixar o limiar — esta seção propõe a FORMA do campo, não um número
+  mágico.
+- **Nunca chamar isso de "tempo real".** O texto fixo é **"projeção
+  operacional atual"** (ou equivalente), em qualquer rótulo de API ou
+  documentação voltada ao usuário final.
 
 ### Grupo B — Visão financeira (Cap. 30.2)
 
-| ID | Nome (PT) | Grão | Fórmula | Fonte | Natureza |
-|---|---|---|---|---|---|
-| G-B1 | Valor bruto do cliente, por moeda/status | organização×moeda×status | soma exata (`agregarLado` generalizado) de `valores_apurados.total` onde `relogio_tipo='cliente'`, linha ATIVA (`calculation_status IN (OPEN,FINAL)`) | `valores_apurados` | Vivo |
-| G-B2 | Valor efetivamente atribuído ao cliente | organização×moeda | soma `responsabilidade_decisoes.valor_cliente` onde `valor_status='CALCULADO'` e decisão é a vigente (não superseded) | `responsabilidade_decisoes` | Vivo |
-| G-B3 | Valor atribuído à Rocket (responsabilidade) | organização×moeda | soma `responsabilidade_decisoes.valor_rocket` nas mesmas condições de G-B2 | idem | Vivo |
-| G-B4 | Exposição estimada da Rocket | organização×moeda | soma `valores_apurados.total` onde `relogio_tipo='rocket'`, `confirmation_status IN ('ESTIMATED','ESTIMATED_PROVISIONAL')`, ATIVA | `valores_apurados` | Vivo |
-| G-B5 | Exposição confirmada da Rocket | organização×moeda | idem, `confirmation_status='CONFIRMED'` | idem | Vivo |
-| G-B6 | Diferença potencial total | organização×moeda | soma das diferenças ELEGÍVEIS por contêiner (ver §7) — nunca uma subtração de totais já agregados | `valores_apurados` (par cliente/Rocket por contêiner) | Vivo, **estritamente interno** |
-| G-B7/8/9 | Faturado / recebido / saldo | — | **Sem fonte.** Fixo "Status financeiro não disponível" | HeadCargo (não integrado) | **Adiado** |
+> **Correção bloqueante 1 aplicada.** Toda linha desta tabela soma
+> **envelopes já selecionados por `selecionarValorAtivo`**, nunca linhas
+> brutas de `valores_apurados`. Ver §6 para a prova de não-duplicação.
 
-Todo indicador do Grupo B retorna, ao lado do total por moeda: contagem de
-`pendente`, `indisponível` e `não aplicável` que **não entraram na soma**
-(Cap. 30.7 — nenhum total esconde pendência). Visibilidade: **decisão do
-usuário (§21, D10/D11)** — ver análise abaixo. Risco de dupla contagem:
-G-B1 soma por `(container_id, relogio_tipo, motor_comercial)` ativo —
-nunca duas linhas ativas do mesmo trio coexistem (garantido pelo índice
-único 0009), então não há duplicação por reconsulta.
+| ID | Nome (PT) | Grão | Fórmula | Fonte | Papel mínimo |
+|---|---|---|---|---|---|
+| G-B1 | Valor bruto do cliente, por moeda/status | organização×moeda×status | `agregarLado` generalizada sobre os envelopes `cliente` SELECIONADOS (um por contêiner) | `valores_apurados` via `selecionarValorAtivo` | ANALYST (decisão #10) |
+| G-B2 | Valor efetivamente atribuído ao cliente | organização×moeda | soma `responsabilidade_decisoes.valor_cliente`, `valor_status='CALCULADO'`, decisão vigente (não superseded) | `responsabilidade_decisoes` | ANALYST (decisão #10) |
+| G-B3 | Valor atribuído à Rocket (responsabilidade) | organização×moeda | idem, `valor_rocket` | idem | ANALYST (decisão #10) |
+| G-B4 | Exposição estimada da Rocket | organização×moeda | `agregarLado` sobre envelopes `rocket` selecionados, `confirmation_status IN ('ESTIMATED','ESTIMATED_PROVISIONAL')` | `valores_apurados` via `selecionarValorAtivo` | ANALYST (decisão #10) |
+| G-B5 | Exposição confirmada da Rocket | organização×moeda | idem, `CONFIRMED` | idem | ANALYST (decisão #10) |
+| G-B6 | Diferença potencial total | organização×moeda×qualidade | soma das diferenças ELEGÍVEIS por contêiner (§7), classificada por qualidade (decisão #8) | par cliente/Rocket selecionado do mesmo contêiner | **MANAGER/ADMIN apenas** (decisão #11) |
+| G-B7/8/9 | Faturado/recebido/saldo | — | **Sem fonte** — "Status financeiro não disponível" | HeadCargo (não integrado) | — |
 
 ### Grupo C — Responsabilidade da Rocket (Cap. 30.3)
 
-| ID | Nome (PT) | Grão | Regra | Fonte | Natureza |
-|---|---|---|---|---|---|
-| G-C1 | Processos com responsabilidade confirmada | processo | existe decisão vigente com `status IN ('CONFIRMADA_ROCKET','CONFIRMADA_CLIENTE','DIVIDIDA')` | `responsabilidade_decisoes` | Vivo |
-| G-C2 | Diárias confirmadas para a Rocket | organização | soma `dias_rocket` das decisões vigentes `CONFIRMADA_ROCKET`/`DIVIDIDA` | idem | Vivo |
-| G-C3 | Valor correspondente (Rocket) | organização×moeda | = G-B3, mesma fonte, outra lente (por decisão em vez de por processo) | idem | Vivo |
-| G-C4 | Cliente/responsável/processo por decisão | linha | detalhamento (drill-down), não um total | `responsabilidade_decisoes` + `processos` | Vivo |
-| G-C5 | Justificativa e evidências | linha | `justificativa`, `evidencia_ref` da decisão vigente | idem | Vivo — **estritamente interno**, nunca no Portal (Cap. 26.4) |
-| G-C6 | Recorrência por período | organização×período | `COUNT`/`GROUP BY` de decisões por `decidido_em` no período filtrado | idem | Vivo, filtrado por período (não um snapshot) |
-| ~~G-C0~~ | Possível responsabilidade sugerida | — | **Fora de escopo** (ver §4.4) | Liberação (inexistente) | Adiado |
+| ID | Nome (PT) | Grão | Regra | Papel |
+|---|---|---|---|---|
+| G-C1 | Processos com responsabilidade confirmada | processo | decisão vigente `status IN (CONFIRMADA_ROCKET, CONFIRMADA_CLIENTE, DIVIDIDA)` em algum contêiner | ANALYST — leitura do estado e evidência (decisão #10); decidir continua exclusivo de MANAGER/ADMIN (já garantido pela 0031, `autor_papel`) |
+| G-C2 | Diárias confirmadas para a Rocket | organização | soma `dias_rocket` de decisões vigentes `CONFIRMADA_ROCKET`/`DIVIDIDA` | ANALYST |
+| G-C3 | Valor correspondente (Rocket) | organização×moeda | = G-B3 | ANALYST (decisão #10 cobre "estado de responsabilidade e evidência operacional", que inclui o valor associado à decisão já tomada) |
+| G-C4 | Cliente/responsável/processo por decisão | linha (drill-down) | — | ANALYST |
+| G-C5 | Justificativa e evidências | linha | `justificativa`, `evidencia_ref` | ANALYST (decisão #10: "evidência operacional") — nunca ao Portal/CLIENT (Cap. 26.4) |
+| G-C6 | Recorrência por período | organização×período | `GROUP BY` de decisões por `decidido_em` | ANALYST |
+| ~~G-C0~~ | Possível responsabilidade sugerida | — | **Fora de escopo** (§4, Liberação inexistente) | — |
 
-### Grupo D — Eficiência operacional (Cap. 30.4)
+**Nota sobre "comparação organização-level entre custo do cliente e
+exposição Rocket" (decisão #11):** restrita a MANAGER/ADMIN. G-C1 a G-C6
+listam ESTADOS e VALORES JÁ DECIDIDOS (não uma comparação agregada de
+organização), por isso ficam abertos ao ANALYST; só uma comparação
+agregada do tipo "total cliente vs. total Rocket da organização" (que é
+exatamente G-B6, diferença potencial) fica restrita.
 
-| ID | Nome (PT) | Grão | Fórmula | Fonte | Natureza |
-|---|---|---|---|---|---|
-| G-D1 | % devolvido dentro do House FT | organização, período | `COUNT(effective_return_date <= discharge_date + house_free_time_days - 1) / COUNT(effective_return_date IS NOT NULL)`, filtrado por período (§11) | `containers` | Histórico-por-período (ver §8) |
-| G-D2 | % devolvido dentro do Master FT | idem, com `master_free_time_days` | idem | `containers` | idem |
-| G-D3 | Média de dias descarga→Empty Return | organização, período | média de `(tracking_return_date - discharge_date)` só sobre containers com ambas as datas | `containers` | idem — **decisão #3 (dias corridos vs. úteis)** |
-| G-D4 | Média de dias de demurrage por contêiner | organização, período | **decisão #2** (inclui processos abertos ou só fechados — ver §21) | `valores_apurados.dias_cobrados` (FINAL) ou `relogios.dias_demurrage` (vivo) | Mista — ver §8 |
-| G-D5 | Tempo médio Empty Return → conclusão | organização, período | média de `(fechado_em - effective_return_date)`, só processos `apuracao_status='FINAL'` | `processos.fechado_em` + `containers.effective_return_date` | Histórico-por-período |
-| G-D6 | Tempo médio de resolução de pendências | organização, período | média de `(resolvido_em - criado_em)` só pendências resolvidas | `demurrage_pendencias` | Histórico-por-período |
-| G-D7 | Processos concluídos sem custo | organização, período | `apuracao_status='FINAL'` e nenhum `valores_apurados` ativo com `total > 0` em nenhum lado | `processos` + `valores_apurados` | Histórico-por-período |
-| G-D8 | Processos concluídos com demurrage | organização, período | complemento de G-D7 dentro dos `FINAL` | idem | idem |
+### Grupo D — Eficiência e conclusão operacional (Cap. 30.4)
 
-### Grupo E — Qualidade de dados e tracking (Cap. 30.5)
+**Metodologia aplicada em todo o grupo (decisões #1, #2, #3, #4, #5, #7):**
 
-| ID | Nome (PT) | Grão | Regra | Fonte | Natureza |
-|---|---|---|---|---|---|
-| G-E1 | Consultas de tracking realizadas | organização, período | `COUNT(tracking_fetches)` via join `container_tracking_targets`→`containers` (escopo de organização, §4.1) | `tracking_fetches` | Histórico-por-período |
-| G-E2 | Respostas reaproveitadas pelo cache | idem | idem, `cached = true` | idem | idem |
-| G-E3 | Consultas evitadas | — | **Pendente de confirmação de fonte** (§4.2) | ? | Adiado até confirmação |
-| G-E4 | Taxa de sucesso por armador | organização, período | `COUNT(status='ok') / COUNT(*)` agrupado por `carrier`, mesmo join | `tracking_fetches` | Histórico-por-período |
-| G-E5 | Conectores com 3+ falhas consecutivas | organização | `tracking_incidents` aberto (`fechado_em IS NULL`) via join de escopo (§4.1) | `tracking_incidents` | Vivo |
-| G-E6 | House/Master FT automático × MANUAL_FALLBACK | organização, período | `COUNT` por `field_observations.fonte` (ou flag de fallback manual da D10 v1.1/1.2) nos campos `house_free_time`/`master_free_time` | `field_observations` | Histórico-por-período |
-| G-E7 | Tipos de contêiner não reconhecidos | organização | `demurrage_pendencias.tipo IN ('tipo_ausente','tipo_nao_reconhecido')` aberta | `demurrage_pendencias` | Vivo |
-| G-E8 | Tabelas/faixas indisponíveis | organização | `valores_apurados.confirmation_status='UNAVAILABLE'` ativo | `valores_apurados` | Vivo |
-| G-E9 | Processos com tracking suspenso 30+ dias | organização | **Pendente de confirmação de fonte** (§4.3) | ? | Adiado até confirmação |
+- Só processos com `apuracao_status = 'FINAL'` entram em qualquer média
+  ou indicador de conclusão (decisão #2 — médias históricas excluem
+  processos abertos).
+- Duração = dias corridos (decisão #3), nunca dias úteis.
+- "Dias de demurrage" usa `valores_apurados.dias_cobrados` da linha
+  **FINAL** (decisão #1), nunca `relogios.dias_demurrage` (cache vivo,
+  mutável) para médias históricas.
+- Um processo com reaberturas conta **uma vez**, pelo **ciclo de
+  fechamento mais recente** (`fechado_em` mais recente,
+  `closing_events` tipo `FECHAMENTO_FINAL` mais recente); ciclos
+  anteriores aparecem só no drill-down via `reaberturas`/`closing_events`,
+  nunca como processos concluídos adicionais (decisão #5).
+- Totais de processo somam **todos os contêineres aplicáveis**, nunca só
+  o líder (decisão #7) — reaproveita `agregarFinanceiroProcesso`/
+  `agregarLado`, que já soma todos os contêineres do processo.
+- Data natural de cada indicador (decisão #4, ver §11): fechamento para
+  eficiência/conclusão; Empty Return para indicadores de devolução;
+  1º dia de demurrage para indicadores de início de custo.
+
+| ID | Nome (PT) | Grão | Fórmula | Data natural |
+|---|---|---|---|---|
+| G-D1 | % devolvido dentro do House FT | organização, período | `COUNT(effective_return_date <= discharge_date + house_free_time_days - 1) / COUNT(effective_return_date IS NOT NULL)`, só containers de processos FINAL | Empty Return |
+| G-D2 | % devolvido dentro do Master FT | idem, `master_free_time_days` | idem | Empty Return |
+| G-D3 | Média de dias descarga→Empty Return | organização, período | média de `(tracking_return_date - discharge_date)`, só FINAL | Empty Return |
+| G-D4 | Média de dias de demurrage por contêiner | organização, período | média de `valores_apurados.dias_cobrados` (linha FINAL), só processos FINAL | 1º dia de demurrage |
+| G-D5 | Tempo médio Empty Return → conclusão | organização, período | média de `(fechado_em − effective_return_date)`, FINAL, ciclo mais recente | Fechamento |
+| G-D6 | Tempo médio de resolução de pendências | organização, período | média de `(resolvido_em − criado_em)`, só resolvidas | Fechamento (data de resolução) |
+
+**Correção bloqueante 2 — conclusão "com/sem custo" substituída por 8
+indicadores separados.** Todos no grão **contêiner** dentro de processos
+`apuracao_status='FINAL'` (ciclo mais recente), exceto onde indicado
+"processo". Em todos: um lado `PENDENTE`/`INDISPONIVEL` **nunca** classifica
+o contêiner como "sem custo" — é excluído das duas contagens (com/sem) e
+reportado à parte, numa contagem de integridade (nunca deveria ocorrer se
+o gate de fechamento v1.3-3 exige comprovação sem pendência, mas a
+medição real confirma isso em vez de presumir).
+
+| ID | Nome (PT) | Regra | Tratamento pendente/indisponível |
+|---|---|---|---|
+| G-D7.1 | Concluído SEM custo ao cliente | contêiner cujo envelope `cliente` selecionado é `NAO_APLICAVEL` (dias de demurrage do cliente = 0) | excluído se `PENDENTE`/`INDISPONIVEL` — reportado em G-D-INTEGRIDADE |
+| G-D7.2 | Concluído COM custo ao cliente | contêiner cujo envelope `cliente` é `CONFIRMADO`/`ESTIMADO`/`ESTIMADO_PROVISORIO` com `total` — reportado por moeda e por status, nunca combinado | idem |
+| G-D7.3 | Concluído SEM exposição Rocket | contêiner cujo envelope `rocket` é `NAO_APLICAVEL` | idem |
+| G-D7.4 | Concluído COM exposição Rocket | contêiner cujo envelope `rocket` é `CONFIRMADO`/`ESTIMADO`/`ESTIMADO_PROVISORIO` | idem |
+| G-D7.5 | Concluído SEM valor em nenhum lado | interseção de G-D7.1 e G-D7.3 (mesmo contêiner, ambos os lados `NAO_APLICAVEL`) | idem |
+| G-D7.6 | Concluído com responsabilidade CONFIRMADA_ROCKET | contêiner cuja decisão vigente (`responsabilidade_decisoes`) tem `status='CONFIRMADA_ROCKET'` | contêineres sem decisão vigente (`NULL`/`EM_ANALISE`) ficam fora, contados à parte como "sem responsabilidade atribuída" |
+| G-D7.7 | Concluído com responsabilidade CONFIRMADA_CLIENTE | idem, `status='CONFIRMADA_CLIENTE'` | idem |
+| G-D7.8 | Concluído com responsabilidade DIVIDIDA | idem, `status='DIVIDIDA'` | idem |
+
+G-D-INTEGRIDADE (contagem de apoio, não um KPI de negócio): contêineres de
+processos FINAL cujo envelope cliente OU rocket ainda está
+`PENDENTE`/`INDISPONIVEL` — esperado ser **zero** pelo gate de fechamento
+v1.3-3, mas medido e exposto em vez de presumido; um valor > 0 aqui é um
+sinal de regressão a investigar, nunca escondido.
+
+### Grupo E — Qualidade de dados e tracking (Cap. 30.5) — revisado após investigação (§4)
+
+| ID | Nome (PT) | Grão | Regra | Natureza |
+|---|---|---|---|---|
+| G-E1 | Consultas de tracking realizadas | organização, período | `COUNT(tracking_fetches)` via join de escopo | Histórico-por-período |
+| G-E2 | Respostas reaproveitadas pelo cache | idem | `cached=true` | idem |
+| ~~G-E3~~ | Consultas evitadas | — | **ADIADO — sem fonte persistida** (§4.2) | — |
+| G-E4 | Taxa de sucesso por armador | organização, período | `status='ok'` agrupado por `carrier` | Histórico-por-período |
+| G-E5 | Conectores com 3+ falhas consecutivas | organização | `tracking_incidents` aberto, via join de escopo | Vivo |
+| G-E6 | House/Master FT automático × MANUAL_FALLBACK | organização, período | `field_observations.fonte` | Histórico-por-período |
+| G-E7 | Tipos de contêiner não reconhecidos | organização | `demurrage_pendencias` aberta | Vivo |
+| G-E8 | Tabelas/faixas indisponíveis | organização | `valores_apurados.confirmation_status='UNAVAILABLE'` ativo | Vivo |
+| G-E9 | Processos com tracking suspenso agora | organização | reexecução de `avaliarCadencia` (congelada) sobre fatos atuais — **só VIVO, nunca histórico** (§4.3) | Vivo apenas |
 
 ### Grupo F — Moeda (Cap. 30.6)
 
-Transversal: todo indicador dos Grupos B/C/D que envolve valor monetário
-é reportado **por moeda separadamente**, nunca somado entre moedas. Não
-há conversão nesta fase (nenhuma taxa de câmbio é uma fonte existente no
-sistema). Se um indicador precisar de uma visão "total" multi-moeda, a
-resposta é uma LISTA por moeda, nunca um número único.
+(inalterado) Transversal — todo indicador monetário é reportado por
+moeda separadamente, nunca somado entre moedas; sem conversão.
 
 ---
 
-## 6. Modelo de agregação financeira
+## 6. Prova de não-duplicação entre motores comerciais (correção bloqueante 1)
 
-Regra única, válida para todo indicador dos Grupos B/C: **generalizar
-`agregarLado`** (hoje interna a `contrato.ts`, escopada a um processo) para
-aceitar qualquer lista de `ValorEnvelope` vindos de qualquer grão —
-processo, organização inteira ou um subconjunto filtrado — produzindo
-exatamente a mesma estrutura (`GrupoFinanceiroPorMoeda[]` +
-`pendentes`/`indisponiveis`/`semAplicacao`/`completo`), usando os MESMOS
-`centavosExatos`/`somarCentavosExatos`/`formatarCentavos` de
-`moedaExata.ts`. **Nenhuma segunda implementação de soma monetária é
-criada.** A função atual de processo (`agregarFinanceiroProcesso`) passa
-a ser um caso particular (um processo = N containers) da nova função de
-organização (organização = M processos = N×M containers).
+**Problema identificado pelo usuário:** o índice único
+`valores_apurados_ativo_unico` é sobre
+`(container_id, relogio_tipo, motor_comercial)` — ele impede DUAS linhas
+ativas do MESMO trio, mas não impede que um contêiner tenha, ao mesmo
+tempo, uma linha ativa para `motor_comercial='termo_embarque'` E outra
+para `'termo_unico'` no lado cliente (teoricamente possível pelo schema,
+mesmo que a prática de negócio só escreva um dos dois por processo).
 
-Regras obrigatórias (já impostas pelo motor atual, preservadas):
+**Solução — reusar a seleção já congelada pela D12, nunca inventar uma
+nova regra:**
 
-- Nunca somar `cliente` com `rocket`.
-- Nunca somar moedas diferentes.
-- `PENDENTE`/`INDISPONIVEL`/`NAO_APLICAVEL` nunca entram na soma — contam
-  à parte; `completo` é `false` sempre que houver `pendentes>0` ou
-  `indisponiveis>0` (a definição atual já ignora `semAplicacao`, que
-  **não** é pendência).
-- Status (`CONFIRMADO`/`ESTIMADO`/`ESTIMADO_PROVISORIO`) preservado em
-  contadores próprios dentro de cada grupo de moeda — nunca um único
-  número "valor total" sem a composição ao lado (Cap. 30.7/25).
-- Só a linha **ATIVA** (`calculation_status IN ('OPEN','FINAL')`) de cada
-  `(container_id, relogio_tipo, motor_comercial)` entra — `SUPERSEDED`
-  nunca é somado a um total atual (mas fica disponível para a timeline/
-  auditoria, nunca apagado).
+1. Para cada contêiner da organização, buscar `termo_tipo` do processo
+   (`processos.condicao_comercial_id → condicoes_comerciais.termo_tipo`),
+   exatamente a mesma consulta que `filaOperacional.ts:474` já faz, em
+   lote.
+2. Buscar todas as linhas ativas de `valores_apurados` do contêiner
+   (`calculation_status IN ('OPEN','FINAL')`), mesma consulta de
+   `detalhe.ts:105-112`, em lote por `container_id = ANY($1)`.
+3. Para o lado **cliente**: `selecionarValorAtivo(rows, 'cliente',
+   motorClienteAplicavelDe(termoTipo))` — o filtro interno da função
+   (`contrato.ts:273`) descarta qualquer linha cujo `motor_comercial`
+   não seja o aplicável ao processo. **Resultado: no máximo UMA linha
+   candidata chega ao passo de escolha, nunca duas de motores
+   diferentes.**
+4. Para o lado **rocket**: `selecionarValorAtivo(rows, 'rocket', null)`
+   — por construção do enum `valor_motor_comercial` (`'termo_embarque' |
+   'termo_unico' | 'exposicao_armador'`), só `'exposicao_armador'` grava
+   linha com `relogio_tipo='rocket'`; os motores de cliente nunca
+   escrevem nesse lado. **A ausência de filtro aqui é segura porque o
+   motor_comercial é, por construção do domínio, único para o lado
+   Rocket** — documentado explicitamente, não presumido silenciosamente.
+5. O resultado de `selecionarValorAtivo` (no máximo uma linha por lado)
+   alimenta `envelopeDoRelogio`/`envelopeDeValor`, produzindo **um único
+   `ValorEnvelope` por contêiner por lado** — exatamente a mesma forma
+   que a D12 já usa para a fila e o detalhe.
+6. Só então os envelopes (um por contêiner, por lado) entram na
+   agregação de organização (`agregarLado` generalizada, §6-bis).
+
+**Prova de que o total de organização não pode incluir dois motores
+comerciais para o mesmo lado de um contêiner:** por indução — cada
+contêiner contribui com exatamente 0 ou 1 envelope por lado (passo 5), e
+a soma de organização é a soma desses envelopes (um por contêiner) — logo
+nunca dois motores do MESMO contêiner/lado entram na soma. Isso é uma
+propriedade da função `selecionarValorAtivo`, já testada pela suíte da
+D12 (`src/demurrage-engine/__tests__/*`), reaproveitada sem reescrita.
+
+**Gate de aceitação explícito (G1, §17):** teste de regressão que cria um
+contêiner com DUAS linhas ativas de `valores_apurados` no lado cliente
+(`motor_comercial` diferentes — cenário artificial, só para provar a
+blindagem) e confirma que a agregação de organização soma **exatamente
+um** dos dois, nunca os dois. Mesmo teste espelhado para o caso (real)
+onde só `exposicao_armador` escreve o lado Rocket.
+
+### 6-bis. Generalização de `agregarLado` (mantido do diagnóstico anterior, sem alteração de regra)
+
+`agregarLado`/`moedaExata.ts` generalizada para aceitar qualquer lista de
+`ValorEnvelope` (processo, organização ou subconjunto filtrado),
+preservando: soma em centavos `bigint`, nunca `Number`/`+`; nunca somar
+`cliente` com `rocket`; nunca somar moedas diferentes;
+`PENDENTE`/`INDISPONIVEL`/`NAO_APLICAVEL` nunca entram na soma; `completo`
+= `false` sempre que `pendentes>0 || indisponiveis>0`.
 
 ---
 
-## 7. Matriz de elegibilidade da diferença potencial
+## 7. Matriz de elegibilidade da diferença potencial (atualizada — decisão #8)
 
-`diferença potencial = valor do cliente − exposição da Rocket` (Cap. 24.3,
-11). Avaliada **por contêiner**, nunca por processo ou organização
-diretamente (a soma organização = soma das diferenças elegíveis por
-contêiner, não a subtração de dois totais já agregados — subtrair totais
-agregados misturaria contêineres onde só um lado está disponível).
+`diferença potencial = valor do cliente − exposição da Rocket`, avaliada
+**por contêiner**, sobre os envelopes JÁ SELECIONADOS pelo §6 (nunca sobre
+linhas brutas).
 
 | Condição | Checagem | Se falhar |
 |---|---|---|
 | Mesma moeda | `cliente.moeda === rocket.moeda` | `incompatível_moeda` |
-| Ambos os lados financeiramente disponíveis | `cliente.situacao NOT IN (PENDENTE, INDISPONIVEL)` E idem para `rocket` | `pendente` ou `indisponivel` (o lado que falhou) |
-| Período de apuração compatível | mesmo `relogio.data_final_apuracao` (ou ambos cobrindo o mesmo intervalo — decisão: ver nota) | `periodo_incompativel` |
-| Frescor pelos `dias_cobrados` | ambos os `valores_apurados` ativos calculados com o `dias_cobrados` correspondente ao estado ATUAL do relógio (mesma regra de frescor da D12 v1.2.3 — `RELOGIO_OBSOLETO` nunca entra) | `obsoleto` |
-| Status de confirmação compatível | **decisão #8** (ver §21): permitir quando um lado é só `ESTIMADO`? Recomendação: permitir, mas marcar a diferença resultante como `parcialmente_estimada` (nunca ocultar que faltou confirmação) | — |
-| Nenhum valor pendente que torne a diferença enganosa | se QUALQUER lado for `PENDENTE`, a diferença NÃO é calculada (nunca aparece como zero) | `pendente` |
+| Ambos disponíveis | `situacao NOT IN (PENDENTE, INDISPONIVEL)` nos dois lados | `pendente`/`indisponivel` |
+| Período compatível | mesma `data_final_apuracao` do relógio correspondente | `periodo_incompativel` |
+| Frescor por `dias_cobrados` | ambos os valores cobrem os dias operacionais atuais (mesma regra de `envelopeDeValor`, D12 v1.2.3) | `obsoleto` |
+| **Status de confirmação (decisão #8 — RESOLVIDA)** | **permitido mesmo quando um lado é só `ESTIMADO`/`ESTIMADO_PROVISORIO`**, desde que as demais condições passem | — |
 
-Quando inválida, a resposta é um objeto estruturado
-`{ elegivel: false, motivo: 'pendente'|'indisponivel'|'incompativel_moeda'|'periodo_incompativel'|'obsoleto' }`
-— nunca `null` silencioso nem `0`. Nunca há conversão de moeda para
-viabilizar a subtração. **Este valor é estritamente interno**: a rota que
-o expõe deve recusar `CLIENT` do mesmo jeito que `autorizacao.ts` já
-recusa hoje (nunca um papel novo o alcança por engano), e o contrato
-público (se algum dia existir Portal) nunca inclui este campo — Cap. 24.3
-e 32.2 são explícitos.
+**Classificação de qualidade obrigatória (decisão #8):** toda diferença
+elegível carrega um campo `qualidade` = o **pior** dos dois lados, na
+ordem `confirmado > estimado > provisório`:
 
----
-
-## 8. Indicadores vivos × históricos
-
-Dois tipos de "histórico" precisam ser distinguidos, porque exigem
-soluções diferentes:
-
-1. **Histórico-por-período (vivo, filtrado por data passada).** Uma
-   consulta agregada sobre fatos **já fechados/append-only**
-   (`effective_return_date`, `closing_events`, `valores_apurados` FINAL,
-   `demurrage_pendencias` resolvidas, `tracking_fetches`), filtrada por
-   uma data de atribuição ao período (§11). **Não precisa de nenhuma
-   tabela nova** — é uma query com `WHERE` de data sobre o estado atual
-   dos fatos fechados. Groups D e E (eficiência, qualidade) são
-   majoritariamente deste tipo.
-2. **Snapshot ponto-no-tempo (precisa de materialização).** "Quantos
-   processos estavam em `CRITICA_15` em 1º de outubro" não é
-   reconstruível a partir de `containers.estado`/`prioridade_balde` hoje:
-   essas colunas são cache regenerável, sobrescrito a cada recálculo —
-   não existe uma versão "como estava naquele dia". O Grupo A (contagens
-   vivas de backlog) é fundamentalmente **o estado atual**; para ver sua
-   evolução ao longo do tempo, é obrigatório um snapshot diário (§9).
-
-Conclusão: **Grupo A é sempre vivo** (não existe "Grupo A histórico" sem
-snapshot); **Grupos D e E são histórico-por-período sobre fatos já
-fechados**, sem necessidade de snapshot; **Grupo B/C são vivos**, mas se o
-usuário quiser uma série temporal de "exposição Rocket ao longo do
-tempo" (em vez de só "exposição Rocket agora"), isso também exige
-snapshot — os valores `valores_apurados` ATIVOS mudam (são substituídos
-por `SUPERSEDED`) e o estado "qual era o total em 1º de setembro" não é
-mais reconstruível sem um registro próprio além da proveniência do
-`supersedes_id` (que reconstrói a CADEIA de um contêiner, mas não um
-TOTAL agregado de organização num instante passado, sem reprocessar todo
-o histórico de cada contêiner — caro e fora do escopo de uma leitura
-`GET`).
-
----
-
-## 9. Recomendação de snapshot histórico
-
-Proposto (aditivo, append-only), condicionado à aprovação do usuário
-(decisão #9, §21):
-
-```sql
-CREATE TABLE demurrage_gestao_snapshots (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  organization_id UUID NOT NULL REFERENCES organizations(id),
-  data_operacional DATE NOT NULL,          -- dia civil operacional (America/Sao_Paulo, já centralizado — v1.3-4)
-  versao_calculo TEXT NOT NULL,            -- versão do materializador (ex.: 'd14.snapshot.v1')
-  grao TEXT NOT NULL CHECK (grao IN ('organizacao', 'processo', 'container')),
-  metricas JSONB NOT NULL,                 -- os indicadores do Grupo A/B/C congelados daquele dia
-  moeda TEXT,                              -- NULL quando a linha não é monetária
-  status_financeiro TEXT,                  -- quando aplicável (grupo B)
-  fontes_hash TEXT NOT NULL,               -- hash dos fatos usados (auditável, mesmo princípio de input_hash)
-  gerado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
-  chave_idempotencia TEXT NOT NULL,        -- 1 materialização por (organização, data, grão, versão)
-  CONSTRAINT demurrage_gestao_snapshots_idempotencia UNIQUE (organization_id, data_operacional, grao, versao_calculo, chave_idempotencia)
-);
--- forbid_mutation (mesmo padrão de `snapshots`/`demurrage_registros`): nunca UPDATE/DELETE.
+```
+qualidade =
+  (cliente.situacao === 'CONFIRMADO' && rocket.situacao === 'CONFIRMADO') ? 'confirmado'
+  : (cliente.situacao === 'ESTIMADO_PROVISORIO' || rocket.situacao === 'ESTIMADO_PROVISORIO') ? 'provisorio'
+  : 'estimado'
 ```
 
-Princípios:
-
-- **Nunca sobrescrever um snapshot passado.** Uma correção de dado que
-  afeta um dia já materializado gera uma **nova versão**
-  (`versao_calculo` incrementada ou uma segunda linha com
-  `fontes_hash` diferente), nunca um `UPDATE` na linha antiga — a
-  decisão #9 do usuário define exatamente quando um dia "fecha" (torna-se
-  imutável) e a partir de quando uma correção posterior vira nota lateral
-  em vez de reescrita.
-- **Materialização é um comando interno separado, nunca dentro de um
-  `GET`.** Um scheduler próprio (análogo ao `schedulerBootstrap` já
-  existente para tracking) roda uma vez por dia civil operacional,
-  idempotente por `(organization_id, data_operacional, grao, versao)` —
-  reprocessar o mesmo dia não duplica.
-- **Granularidade organização é suficiente para os indicadores do
-  Cap. 30** (nenhum capítulo pede snapshot por processo individual) —
-  `grao='processo'/'container'` fica reservado para uma necessidade futura
-  de drill-down histórico, não implementado nesta fase a menos que
-  aprovado.
-- Snapshots nunca retroagem: a primeira materialização de um dia só
-  acontece quando esse dia já é passado (nunca um "snapshot do futuro" nem
-  um snapshot do dia corrente, que ainda está mudando).
-
-**Alternativa mais simples (sem nova tabela), se o usuário preferir não
-aprovar materialização nesta fase:** expor só os indicadores Vivos (Grupo
-A/B/C "agora") e Históricos-por-período (Grupos D/E, que não precisam de
-snapshot). Uma série temporal de backlog (Grupo A ao longo do tempo) fica
-**explicitamente fora de escopo** até a aprovação do snapshot. Esta é a
-recomendação se o apetite for minimizar superfície nova nesta fase.
+Nunca oculta a composição: a resposta sempre inclui `qualidade` ao lado
+do valor da diferença — nunca um número "limpo" sem essa classificação.
+Quando inválida, resposta estruturada
+`{ elegivel: false, motivo: 'pendente'|'indisponivel'|'incompativel_moeda'|'periodo_incompativel'|'obsoleto' }`,
+nunca `null`/`0` silencioso. **Estritamente interno — MANAGER/ADMIN
+apenas (decisão #11)**, nunca `CLIENT`, nunca um Portal futuro (Cap. 24.3/
+32.2).
 
 ---
 
-## 10. Contratos de API propostos (sem desenhar UI)
+## 8. Indicadores vivos × histórico-por-período (V1 — sem snapshot)
 
-Seguem a mesma convenção da D12 v1.2.3: organização só do membership,
-`organizationId` nunca aceito em nenhum canal (`400 parametro_nao_aceito`
-explícito), `GET` nunca escreve/recalcula/dispara tracking/notificação,
-paginação/filtros estáveis, valores monetários como string decimal exata,
-moedas e status sempre separados, `CLIENT` nunca alcança estas rotas
-(mesmo guard de `autorizacao.ts`).
+(mantido do diagnóstico anterior, com a distinção REFORÇADA pela
+correção bloqueante 4)
 
-| Rota | Propósito | Indicadores | Paginação |
-|---|---|---|---|
-| `GET /api/demurrage/v2/gestao/operacional` | Visão operacional atual | Grupo A completo | Não pagina (contagens), filtros de §11 |
-| `GET /api/demurrage/v2/gestao/financeiro` | Visão financeira atual | Grupo B (exceto faturado/recebido/saldo — fixo "não disponível") | idem |
-| `GET /api/demurrage/v2/gestao/responsabilidade` | Responsabilidade Rocket | Grupo C | idem, + período (recorrência) |
-| `GET /api/demurrage/v2/gestao/eficiencia` | Eficiência operacional | Grupo D | período **obrigatório** (sem período, nenhuma média é exibida — nunca uma média "desde sempre" implícita) |
-| `GET /api/demurrage/v2/gestao/qualidade` | Qualidade de dados/tracking | Grupo E | período obrigatório para E1/E2/E3/E4/E6; vivo para E5/E7/E8/E9 |
-| `GET /api/demurrage/v2/gestao/indicadores/:id/composicao` | Drill-down (Cap. 30.7) | qualquer indicador acima | cursor igual ao da fila D12 (mesma paginação, mesmos filtros de processo/contêiner) — reaproveita `FilaItemV1`/`construirQueryFila`, nunca reimplementa |
-| `GET /api/demurrage/v2/gestao/historico/:grao` | Série temporal | snapshots (§9), **condicional à aprovação** | cursor por `data_operacional` |
-
-Todas retornam, ao lado de cada total monetário, as contagens
-`pendente`/`indisponível`/`não aplicável` que ficaram fora da soma — nunca
-um total "limpo" sem essa composição (Cap. 30.7).
+- **Vivo:** estado atual, recalculável a qualquer momento a partir das
+  colunas persistidas/cache (Grupo A, B, C, G-E5/E7/E8/E9).
+- **Histórico-por-período:** agregação sobre fatos **já fechados/
+  append-only**, filtrada por uma data de atribuição passada — **não
+  precisa de snapshot**, é uma query com `WHERE` de data sobre o estado
+  atual dos fatos fechados (Grupo D inteiro, G-E1/E2/E4/E6).
+- **Snapshot ponto-no-tempo:** **fora da V1** (correção bloqueante 4) —
+  nenhuma série temporal de backlog (Grupo A ao longo do tempo) é
+  entregue nesta fase.
 
 ---
 
-## 11. Filtros e períodos de relatório
+## 9. Snapshot histórico — REMOVIDO da V1 (correção bloqueante 4)
 
-Filtros comuns a todas as rotas (reaproveitando `FiltroFila`/
-`normalizarFiltrosFila` como base, estendido só com o necessário):
-`cliente`, `armador`, `responsavel`, `tipoEquipamento` (novo — hoje a D12
-não filtra por tipo de equipamento; precisa ser adicionado), e período.
+**Nenhuma tabela `demurrage_gestao_snapshots`, nenhuma migration `0035`,
+nenhum materializador, nenhum bootstrap de scheduler de Gestão fazem
+parte desta entrega.** O modelo genérico `metricas JSONB` proposto no
+diagnóstico anterior é insuficientemente estrito para um contrato
+histórico permanente — correto o apontamento do usuário.
 
-**Decisão #4 do usuário (§21):** qual data atribui um processo/contêiner a
-um período de relatório. Opções e a recomendação:
+**Escopo da D14 V1:** indicadores vivos (Grupos A/B/C/E5/E7/E8/E9) +
+histórico-por-período reconstruível de fatos já fechados (Grupo D,
+G-E1/E2/E4/E6) + drill-down de composição. **Nenhuma série temporal de
+backlog** (ex.: "evolução de `CRITICA_15` ao longo do tempo") é entregue.
 
-| Opção | O que mede | Problema |
+**Desenho futuro (fora desta fase, explicitamente adiado):** quando
+aprovado, o snapshot precisa definir, por métrica, ANTES de qualquer
+migration:
+
+- **identificador da métrica** (um ID estável, versionado — não um texto
+  livre dentro de um JSONB);
+- **dimensões** (quais filtros/cortes aquela métrica suporta, tipados,
+  não um objeto aberto);
+- **grão** (organização/processo/contêiner/dia — explícito por métrica,
+  não um campo genérico `grao` compartilhado por todas);
+- **unidade** (contagem, dias, valor monetário — tipado);
+- **moeda** (quando aplicável, nunca implícita);
+- **qualidade financeira** (confirmado/estimado/provisório/indisponível —
+  mesma taxonomia do resto do sistema, nunca uma nova);
+- **contagens incluídas/excluídas** (o que entrou na métrica e o que
+  ficou de fora por pendência/indisponibilidade, sempre ao lado do
+  número, nunca escondido);
+- **versão da regra** (quando a fórmula de cálculo muda, uma nova versão
+  nunca reescreve snapshots antigos calculados pela versão anterior);
+- **linhagem de correção** (se um dia materializado precisa ser corrigido,
+  como isso é registrado sem apagar o snapshot original — append-only,
+  nunca `UPDATE`);
+- **contrato de consulta tipado** (schema de resposta explícito por
+  métrica, não um `JSONB` genérico interpretado por convenção no
+  frontend).
+
+Este desenho é trabalho de uma fase própria (D14.1 ou preparação da D15),
+**não parte dos gates desta entrega**.
+
+---
+
+## 10. Contratos de API propostos
+
+Mesma convenção da D12 (organização só do membership, `organizationId`
+nunca aceito, `GET` nunca escreve/recalcula, moedas/status separados,
+`CLIENT` nunca alcança). **Removida** a rota de histórico/snapshot do
+diagnóstico anterior (correção bloqueante 4).
+
+| Rota | Propósito | Indicadores |
 |---|---|---|
-| Data de descarga | "o que chegou neste mês" | Um processo de setembro pode fechar em novembro — média de eficiência do mês de descarga fica incompleta até todos fecharem |
-| **1º dia de demurrage** (recomendado para Grupo D "eficiência") | "o que começou a gerar risco/custo neste mês" | Só existe para quem chegou a ter demurrage — processos sem demurrage ficam de fora desta contagem especificamente (não de outras) |
-| Empty Return (devolução efetiva) | "o que foi devolvido neste mês" | Não serve para indicadores de "entrada" (ex.: quantos entraram em monitoramento) |
-| Data de fechamento | "o que foi concluído neste mês" | É a única data estável para os indicadores de EFICIÊNCIA do Grupo D (G-D1/D2/D3/D5/D7/D8 — todos exigem conclusão/devolução para existir) |
+| `GET /api/demurrage/v2/gestao/operacional` | Visão operacional atual, com bloco de frescor (§5-A) | Grupo A |
+| `GET /api/demurrage/v2/gestao/financeiro` | Visão financeira atual | Grupo B (G-B6 só para MANAGER/ADMIN — 403 de campo, não da rota inteira, se ANALYST pedir e o backend expuser o campo mesmo assim) |
+| `GET /api/demurrage/v2/gestao/responsabilidade` | Responsabilidade Rocket | Grupo C |
+| `GET /api/demurrage/v2/gestao/eficiencia` | Eficiência/conclusão operacional | Grupo D (período obrigatório — sem período, nenhuma média é exibida) |
+| `GET /api/demurrage/v2/gestao/qualidade` | Qualidade de dados/tracking | Grupo E (G-E3 ausente da resposta — não um campo vazio, o próprio indicador não existe no contrato) |
+| `GET /api/demurrage/v2/gestao/indicadores/:id/composicao` | Drill-down (Cap. 30.7) | qualquer indicador acima, cursor igual ao da D12 |
 
-**Recomendação:** usar **data de fechamento
-(`processos.fechado_em`)** como período-padrão para o Grupo D (eficiência
-— os indicadores só fazem sentido para processos concluídos, e usar a
-data de conclusão evita o problema de "mês incompleto" de usar a data de
-descarga); usar **data de descarga** como período-padrão para o Grupo A
-(visão operacional — mede o que entrou, não o que terminou); permitir
-override explícito do campo de data por filtro (como a D12 já faz com
-`periodoCampo: 'descarga'|'devolucao'`), estendido com `'fechamento'` e
-`'primeiro_dia_demurrage'`.
+**Visibilidade em nível de CAMPO, não só de rota (decisões #10/#11):** a
+rota `/financeiro` é acessível a ANALYST/MANAGER/ADMIN, mas o campo
+`G-B6` (diferença potencial) só aparece no payload para MANAGER/ADMIN —
+para ANALYST, o campo é **omitido** (nunca um valor fabricado/zerado),
+com uma marca explícita `acessoRestrito: true` em vez do valor, para que
+o consumidor saiba que o campo existe mas não está disponível para o
+papel atual — nunca confundível com "não calculado".
 
 ---
 
-## 12. Matriz de visibilidade por papel
+## 11. Filtros e períodos de relatório (decisão #4 — RESOLVIDA, sem override genérico)
+
+**Removido** o campo de override genérico `periodoCampo` proposto no
+diagnóstico anterior — o usuário determinou que cada indicador usa sua
+**data natural fixa**, nunca uma data trocável que mudaria o significado
+de negócio do indicador:
+
+| Indicador/família | Data natural | Justificativa |
+|---|---|---|
+| Entrada em monitoramento (Grupo A, quando filtrado por período) | **Descarga** | É quando o contêiner entra no acompanhamento (Cap. 13) |
+| Indicadores de devolução (G-D1, G-D2, G-D3) | **Empty Return** (`tracking_return_date`/`effective_return_date`) | Medem o que foi devolvido, não o que foi concluído |
+| Eficiência e conclusão (G-D4 parcialmente, G-D5, G-D6, G-D7.\*) | **Fechamento** (`processos.fechado_em`) | Só fazem sentido para processos concluídos; evita viés de "mês incompleto" |
+| Indicadores de início de custo (G-D4) | **1º dia de demurrage** (`relogios.primeiro_dia_demurrage` da apuração FINAL) | Mede quando o custo começou, não quando descarregou nem quando fechou |
+
+Filtros comuns não-temporais (mantidos): `cliente`, `armador`,
+`responsavel`, `tipoEquipamento` (novo nesta fase — hoje a D12 não filtra
+por tipo).
+
+---
+
+## 12. Matriz de visibilidade por papel (decisões #10/#11 — RESOLVIDA)
 
 | Indicador/grupo | ANALYST | MANAGER | ADMIN | CLIENT |
 |---|---|---|---|---|
-| Grupo A (operacional) | ✅ | ✅ | ✅ | ❌ (403, igual D12) |
-| G-A6 (contêineres com exposição Rocket — só contagem, sem valor) | **decisão #10** | ✅ | ✅ | ❌ |
-| Grupo B (financeiro, valores) | **decisão #10/#11** | ✅ | ✅ | ❌ |
-| G-B6 (diferença potencial) | **decisão #10** (recomendação: não) | ✅ | ✅ | ❌ sempre (Cap. 24.3/32.2, nunca negociável) |
-| Grupo C (responsabilidade) | **decisão #11** (recomendação: leitura sim, nunca decidir) | ✅ (decide) | ✅ (decide) | ❌ sempre (Cap. 26.4/32.2) |
+| Grupo A (operacional) | ✅ | ✅ | ✅ | ❌ |
+| G-A6 (contagem de exposição Rocket) | ✅ | ✅ | ✅ | ❌ |
+| Grupo B, exceto G-B6 (valores: cliente, exposição Rocket, status financeiro) | ✅ (decisão #10) | ✅ | ✅ | ❌ |
+| **G-B6 (diferença potencial)** | ❌ (decisão #11) | ✅ | ✅ | ❌ sempre |
+| Grupo C (responsabilidade — estado, valores já decididos, evidência) | ✅ leitura (decisão #10) | ✅ leitura + decide | ✅ leitura + decide | ❌ sempre |
+| **Comparação organização-level cliente×Rocket** (equivalente a G-B6 em outra lente) | ❌ (decisão #11) | ✅ | ✅ | ❌ |
 | Grupo D (eficiência) | ✅ | ✅ | ✅ | ❌ |
-| Grupo E (qualidade/tracking) | ✅ (consulta) | ✅ | ✅ | ❌ |
-| Histórico/snapshot (§9) | mesma regra do indicador vivo correspondente | | | ❌ |
+| Grupo E (qualidade/tracking) | ✅ | ✅ | ✅ | ❌ |
 
-Hoje (D12) os três papéis internos têm exatamente a mesma visibilidade de
-leitura — não existe nenhuma diferenciação de campo por papel em
-`filaOperacional.ts`/`detalhe.ts`. O Blueprint Cap. 10 diferencia
-APENAS permissões de **escrita** (Analista não corrige Free Time já
-fornecido por fonte aprovada; só Gestor confirma responsabilidade) — não
-diz explicitamente que o Analista não pode **ler** exposição Rocket ou
-diferença potencial. Por isso as células acima marcadas "decisão #10/#11"
-não têm resposta no Blueprint e **exigem decisão do usuário** (ver §21);
-a recomendação desta análise segue o princípio de menor exposição: dados
-estritamente internos de margem (diferença potencial) ficam restritos a
-MANAGER/ADMIN por padrão, enquanto contagens operacionais (quantos
-contêineres estão expostos, sem valor) ficam abertas a todos os papéis
-internos.
+A diferenciação é implementada em **nível de campo** (§10), não só de
+rota — testada explicitamente no gate G5 (§17).
+
+### 12-bis. Metadado de dimensão no contrato (correção bloqueante 3)
+
+Todo indicador do Grupo A (e qualquer outro indicador de contagem futuro)
+carrega, no contrato de resposta:
+
+```
+{
+  id: "G-A3",
+  dimensao: "estado" | "balde" | "populacional" | "independente" | "fechamento",
+  mutuamenteExclusivoCom: ["G-A2", "G-A9-DEVOLVIDO_AGUARDANDO_TRATAMENTO", ...],  // outros IDs da MESMA dimensão
+  valor: <int>
+}
+```
+
+Documentação de API inclui, de forma destacada: **"Os indicadores do
+Grupo A medem dimensões independentes do mesmo conjunto de processos. Um
+processo pode aparecer em vários indicadores simultaneamente. A soma dos
+valores nunca representa o total de processos da organização."** Este
+texto é um requisito de aceitação (G3, §17), não uma sugestão de
+redação.
 
 ---
 
 ## 13. Isolamento de organização
 
-Nenhuma rota aceita `organizationId` de query/corpo/cabeçalho — mesmo guard
-de `autorizacao.ts` (`resolverAutorizacao`), reutilizado sem alteração.
-Toda nova consulta segue o padrão já em uso: **toda tabela com
-`organization_id` filtra por ele diretamente; toda tabela sem
-`organization_id` (as GLOBAIS de tracking) filtra por JOIN através de
-`container_tracking_targets`/`containers`**, nunca por filtro aplicado
-depois de uma soma/contagem já feita sobre o universo inteiro (o padrão
-errado seria "contar tudo, filtrar depois" — o padrão certo, já usado em
-`buscarAgregadosPorProcesso`, é "o JOIN já restringe antes de agregar").
-A suíte de teste de zero-escrita/RBAC da D12 (`demurrageV2UiZeroWrite`)
-deve ganhar casos equivalentes para as novas rotas (mesmo fingerprint de
-schema completo antes/depois, mesmo teste de 403 para `CLIENT`/401 sem
-sessão).
+(inalterado do diagnóstico anterior) `organizationId` nunca aceito em
+nenhum canal; toda tabela global de tracking filtra por JOIN através de
+`container_tracking_targets`/`containers`, nunca por filtro pós-agregação.
+Teste de isolamento com `tracking_target` compartilhado entre duas
+organizações (vessel sharing) é gate obrigatório (§17, §18).
 
 ---
 
-## 14. Estratégia de consulta e desempenho
+## 14. Estratégia de consulta e desempenho (atualizada com o padrão §6)
 
-### Leituras em lote já reaproveitáveis da D12
+### Leituras em lote reaproveitáveis da D12
 
-- `buscarProcessosCandidatos`/`buscarContainersDosCandidatos` (fila) — já
-  usam `= ANY($1)`, nunca uma consulta por processo.
-- `buscarAgregadosPorProcesso` — já resolve pendências/falhas/tracking em
-  3 consultas agregadas (`UNION ALL` + `GROUP BY`), não N+1.
-- `contarEstadosEBaldes` — já existe, mas **não escala** (ver abaixo).
+(mantido) `buscarProcessosCandidatos`/`buscarContainersDosCandidatos`,
+`buscarAgregadosPorProcesso` — padrão `= ANY($1)`, nunca N+1.
 
-### Risco de N+1 e de custo linear identificado
+**Novo nesta revisão — padrão de lote para a seleção financeira do §6:**
+a consulta de `termo_tipo` + linhas ativas de `valores_apurados` deve
+rodar **uma vez para toda a organização** (não por processo), com
+`container_id = ANY($1)` sobre TODOS os contêineres candidatos da
+organização (ou do filtro aplicado), exatamente como `detalhe.ts:105-112`
+já faz por página — generalizado para o universo completo em vez de uma
+página de 50. `selecionarValorAtivo` roda em memória sobre esse lote
+único (função pura, sem I/O), nunca uma consulta por contêiner.
 
-`contarEstadosEBaldes` (reaproveitada pelos KPIs da D13) carrega **todos**
-os processos e containers da organização e roda
-`derivarEmLote`/`consolidarProcesso` em memória a cada chamada — O(N)
-processos × containers, sem paginação, a cada requisição. Isso é aceitável
-para os 4 KPIs da D13 (chamada uma vez ao abrir a tela), mas o Grupo A da
-D14 soma MAIS dimensões (cliente/armador/responsável/tipo/período) sobre a
-MESMA base — se implementado copiando o padrão atual, o custo cresce na
-mesma proporção.
+### Risco de N+1 e custo linear (mantido, com adição)
 
-**Recomendação:** os indicadores do Grupo A devem ser respondidos por
-`SELECT COUNT(*) ... GROUP BY` diretamente sobre as colunas persistidas
-(`containers.estado`, `processos.prioridade_balde`, já materializadas pela
-Fase 7/0015), **não** por re-derivação em memória — aceitando que essas
-colunas são "quase vivas" (atualizadas a cada tick do scheduler/leitura
-que já as recalcula), em vez de 100% recalculadas a cada leitura de
-Gestão. Isso é uma mudança de postura em relação à D12 (que prioriza
-"sempre recalculado" para a fila, por ser uma tela de poucos itens) —
-**precisa de aprovação explícita do usuário** porque troca
-"sempre exatamente vivo" por "vivo com a defasagem de um tick do
-scheduler" em troca de custo constante por grupo em vez de custo linear
-no total de contêineres da organização.
+`contarEstadosEBaldes` não escala — recomendação mantida: Grupo A usa
+`GROUP BY` sobre colunas persistidas, não re-derivação em memória
+(decisão pendente de aprovação explícita, já registrada no diagnóstico
+anterior, mantida sem mudança).
 
-### Tabela de custo esperado (estimativa, sem medição real disponível)
+**Adição:** a seleção financeira do §6, mesmo rodando sobre o lote
+completo da organização, é O(contêineres ativos) em memória **uma vez por
+requisição** — aceitável para a visão de Gestão (consultada com menor
+frequência que a fila operacional), mas precisa de medição real (abaixo)
+antes de aprovar para 10.000 processos.
 
-| Processos na organização | Grupo A (hoje, re-derivação em memória) | Grupo A (proposto, `GROUP BY` sobre coluna persistida) | Grupo B/C (nova agregação financeira) | Grupo D/E (histórico-por-período) |
-|---|---|---|---|---|
-| 100 | ~instantâneo | instantâneo | 1 `GROUP BY` sobre `valores_apurados` filtrado por organização — rápido com índice | 1–2 `GROUP BY` com filtro de data — rápido |
-| 1.000 | perceptível (centenas de ms) | ainda rápido (índice composto) | ainda rápido | ainda rápido |
-| 10.000 | risco real de lentidão (milhares de linhas recalculadas por chamada) | **ainda O(índice)**, não O(N) de re-derivação | depende de índice em `valores_apurados(container_id, relogio_tipo, calculation_status)` já parcialmente coberto (0009) — confirmar com `EXPLAIN` antes de aprovar índice novo | depende de volume de `tracking_fetches`/`demurrage_pendencias` no período — paginar por período evita problema |
+### Tabela de custo esperado (mantida, estimativa — não substitui medição)
 
-**Nenhuma estimativa acima substitui medição real.** O plano de teste
-(§18) inclui `EXPLAIN ANALYZE` contra um volume sintético antes de
-qualquer índice novo ser proposto como migration.
+| Processos | Grupo A (`GROUP BY` proposto) | Grupo B (seleção em lote, §6) | Grupo D/E (histórico-por-período) |
+|---|---|---|---|
+| 100 | instantâneo | instantâneo | rápido |
+| 1.000 | rápido (índice composto) | rápido | rápido |
+| 10.000 | O(índice), não O(N) | depende de `EXPLAIN` sobre `valores_apurados` filtrado por `container_id = ANY(milhares)` — medir | depende do volume no período, paginar evita problema |
 
-### Índices potenciais (não criados nesta fase — só apontados)
+### Índices potenciais (mantidos do diagnóstico anterior, não criados nesta fase)
 
-1. `containers (organization_id, estado)` — suporta G-A1/A2/A3 por
-   `GROUP BY estado` com filtro de organização já citado no plano de
-   consulta.
-2. `processos (organization_id, prioridade_balde)` — hoje só existe
-   `processos_prioridade_balde_idx` sem `organization_id`; toda consulta
-   real filtra pelos dois. Suporta G-A4/A5.
-3. `valores_apurados (relogio_tipo, confirmation_status, calculation_status)`
-   combinado com `container_id` — suporta Grupo B agregado por
-   organização via join com `containers`. Precisa confirmar se o índice
-   existente (`valores_apurados_container_idx`) já é suficiente via
-   `container_id` primeiro (provavelmente sim para consultas por
-   processo; para consulta por ORGANIZAÇÃO inteira, provavelmente não —
-   medir).
-4. `tracking_fetches (criado_em)` ou `(tracking_target_id, criado_em)` já
-   existe (`tracking_fetches_target_idx`) — suficiente para Grupo E
-   filtrado por `tracking_target_id` após o join; confirmar com
-   `EXPLAIN` se filtro por período (`criado_em BETWEEN`) se beneficia de
-   um índice adicional só em `criado_em`.
+1. `containers (organization_id, estado)`.
+2. `processos (organization_id, prioridade_balde)`.
+3. `valores_apurados (relogio_tipo, confirmation_status,
+   calculation_status)` combinado com `container_id` — confirmar com
+   `EXPLAIN` se o índice existente já basta para a consulta em lote do
+   §6 em organizações grandes.
+4. `tracking_fetches (criado_em)` — confirmar necessidade com `EXPLAIN`.
 
-Qualquer um destes só vira migration real na fase de implementação, **com
-o `EXPLAIN ANALYZE` que o justifica** anexado ao PR, nunca adicionado por
-suposição.
-
-### Paginação estável
-
-Drill-down (`/composicao`) reaproveita o cursor assinado da D12
-(`cursorAssinado.ts`) — mesmo HMAC, mesma versão de contrato por rota, sem
-nova implementação de paginação.
+Nenhum índice novo entra em migration sem o `EXPLAIN ANALYZE` que o
+justifica, anexado ao PR da implementação.
 
 ---
 
-## 15. Migrations propostas (se aprovadas)
+## 15. Migrations propostas
 
-**Nenhuma migration é criada nesta fase.** Se o usuário aprovar o modelo
-de snapshot (§9), a única migration necessária na implementação é:
+**Nenhuma migration nesta fase.** A migration `0035` e o materializador
+de snapshot, propostos no diagnóstico anterior, **foram removidos**
+(correção bloqueante 4) — nenhuma tabela nova é necessária para a D14
+V1: todos os indicadores do §5 leem tabelas/colunas já existentes.
 
-- `0035_demurrage_gestao_snapshots.sql` — cria `demurrage_gestao_snapshots`
-  (schema no §9), `forbid_mutation` (mesmo padrão de `snapshots`/
-  `demurrage_registros`), índice
-  `(organization_id, data_operacional, grao)`.
-
-Se o usuário aprovar os índices do §14 após medição real, eles entram
-numa migration separada e aditiva (`0036` ou seguinte), cada um
-acompanhado do `EXPLAIN ANALYZE` que o motivou. Nenhuma coluna existente
-muda de tipo, nenhuma tabela existente é alterada estruturalmente.
+Se, após medição real (§14), os índices do item 14 forem aprovados, eles
+entram numa migration aditiva separada (`0035` ou seguinte — o número
+volta a ficar livre), cada um com o `EXPLAIN ANALYZE` que o motivou.
+Nenhuma coluna existente muda de tipo; nenhuma tabela existente é alterada
+estruturalmente.
 
 ---
 
-## 16. Arquivos a criar/alterar (na implementação, não nesta fase)
+## 16. Arquivos a criar/alterar (implementação futura)
 
-Só leitura (novo), seguindo a convenção de `src/demurrage-engine/leitura/`:
+(mantido do diagnóstico anterior, com remoção dos itens de snapshot)
 
 - `src/demurrage-engine/leitura/gestao/contrato.ts` — tipos dos payloads
-  dos 6 grupos (A–F) + resposta de drill-down + resposta de histórico.
-- `src/demurrage-engine/leitura/gestao/operacional.ts` — Grupo A.
-- `src/demurrage-engine/leitura/gestao/financeiro.ts` — Grupos B/F
-  (generaliza `agregarLado`, movida ou reexportada de `contrato.ts`
-  original sem duplicar).
+  (A–F), incluindo o bloco de frescor (§5-A) e o metadado de dimensão
+  (§12-bis). **Sem** tipo de resposta de histórico/snapshot.
+- `src/demurrage-engine/leitura/gestao/selecaoFinanceira.ts` — **novo
+  módulo isolado** que encapsula o padrão do §6 (busca em lote +
+  `selecionarValorAtivo` por contêiner), reusado por `financeiro.ts`,
+  `responsabilidade.ts` e `eficiencia.ts` — para que a prova de
+  não-duplicação (§6) viva em UM lugar, nunca reimplementada em cada
+  grupo.
+- `src/demurrage-engine/leitura/gestao/operacional.ts` — Grupo A, com
+  bloco de frescor.
+- `src/demurrage-engine/leitura/gestao/financeiro.ts` — Grupos B/F, sobre
+  `selecaoFinanceira.ts`.
 - `src/demurrage-engine/leitura/gestao/responsabilidade.ts` — Grupo C.
-- `src/demurrage-engine/leitura/gestao/eficiencia.ts` — Grupo D.
-- `src/demurrage-engine/leitura/gestao/qualidade.ts` — Grupo E.
-- `src/routes/demurrageGestaoRoutes.ts` — as 7 rotas do §10, mesmo padrão
-  de `demurrageV2Routes.ts` (RBAC via `autorizacao.ts`, reexportado sem
-  alteração).
-- Se snapshot aprovado: `src/demurrage-engine/gestao/snapshotMaterializer.ts`
-  + bootstrap próprio (análogo a `schedulerBootstrap.ts`), chamado por
-  `src/index.ts` como um novo ciclo independente — nunca dentro de um
-  `GET`.
-- `src/demurrage-engine/db/migrations/0035_demurrage_gestao_snapshots.sql`
-  (condicional).
-- Testes: `src/demurrage-engine/__tests__/gestaoOperacional.test.ts`,
-  `gestaoFinanceiro.test.ts`, `gestaoResponsabilidade.test.ts`,
-  `gestaoEficiencia.test.ts`, `gestaoQualidade.test.ts`,
-  `gestaoDiferencaPotencial.test.ts`, `gestaoSnapshot.test.ts`
-  (condicional) + `src/frontend-tests`-equivalente para zero-escrita/RBAC
-  das novas rotas, seguindo `demurrageV2UiZeroWrite.test.ts`.
-- `docs/demurrage-fase-d14.md` — relatório de entrega, só depois da
-  implementação e validação (não nesta fase).
+- `src/demurrage-engine/leitura/gestao/eficiencia.ts` — Grupo D, com os 8
+  indicadores de conclusão (+ G-D-INTEGRIDADE).
+- `src/demurrage-engine/leitura/gestao/qualidade.ts` — Grupo E (sem
+  G-E3; G-E9 vivo via `avaliarCadencia` importada, não duplicada).
+- `src/routes/demurrageGestaoRoutes.ts` — as 6 rotas (§10), com
+  visibilidade de campo por papel (§10, §12).
+- ~~`src/demurrage-engine/gestao/snapshotMaterializer.ts`~~ — **removido**.
+- ~~`0035_demurrage_gestao_snapshots.sql`~~ — **removido**.
+- Testes: `gestaoSelecaoFinanceira.test.ts` (prova de não-duplicação,
+  §6, gate G1), `gestaoOperacional.test.ts` (dimensões independentes,
+  gate G3), `gestaoFinanceiro.test.ts`, `gestaoResponsabilidade.test.ts`,
+  `gestaoEficiencia.test.ts` (8 indicadores + integridade, gate G4),
+  `gestaoQualidade.test.ts`, `gestaoDiferencaPotencial.test.ts` (§7) +
+  equivalente de zero-escrita/RBAC/isolamento para as novas rotas.
+- `docs/demurrage-fase-d14.md` — relatório de entrega, só após
+  implementação e validação.
 
-**Nada em `public/**`, `src/routes/demurrageRoutes.ts` (V1),
-`src/routes/demurrageV2Routes.ts` (D12, só lido como referência), nem em
-qualquer motor de D10/D11/D12.**
+**Nada em `public/**`, rotas V1/V2 existentes, nem em qualquer motor de
+D10/D11/D12.**
 
 ---
 
-## 17. Gates de aceitação propostos G1–G7
+## 17. Gates de aceitação revisados G1–G7
 
-- **G1 — Confirmação de fontes pendentes.** Resolver §4.2/§4.3 (consultas
-  evitadas, suspensão de 30 dias) por leitura de código antes de escrever
-  qualquer query que dependa delas; documentar a fonte real encontrada ou
-  formalizar o adiamento.
-- **G2 — Agregação financeira generalizada.** Extrair/generalizar
-  `agregarLado` para aceitar qualquer lista de envelopes; implementar
-  Grupos B/F sobre ela; nenhuma segunda soma monetária no código.
-- **G3 — Elegibilidade da diferença potencial.** Implementar a matriz do
-  §7 como função pura testável isoladamente (fixtures cobrindo cada motivo
-  de inelegibilidade), antes de ligar a qualquer rota.
-- **G4 — Grupos A/C/E (contagens vivas).** Implementar sobre colunas
-  persistidas (não re-derivação em memória, conforme §14), com
-  `EXPLAIN ANALYZE` anexado.
-- **G5 — Grupos D (histórico-por-período).** Implementar sobre fatos
-  fechados existentes, com os 4 períodos de atribuição (§11) selecionáveis.
-- **G6 — Snapshot (condicional à aprovação).** Migration + materializador
-  + bootstrap próprio, idempotente, nunca dentro de um `GET`.
-- **G7 — Regressão, RBAC, isolamento e relatório final.** Testes das
-  novas rotas (zero-escrita, 401/403, fingerprint de schema), suíte
-  completa da engine, V1, `tsc`, `build`, `git diff` vazio nos arquivos
-  protegidos, relatório de entrega em português.
+- **G1 — Seleção financeira autoritativa.** `selecaoFinanceira.ts`
+  implementa exatamente o padrão do §6, reusando `selecionarValorAtivo`/
+  `motorClienteAplicavelDe` sem reescrita. Teste prova que um contêiner
+  com múltiplas linhas ativas em motores diferentes contribui no máximo
+  um envelope por lado para a agregação de organização (cenário
+  artificial de duas linhas ativas no lado cliente; cenário real de
+  `exposicao_armador` único no lado Rocket).
+- **G2 — Agregação decimal exata.** `agregarLado` generalizada, mesmos
+  testes de não-soma de moeda/não-zero-para-pendente já existentes na
+  D12, reexecutados sem alteração de expectativa sobre a função
+  original.
+- **G3 — Dimensões operacionais independentes.** Grupo A carrega
+  `dimensao`/`mutuamenteExclusivoCom` no contrato; teste de fixture prova
+  que um único processo aparece simultaneamente em indicadores de
+  dimensões diferentes (ex.: `CRITICA_15` + exposição Rocket + pendência
+  de dados no mesmo processo); documentação de API contém o aviso
+  obrigatório do §12-bis.
+- **G4 — Indicadores de conclusão separados.** Os 8 indicadores do §5
+  (Grupo D, correção 2) implementados com teste de cada caso (com/sem
+  custo cliente, com/sem exposição Rocket, sem valor em nenhum lado, as 3
+  responsabilidades) e do caso de integridade (pendência remanescente
+  num processo FINAL nunca vira "sem custo").
+- **G5 — Visibilidade em nível de campo.** Teste por papel×rota×campo:
+  ANALYST recebe `/financeiro` sem o campo `G-B6` (marcado
+  `acessoRestrito`, nunca um valor fabricado); MANAGER/ADMIN recebem o
+  valor completo.
+- **G6 — Isolamento, zero-escrita e SEM snapshot em V1.** Rotas só `GET`,
+  fingerprint de schema completo antes/depois (zero-escrita); teste de
+  isolamento com `tracking_target` compartilhado entre duas organizações
+  (§18); **confirmação explícita no PR de que nenhuma migration `0035`
+  nem materializador de snapshot existe no diff**.
+- **G7 — Desempenho e regressão completa.** Contagem de queries por rota
+  (nunca N+1), `EXPLAIN ANALYZE` real contra volume sintético de
+  100/1.000/10.000 processos (§14) anexado ao PR; suíte completa da
+  engine (`test:demurrage-engine`, baseline 724/724), V1 (25/25),
+  `tsc --noEmit`, `npm run build` limpos; `git diff` vazio em
+  `src/demurrage-engine/db/migrations/0001`–`0034` e em todos os
+  arquivos protegidos de D10/D11/D12/D13.
 
 ---
 
-## 18. Plano de teste PostgreSQL
+## 18. Plano de teste PostgreSQL (atualizado)
 
-Reaproveita a infraestrutura já existente
-(`src/demurrage-engine/__tests__/*.test.ts`, `node:test` com banco real):
-
-1. **Fixtures de volume sintético** — gerar 100/1.000/10.000 processos com
-   distribuição realista entre baldes/estados/moedas/status de confirmação
-   (reaproveitando os helpers de fixture já usados em D11/D12), para medir
-   G-A/G-B/G-D/G-E com `EXPLAIN ANALYZE` real, não estimado.
-2. **Zero-escrita.** Cada rota nova roda contra o banco real e tira o
-   fingerprint de TODO o schema (`information_schema`) antes/depois —
-   mesmo padrão de `demurrageV2UiZeroWrite.test.ts`.
-3. **RBAC.** `CLIENT` recebe 403 nas 7 rotas; sem sessão recebe 401;
-   `organizationId` em qualquer canal recebe 400 `parametro_nao_aceito`.
-4. **Isolamento multi-organização.** Duas organizações com dados
-   concorrentes (incluindo um `tracking_target` COMPARTILHADO entre
-   ambas, reproduzindo o cenário de vessel sharing) — nenhum indicador de
-   uma organização conta fato da outra (G-E1/E2/E4/E5, que dependem do
-   join através de tabelas globais).
-5. **Elegibilidade da diferença potencial.** Casos de cada motivo de
-   inelegibilidade do §7 isoladamente, mais o caso elegível.
-6. **Não combinação de moedas.** Fixture com BRL e USD no mesmo processo —
-   nunca uma linha somando os dois.
-7. **Snapshot (se aprovado).** Idempotência (rodar duas vezes o mesmo dia
-   não duplica), imutabilidade (tentar `UPDATE`/`DELETE` falha), e
-   materialização nunca roda dentro do ciclo de request HTTP.
-8. **Regressão completa.** `test:demurrage-engine` (baseline atual:
-   724/724), V1 (25/25), `tsc --noEmit`, `npm run build`.
+1. **Seleção financeira (G1).** Fixtures com múltiplas linhas ativas por
+   motor comercial no mesmo contêiner/lado (cenário artificial) +
+   fixture real de Termo Único vs. Termo por Embarque em processos
+   diferentes da mesma organização.
+2. **Fixtures de volume sintético** — 100/1.000/10.000 processos,
+   `EXPLAIN ANALYZE` real para Grupo A (proposto), Grupo B (seleção em
+   lote), Grupo D/E.
+3. **Zero-escrita** — fingerprint de `information_schema` antes/depois
+   nas 6 rotas (mesmo padrão `demurrageV2UiZeroWrite.test.ts`).
+4. **RBAC de rota.** `CLIENT` 403, sem sessão 401, `organizationId` em
+   qualquer canal 400 `parametro_nao_aceito`.
+5. **RBAC de campo (G5).** `ANALYST` nunca recebe `G-B6`/diferença
+   potencial no payload; `MANAGER`/`ADMIN` recebem.
+6. **Isolamento multi-organização, incluindo tracking compartilhado.**
+   Duas organizações com um `tracking_target` em comum (cenário de
+   vessel sharing real, F9v1.1) — G-E1/E2/E4/E5/E9 de cada organização
+   nunca contam o fato da outra.
+7. **Elegibilidade e qualidade da diferença potencial (§7).** Cada motivo
+   de inelegibilidade isoladamente; caso elegível com um lado estimado
+   (decisão #8) classificado corretamente como `estimado`/`provisorio`.
+8. **Dimensões independentes (G3).** Fixture de um processo em múltiplos
+   indicadores simultaneamente (balde crítico + exposição Rocket +
+   pendência).
+9. **8 indicadores de conclusão + integridade (G4).** Cada um dos casos
+   do §5/Grupo D, incluindo o caso de integridade (pendência
+   remanescente nunca vira zero).
+10. **Regressão completa.** `test:demurrage-engine` (724/724), V1
+    (25/25), `tsc --noEmit`, `npm run build`.
 
 ---
 
 ## 19. Riscos de regressão
 
-- **Nenhum risco para D10/D11/D12/D13**: toda leitura nova é aditiva,
-  sobre tabelas/colunas já existentes, sem nenhuma alteração nelas.
-- **Risco real: reaproveitar mal `agregarLado`.** Se a generalização para
-  organização não preservar exatamente as mesmas regras (nunca somar
-  moeda, nunca converter `PENDENTE`/`INDISPONIVEL` em zero), o Grupo B
-  herdaria um bug sutil de um lugar que hoje está correto e testado (D12
-  v1.2.1). Mitigação: extrair sem reescrever a lógica interna, só o grão
-  de entrada; reexecutar os testes atuais de `agregarFinanceiroProcesso`
-  sem alteração de expectativa.
-- **Risco de desempenho se o Grupo A copiar o padrão de
-  `contarEstadosEBaldes` sem a mudança do §14** — não quebra nada, mas
-  degrada em organizações grandes. Mitigação: gate G4 explícito.
-- **Risco de vazamento cross-organização via tabelas globais de
-  tracking** se um desenvolvedor futuro copiar uma consulta de Grupo E sem
-  o join de escopo do §4.1. Mitigação: teste de isolamento dedicado
-  (§18.4) como gate de regressão permanente, não só desta fase.
+(mantido do diagnóstico anterior) Nenhum risco para D10/D11/D12/D13 —
+leitura aditiva. Risco real mitigado nesta revisão: a generalização de
+`agregarLado` e a reutilização de `selecionarValorAtivo` em
+`selecaoFinanceira.ts` (módulo único) eliminam o risco antes identificado
+de "reaproveitar mal" a lógica de seleção — ela não é reescrita, só
+chamada em lote maior.
+
+**Risco novo identificado nesta revisão:** se um desenvolvedor futuro
+implementar o Grupo D sem passar pelo `selecaoFinanceira.ts` central
+(ex.: consultando `valores_apurados` diretamente "só para os 8
+indicadores de conclusão"), reintroduziria o bug da correção bloqueante
+1. Mitigação: `selecaoFinanceira.ts` é a ÚNICA porta de entrada para
+envelopes selecionados — gate G1 inclui uma checagem estática (grep) que
+nenhum outro arquivo de `gestao/` consulta `valores_apurados` diretamente.
 
 ---
 
 ## 20. Itens explicitamente adiados
 
-- **Integração financeira com HeadCargo** (Grupo B7/8/9) — sem fonte.
-- **Possível responsabilidade SUGERIDA** (G-C0) — depende do módulo
-  Liberação, inexistente nesta base.
-- **"Consultas evitadas" e "suspensão de tracking após 30 dias"** (G-E3,
-  G-E9) — fonte não confirmada; ver G1.
-- **Série temporal de backlog (Grupo A histórico)** sem aprovação do
-  snapshot (§9) — fica só "agora", sem "como estava".
-- **Qualquer ação de escrita** (correção, confirmação de responsabilidade,
-  reabertura, tracking manual) a partir da tela de Gestão — D14 é
-  somente leitura; essas ações já existem em D10/D11 e não são tocadas.
-- **Conversão de moeda** — nunca implementada; todo valor fica na sua
-  moeda original.
-- **UI de Gestão** — fora do escopo desta fase (backend-first, conforme
-  instrução).
+- Integração financeira HeadCargo (G-B7/8/9).
+- Responsabilidade SUGERIDA (G-C0) — depende de Liberação.
+- **G-E3 (consultas evitadas)** — sem fonte persistida (§4.2).
+- **Série histórica de suspensão (G-E9 histórico)** — sem fato auditável
+  (§4.3); só a contagem viva permanece.
+- **Snapshot ponto-no-tempo / série temporal de backlog** — removido da
+  V1 inteira (correção bloqueante 4); desenho futuro descrito no §9.
+- Qualquer ação de escrita a partir de Gestão.
+- Conversão de moeda.
+- UI de Gestão.
 
 ---
 
-## 21. Decisões que exigem aprovação do usuário
+## 21. Decisões de negócio — APROVADAS (aplicadas nesta revisão)
 
-Cada uma com a recomendação desta análise; nenhuma foi decidida
-silenciosamente no código (nenhuma implementação foi feita).
+Todas as 14 decisões do diagnóstico anterior foram resolvidas pelo
+usuário e aplicadas ao longo deste documento. Resumo de onde cada uma foi
+incorporada:
 
-1. **O que significa "duração média de demurrage".** Recomendação:
-   G-D4 usando `valores_apurados.dias_cobrados` da linha **FINAL** (não
-   `OPEN`), para que a média reflita apuração encerrada e auditável, não
-   um valor "em andamento" que ainda vai mudar.
-2. **Médias incluem processos abertos?** Recomendação: **não** — G-D1 a
-   D8 só sobre processos com `apuracao_status='FINAL'` (ou, no caso de
-   G-D3, containers com `effective_return_date` preenchida). Processos
-   abertos entram nos indicadores VIVOS do Grupo A, não nas médias
-   históricas do Grupo D (evita viés: um processo recém-aberto com "0
-   dias até agora" puxaria a média para baixo artificialmente).
-3. **Duração usa dias corridos?** Recomendação: **sim, dias corridos**
-   (coerente com o Cap. 23, que já define a apuração em dias corridos,
-   sem cálculo por hora) — não dias úteis.
-4. **Qual data atribui um processo a um período de relatório?**
-   Recomendação detalhada no §11: fechamento para Grupo D, descarga para
-   Grupo A, com override explícito por filtro.
-5. **Processos reabertos contam uma vez ou por ciclo operacional?**
-   Recomendação: **uma vez por ciclo de fechamento** — cada
-   fechamento→reabertura→refechamento gera um novo "ciclo" rastreável por
-   `reaberturas`/`closing_events`; um indicador de eficiência (G-D5/D7/D8)
-   conta o CICLO mais recente (o resultado final), mas a composição
-   (drill-down) mostra os ciclos anteriores como histórico, nunca
-   escondidos. Alternativa: contar cada ciclo separadamente nos
-   indicadores agregados (infla a contagem de "processos concluídos"
-   artificialmente) — não recomendada.
-6. **Totais confirmado/estimado aparecem juntos, separados ou nunca
-   combinados?** Recomendação: **nunca combinados em um único número**
-   — sempre como hoje em `agregarLado` (grupos por moeda com
-   confirmados/estimados/provisórios como contadores ao lado do
-   subtotal exato daquele grupo, nunca um "total" que mistura os status
-   sem marcação).
-7. **Totais de processo incluem todos os contêineres ou só o líder?**
-   Recomendação: **todos os contêineres** — Cap. 25 é explícito ("total
-   do processo corresponde à soma dos valores individuais"); o
-   contêiner-líder decide ESTADO/prioridade (Cap. 21/22), nunca decide
-   sozinho o total financeiro do processo.
-8. **Diferença potencial é permitida quando um lado é só estimado?**
-   Recomendação: **permitir, mas marcar como `parcialmente_estimada`**
-   (nunca ocultar a composição) — ver §7.
-9. **Quando um dia histórico se torna imutável?** Recomendação: um dia
-   operacional só é materializado (§9) quando já é passado (nunca o dia
-   corrente); uma correção que afeta um dia já materializado gera uma
-   NOVA versão do snapshot daquele dia (nunca reescreve a linha antiga) —
-   análogo ao próprio `valores_apurados` (nunca `UPDATE` de memória de
-   cálculo, só supersede).
-10. **ANALYST pode ver exposição Rocket / diferença potencial?**
-    Recomendação: contagem (G-A6, "quantos contêineres expostos") sim;
-    **valor** de exposição (Grupo B) e diferença potencial (G-B6) **não**
-    por padrão — restritos a MANAGER/ADMIN (ver §12). O Blueprint não
-    decide isso explicitamente; esta é a leitura mais conservadora do
-    Cap. 10/11 (margem é informação de gestão, não de operação do
-    dia a dia).
-11. **Só MANAGER/ADMIN veem indicadores financeiros sensíveis?**
-    Recomendação: sim para os Grupos B (valores) e C (responsabilidade,
-    inclusive leitura) — ANALYST vê que existe uma decisão de
-    responsabilidade e seu estado (Cap. 10: "consultar dados, cálculos e
-    evidências" é papel do Analista), mas não decide (já garantido pela
-    migration 0031: `autor_papel IN ('MANAGER','ADMIN')`).
-12. **Como registros históricos incompletos são representados?**
-    Recomendação: um snapshot cujas fontes tinham pendência naquele dia
-    preserva a pendência DENTRO do snapshot (mesma filosofia de "nunca
-    virar zero") — o snapshot registra "X pendente naquele dia", não
-    tenta completá-lo retroativamente com dado que só chegou depois.
-13. **Processos em monitoramento silencioso entram nos totais
-    operacionais?** Recomendação: entram em G-A1 (monitoramento total,
-    que por definição inclui todos), mas **não** nos indicadores de "fila
-    que exige ação" (G-A2 a G-A9 já são, por definição de estado, estados
-    que NÃO são silenciosos) — coerente com Cap. 13 ("estar sendo
-    monitorado não significa ser exibido como problema").
-14. **Contêineres devolvidos mas não fechados financeiramente continuam
-    "ativos" nas métricas de gestão?** Recomendação: sim — entram em
-    G-A9 (aguardando tratamento) até `apuracao_status='FINAL'`; só saem
-    dos indicadores operacionais de backlog depois do fechamento (Cap. 27.1
-    — "saem da fila principal" só após concluídos operacionalmente), mas
-    continuam disponíveis para consulta em Gestão mesmo depois de
-    concluídos (Cap. 27.1: "o eventual saldo financeiro permanece
-    disponível para Gestão e consulta").
+1. **Duração média usa `dias_cobrados` FINAL** → §5 Grupo D, metodologia.
+2. **Médias excluem processos abertos** → idem.
+3. **Dias corridos** → idem.
+4. **Data natural fixa por indicador, sem override genérico** → §11.
+5. **Processo conta uma vez; ciclos anteriores só em drill-down** → §5
+   Grupo D, metodologia.
+6. **Confirmado/estimado/provisório nunca combinados** → §5 Grupo B
+   (herda de `agregarLado`, inalterado) e §7 (qualidade da diferença
+   potencial).
+7. **Totais incluem todos os contêineres, nunca só o líder** → §5 Grupo
+   D, metodologia; §6 (seleção é por contêiner, soma é de todos).
+8. **Diferença potencial permite estimado, com classificação de
+   qualidade** → §7.
+9. **Snapshots diários adiados da V1** → §9 (correção bloqueante 4).
+10. **ANALYST vê valor do cliente, exposição Rocket, status financeiro,
+    responsabilidade (estado+evidência)** → §12.
+11. **MANAGER/ADMIN apenas: diferença potencial, indicadores de margem,
+    comparação organização-level cliente×Rocket** → §12.
+12. **Registros históricos incompletos ficam pendentes/indisponíveis,
+    nunca zero** → aplicado transversalmente (§5 Grupo D,
+    G-D-INTEGRIDADE; §7; princípio geral de `agregarLado`).
+13. **Monitoramento silencioso entra na população total, não na fila de
+    ação** → G-A1 (populacional) vs. G-A2+ (dimensão estado, que exclui
+    silencioso por definição do próprio enum).
+14. **Contêineres devolvidos ficam no backlog operacional até FINAL** →
+    G-A9 (aguardando tratamento, dimensão estado) permanece até
+    `apuracao_status='FINAL'`; só então sai para a dimensão fechamento
+    (G-A10).
+
+Nenhuma decisão nova foi introduzida silenciosamente por esta revisão —
+onde uma definição de implementação precisou de um critério próprio (ex.:
+regra de composição dos indicadores de responsabilidade por processo,
+§5 Grupo D), a escolha foi declarada explicitamente no texto, nunca
+embutida sem explicação.
 
 ---
 
-**A D14 não está implementada, aprovada nem congelada.** Nenhum código foi
-alterado por este diagnóstico. A implementação só começa após o usuário
-responder às 14 decisões do §21 (ou aceitar as recomendações como estão) e
-aprovar explicitamente este documento. A D15 não foi iniciada.
+**A D14 não está implementada, aprovada nem congelada.** Nenhum código
+foi alterado por esta revisão. A implementação só começa após aprovação
+final deste diagnóstico corrigido. A D15 não foi iniciada.
