@@ -10,7 +10,7 @@ import { blocoPrazoRelogio, diasDemurrageOperacionais, escolherProximoVencimento
 import {
   AutorLeitura, CONTRATO_LEITURA_V1, ContainerDetalheV1, DecisaoResponsabilidadeLeitura, DoisRelogiosLeitura, LiderLeitura,
   ProcessoDetalheV1, RelogioLeitura, ResponsabilidadeLeitura, TabelaComercialLeitura,
-  envelopeDeValor, isoTimestamp, motorClienteAplicavelDe, normalizarMotivoInvalidacao, prazoRelogioLeituraDe,
+  ValorAtivoSelecionado, envelopeDoRelogio, isoTimestamp, motorClienteAplicavelDe, normalizarMotivoInvalidacao, prazoRelogioLeituraDe,
   rotularEstado, selecionarValorAtivo, agregarFinanceiroProcesso,
 } from './contrato';
 
@@ -104,7 +104,7 @@ async function buscarDadosBatchContainers(
   }
 
   const { rows: valRows } = await pool.query(
-    `SELECT va.container_id, va.relogio_tipo, va.motor_comercial, va.total, va.moeda, va.confirmation_status,
+    `SELECT va.container_id, va.relogio_tipo, va.motor_comercial, va.total, va.moeda, va.confirmation_status, va.dias_cobrados,
             va.tabela_id, va.versao_tabela, tt.fonte AS tt_fonte, tt.qualidade_fonte AS tt_qualidade,
             tt.vigencia_inicio AS tt_vigencia_inicio, tt.vigencia_fim AS tt_vigencia_fim
        FROM valores_apurados va
@@ -257,7 +257,7 @@ async function buscarResponsabilidadeEmLote(
 function construirRelogio(params: {
   relogioRow: any | undefined;
   cache: ValidadeCache;
-  valorAtivo: { confirmationStatus: any; total: number | null; moeda: string | null } | null;
+  valorAtivo: ValorAtivoSelecionado | null;
   tabela: TabelaComercialLeitura | null;
   descarga: { data: string | null; fonte: string | null; observadoEm: string | null; evidenciaRef: string | null };
   freeTimeDias: number | null;
@@ -292,10 +292,8 @@ function construirRelogio(params: {
     motivo: r?.motivo ?? null,
     calculadoEm: isoTimestamp(r?.calculated_at ?? null),
     cache: params.cache,
-    valor: envelopeDeValor({
-      relogioStatus: status, diasDemurrage: diasOperacionais, valor: params.valorAtivo,
-      valorDefasado: dias !== null && diasOperacionais !== null && diasOperacionais > dias,
-    }),
+    // Mesmo helper da fila (v1.2.3): dias operacionais × dias cobrados do valor escolhido.
+    valor: envelopeDoRelogio(params.clock, params.hoje, params.emptyReturn, params.valorAtivo),
     tabela: params.tabela,
     ...prazoRelogioLeituraDe(blocoPrazoRelogio(params.clock, params.hoje, params.limiar, params.emptyReturn)),
   };

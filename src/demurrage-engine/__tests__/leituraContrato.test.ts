@@ -14,7 +14,7 @@ test('envelopeDeValor: relógio não-OK é sempre PENDENTE, mesmo com valor pres
     const env = envelopeDeValor({
       relogioStatus: status,
       diasDemurrage: null,
-      valor: { confirmationStatus: 'CONFIRMED', total: 999, moeda: 'BRL' },
+      valor: { confirmationStatus: 'CONFIRMED', total: 999, moeda: 'BRL', diasCobrados: 5 },
     });
     assert.equal(env.situacao, 'PENDENTE');
     assert.equal(env.total, null);
@@ -38,7 +38,7 @@ test('envelopeDeValor: UNAVAILABLE nunca vira zero — total e moeda permanecem 
   const env = envelopeDeValor({
     relogioStatus: 'OK',
     diasDemurrage: 5,
-    valor: { confirmationStatus: 'UNAVAILABLE', total: null, moeda: null },
+    valor: { confirmationStatus: 'UNAVAILABLE', total: null, moeda: null, diasCobrados: null },
   });
   assert.equal(env.situacao, 'INDISPONIVEL');
   assert.equal(env.total, null);
@@ -49,7 +49,7 @@ test('envelopeDeValor: ESTIMATED nunca aparece como CONFIRMADO', () => {
   const env = envelopeDeValor({
     relogioStatus: 'OK',
     diasDemurrage: 3,
-    valor: { confirmationStatus: 'ESTIMATED', total: 450, moeda: 'USD' },
+    valor: { confirmationStatus: 'ESTIMATED', total: 450, moeda: 'USD', diasCobrados: 3 },
   });
   assert.equal(env.situacao, 'ESTIMADO');
   assert.notEqual(env.situacao, 'CONFIRMADO');
@@ -61,7 +61,7 @@ test('envelopeDeValor: ESTIMATED_PROVISIONAL é distinto de ESTIMATED e de CONFI
   const env = envelopeDeValor({
     relogioStatus: 'OK',
     diasDemurrage: 3,
-    valor: { confirmationStatus: 'ESTIMATED_PROVISIONAL', total: 100, moeda: 'BRL' },
+    valor: { confirmationStatus: 'ESTIMATED_PROVISIONAL', total: 100, moeda: 'BRL', diasCobrados: 3 },
   });
   assert.equal(env.situacao, 'ESTIMADO_PROVISORIO');
 });
@@ -70,7 +70,7 @@ test('envelopeDeValor: CONFIRMED com relógio OK e dias vira CONFIRMADO com o to
   const env = envelopeDeValor({
     relogioStatus: 'OK',
     diasDemurrage: 10,
-    valor: { confirmationStatus: 'CONFIRMED', total: 1234.56, moeda: 'BRL' },
+    valor: { confirmationStatus: 'CONFIRMED', total: 1234.56, moeda: 'BRL', diasCobrados: 10 },
   });
   assert.deepEqual(env, { situacao: 'CONFIRMADO', total: 1234.56, moeda: 'BRL' });
 });

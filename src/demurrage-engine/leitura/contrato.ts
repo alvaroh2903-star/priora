@@ -1,6 +1,6 @@
 import { CivilDate } from '../temporal/civilDate';
-import { Badge, EstadoOperacional, PrioridadeBalde, Responsabilidade } from '../lifecycle/types';
-import { BlocoPrazoRelogio } from '../lifecycle/prazoFreeTime';
+import { Badge, ClockFact, EstadoOperacional, PrioridadeBalde, Responsabilidade } from '../lifecycle/types';
+import { BlocoPrazoRelogio, diasDemurrageOperacionais } from '../lifecycle/prazoFreeTime';
 import { centavosExatos, somarCentavosExatos, formatarCentavos } from './moedaExata';
 
 /**
@@ -49,14 +49,20 @@ export type ConfirmationStatusValor = 'ESTIMATED' | 'ESTIMATED_PROVISIONAL' | 'C
  * já persistidos e a linha ATIVA de `valores_apurados` (ou null), devolve o
  * envelope de situação. Nenhum valor é calculado — só traduzido/escolhido.
  */
+/** Linha ATIVA de `valores_apurados` escolhida para exibição, com os dias que ela cobre. */
+export interface ValorAtivoSelecionado {
+  confirmationStatus: ConfirmationStatusValor;
+  total: number | null;
+  moeda: string | null;
+  /** `valores_apurados.dias_cobrados` da PRÓPRIA linha escolhida (null só em UNAVAILABLE, por schema). */
+  diasCobrados: number | null;
+}
+
 export function envelopeDeValor(input: {
   relogioStatus: RelogioStatus;
   /** Dias de demurrage OPERACIONAIS do relógio (D12 v1.2.2, `diasDemurrageOperacionais`). */
   diasDemurrage: number | null;
-  valor: { confirmationStatus: ConfirmationStatusValor; total: number | null; moeda: string | null } | null;
-  /** v1.2.2: o valor ativo foi apurado para MENOS dias do que os operacionais (cache ainda
-   * não recalculado pelo tick diário) — não representa o período atual. */
-  valorDefasado?: boolean;
+  valor: ValorAtivoSelecionado | null;
 }): ValorEnvelope {
   if (input.relogioStatus !== 'OK') {
     return { situacao: 'PENDENTE', total: null, moeda: null };
@@ -65,9 +71,20 @@ export function envelopeDeValor(input: {
   if (dias <= 0) {
     return { situacao: 'NAO_APLICAVEL', total: null, moeda: null };
   }
-  if (!input.valor || input.valorDefasado) {
-    // Sem valor, ou valor de um período anterior: PENDENTE até o recálculo legítimo —
-    // nunca um valor fabricado, nunca "sem demurrage".
+  if (!input.valor) {
+    return { situacao: 'PENDENTE', total: null, moeda: null };
+  }
+  if (input.valor.confirmationStatus === 'UNAVAILABLE') {
+    // Sem dias cobrados por schema; continua INDISPONIVEL — nunca vira zero nem pendente.
+    return { situacao: 'INDISPONIVEL', total: null, moeda: null };
+  }
+  // D12 v1.2.3: frescor decidido pelo PRÓPRIO valor escolhido — ele só representa o período
+  // atual se cobre os dias operacionais de hoje. Um valor de menos dias (recálculo financeiro
+  // falhou ou ainda está na fila, mesmo com o relógio já em dia) fica PENDENTE até o recálculo
+  // legítimo: nunca exibido como se fosse o atual, nunca reescrito aqui. A validade do relógio
+  // (`cache: VALIDO/OBSOLETO`) é outra questão e não entra nesta decisão. Um valor que cobre MAIS
+  // dias que os operacionais é exibido como está (não é reduzido nem reescrito).
+  if (input.valor.diasCobrados === null || dias > input.valor.diasCobrados) {
     return { situacao: 'PENDENTE', total: null, moeda: null };
   }
   switch (input.valor.confirmationStatus) {
@@ -77,9 +94,6 @@ export function envelopeDeValor(input: {
       return { situacao: 'ESTIMADO', total: input.valor.total, moeda: input.valor.moeda };
     case 'ESTIMATED_PROVISIONAL':
       return { situacao: 'ESTIMADO_PROVISORIO', total: input.valor.total, moeda: input.valor.moeda };
-    case 'UNAVAILABLE':
-      // Constraint valores_forma_por_status já garante total NULL aqui; explícito por segurança.
-      return { situacao: 'INDISPONIVEL', total: null, moeda: null };
   }
 }
 
@@ -264,10 +278,13 @@ export function rotularEstado(codigo: EstadoOperacional | 'NAO_DERIVADO' | null)
  * precisa aparecer como INDISPONIVEL em vez de ser tratado como ausente).
  */
 export function selecionarValorAtivo(
-  rows: Array<{ relogio_tipo: string; motor_comercial: string; total: string | number | null; moeda: string | null; confirmation_status: ConfirmationStatusValor }>,
+  rows: Array<{
+    relogio_tipo: string; motor_comercial: string; total: string | number | null; moeda: string | null;
+    confirmation_status: ConfirmationStatusValor; dias_cobrados: number | null;
+  }>,
   relogioTipo: 'cliente' | 'rocket',
   motorClienteAplicavel: string | null,
-): { confirmationStatus: ConfirmationStatusValor; total: number | null; moeda: string | null } | null {
+): ValorAtivoSelecionado | null {
   const candidatos = rows.filter(
     (r) => r.relogio_tipo === relogioTipo
       && (relogioTipo !== 'cliente' || motorClienteAplicavel === null || r.motor_comercial === motorClienteAplicavel),
@@ -281,7 +298,22 @@ export function selecionarValorAtivo(
     confirmationStatus: escolhida.confirmation_status,
     total: escolhida.total === null ? null : Number(escolhida.total),
     moeda: escolhida.moeda,
+    diasCobrados: escolhida.dias_cobrados === null || escolhida.dias_cobrados === undefined ? null : Number(escolhida.dias_cobrados),
   };
+}
+
+/**
+ * Envelope de UM relógio de UM contêiner — helper ÚNICO usado pela fila, pelo
+ * detalhe de processo e pelo detalhe de contêiner (e, por consequência, pela
+ * agregação financeira do processo). Dias operacionais pela regra da v1.2.2;
+ * frescor do valor pelos dias cobrados da linha escolhida (v1.2.3).
+ */
+export function envelopeDoRelogio(clock: ClockFact, hoje: CivilDate, emptyReturn: boolean, valor: ValorAtivoSelecionado | null): ValorEnvelope {
+  return envelopeDeValor({
+    relogioStatus: clock.status,
+    diasDemurrage: clock.status === 'OK' ? diasDemurrageOperacionais(clock, hoje, emptyReturn) : null,
+    valor,
+  });
 }
 
 /** termo_tipo da condição comercial ('embarque'|'unico'|null) → motor comercial aplicável ao cliente. */

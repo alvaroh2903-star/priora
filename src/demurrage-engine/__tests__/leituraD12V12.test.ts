@@ -8,6 +8,9 @@ import { ProcessoRepository } from '../persistence/processoRepository';
 import { ContainerRepository } from '../persistence/containerRepository';
 import { recalcularApuracaoContainer } from '../apuracao/recalcularApuracao';
 import { passagemDoCalendario } from '../apuracao/passagemCalendario';
+import { processarRecalculosPendentes } from '../freeTime/recalculoOutbox';
+import { LifecycleRepository } from '../persistence/lifecycleRepository';
+import { seedArmadorTables } from '../tariffs/seed/armadorTables';
 import { seedRocketTermoPorEmbarque, seedRocketTermoUnico } from '../tariffs/seed/rocketTermoPorEmbarque';
 import { buscarDetalheContainer, buscarDetalheProcesso } from '../leitura/detalhe';
 import { buscarFilaOperacional, contarEstadosEBaldes } from '../leitura/filaOperacional';
@@ -640,5 +643,139 @@ test('v1.2.2 (integração): Empty Return dentro do Free Time, lido muito depois
     const fila = await buscarFilaOperacional(pool, { organizationId: orgId, filtros: filtroFilaVazio(), hoje });
     assert.ok(!fila.itens.some((i) => i.processo.id === processoId), 'concluído fica fora da fila padrão');
     assert.equal(await fingerprintTabelas(pool, tabelas), antes);
+  } finally { await pool.end(); }
+});
+
+/* ===================================================================== *
+ * v1.2.3 — frescor do valor pelos dias cobrados da linha escolhida.
+ * ===================================================================== */
+
+/** Processo com tabela Rocket×cliente (Termo por Embarque) e armador Hapag-Lloyd (exposição Rocket real). */
+async function processoComDuasTarifas(pool: Pool, numero: string): Promise<{ orgId: string; processoId: string }> {
+  await seedArmadorTables(pool);
+  const p = await processoComTarifa(pool, numero, { termoTipo: 'embarque', diaria: 100 });
+  await pool.query(`UPDATE processos SET armador_id = (SELECT id FROM armadores WHERE codigo_interno = 'HAPAG') WHERE id = $1`, [p.processoId]);
+  return p;
+}
+
+async function containerComTipo(pool: Pool, orgId: string, processoId: string, numero: string, f: { houseFT: number; masterFT: number; hoje: string }) {
+  const id = await criarContainer(pool, orgId, processoId, numero, { discharge: '2026-11-01', ...f });
+  await pool.query(`UPDATE containers SET container_type_id = (SELECT id FROM container_types WHERE codigo = '20DV') WHERE id = $1`, [id]);
+  await recalcularApuracaoContainer(pool, id, { dataReferencia: f.hoje });
+  return id;
+}
+
+test('v1.2.3 (integração): relógio em dia (5 dias) e valor ativo de 4 dias — fila, detalhes e agregado PENDENTE; falha técnica visível; zero escrita; depois o recálculo legítimo resolve', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await setup(pool);
+    const { orgId, processoId } = await processoComDuasTarifas(pool, 'V123A');
+    // House LFD 2026-11-05 (cliente entra em demurrage); Master LFD 2026-11-21 (Rocket
+    // permanece dentro do Free Time o tempo todo deste teste — NAO_APLICAVEL o tempo todo,
+    // deliberadamente fora do caminho de frescor exercido aqui, que é só o lado cliente).
+    // Apuração completa (relógio + valores) em 2026-11-09 → cliente com 4 dias cobrados.
+    const c = await containerComTipo(pool, orgId, processoId, 'V123A1', { houseFT: 5, masterFT: 20, hoje: '2026-11-09' });
+    // A observação do Master Free Time já enfileira o próprio recálculo no outbox
+    // (serviço de Free Time, fora do escopo desta v1.2.3) — drena-o pelo caminho
+    // oficial antes do cenário começar, para que o único item pendente abaixo seja
+    // o que este teste insere de propósito.
+    await processarRecalculosPendentes({ pool, hoje: '2026-11-09', workerId: 'w-setup' });
+    const { rows: v4 } = await pool.query(
+      `SELECT relogio_tipo, dias_cobrados, confirmation_status FROM valores_apurados
+        WHERE container_id = $1 AND calculation_status IN ('OPEN','FINAL') ORDER BY relogio_tipo`, [c]);
+    assert.deepEqual(v4.map((r: any) => [r.relogio_tipo, r.dias_cobrados, r.confirmation_status]), [['cliente', 4, 'ESTIMATED']], 'Rocket ainda sem demurrage (Master dentro do Free Time) — nenhuma linha ativa');
+
+    // 2026-11-10: um recálculo entra na fila (mesmo INSERT dos serviços de Free Time) …
+    await pool.query(
+      `INSERT INTO recalculo_outbox (organization_id, container_id, tipo, chave) VALUES ($1, $2, 'house_free_time', gen_random_uuid()::text)`,
+      [orgId, c],
+    );
+    // … o relógio é projetado pelo caminho oficial só de relógio (5 dias) …
+    await new LifecycleRepository(pool).derivarEPersistirContainer(c, { hoje: '2026-11-10' });
+    // … e o recálculo financeiro FALHA no worker real (falha injetada pelo gancho de teste do próprio worker).
+    const falha = await processarRecalculosPendentes({
+      pool, hoje: '2026-11-10', workerId: 'w-teste',
+      recalcular: async () => { throw new Error('motor indisponível (simulado)'); },
+    });
+    assert.equal(falha.falhados, 1);
+    const { rows: [rel] } = await pool.query(`SELECT dias_demurrage FROM relogios WHERE container_id = $1 AND tipo = 'cliente'`, [c]);
+    assert.equal(rel.dias_demurrage, 5, 'relógio guardado em dia');
+
+    const tabelas = await todasAsTabelas(pool);
+    const antes = await fingerprintTabelas(pool, tabelas);
+    const hoje = '2026-11-10';
+    const ler = async () => {
+      const fila = await buscarFilaOperacional(pool, { organizationId: orgId, filtros: filtroFilaVazio(), hoje });
+      const det = await buscarDetalheProcesso(pool, orgId, processoId, hoje);
+      const dc = await buscarDetalheContainer(pool, orgId, c, hoje);
+      return { item: fila.itens.find((i) => i.processo.id === processoId)!, det: det!, dc: dc! };
+    };
+
+    const pre = await ler();
+    assert.deepEqual(pre.dc.relogios.cliente.valor, { situacao: 'PENDENTE', total: null, moeda: null }, 'detalhe de contêiner, cliente: valor de 4 dias não representa os 5 dias de hoje');
+    assert.equal(pre.dc.relogios.rocket.valor.situacao, 'NAO_APLICAVEL', 'Rocket: ainda dentro do Free Time Master, independente do frescor do cliente');
+    for (const lado of ['cliente', 'rocket'] as const) {
+      assert.deepEqual(pre.det.conteineres[0].relogios[lado].valor, pre.dc.relogios[lado].valor, `detalhe de processo = detalhe de contêiner (${lado})`);
+      assert.equal(pre.dc.relogios[lado].cache, 'VALIDO', 'o relógio está válido — a validade do relógio não decide o frescor do valor');
+    }
+    assert.deepEqual(pre.item.exposicaoFinanceira, { valorCliente: pre.dc.relogios.cliente.valor, exposicaoRocket: pre.dc.relogios.rocket.valor }, 'fila = detalhe');
+    assert.deepEqual(pre.item.agregadoFinanceiro, pre.det.agregadoFinanceiro);
+    assert.equal(pre.det.agregadoFinanceiro.cliente.completo, false);
+    assert.equal(pre.det.agregadoFinanceiro.rocket.completo, true, 'lados independentes: NAO_APLICAVEL nunca bloqueia completude');
+    assert.equal(pre.det.agregadoFinanceiro.cliente.gruposPorMoeda.length, 0, 'nenhum subtotal com o valor antigo');
+    // A falha técnica continua visível pelos indicadores existentes.
+    assert.equal(pre.item.falhasTecnicas.porTipo.recalculo_reprocessavel, 1);
+    assert.equal(pre.det.falhasTecnicas.porTipo.recalculo_reprocessavel, 1);
+    // Zero escrita.
+    assert.equal(await fingerprintTabelas(pool, tabelas), antes);
+
+    // Recálculo legítimo: o mesmo worker reprocessa o item, agora com o orquestrador real.
+    const ok = await processarRecalculosPendentes({ pool, hoje, workerId: 'w-teste' });
+    assert.equal(ok.concluidos, 1);
+    const pos = await ler();
+    assert.equal(pos.dc.relogios.cliente.valor.situacao, 'ESTIMADO', 'cliente: status real do valor recalculado, agora cobrindo os 5 dias de hoje');
+    assert.equal(pos.dc.relogios.rocket.valor.situacao, 'NAO_APLICAVEL', 'Rocket: ainda dentro do Free Time Master, sem qualquer relação com o recálculo do cliente');
+    for (const lado of ['cliente', 'rocket'] as const) {
+      assert.deepEqual(pos.det.conteineres[0].relogios[lado].valor, pos.dc.relogios[lado].valor);
+    }
+    assert.equal(pos.dc.relogios.cliente.valor.total, 500, '5 dias × 100 do Termo por Embarque');
+    assert.deepEqual(pos.item.exposicaoFinanceira, { valorCliente: pos.dc.relogios.cliente.valor, exposicaoRocket: pos.dc.relogios.rocket.valor });
+    assert.deepEqual(pos.item.agregadoFinanceiro, pos.det.agregadoFinanceiro);
+    assert.equal(pos.det.agregadoFinanceiro.cliente.completo, true);
+    assert.equal(pos.det.agregadoFinanceiro.rocket.completo, true);
+    assert.equal(pos.det.agregadoFinanceiro.cliente.gruposPorMoeda[0].subtotalConhecido, '500.00');
+    assert.equal(pos.item.falhasTecnicas.porTipo.recalculo_reprocessavel, undefined, 'item concluído deixa de aparecer como falha');
+  } finally { await pool.end(); }
+});
+
+test('v1.2.3 (integração): cliente e Rocket com situações independentes — cliente defasado, Rocket ainda sem demurrage', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await setup(pool);
+    const { orgId, processoId } = await processoComDuasTarifas(pool, 'V123B');
+    // House LFD 2026-11-05; Master LFD 2026-11-20. Apuração em 2026-11-09: cliente 4 dias, Rocket 0.
+    const c = await containerComTipo(pool, orgId, processoId, 'V123B1', { houseFT: 5, masterFT: 20, hoje: '2026-11-09' });
+    await new LifecycleRepository(pool).derivarEPersistirContainer(c, { hoje: '2026-11-10' }); // relógios a 2026-11-10, valores não.
+
+    const tabelas = await todasAsTabelas(pool);
+    const antes = await fingerprintTabelas(pool, tabelas);
+    const hoje = '2026-11-10';
+    const dc = await buscarDetalheContainer(pool, orgId, c, hoje);
+    const det = await buscarDetalheProcesso(pool, orgId, processoId, hoje);
+    const fila = await buscarFilaOperacional(pool, { organizationId: orgId, filtros: filtroFilaVazio(), hoje });
+    const item = fila.itens.find((i) => i.processo.id === processoId)!;
+    assert.equal(dc!.relogios.cliente.valor.situacao, 'PENDENTE', 'cliente: valor de 4 dias, hoje 5');
+    assert.equal(dc!.relogios.rocket.valor.situacao, 'NAO_APLICAVEL', 'Rocket: ainda dentro do Free Time Master');
+    assert.deepEqual(det!.conteineres[0].relogios.cliente.valor, dc!.relogios.cliente.valor);
+    assert.deepEqual(det!.conteineres[0].relogios.rocket.valor, dc!.relogios.rocket.valor);
+    assert.deepEqual(item.agregadoFinanceiro, det!.agregadoFinanceiro);
+    assert.equal(det!.agregadoFinanceiro.cliente.completo, false);
+    assert.equal(det!.agregadoFinanceiro.rocket.completo, true, 'lados independentes: o lado Rocket não herda a pendência do cliente');
+    assert.equal(await fingerprintTabelas(pool, tabelas), antes);
+
+    await recalcularApuracaoContainer(pool, c, { dataReferencia: hoje });
+    const dc2 = await buscarDetalheContainer(pool, orgId, c, hoje);
+    assert.equal(dc2!.relogios.cliente.valor.situacao, 'ESTIMADO');
+    assert.equal(dc2!.relogios.rocket.valor.situacao, 'NAO_APLICAVEL');
   } finally { await pool.end(); }
 });

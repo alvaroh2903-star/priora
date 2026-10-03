@@ -3,12 +3,12 @@ import { LifecycleRepository } from '../persistence/lifecycleRepository';
 import { ordenarFila, ordenarTodos, compararDesempate } from '../lifecycle/priorityEngine';
 import { composicaoDeEstados, consolidarProcesso } from '../lifecycle/processConsolidation';
 import { ContainerLifecycle, ProcessoLifecycleResult } from '../lifecycle/types';
-import { blocoPrazoRelogio, diasDemurrageOperacionais, escolherProximoVencimentoProcesso, CandidatoProximoVencimento } from '../lifecycle/prazoFreeTime';
+import { blocoPrazoRelogio, escolherProximoVencimentoProcesso, CandidatoProximoVencimento } from '../lifecycle/prazoFreeTime';
 import { hojeOperacional } from '../time/operationalDate';
 import { CivilDate } from '../temporal/civilDate';
 import {
   CONTRATO_FILA_ITEM_V1, CONTRATO_LEITURA_V1, ErroLeitura, FilaItemV1, FilaRespostaV1, FiltroFila, LiderLeitura,
-  envelopeDeValor, isoTimestamp, motorClienteAplicavelDe, rotularEstado, selecionarValorAtivo, agregarFinanceiroProcesso, filtroFilaVazio,
+  ValorEnvelope, envelopeDoRelogio, isoTimestamp, motorClienteAplicavelDe, rotularEstado, selecionarValorAtivo, agregarFinanceiroProcesso, filtroFilaVazio,
 } from './contrato';
 import { codificarCursorAssinado, decodificarCursorAssinado, hmacLeitura } from './cursorAssinado';
 
@@ -471,7 +471,7 @@ export async function buscarFilaOperacional(pool: Pool, input: BuscarFilaInput):
   const containerIdsPagina = pagina.flatMap((a) => (containersPorProcesso.get(a.candidato.processo_id) ?? []).map((c) => c.id));
   const { rows: valoresPagina } = containerIdsPagina.length
     ? await pool.query(
-        `SELECT c.id AS container_id, cc.termo_tipo, va.relogio_tipo, va.motor_comercial, va.total, va.moeda, va.confirmation_status
+        `SELECT c.id AS container_id, cc.termo_tipo, va.relogio_tipo, va.motor_comercial, va.total, va.moeda, va.confirmation_status, va.dias_cobrados
            FROM containers c
            JOIN processos p2 ON p2.id = c.processo_id
            LEFT JOIN condicoes_comerciais cc ON cc.id = p2.condicao_comercial_id
@@ -490,24 +490,14 @@ export async function buscarFilaOperacional(pool: Pool, input: BuscarFilaInput):
     }
   }
 
-  /** Envelope cliente/rocket de UM contêiner (mesma tradução do envelope do líder, D12 v1.1), sobre o pacote ATUAL. */
-  function envelopesDoContainer(pacote: ContainerLifecycle): { cliente: ReturnType<typeof envelopeDeValor>; rocket: ReturnType<typeof envelopeDeValor> } {
+  /** Envelope cliente/rocket de UM contêiner — mesmo helper do detalhe (`envelopeDoRelogio`), sobre o pacote ATUAL. */
+  function envelopesDoContainer(pacote: ContainerLifecycle): { cliente: ValorEnvelope; rocket: ValorEnvelope } {
     const vrows = valoresPorContainer.get(pacote.facts.containerId) ?? [];
     const motorAplicavel = motorClienteAplicavelDe(termoTipoPorContainer.get(pacote.facts.containerId) ?? null);
     const { facts } = pacote;
-    // v1.2.2: dias OPERACIONAIS (mesma regra do estado); valor apurado para menos dias = defasado.
-    const envelope = (clock: typeof facts.clienteClock, valor: ReturnType<typeof selecionarValorAtivo>) => {
-      const diasOp = diasDemurrageOperacionais(clock, facts.hoje, facts.emptyReturn);
-      return envelopeDeValor({
-        relogioStatus: clock.status,
-        diasDemurrage: clock.status === 'OK' ? diasOp : null,
-        valor,
-        valorDefasado: clock.status === 'OK' && diasOp > clock.diasDemurrage,
-      });
-    };
     return {
-      cliente: envelope(facts.clienteClock, selecionarValorAtivo(vrows, 'cliente', motorAplicavel)),
-      rocket: envelope(facts.rocketClock, selecionarValorAtivo(vrows, 'rocket', null)),
+      cliente: envelopeDoRelogio(facts.clienteClock, facts.hoje, facts.emptyReturn, selecionarValorAtivo(vrows, 'cliente', motorAplicavel)),
+      rocket: envelopeDoRelogio(facts.rocketClock, facts.hoje, facts.emptyReturn, selecionarValorAtivo(vrows, 'rocket', null)),
     };
   }
 

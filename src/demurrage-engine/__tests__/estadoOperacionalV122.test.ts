@@ -223,11 +223,11 @@ test('prioridade: o contêiner que acabou de vencer (sem tick) passa à frente d
   assert.equal(ordenarTodos([dentro, vencido])[0].facts.containerId, 'vencido');
 });
 
-test('envelope financeiro: dias operacionais > dias do valor (cache atrasado) → PENDENTE, nunca "sem demurrage" nem valor fabricado', () => {
-  const valorZero = { confirmationStatus: 'CONFIRMED' as const, total: 0, moeda: 'BRL' };
-  const e = envelopeDeValor({ relogioStatus: 'OK', diasDemurrage: 1, valor: valorZero, valorDefasado: true });
-  assert.deepEqual(e, { situacao: 'PENDENTE', total: null, moeda: null });
+test('envelope financeiro: dias operacionais > dias cobrados do valor (cache atrasado) → PENDENTE, nunca "sem demurrage" nem valor fabricado', () => {
+  // Valor guardado na véspera cobria 0 dias (zero confirmado); hoje há 1 dia operacional.
+  const valorZero = { confirmationStatus: 'CONFIRMED' as const, total: 0, moeda: 'BRL', diasCobrados: 0 };
+  assert.deepEqual(envelopeDeValor({ relogioStatus: 'OK', diasDemurrage: 1, valor: valorZero }), { situacao: 'PENDENTE', total: null, moeda: null });
   // Valor apurado para os dias atuais segue normal.
-  const atual = envelopeDeValor({ relogioStatus: 'OK', diasDemurrage: 1, valor: { confirmationStatus: 'ESTIMATED', total: 150, moeda: 'USD' }, valorDefasado: false });
+  const atual = envelopeDeValor({ relogioStatus: 'OK', diasDemurrage: 1, valor: { confirmationStatus: 'ESTIMATED', total: 150, moeda: 'USD', diasCobrados: 1 } });
   assert.equal(atual.situacao, 'ESTIMADO');
 });

@@ -1,4 +1,4 @@
-# Fase D12 v1.2 (+ v1.2.1 e v1.2.2 corretivas) — correção do contrato operacional (NÃO aprovada, NÃO congelada)
+# Fase D12 v1.2 (+ v1.2.1, v1.2.2 e v1.2.3 corretivas) — correção do contrato operacional (NÃO aprovada, NÃO congelada)
 
 > **Status:** entregue para auditoria. Base: `1bdd406` (D12 v1.1 aprovada e
 > congelada) + `3eb89aa` (diagnóstico D13, aprovado). Reabertura **controlada
@@ -23,6 +23,145 @@
 > padrão justamente no dia em que a demurrage começa. Correção da derivação
 > pura da Fase 7 **explicitamente autorizada** e restrita; seção 00 abaixo.
 > As seções 7, 8 e 9 foram atualizadas.
+
+> **v1.2.3 (corretiva):** a auditoria final da v1.2.2 encontrou um achado
+> bloqueante remanescente — o frescor do valor financeiro era decidido
+> comparando os dias operacionais com o CACHE do relógio
+> (`diasOperacionais > clock.diasDemurrage`), que só detecta a janela entre
+> a virada da data e o tick diário. Um valor apurado para menos dias do que
+> os operacionais de hoje podia continuar sendo exibido como atual sempre
+> que o relógio já tivesse sido projetado mas o recálculo financeiro tivesse
+> falhado ou ainda estivesse na fila — o relógio em dia escondia o valor
+> desatualizado. Corrigido na seção 000 abaixo: o frescor passa a ser
+> decidido pelos `dias_cobrados` da PRÓPRIA linha de `valores_apurados`
+> escolhida, nunca pelo cache do relógio. As seções 8, 9 e 10 foram
+> atualizadas.
+
+## 000. v1.2.3 — frescor do valor financeiro pelos dias cobrados da própria linha
+
+### Problema
+
+O envelope financeiro decidia frescor comparando os dias operacionais de
+hoje com o CACHE do relógio:
+
+```
+diasOperacionais > clock.diasDemurrage
+```
+
+Essa comparação só detecta a janela entre a virada da data e o tick diário
+(achado que a v1.2.2 já cobria para o estado do lifecycle). Ela NÃO detecta
+um valor desatualizado depois que o relógio já foi projetado — exatamente o
+caso em que a projeção do relógio tem sucesso, mas o recálculo financeiro
+falha ou fica na fila:
+
+```
+dias guardados no relógio (cache)  = 5
+dias cobrados pelo valor ativo     = 4
+dias operacionais de hoje          = 5
+```
+
+`5 > 5` é falso: o valor de 4 dias passava a ser exibido como se fosse o
+valor atual, escondido pelo relógio em dia. Clock válido e valor válido são
+duas perguntas diferentes — a v1.2.2 resolveu a primeira (estado do
+lifecycle), não a segunda (frescor do valor monetário exibido).
+
+### Correção
+
+`valores_apurados.dias_cobrados` passa a entrar nas quatro leituras batch
+que hoje decidem o envelope financeiro — fila, detalhe de processo, detalhe
+de contêiner e, por consequência, a agregação financeira do processo — e o
+frescor passa a ser decidido contra os dias cobrados da PRÓPRIA linha
+escolhida, nunca contra o cache do relógio:
+
+```ts
+// leitura/contrato.ts
+export interface ValorAtivoSelecionado {
+  confirmationStatus: ConfirmationStatusValor;
+  total: number | null;
+  moeda: string | null;
+  /** dias_cobrados da PRÓPRIA linha escolhida (null só em UNAVAILABLE, por schema). */
+  diasCobrados: number | null;
+}
+
+// dentro de envelopeDeValor, depois do caso UNAVAILABLE:
+if (input.valor.diasCobrados === null || dias > input.valor.diasCobrados) {
+  return { situacao: 'PENDENTE', total: null, moeda: null };
+}
+```
+
+Regras, todas confirmadas por teste:
+
+- sem valor escolhido → `PENDENTE`;
+- valor conhecido com menos dias cobrados do que os operacionais →
+  `PENDENTE`;
+- dias cobrados iguais aos operacionais → valor exposto normalmente;
+- dias cobrados MAIORES do que os operacionais → exposto como está, nunca
+  reduzido nem reescrito (invariante coberta por teste próprio);
+- `UNAVAILABLE` continua `INDISPONIVEL` — sem `dias_cobrados` por schema,
+  nunca comparado, nunca zero;
+- `NAO_APLICAVEL` continua decidido pelos dias operacionais zero (regra da
+  v1.2.2, inalterada);
+- zero confirmado que cobre os dias atuais continua zero (nunca é tratado
+  como "sem valor");
+- cliente e Rocket continuam separados — cada um com seu relógio e seu
+  valor escolhido;
+- cada motor comercial do cliente concorre só com sua própria linha ativa
+  (`motorClienteAplicavelDe`, inalterado da v1.1);
+- nenhum valor é recalculado nem persistido pela leitura (GET).
+
+O parâmetro `valorDefasado` (comparação pelo cache, da v1.2.2) foi
+removido — a validade do relógio (`cache: VALIDO/OBSOLETO`) e a validade do
+valor são questões independentes, e só a segunda decide o envelope.
+
+### Helper único (fila = detalhe de processo = detalhe de contêiner)
+
+`envelopeDoRelogio` (novo, `contrato.ts`) substitui a lógica que a fila e o
+detalhe implementavam cada um à sua maneira:
+
+```ts
+export function envelopeDoRelogio(
+  clock: ClockFact, hoje: CivilDate, emptyReturn: boolean, valor: ValorAtivoSelecionado | null,
+): ValorEnvelope {
+  return envelopeDeValor({
+    relogioStatus: clock.status,
+    diasDemurrage: clock.status === 'OK' ? diasDemurrageOperacionais(clock, hoje, emptyReturn) : null,
+    valor,
+  });
+}
+```
+
+`filaOperacional.ts` e `detalhe.ts` chamam exatamente esta função — a fila
+não tem mais sua própria cópia de `envelope(...)` com a comparação pelo
+cache, e `construirRelogio` (detalhe) não monta mais o `valorDefasado` à
+mão. Como a agregação financeira (`agregarFinanceiroProcesso`) consome os
+mesmos `ValorEnvelope` já traduzidos, a correção se propaga automaticamente
+para `agregadoFinanceiro` sem tocar `moedaExata.ts` nem a função de soma.
+
+### Nota: divergência cliente×Rocket de frescor não é alcançável pelo pipeline real hoje
+
+O teste puro #10 cobre o caso em que cliente e Rocket têm frescor
+DIFERENTE (um atual, outro `PENDENTE`) — a função `envelopeDoRelogio` é
+chamada uma vez por lado, com o relógio e o valor daquele lado, então nada
+na assinatura impede essa divergência. Na integração real, porém, os dois
+lados de um mesmo contêiner são recalculados na MESMA transação
+(`recalcularApuracaoContainer`) com a MESMA `data_final_apuracao`: uma
+falha no worker de recálculo afeta a apuração do contêiner inteiro, não um
+lado isolado, então os dois lados ficam com `dias_cobrados` desatualizados
+juntos (ou nenhum). Por isso o teste de integração que demonstra "cliente e
+Rocket com situações diferentes" (seção de testes abaixo) usa a divergência
+que o pipeline real produz hoje — relógios com LFDs diferentes colocando um
+lado em `PENDENTE` e o outro em `NAO_APLICAVEL` (ainda dentro do Free Time)
+— em vez de dois lados "conhecidos" com frescor diferente, que exigiria uma
+falha seletiva por lado que o orquestrador atual não produz. A regra em si
+não depende disso: se um dia existir um caminho que recalcule os lados
+separadamente, `envelopeDoRelogio` já trata cada lado de forma
+independente, sem qualquer mudança de código.
+
+### Correção de um texto desatualizado (seção 00)
+
+A seção 00 descrevia o comportamento da janela de valor financeiro citando
+o parâmetro `valorDefasado` de `envelopeDeValor`, removido nesta correção.
+O texto abaixo já reflete a regra atual (dias cobrados da linha escolhida).
 
 ## 00. v1.2.2 — estado operacional vivo depois do fim do Free Time
 
@@ -82,11 +221,18 @@ responsabilidade Rocket é inferida.
 
 ### Valor financeiro na janela
 
-O valor ativo de `valores_apurados` foi apurado para os dias do cache. Quando
-os dias operacionais são maiores, o envelope sai `PENDENTE` (novo parâmetro
-`valorDefasado` de `envelopeDeValor`) — nunca `NAO_APLICAVEL` ("sem
-demurrage"), nunca um valor fabricado. O agregado do lado fica
-`completo: false` até o recálculo legítimo do pipeline.
+O valor ativo de `valores_apurados` foi apurado para um número de dias
+próprio (`dias_cobrados`). Quando os dias operacionais de hoje são maiores
+do que os dias cobrados pelo valor ativo, o envelope sai `PENDENTE` — nunca
+`NAO_APLICAVEL` ("sem demurrage"), nunca um valor fabricado. O agregado do
+lado fica `completo: false` até o recálculo legítimo do pipeline. **Nota
+v1.2.3:** esta comparação era originalmente feita contra o CACHE do
+relógio (`diasOperacionais > clock.diasDemurrage`), o que só cobria a
+janela desta seção (virada da data → tick diário). A correção da v1.2.3
+(seção 000) trocou a comparação pelos `dias_cobrados` da própria linha de
+valor escolhida, cobrindo também o caso em que o relógio já está em dia
+mas o recálculo financeiro falhou ou está na fila — ambas as janelas usam
+hoje a mesma regra, sem duplicação.
 
 ### Contrato de leitura (aditivo)
 
@@ -395,7 +541,7 @@ existe.
   (só o pipeline apura) e o fechamento (`closingService`, que lê relógios
   guardados de contêineres devolvidos — nos quais a regra não extrapola).
 
-## 8. Testes (`__tests__/prazoFreeTimeV12.test.ts` + `__tests__/leituraD12V12.test.ts`)
+## 8. Testes (`__tests__/prazoFreeTimeV12.test.ts` + `__tests__/leituraD12V12.test.ts` + `__tests__/frescorValorV123.test.ts`)
 
 ### Puros (sem banco) — `prazoFreeTimeV12.test.ts`, 46 testes (25 → 46 na v1.2.1)
 
@@ -416,16 +562,34 @@ existe.
 | Caso 12 puro (1) | em LFD+1, +7 e +15: estado, prioridade, apuração e bloco de prazo idênticos com cache 0 e com cache atualizado |
 | Apuração, responsabilidade, prioridade, envelope (4) | ativo além do LFD nunca `ZERO_CONFIRMADO`; responsabilidade `EM_ANALISE`, nunca decisão nem Rocket automática; recém-vencido passa à frente do ainda livre; valor de menos dias → `PENDENTE`, valor atual segue normal |
 
-### Integração (PostgreSQL real, pipeline oficial) — `leituraD12V12.test.ts`, 16 testes (11 → 14 na v1.2.1 → 16 na v1.2.2)
+### Puros (sem banco) — `frescorValorV123.test.ts`, 14 testes (novo na v1.2.3)
+
+| Ponto | Testes |
+|---|---|
+| Casos 1–10 do pedido (10) | 1 operacional 5/relógio 5/valor 4 → `PENDENTE`; 2 operacional 5/relógio 5/valor 5 → valor normal; 3 operacional 5/relógio 4/valor 4 → `PENDENTE`; 4 operacional 5/relógio 4/valor 5 → valor normal (a validade do relógio não decide o frescor do valor); 5 operacional 0 → `NAO_APLICAVEL` mesmo com valor guardado; 6 sem valor escolhido → `PENDENTE`; 7 `UNAVAILABLE` com dias cobrados nulos → `INDISPONIVEL`, nunca zero, nunca pendente, mesmo com dias operacionais avançando; 8 zero confirmado que cobre os dias atuais → `CONFIRMADO` zero, se não cobre → `PENDENTE`; 9 `ESTIMATED`/`ESTIMATED_PROVISIONAL`/`CONFIRMED` seguem a mesma regra de frescor; 10 cliente e Rocket com frescor diferente — cada lado com seu relógio e seu valor, agregado reflete a diferença |
+| Invariante e defensivo (2) | valor que cobre MAIS dias do que os operacionais é exibido como está, nunca reduzido nem reescrito; valor conhecido sem `diasCobrados` (o schema proíbe) → `PENDENTE`, nunca exibido como atual |
+| Empty Return e seleção (2) | o valor apurado até a devolução continua atual por mais tarde que seja hoje; `selecionarValorAtivo` carrega os dias cobrados da PRÓPRIA linha escolhida, por motor comercial aplicável e por lado (inclusive `UNAVAILABLE` com `diasCobrados: null`) |
+
+### Integração (PostgreSQL real, pipeline oficial) — `leituraD12V12.test.ts`, 18 testes (11 → 14 na v1.2.1 → 16 na v1.2.2 → 18 na v1.2.3)
 
 | Ponto | Testes |
 |---|---|
 | **v1.2.2 janela** | processo persistido `MONITORAMENTO_SILENCIOSO`/`SILENCIOSO`; leitura em LFD+1 sem tick: a **fila padrão** já inclui o processo, `EM_DEMURRAGE_ATENCAO`, `ATENCAO_1_6`, líder = o contêiner vencido (fila e detalhe), `/filtros` conta o mesmo estado/balde, bloco vencido com `dias = 0`, `diasOperacionais = 1`, cache `OBSOLETO`, valor `PENDENTE`, lado cliente incompleto, fila = detalhe no agregado, responsabilidade `EM_ANALISE` sem decisão, próximo vencimento = o outro contêiner; **fingerprint de todas as tabelas idêntico**. Depois de `passagemDoCalendario`: estado persistido igual ao que a leitura já mostrava; estado, prioridade, líder, badges, contagens, próximo vencimento e interpretação de prazo idênticos; só `dias` (0 → 1), `cache` (`OBSOLETO` → `VALIDO`) e o valor (`PENDENTE` → `ESTIMADO`, por recálculo legítimo) mudam |
 | **v1.2.2 Empty Return** | devolvido dentro do Free Time, lido 40 dias depois do LFD: `CONCLUIDO_PARA_ROCKET`, cliente e Rocket com 0 dias e 0 dias operacionais, não vencidos, encerrados, sem marco; sem próximo vencimento; fora da fila padrão; zero escrita |
+| **v1.2.3 relógio em dia, valor desatualizado** | relógio projetado a 5 dias, valor ativo do cliente apurado para só 4 (o Rocket fica `NAO_APLICAVEL` neste cenário — Master dentro do Free Time o tempo todo, deliberadamente fora do caminho exercido): fila, detalhe de processo e detalhe de contêiner concordam em `PENDENTE` para o cliente; `cache: VALIDO` no relógio (a validade do relógio não decide o frescor do valor); agregado do lado cliente incompleto, lado Rocket completo (`NAO_APLICAVEL` nunca bloqueia); falha técnica (`recalculo_reprocessavel`) visível nos indicadores existentes, tanto na fila quanto no detalhe; **fingerprint de todas as tabelas idêntico** (zero escrita) durante toda a janela `PENDENTE`. Depois do recálculo legítimo (mesmo worker, orquestrador real): cliente `ESTIMADO` com o total correto (5 dias × diária), agregado cliente completo, indicador de falha técnica some, fila = detalhe em todos os pontos |
+| **v1.2.3 cliente × Rocket independentes** | House LFD alcançado (cliente 4 dias cobrados, hoje 5 → `PENDENTE`), Master ainda dentro do Free Time (Rocket `NAO_APLICAVEL`): fila, detalhe de processo e detalhe de contêiner concordam nos dois lados; agregado cliente incompleto, agregado Rocket completo (lados independentes — a pendência de um nunca contamina o outro); zero escrita; depois do recálculo legítimo, cliente passa a `ESTIMADO` e o Rocket continua `NAO_APLICAVEL`, sem qualquer relação entre os dois recálculos |
 
 **Mutação (v1.2.2).** Com a regra operacional desligada (devolvendo só o
 cache), 12 dos 20 testes puros e 3 testes de integração falham; o arquivo
 original foi restaurado.
+
+**Mutação (v1.2.3).** Desativei temporariamente a comparação por
+`dias_cobrados` em `envelopeDeValor` (mantendo só o caso `UNAVAILABLE`) —
+5 dos 14 testes puros de `frescorValorV123.test.ts` (casos 1, 3, 8, 9 e 10
+do pedido) e os dois testes de integração novos falham, exatamente o
+cenário "relógio em dia, valor de menos dias" que a correção resolve. O
+arquivo original foi restaurado em seguida e as duas suítes voltaram a
+32/32.
 
 ### Integração anterior — detalhamento (v1.2/v1.2.1)
 
@@ -445,52 +609,72 @@ voltando a checar `diasDemurrage` antes da data → 3 testes puros e o teste
 de integração #1 falham; (b) soma voltando a ponto flutuante → o teste de
 integração #3 falha. Os arquivos originais foram restaurados em seguida.
 
-## 9. Validação completa (v1.2.2)
+## 9. Validação completa (v1.2.3)
 
 Todas as corridas **isoladas** (nada mais acessando o PostgreSQL ao mesmo
-tempo), na ordem: engine completa, V1, grupos, benchmark.
+tempo), na ordem: testes novos, grupos, engine completa, V1, `tsc`, build,
+benchmark.
 
 | Suíte | Resultado |
 |---|---|
-| Testes puros novos da v1.2.2 (`estadoOperacionalV122`) | 20/20 |
-| Integração D12 v1.2–v1.2.2 (`leituraD12V12`, inclui a janela pré-tick e a convergência pós-tick) | 16/16 |
+| Testes puros novos da v1.2.3 (`frescorValorV123`) | 14/14 |
+| Integração D12 novos da v1.2.3 (dentro de `leituraD12V12`) | 2/2 |
+| Integração D12 completa (`leituraD12V12`, v1.2 → v1.2.3) | 18/18 |
 | Lifecycle e prioridade (`lifecycle`, `estadoOperacionalV122`) | 49/49 |
 | Relógios (`relogios`, `dualClockCalculator`, `freeTimeClock`, `civilDate`) | 66/66 |
 | D10 (`registroDemurrage`, v1.1, v1.2) | 69/69 |
 | D11 (`responsabilidadeDecisao`, v1.1, v1.2, auditoria) | 59/59 |
-| D12 completa (`leitura*`, `demurrageV2Routes`, `prazoFreeTimeV12`) | 119/119 |
+| D12 completa (`leitura*`, `demurrageV2Routes`, `prazoFreeTimeV12`) | 121/121 (119 na v1.2.2 + 2 testes de integração novos) |
 | Rotas V2 (`demurrageV2Routes`, `leituraAutorizacao`) | 17/17 |
-| Tarifas e apuração (`tariffs`, `apuracao` v1–v1.4, `closing`, `demurrageTickFilas`) | 105/105 |
-| **Engine completa** (`npm run test:demurrage-engine`) | **708/708** (686 da v1.2.1 + 20 puros + 2 de integração) — log de 4.318 linhas, nenhum `not ok` |
+| Tarifas e apuração (`tariffs`, `apuracao` v1–v1.4, `closing`, `demurrageTickFilas`) | 105/105 — **motores tarifários intocados** |
+| **Engine completa** (`npm run test:demurrage-engine`) | **724/724** (708 da v1.2.2 + 14 puros + 2 de integração), nenhum `not ok` |
 | V1 (`npm test`) | 25/25 |
 | `tsc --noEmit` | limpo |
 | `npm run build` | limpo |
 
-Zero falhas e **zero testes ignorados** em todas as linhas.
+Zero falhas e **zero testes ignorados** em todas as linhas. Todos os
+grupos fora do escopo direto da v1.2.3 (lifecycle/prioridade, relógios,
+D10, D11, tarifas/apuração, rotas V2) mantêm exatamente a mesma contagem
+da v1.2.2 — nenhum efeito colateral fora de `contrato.ts`,
+`filaOperacional.ts`, `detalhe.ts` e os dois arquivos de teste.
+
+**Mutação, prova de que os testes pegam o defeito original.** Ver seção 8
+— desativar a comparação por `dias_cobrados` (voltando ao comportamento
+anterior à v1.2.3) derruba 5 dos 14 testes puros novos e os 2 testes de
+integração novos; arquivo original restaurado e as duas suítes
+confirmadas em 32/32 depois.
 
 **Zero escrita em todos os GETs.** O G7 de `demurrageV2Routes` (fingerprint
 de todas as tabelas em torno de todas as rotas) segue verde; os dois testes
-novos da v1.2.2 tiram o fingerprint do schema inteiro em torno de todas as
-leituras da janela pré-tick e do contêiner devolvido.
+de integração novos da v1.2.3 tiram o fingerprint do schema inteiro em
+torno de toda a janela `PENDENTE` (antes do recálculo legítimo) — igual ao
+padrão já usado pelas janelas da v1.2.1/v1.2.2.
 
-**Fila × detalhe × filtros.** Na janela pré-tick, fila padrão, detalhe de
-processo, detalhe de contêiner e `/filtros` dão o mesmo estado
-(`EM_DEMURRAGE_ATENCAO`), o mesmo balde (`ATENCAO_1_6`) e o mesmo líder;
-agregado financeiro e próximo vencimento idênticos na fila e no detalhe —
-antes e depois do tick.
+**Fila × detalhe de processo × detalhe de contêiner × agregado.** Nos dois
+testes de integração novos, os três endpoints de leitura e o agregado
+financeiro do processo concordam byte a byte (`deepEqual`) tanto na janela
+`PENDENTE` (valor desatualizado, falha técnica visível) quanto depois do
+recálculo legítimo (`ESTIMADO`) — cliente e Rocket conferidos
+separadamente nos dois momentos.
 
 ### Benchmarks de custo constante (banco descartável, fixtures por SQL direto, rodados após as suítes)
 
 | Endpoint | Volume | Queries | Tempo |
 |---|---|---|---|
-| Fila (página de 50) | 1 processo | 13 | 21 ms |
-| | 300 processos | 13 | 52 ms |
-| | 1.000 processos | 13 | 87 ms |
-| | 2.000 processos | 13 | 144 ms |
-| Detalhe de processo | 1 contêiner | 21 | 14 ms |
-| | 10 contêineres | 21 | 13 ms |
-| | 100 contêineres | 21 | 30 ms |
-| | 500 contêineres | 21 | 95 ms |
+| Fila (página de 50) | 1 processo | 13 | 15 ms |
+| | 300 processos | 13 | 68 ms |
+| | 1.000 processos | 13 | 79 ms |
+| | 2.000 processos | 13 | 145 ms |
+| Detalhe de processo | 1 contêiner | 21 | 16 ms |
+| | 10 contêineres | 21 | 15 ms |
+| | 100 contêineres | 21 | 28 ms |
+| | 500 contêineres | 21 | 83 ms |
+
+**Mesmo número de consultas da v1.2/v1.2.1/v1.2.2** (13 na fila, 21 no
+detalhe, constante em todos os volumes): a leitura de `dias_cobrados`
+entrou como coluna adicional nas MESMAS consultas batch já existentes
+(`va.dias_cobrados` no `SELECT`), nenhuma consulta nova por contêiner ou
+por página. Os tempos são de uma única execução, só como observação.
 
 Mesmo número de consultas da v1.2 e da v1.2.1: a regra operacional é pura,
 nenhuma consulta nova. Os tempos são de uma única execução, só como
@@ -522,5 +706,24 @@ após Empty Return. Código alterado: `prazoFreeTime.ts`,
 `lifecycleRepository.ts` (só a montagem de fatos passa a usar a regra),
 `contrato.ts`, `filaOperacional.ts`, `detalhe.ts`.
 
-**A D12 v1.2/v1.2.1/v1.2.2 não está aprovada nem congelada, e a D13 não foi
-iniciada.** Aguardo auditoria.
+Na v1.2.3: nenhuma migration (`dias_cobrados` já existia desde a Fase 4,
+migration 0009 — só passou a ser LIDO pelas quatro leituras batch);
+nenhuma UI; nenhuma escrita em GET (as duas escritas do novo teste de
+integração são o próprio pipeline oficial —
+`recalcularApuracaoContainer`/`processarRecalculosPendentes` — nunca a
+leitura); D10, D11, V1, cadência, Portal, Supabase, HeadCargo e Liberação
+intocados; **motores tarifários intocados** (`termoPorEmbarqueEngine.ts`,
+`termoUnicoEngine.ts`, `exposicaoRocketEngine.ts`, `bracketEngine.ts` sem
+diff — confirmado pela suíte de tarifas/apuração em 105/105, idêntica à
+v1.2.2); nenhum valor é calculado ou recalculado no caminho de leitura — só
+traduzido/escolhido, exatamente como antes. Código alterado: `contrato.ts`
+(`ValorAtivoSelecionado.diasCobrados`, regra de frescor em
+`envelopeDeValor`, helper novo `envelopeDoRelogio`, remoção do parâmetro
+`valorDefasado`), `filaOperacional.ts` e `detalhe.ts` (coluna
+`dias_cobrados` nas leituras batch existentes, chamada ao helper único),
+mais os arquivos de teste (`frescorValorV123.test.ts`, novo;
+`leituraD12V12.test.ts`, `leituraContrato.test.ts` e
+`estadoOperacionalV122.test.ts`, ajustados) e este relatório.
+
+**A D12 v1.2/v1.2.1/v1.2.2/v1.2.3 não está aprovada nem congelada, e a D13
+não foi iniciada.** Aguardo auditoria.
