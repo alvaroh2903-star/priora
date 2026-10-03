@@ -25,7 +25,10 @@
   if (typeof module === 'object' && module.exports) {
     module.exports = factory();
   } else {
-    root.DemurrageV2 = factory();
+    // Idempotente (mesmo padrão de `priora-bus.js`): carregado só pelo
+    // `<helmet>` de `DemurrageOperacional.dc.html`; se algum dia for incluído
+    // de novo, a primeira instância é mantida — nunca duas cópias concorrentes.
+    root.DemurrageV2 = root.DemurrageV2 || factory();
   }
 }(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
@@ -136,15 +139,58 @@
     return { situacao: envelope.situacao, rotulo: rotuloSituacaoValor(envelope.situacao, lado), textoValor: textoValor };
   }
 
+  var SIMBOLO_MOEDA = { BRL: 'R$', USD: 'US$', EUR: '€' };
+
+  /** Código ISO da moeda → símbolo de exibição (o mesmo do módulo V1); moeda desconhecida sai como o código. */
+  function simboloMoeda(codigo) {
+    return SIMBOLO_MOEDA[codigo] || String(codigo);
+  }
+
+  var RE_DECIMAL_EXATO = /^(-?)(\d+)(?:\.(\d+))?$/;
+
+  /**
+   * String decimal EXATA do backend ("2400.00", "60.06") → formato brasileiro
+   * ("2.400,00", "60,06") SÓ por manipulação de texto: os dígitos de entrada
+   * são exatamente os dígitos de saída — nenhum `Number()`, nenhum
+   * arredondamento, nenhuma perda de casa. Formato inesperado sai como veio
+   * (nunca inventa um número).
+   */
+  function formatarDecimalExatoBr(texto) {
+    var s = String(texto);
+    var m = RE_DECIMAL_EXATO.exec(s);
+    if (!m) return s;
+    var inteiro = m[2];
+    var comPontos = '';
+    var contador = 0;
+    for (var i = inteiro.length - 1; i >= 0; i--) {
+      comPontos = inteiro.charAt(i) + comPontos;
+      contador++;
+      if (contador % 3 === 0 && i > 0) comPontos = '.' + comPontos;
+    }
+    return m[1] + comPontos + (m[3] !== undefined ? ',' + m[3] : '');
+  }
+
+  /** Composição de status de UM grupo de moeda, com as contagens que o próprio grupo trouxe (nunca somadas entre grupos). */
+  function statusDoGrupo(grupo) {
+    var partes = [];
+    if (grupo.confirmados) partes.push(grupo.confirmados + (grupo.confirmados === 1 ? ' confirmado' : ' confirmados'));
+    if (grupo.estimados) partes.push(grupo.estimados + (grupo.estimados === 1 ? ' estimado' : ' estimados'));
+    if (grupo.estimativasProvisorias) partes.push(grupo.estimativasProvisorias + (grupo.estimativasProvisorias === 1 ? ' estimativa provisória' : ' estimativas provisórias'));
+    return partes.join(' · ');
+  }
+
   /**
    * Grupo financeiro por moeda (`GrupoFinanceiroPorMoeda`) → texto de exibição.
    * `subtotalConhecido` é a STRING DECIMAL EXATA do backend ("60.06") — nunca
-   * passa por `Number()`/`parseFloat()` aqui, só concatenação de texto.
+   * passa por `Number()`/`parseFloat()` aqui: `subtotalExato` é a própria
+   * string, e `texto` é ela reformatada só como texto ("US$ 60,06").
    */
   function formatarGrupoFinanceiro(grupo) {
     return {
       moeda: grupo.moeda,
-      texto: grupo.moeda + ' ' + grupo.subtotalConhecido,
+      subtotalExato: grupo.subtotalConhecido,
+      texto: simboloMoeda(grupo.moeda) + ' ' + formatarDecimalExatoBr(grupo.subtotalConhecido),
+      statusTexto: statusDoGrupo(grupo),
       confirmados: grupo.confirmados,
       estimados: grupo.estimados,
       estimativasProvisorias: grupo.estimativasProvisorias,
@@ -152,26 +198,52 @@
   }
 
   /**
+   * Linhas de situação de um lado — o que NÃO entrou em nenhum subtotal
+   * (pendente/indisponível/sem demurrage), cada categoria com a contagem que
+   * o backend mandou. Nunca vira "0" nem um valor.
+   */
+  function linhasStatusLado(lado, ladoNome) {
+    var linhas = [];
+    if (lado.pendentes) linhas.push(lado.pendentes + (lado.pendentes === 1 ? ' contêiner pendente de cálculo' : ' contêineres pendentes de cálculo'));
+    if (lado.indisponiveis) {
+      var txt = ladoNome === 'rocket' ? ' sem exposição disponível' : ' sem valor disponível';
+      linhas.push(lado.indisponiveis + (lado.indisponiveis === 1 ? ' contêiner' : ' contêineres') + txt);
+    }
+    return linhas;
+  }
+
+  /**
    * `AgregadoFinanceiroLado` → view-model. Cada moeda sai como uma linha
    * SEPARADA (nunca somadas entre si); `completo` é repassado como veio —
-   * esta função não recalcula completude.
+   * esta função não recalcula completude. `situacaoSemValor` só é preenchido
+   * quando não há NENHUM grupo de moeda (para o cartão nunca mostrar um
+   * número que não existe).
    */
-  function formatarAgregadoLado(lado) {
-    if (!lado) return { grupos: [], pendentes: 0, indisponiveis: 0, semAplicacao: 0, completo: true };
+  function formatarAgregadoLado(lado, ladoNome) {
+    if (!lado) return { grupos: [], pendentes: 0, indisponiveis: 0, semAplicacao: 0, completo: true, linhasStatus: [], situacaoSemValor: null };
     var grupos = [];
     for (var i = 0; i < lado.gruposPorMoeda.length; i++) grupos.push(formatarGrupoFinanceiro(lado.gruposPorMoeda[i]));
+    var situacaoSemValor = null;
+    if (!grupos.length) {
+      if (lado.pendentes) situacaoSemValor = 'Pendente de cálculo';
+      else if (lado.indisponiveis) situacaoSemValor = ladoNome === 'rocket' ? 'Exposição ao armador ainda não disponível' : 'Valor ainda não disponível';
+      else if (lado.semAplicacao) situacaoSemValor = 'Sem demurrage';
+      else situacaoSemValor = 'Sem valor apurado';
+    }
     return {
       grupos: grupos,
       pendentes: lado.pendentes,
       indisponiveis: lado.indisponiveis,
       semAplicacao: lado.semAplicacao,
       completo: lado.completo,
+      linhasStatus: linhasStatusLado(lado, ladoNome),
+      situacaoSemValor: situacaoSemValor,
     };
   }
 
   function formatarAgregadoFinanceiro(agregado) {
-    if (!agregado) return { cliente: formatarAgregadoLado(null), rocket: formatarAgregadoLado(null) };
-    return { cliente: formatarAgregadoLado(agregado.cliente), rocket: formatarAgregadoLado(agregado.rocket) };
+    if (!agregado) return { cliente: formatarAgregadoLado(null, 'cliente'), rocket: formatarAgregadoLado(null, 'rocket') };
+    return { cliente: formatarAgregadoLado(agregado.cliente, 'cliente'), rocket: formatarAgregadoLado(agregado.rocket, 'rocket') };
   }
 
   /* ================================================================== *
@@ -439,7 +511,32 @@
       // DV-01: agregado do PROCESSO inteiro, por lado e moeda — nunca somado aqui.
       agregadoFinanceiro: formatarAgregadoFinanceiro(item.agregadoFinanceiro),
       proximoVencimento: formatarProximoVencimento(item.proximoVencimento),
+      // Linha de referências do cartão (só o que veio; ausente = omitido, nunca inventado).
+      referencias: referenciasDoItem(item),
+      composicaoTexto: textoComposicao(item.conteineres),
+      secao: secaoDoBalde(item.prioridade ? item.prioridade.balde : null),
+      trackingRelativo: item.trackingAtualizadoEm || null,
+      derivadoRelativo: item.ultimaAtualizacao || null,
     };
+  }
+
+  function referenciasDoItem(item) {
+    var refs = [];
+    if (item.house) refs.push('HBL ' + item.house);
+    if (item.mbl) refs.push('MBL ' + item.mbl);
+    if (item.armador && item.armador.nome) refs.push(item.armador.nome);
+    if (item.responsavelOperacional && item.responsavelOperacional.nome) refs.push('Resp.: ' + item.responsavelOperacional.nome);
+    return refs;
+  }
+
+  /** `ComposicaoContainers` → texto, usando só as contagens que o backend já consolidou. */
+  function textoComposicao(c) {
+    if (!c || !c.total) return 'Nenhum contêiner derivado';
+    var partes = [c.total + (c.total === 1 ? ' contêiner' : ' contêineres')];
+    if (c.emDemurrage) partes.push(c.emDemurrage + ' em demurrage');
+    if (c.devolvidos) partes.push(c.devolvidos + (c.devolvidos === 1 ? ' devolvido' : ' devolvidos'));
+    if (c.comPendencia) partes.push(c.comPendencia + ' com pendência');
+    return partes.join(' · ');
   }
 
   /**
@@ -450,6 +547,184 @@
     var out = [];
     for (var i = 0; i < (itens || []).length; i++) out.push(formatarItemFila(itens[i]));
     return out;
+  }
+
+  /* ================================================================== *
+   * 6b) Painel no estilo da tela Demurrage original — grupos visuais por
+   *     urgência. O grupo é um RÓTULO do balde OFICIAL que o backend já
+   *     decidiu (`prioridade.balde`, Cap. 22), nunca uma regra nova; e a
+   *     montagem PROVA que preserva a ordem recebida (ver
+   *     `montarSecoesFila`).
+   * ================================================================== */
+
+  var SECAO_DO_BALDE = {
+    CRITICA_15: 'demurrage', CRITICA_7_14: 'demurrage', ATENCAO_1_6: 'demurrage',
+    DEVOLVIDO_TRATAMENTO: 'devolvidos',
+    PRAZO_PREVENTIVO: 'prazo',
+    SILENCIOSO: 'monitoramento',
+  };
+
+  /** Ordem das seções = ordem dos baldes do Cap. 22 (a mesma que o backend usa para ordenar a fila). */
+  var ORDEM_SECOES = ['demurrage', 'devolvidos', 'prazo', 'monitoramento'];
+
+  var METADADOS_SECAO = {
+    demurrage: { titulo: 'Em demurrage', dica: 'Cliente ou Rocket já acumulando custo.', vazio: 'Nenhum processo em demurrage no momento.', sempreVisivel: true },
+    devolvidos: { titulo: 'Devolvidos — aguardando tratamento', dica: 'Empty Return registrado; custo ou responsabilidade a tratar.', vazio: 'Nenhum contêiner devolvido aguardando tratamento.', sempreVisivel: true },
+    prazo: { titulo: 'Risco iminente', dica: 'Free Time terminando — ainda sem custo.', vazio: 'Nenhum Free Time terminando agora.', sempreVisivel: true },
+    monitoramento: { titulo: 'Monitoramento', dica: 'Sem urgência ou ainda sem contêiner derivado.', vazio: '', sempreVisivel: false },
+    fila: { titulo: 'Fila operacional', dica: 'Na ordem oficial do backend.', vazio: 'Nenhum processo.', sempreVisivel: true },
+  };
+
+  /** Balde oficial → chave da seção visual (desconhecido → monitoramento, nunca descartado). */
+  function secaoDoBalde(balde) {
+    return SECAO_DO_BALDE[balde] || 'monitoramento';
+  }
+
+  /**
+   * View-models da fila (já na ordem da API) → seções visuais. NÃO ordena:
+   * cada item é só colocado na seção do seu balde, mantendo a ordem relativa.
+   * Em seguida VERIFICA que ler as seções de cima para baixo dá exatamente a
+   * sequência recebida (o backend ordena primeiro pelo balde, então isso
+   * vale sempre). Se um dia não valer, devolve UMA seção única na ordem
+   * recebida (`preservaOrdem: false`) — a tela nunca reordena para caber
+   * nos grupos.
+   */
+  function montarSecoesFila(vms) {
+    var lista = vms || [];
+    var porSecao = { demurrage: [], devolvidos: [], prazo: [], monitoramento: [] };
+    for (var i = 0; i < lista.length; i++) porSecao[lista[i].secao || secaoDoBalde(lista[i].balde)].push(lista[i]);
+
+    var secoes = [];
+    for (var j = 0; j < ORDEM_SECOES.length; j++) {
+      var chave = ORDEM_SECOES[j];
+      if (porSecao[chave].length || METADADOS_SECAO[chave].sempreVisivel) {
+        secoes.push(Object.assign({ chave: chave, itens: porSecao[chave] }, METADADOS_SECAO[chave]));
+      }
+    }
+
+    var lidaDeCimaParaBaixo = [];
+    for (var k = 0; k < secoes.length; k++) {
+      for (var n = 0; n < secoes[k].itens.length; n++) lidaDeCimaParaBaixo.push(secoes[k].itens[n].processoId);
+    }
+    var preserva = lidaDeCimaParaBaixo.length === lista.length;
+    for (var m = 0; preserva && m < lista.length; m++) {
+      if (lidaDeCimaParaBaixo[m] !== lista[m].processoId) preserva = false;
+    }
+    if (!preserva) {
+      return { preservaOrdem: false, secoes: [Object.assign({ chave: 'fila', itens: lista.slice() }, METADADOS_SECAO.fila)] };
+    }
+    return { preservaOrdem: true, secoes: secoes };
+  }
+
+  /**
+   * "Maior risco atual" = o PRIMEIRO item da fila oficial. Quem decide isso
+   * é a ordem do backend (Cap. 22); aqui não há comparação nenhuma.
+   */
+  function primeiroDaFila(vms) {
+    return vms && vms.length ? vms[0] : null;
+  }
+
+  /**
+   * Consultas de CONTAGEM dos indicadores do topo — cada uma é a própria
+   * fila oficial com um filtro já existente da D12 e `limite=1` (só o
+   * `total` é lido). Sem filtros do usuário: os indicadores são a visão
+   * geral da organização. Custo constante por consulta (D12 v1.2).
+   */
+  function consultasIndicadores() {
+    return {
+      emDemurrage: construirQueryFila(Object.assign(filtrosPadrao(), { emDemurrage: true }), { limite: 1 }),
+      comPendencia: construirQueryFila(Object.assign(filtrosPadrao(), { comPendencia: true }), { limite: 1 }),
+      comFalhaTecnica: construirQueryFila(Object.assign(filtrosPadrao(), { comFalhaTecnica: true }), { limite: 1 }),
+    };
+  }
+
+  /** Contagem do balde em `/filtros` (contarEstadosEBaldes da D12): lida, nunca somada. Sem `/filtros` → null. */
+  function totalDoBalde(opcoesFiltros, codigo) {
+    if (!opcoesFiltros || !opcoesFiltros.baldes) return null;
+    for (var i = 0; i < opcoesFiltros.baldes.length; i++) {
+      if (opcoesFiltros.baldes[i].codigo === codigo) return opcoesFiltros.baldes[i].total;
+    }
+    return 0; // o backend só lista baldes com ao menos um processo.
+  }
+
+  function textoContagem(n) {
+    return n === null || n === undefined ? '—' : String(n);
+  }
+
+  /**
+   * Indicadores do topo (cartões de KPI da tela original). Cada número vem
+   * de UMA resposta da D12 — contagem de processos, nunca valor monetário,
+   * nunca uma soma feita aqui. Contagem que não chegou (falha da consulta)
+   * fica `null` e é exibida como "—" com aviso: nunca "0".
+   *
+   * Não existe indicador de "impacto total": o contrato D12 não consolida
+   * valores da fila inteira e a soma no navegador misturaria moedas e
+   * situações (estimado × confirmado) — decisão DV-06 do diagnóstico.
+   */
+  function montarIndicadores(opcoesFiltros, contagens) {
+    var c = contagens || {};
+    var b15 = totalDoBalde(opcoesFiltros, 'CRITICA_15');
+    var b714 = totalDoBalde(opcoesFiltros, 'CRITICA_7_14');
+    var b16 = totalDoBalde(opcoesFiltros, 'ATENCAO_1_6');
+    var emDem = c.emDemurrage === undefined ? null : c.emDemurrage;
+    var pend = c.comPendencia === undefined ? null : c.comPendencia;
+    var falha = c.comFalhaTecnica === undefined ? null : c.comFalhaTecnica;
+    var prazo = totalDoBalde(opcoesFiltros, 'PRAZO_PREVENTIVO');
+    var dev = totalDoBalde(opcoesFiltros, 'DEVOLVIDO_TRATAMENTO');
+    return [
+      {
+        chave: 'demurrage', tema: 'demurrage', rotulo: 'Processos em demurrage', valor: emDem, valorTexto: textoContagem(emDem),
+        sub: b15 === null ? 'Contêiner do cliente ou da Rocket já em demurrage' : ('Crítico 15+: ' + b15 + ' · 7–14: ' + textoContagem(b714) + ' · 1–6: ' + textoContagem(b16)),
+        indisponivel: emDem === null,
+      },
+      {
+        chave: 'prazo', tema: 'prazo', rotulo: 'Free Time terminando', valor: prazo, valorTexto: textoContagem(prazo),
+        sub: 'Prazo próximo — ainda sem custo', indisponivel: prazo === null,
+      },
+      {
+        chave: 'pendencias', tema: 'neutro', rotulo: 'Pendências de informação', valor: pend, valorTexto: textoContagem(pend),
+        sub: falha === null ? 'Dados faltando ou divergentes' : (falha + (falha === 1 ? ' processo com falha técnica' : ' processos com falha técnica')),
+        indisponivel: pend === null,
+      },
+      {
+        chave: 'devolvidos', tema: 'neutro', rotulo: 'Devolvidos em tratamento', valor: dev, valorTexto: textoContagem(dev),
+        sub: 'Empty Return com custo ou responsabilidade a tratar', indisponivel: dev === null,
+      },
+    ];
+  }
+
+  var LINHAS_RESUMO = [
+    { codigo: 'CRITICA_15', rotulo: 'Crítico — 15 dias ou mais', tema: 'demurrage' },
+    { codigo: 'CRITICA_7_14', rotulo: 'Crítico — 7 a 14 dias', tema: 'demurrage' },
+    { codigo: 'ATENCAO_1_6', rotulo: 'Atenção — 1 a 6 dias', tema: 'prazo' },
+    { codigo: 'DEVOLVIDO_TRATAMENTO', rotulo: 'Devolvidos — tratamento', tema: 'neutro' },
+    { codigo: 'PRAZO_PREVENTIVO', rotulo: 'Prazo preventivo', tema: 'prazo' },
+    { codigo: 'SILENCIOSO', rotulo: 'Monitoramento silencioso', tema: 'cinza' },
+  ];
+
+  /** "Resumo geral" da coluna direita: uma linha por balde oficial, com a contagem de `/filtros` (nenhuma soma). */
+  function montarResumoOperacional(opcoesFiltros) {
+    var out = [];
+    for (var i = 0; i < LINHAS_RESUMO.length; i++) {
+      var l = LINHAS_RESUMO[i];
+      out.push({ codigo: l.codigo, rotulo: l.rotulo, tema: l.tema, total: totalDoBalde(opcoesFiltros, l.codigo), totalTexto: textoContagem(totalDoBalde(opcoesFiltros, l.codigo)) });
+    }
+    return out;
+  }
+
+  /** Quantidade de filtros ativos (mesmo critério da D13 original), para o botão "Filtros (N ativos)". */
+  function contarFiltrosAtivos(filtros) {
+    var f = filtros || {};
+    var campos = ['responsavel', 'cliente', 'armador', 'estado', 'prioridade', 'comPendencia', 'comFalhaTecnica', 'dentroDoFreeTime', 'emDemurrage', 'devolvido', 'responsabilidadeEmAnalise', 'exposicaoIndisponivel', 'busca'];
+    var n = 0;
+    for (var i = 0; i < campos.length; i++) if (f[campos[i]]) n++;
+    if (f.periodoInicio && f.periodoFim) n++;
+    return n;
+  }
+
+  /** Estado inicial do painel de filtros: SEMPRE recolhido — a fila aparece primeiro (correção D13). */
+  function estadoInicialPainelFiltros() {
+    return false;
   }
 
   /* ================================================================== *
@@ -830,6 +1105,17 @@
     formatarNumeroBr: formatarNumeroBr,
     formatarEnvelope: formatarEnvelope,
     formatarGrupoFinanceiro: formatarGrupoFinanceiro,
+    simboloMoeda: simboloMoeda,
+    formatarDecimalExatoBr: formatarDecimalExatoBr,
+    secaoDoBalde: secaoDoBalde,
+    montarSecoesFila: montarSecoesFila,
+    primeiroDaFila: primeiroDaFila,
+    consultasIndicadores: consultasIndicadores,
+    totalDoBalde: totalDoBalde,
+    montarIndicadores: montarIndicadores,
+    montarResumoOperacional: montarResumoOperacional,
+    contarFiltrosAtivos: contarFiltrosAtivos,
+    estadoInicialPainelFiltros: estadoInicialPainelFiltros,
     formatarAgregadoLado: formatarAgregadoLado,
     formatarAgregadoFinanceiro: formatarAgregadoFinanceiro,
     formatarDataCivil: formatarDataCivil,

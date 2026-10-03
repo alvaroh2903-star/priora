@@ -172,7 +172,7 @@ test('4b) um relógio PENDING não contamina o outro relógio (independência to
 
 test('4c) o bloco interno de responsabilidade nunca faz parte do template da FILA — só do detalhe do contêiner', () => {
   const html = fs.readFileSync(HTML_PATH, 'utf8');
-  const inicioFila = html.indexOf('VIEW: FILA');
+  const inicioFila = html.indexOf('VIEW: PAINEL');
   const inicioProcesso = html.indexOf('VIEW: DETALHE DO PROCESSO');
   const inicioContainer = html.indexOf('VIEW: DETALHE DO CONTÊINER');
   assert.ok(inicioFila > 0 && inicioProcesso > inicioFila && inicioContainer > inicioProcesso, 'as três visões estão demarcadas no template');
@@ -215,18 +215,22 @@ test('6) envelope INDISPONIVEL nunca mostra "0"/"R$ 0" — rótulo específico p
  *    numérica — exibido byte a byte.
  * ===================================================================== */
 
-test('7) formatarGrupoFinanceiro exibe subtotalConhecido EXATAMENTE como veio (string), sem Number()/parseFloat()', () => {
+test('7) formatarGrupoFinanceiro expõe subtotalExato EXATAMENTE como veio (string), sem Number()/parseFloat() — texto é só a tradução BR do mesmo dígitos', () => {
   const grupo = { moeda: 'BRL', subtotalConhecido: '60.06', confirmados: 0, estimados: 3, estimativasProvisorias: 0 };
   const vm = DV2.formatarGrupoFinanceiro(grupo);
-  assert.ok(vm.texto.includes('60.06'), 'a string decimal exata aparece verbatim no texto');
+  assert.equal(vm.subtotalExato, '60.06', 'a string decimal exata sai intocada no campo dedicado (byte a byte)');
+  assert.equal(vm.texto, 'R$ 60,06', 'o texto é o símbolo da moeda + a tradução BR dos MESMOS dígitos, nunca um valor recalculado');
   assert.equal(typeof grupo.subtotalConhecido, 'string', 'a entrada nunca é mutada para number');
 });
 
-test('7b) uma soma ingênua de ponto flutuante (0.1+0.2) nunca aparece — a função só concatena texto, não soma', () => {
-  // Prova por ausência: a própria string de entrada "0.30" sai intacta, nunca recalculada como 0.30000000000000004.
+test('7b) uma soma ingênua de ponto flutuante (0.1+0.2) nunca aparece — a função só traduz os dígitos recebidos, não soma', () => {
+  // Prova por ausência: a própria string de entrada "0.30" sai intacta (em subtotalExato) e sem o erro
+  // clássico de ponto flutuante (0.30000000000000004) em nenhum dos dois campos.
   const vm = DV2.formatarGrupoFinanceiro({ moeda: 'USD', subtotalConhecido: '0.30', confirmados: 1, estimados: 0, estimativasProvisorias: 0 });
-  assert.ok(vm.texto.includes('0.30'));
-  assert.ok(!vm.texto.includes('0.30000000000000004'));
+  assert.equal(vm.subtotalExato, '0.30');
+  assert.equal(vm.texto, 'US$ 0,30');
+  assert.ok(!vm.subtotalExato.includes('0.30000000000000004'));
+  assert.ok(!vm.texto.includes('30000000000000004'));
 });
 
 /* ===================================================================== *
@@ -243,9 +247,9 @@ test('8) formatarAgregadoLado nunca soma moedas diferentes — cada grupo sai co
   };
   const vm = DV2.formatarAgregadoLado(lado);
   assert.equal(vm.grupos.length, 2, 'duas linhas, uma por moeda');
-  assert.ok(vm.grupos.some((g: any) => g.texto.includes('BRL') && g.texto.includes('100.00')));
-  assert.ok(vm.grupos.some((g: any) => g.texto.includes('USD') && g.texto.includes('50.00')));
-  assert.ok(!vm.grupos.some((g: any) => g.texto.includes('150')), 'NUNCA uma linha combinando as duas moedas em um único total');
+  assert.ok(vm.grupos.some((g: any) => g.moeda === 'BRL' && g.subtotalExato === '100.00' && g.texto === 'R$ 100,00'));
+  assert.ok(vm.grupos.some((g: any) => g.moeda === 'USD' && g.subtotalExato === '50.00' && g.texto === 'US$ 50,00'));
+  assert.ok(!vm.grupos.some((g: any) => g.subtotalExato === '150.00' || g.texto.includes('150')), 'NUNCA uma linha combinando as duas moedas em um único total');
 });
 
 /* ===================================================================== *
@@ -380,14 +384,20 @@ test('14) o módulo visual contém ao menos uma regra @media para o layout respo
  * 15) Navegação por teclado e rótulos acessíveis.
  * ===================================================================== */
 
-test('15) o módulo visual usa role/aria-*/tabIndex/onKeyDown — primeiro módulo do painel com acessibilidade real', () => {
+test('15) o módulo visual usa role/aria-*/controles nativos de teclado/onKeyDown — acessibilidade real, não decorativa', () => {
   const html = fs.readFileSync(HTML_PATH, 'utf8');
   assert.ok(/role="/.test(html), 'usa role=');
   assert.ok(/aria-live/.test(html), 'tem ao menos um aria-live para avisos');
   assert.ok(/aria-label="/.test(html), 'usa aria-label em pelo menos um elemento');
   assert.ok(/aria-busy="/.test(html), 'sinaliza carregando via aria-busy');
-  assert.ok(/tabIndex="/.test(html), 'linhas clicáveis são alcançáveis por teclado (tabIndex)');
-  assert.ok(/onKeyDown="/.test(html), 'há tratamento de tecla (Enter/Espaço/Esc)');
+  // Toda ação clicável é um elemento nativamente focável/ativável por teclado
+  // (<button>/<a>) — por isso não há necessidade de tabIndex manual em divs
+  // (técnica substituída pela composição V1: controles nativos, não divs com
+  // onClick). onKeyDown trata Esc nos painéis/telas de detalhe.
+  assert.ok(/onClick="\{\{[^}]+\}\}"/.test(html), 'ações usam onClick');
+  const temDivComOnClickSemBotao = /<div[^>]*onClick="/.test(html);
+  assert.ok(!temDivComOnClickSemBotao, 'nenhuma <div> clicável sem semântica nativa — use <button>/<a>');
+  assert.ok(/onKeyDown="/.test(html), 'há tratamento de tecla (Esc para fechar filtros/voltar)');
   assert.ok((html.match(/role="/g) || []).length >= 5, 'acessibilidade aplicada em múltiplos pontos, não só decorativa');
 });
 
@@ -462,4 +472,149 @@ test('extra: datas civis nunca passam por Date — formatarDataCivil é corte de
   assert.equal(DV2.formatarDataCivil('2026-01-05'), '05/01/2026');
   assert.equal(DV2.formatarDataCivil(null), null);
   assert.equal(DV2.formatarDataCivil('data-invalida'), null, 'formato inesperado nunca lança, nunca inventa uma data');
+});
+
+/* ===================================================================== *
+ * D13 corretiva — dashboard original: decimal BR exato, seções por balde
+ * (ordem preservada / fallback), indicadores sem soma, contagem de filtros
+ * ativos e estado inicial do painel de filtros.
+ * ===================================================================== */
+
+test('17) formatarDecimalExatoBr traduz os MESMOS dígitos para o formato BR — nunca Number()/arredondamento', () => {
+  assert.equal(DV2.formatarDecimalExatoBr('2400.00'), '2.400,00');
+  assert.equal(DV2.formatarDecimalExatoBr('60.06'), '60,06');
+  assert.equal(DV2.formatarDecimalExatoBr('0.30'), '0,30');
+  assert.equal(DV2.formatarDecimalExatoBr('1000000.01'), '1.000.000,01');
+  assert.equal(DV2.formatarDecimalExatoBr('-45.50'), '-45,50');
+  assert.equal(DV2.formatarDecimalExatoBr('7'), '7', 'sem casa decimal, sai como veio');
+  // Formato inesperado nunca é descartado nem lança: sai como a própria entrada (nunca inventa número).
+  assert.equal(DV2.formatarDecimalExatoBr('indisponivel'), 'indisponivel');
+});
+
+function vmFixture(over: Partial<any> = {}): any {
+  return Object.assign({
+    processoId: 'p1', numeroProcesso: 'IM-0001', cliente: 'Cliente X',
+    balde: 'CRITICA_15', composicao: { total: 1 }, agregadoFinanceiro: { cliente: { grupos: [] }, rocket: { grupos: [] } },
+  }, over);
+}
+
+test('18) montarSecoesFila preserva a ordem recebida dentro de cada seção (balde já ordenado pelo backend)', () => {
+  const vms = [
+    vmFixture({ processoId: 'p1', balde: 'CRITICA_15' }),
+    vmFixture({ processoId: 'p2', balde: 'CRITICA_15' }),
+    vmFixture({ processoId: 'p3', balde: 'ATENCAO_1_6' }),
+    vmFixture({ processoId: 'p4', balde: 'DEVOLVIDO_TRATAMENTO' }),
+    vmFixture({ processoId: 'p5', balde: 'PRAZO_PREVENTIVO' }),
+  ];
+  const r = DV2.montarSecoesFila(vms);
+  assert.equal(r.preservaOrdem, true);
+  const demurrage = r.secoes.find((s: any) => s.chave === 'demurrage');
+  assert.deepEqual(demurrage.itens.map((i: any) => i.processoId), ['p1', 'p2', 'p3'], 'CRITICA_15 e ATENCAO_1_6 caem na mesma seção visual "demurrage", na ordem recebida');
+  const devolvidos = r.secoes.find((s: any) => s.chave === 'devolvidos');
+  assert.deepEqual(devolvidos.itens.map((i: any) => i.processoId), ['p4']);
+  const prazo = r.secoes.find((s: any) => s.chave === 'prazo');
+  assert.deepEqual(prazo.itens.map((i: any) => i.processoId), ['p5']);
+});
+
+test('18b) montarSecoesFila cai para seção ÚNICA (preservaOrdem:false) se o agrupamento mudaria a ordem recebida', () => {
+  // ORDEM_SECOES lê "demurrage" antes de "prazo". Construído para violar a invariante:
+  // um item PRAZO_PREVENTIVO (seção "prazo") chega ANTES de um CRITICA_15 (seção
+  // "demurrage") — ler as seções de cima para baixo não reproduziria a ordem de chegada.
+  const vms = [
+    vmFixture({ processoId: 'p1', balde: 'PRAZO_PREVENTIVO' }),
+    vmFixture({ processoId: 'p2', balde: 'CRITICA_15' }),
+  ];
+  const r = DV2.montarSecoesFila(vms);
+  assert.equal(r.preservaOrdem, false, 'a tela nunca reordena para caber nos grupos — sinaliza e usa uma seção única');
+  assert.equal(r.secoes.length, 1);
+  assert.equal(r.secoes[0].chave, 'fila');
+  assert.deepEqual(r.secoes[0].itens.map((i: any) => i.processoId), ['p1', 'p2'], 'a seção única preserva a ordem recebida, intocada');
+});
+
+test('18c) montarSecoesFila: continuidade de paginação — concatenar página 2 ao fim não quebra a invariante de ordem', () => {
+  const pagina1 = [vmFixture({ processoId: 'p1', balde: 'CRITICA_15' }), vmFixture({ processoId: 'p2', balde: 'PRAZO_PREVENTIVO' })];
+  const pagina2 = [vmFixture({ processoId: 'p3', balde: 'PRAZO_PREVENTIVO' }), vmFixture({ processoId: 'p4', balde: 'SILENCIOSO' })];
+  const r = DV2.montarSecoesFila(pagina1.concat(pagina2));
+  assert.equal(r.preservaOrdem, true);
+  const prazo = r.secoes.find((s: any) => s.chave === 'prazo');
+  assert.deepEqual(prazo.itens.map((i: any) => i.processoId), ['p2', 'p3'], 'itens da página 2 continuam na mesma seção, após os da página 1');
+});
+
+test('19) montarIndicadores nunca soma valores — 4 contagens; falha de consulta vira null → "—", nunca "0"', () => {
+  const opcoesFiltros = { baldes: [{ codigo: 'CRITICA_15', total: 3 }, { codigo: 'PRAZO_PREVENTIVO', total: 2 }] };
+  const kpis = DV2.montarIndicadores(opcoesFiltros, { emDemurrage: 5, comPendencia: null, comFalhaTecnica: 1 });
+  assert.equal(kpis.length, 4, 'exatamente 4 indicadores — sem "impacto total" inventado');
+  const demurrage = kpis.find((k: any) => k.chave === 'demurrage');
+  assert.equal(demurrage.valorTexto, '5');
+  const pendencias = kpis.find((k: any) => k.chave === 'pendencias');
+  assert.equal(pendencias.valorTexto, '—', 'contagem que falhou nunca vira "0" — some como indisponível');
+  assert.equal(pendencias.indisponivel, true);
+  for (const k of kpis) assert.ok(typeof k.rotulo === 'string' && !/impacto/i.test(k.rotulo));
+});
+
+test('19b) montarIndicadores sem /filtros disponível (opcoesFiltros null) não quebra — contagens de balde somem como null', () => {
+  const kpis = DV2.montarIndicadores(null, {});
+  const prazo = kpis.find((k: any) => k.chave === 'prazo');
+  assert.equal(prazo.valorTexto, '—');
+  assert.equal(prazo.indisponivel, true);
+});
+
+test('20) consultasIndicadores usa limite=1 e os três filtros booleanos já existentes na D12 (nenhum filtro novo inventado)', () => {
+  const qs = DV2.consultasIndicadores();
+  for (const chave of ['emDemurrage', 'comPendencia', 'comFalhaTecnica']) {
+    const params = new URLSearchParams(qs[chave]);
+    assert.equal(params.get('limite'), '1', chave + ' deve pedir só a contagem (limite=1)');
+  }
+  assert.equal(new URLSearchParams(qs.emDemurrage).get('emDemurrage'), 'true');
+  assert.equal(new URLSearchParams(qs.comPendencia).get('comPendencia'), 'true');
+  assert.equal(new URLSearchParams(qs.comFalhaTecnica).get('comFalhaTecnica'), 'true');
+});
+
+test('21) estadoInicialPainelFiltros é sempre false — a fila aparece primeiro, filtros recolhidos (correção D13)', () => {
+  assert.equal(DV2.estadoInicialPainelFiltros(), false);
+});
+
+test('22) contarFiltrosAtivos conta só os campos preenchidos, e o período só conta quando início E fim estão presentes', () => {
+  assert.equal(DV2.contarFiltrosAtivos({}), 0);
+  assert.equal(DV2.contarFiltrosAtivos({ busca: 'IM2151' }), 1);
+  assert.equal(DV2.contarFiltrosAtivos({ busca: 'IM2151', comPendencia: true }), 2);
+  assert.equal(DV2.contarFiltrosAtivos({ periodoInicio: '2026-01-01' }), 0, 'só o início, sem o fim, não conta');
+  assert.equal(DV2.contarFiltrosAtivos({ periodoInicio: '2026-01-01', periodoFim: '2026-01-31' }), 1);
+  assert.equal(DV2.contarFiltrosAtivos({ incluirSilenciosos: true }), 0, 'incluirSilenciosos tem contador visual próprio (chip), não entra nesta contagem');
+});
+
+/* ===================================================================== *
+ * D13 corretiva — estática: construtor/renderVals nunca tocam
+ * `DemurrageV2` antes de `pronto` (correção do runtime real da auditoria).
+ * ===================================================================== */
+
+test('23) o script embutido nunca referencia DemurrageV2 fora de window.DemurrageV2 (sempre via helmet, nunca segunda cópia)', () => {
+  const html = fs.readFileSync(HTML_PATH, 'utf8');
+  const script = semComentarios(lerInlineScript(html));
+  // Toda ocorrência de "DemurrageV2" no script embutido deve ser "window.DemurrageV2"
+  // (nunca uma referência solta a um identificador global `DemurrageV2`, o que
+  // causaria exatamente o ReferenceError da auditoria se executado cedo demais).
+  const soltas = script.match(/(?<!window\.)\bDemurrageV2\b/g) || [];
+  assert.deepEqual(soltas, [], 'toda referência a DemurrageV2 no script deve ser window.DemurrageV2');
+  // E o módulo é carregado uma ÚNICA vez no helmet (nunca uma segunda cópia inline).
+  // Fora de comentários: o código em `aguardarApresentacao` também cita o nome do
+  // arquivo (um seletor `document.querySelector('script[src$="..."]')`), que não é
+  // uma segunda tag <script src>, então é excluído contando só dentro de <helmet>.
+  const semComent = semComentarios(html);
+  const inicioHelmet = semComent.indexOf('<helmet>');
+  const fimHelmet = semComent.indexOf('</helmet>');
+  const helmet = semComent.slice(inicioHelmet, fimHelmet);
+  const cargas = (helmet.match(/<script src="\.\/demurrage-v2-apresentacao\.js">/g) || []).length;
+  assert.equal(cargas, 1, 'o módulo de apresentação é importado uma única vez, pelo helmet');
+});
+
+test('23b) o UMD do módulo de apresentação é idempotente (reatribuição em window não duplica a instância)', () => {
+  const js = fs.readFileSync(JS_PATH, 'utf8');
+  assert.match(js, /root\.DemurrageV2\s*=\s*root\.DemurrageV2\s*\|\|\s*factory\(\)/, 'window.DemurrageV2 só é definido uma vez, mesmo que o script seja avaliado mais de uma vez');
+});
+
+test('24) guarda de produto: nenhuma ação simulada ("Solicitar Minuta") e nenhum "impacto total" inventado no template', () => {
+  const html = fs.readFileSync(HTML_PATH, 'utf8');
+  assert.doesNotMatch(html, /Solicitar Minuta/, 'nenhuma ação sem backend real por trás');
+  assert.doesNotMatch(html, /[Ii]mpacto total/, 'nenhum indicador de impacto total fictício somando moedas/situações diferentes');
 });
