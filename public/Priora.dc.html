@@ -37,6 +37,7 @@
   <div data-view="{{ vw.liberacao }}" data-screen-label="Liberação"><sc-if value="{{ m.liberacao }}" hint-placeholder-val="{{ false }}"><dc-import name="Liberacao" hint-size="100%,640px"></dc-import></sc-if></div>
   <div data-view="{{ vw.couriers }}" data-screen-label="Couriers"><sc-if value="{{ m.couriers }}" hint-placeholder-val="{{ false }}"><dc-import name="Courier Module" hint-size="100%,640px"></dc-import></sc-if></div>
   <div data-view="{{ vw.demurrage }}" data-screen-label="Demurrage"><sc-if value="{{ m.demurrage }}" hint-placeholder-val="{{ false }}"><dc-import name="Demurrage" hint-size="100%,640px"></dc-import></sc-if></div>
+  <div data-view="{{ vw.demurrageop }}" data-screen-label="Demurrage Operacional"><sc-if value="{{ m.demurrageop }}" hint-placeholder-val="{{ false }}"><dc-import name="DemurrageOperacional" hint-size="100%,640px"></dc-import></sc-if></div>
   <div data-view="{{ vw.exigem }}" data-screen-label="Exigem Atenção"><sc-if value="{{ m.exigem }}" hint-placeholder-val="{{ false }}"><dc-import name="Exigem Atencao" hint-size="100%,640px"></dc-import></sc-if></div>
   <div data-view="{{ vw.equipe }}" data-screen-label="Equipe & Desempenho"><sc-if value="{{ m.equipe }}" hint-placeholder-val="{{ false }}"><dc-import name="Equipe e Desempenho" hint-size="100%,640px"></dc-import></sc-if></div>
   <div data-view="{{ vw.relatorios }}" data-screen-label="Relatórios"><sc-if value="{{ m.relatorios }}" hint-placeholder-val="{{ false }}"><dc-import name="Relatorios" hint-size="100%,640px"></dc-import></sc-if></div>
@@ -48,7 +49,7 @@
 </x-dc>
 <script type="text/x-dc" data-dc-script>
 class Component extends DCLogic {
-  KEYS = ['inicio','fila','auditoria','processos','liberacao','couriers','demurrage','exigem','equipe','relatorios'];
+  KEYS = ['inicio','fila','auditoria','processos','liberacao','couriers','demurrage','demurrageop','exigem','equipe','relatorios'];
   HREF2KEY = {
     'Inicio.dc.html':'inicio',
     'Fila de Decisoes.dc.html':'fila',
@@ -57,6 +58,7 @@ class Component extends DCLogic {
     'Liberacao.dc.html':'liberacao',
     'Courier Module.dc.html':'couriers',
     'Demurrage.dc.html':'demurrage',
+    'DemurrageOperacional.dc.html':'demurrageop',
     'Exigem Atencao.dc.html':'exigem',
     'Equipe e Desempenho.dc.html':'equipe',
     'Relatorios.dc.html':'relatorios'

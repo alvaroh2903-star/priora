@@ -13,7 +13,8 @@
     "typecheck": "tsc --noEmit",
     "test": "node -r ts-node/register --test src/auditoria/preAlerta/*.test.ts",
     "db:migrate:demurrage": "ts-node src/demurrage-engine/db/migrate.ts",
-    "test:demurrage-engine": "node --test-concurrency=1 -r ts-node/register --test src/demurrage-engine/__tests__/*.test.ts"
+    "test:demurrage-engine": "node --test-concurrency=1 -r ts-node/register --test src/demurrage-engine/__tests__/*.test.ts",
+    "test:demurrage-ui": "node --test-concurrency=1 -r ts-node/register --test src/frontend-tests/*.test.ts"
   },
   "keywords": [
     "outlook",

@@ -1,0 +1,900 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+<script src="./priora-bus.js"></script>
+<script src="./demurrage-v2-apresentacao.js"></script>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Plus Jakarta Sans',sans-serif;-webkit-font-smoothing:antialiased;background:#F4F5FB}
+  ::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:#D7DAE8;border-radius:8px;border:2px solid #F4F5FB}::-webkit-scrollbar-track{background:transparent}
+  @keyframes pageIn{from{transform:translateY(12px)}to{transform:translateY(0)}}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @keyframes skelPulse{0%,100%{opacity:1}50%{opacity:.5}}
+  .solid-btn{transition:transform .15s,box-shadow .2s,background .18s}.solid-btn:hover{transform:translateY(-1px)}
+  .ghost-btn{transition:background .16s,border-color .16s,color .16s}.ghost-btn:hover{background:#F3F1FE!important;border-color:#CFC6FB!important;color:#3D34C9!important}
+  .row-hover{transition:background .15s,box-shadow .15s}.row-hover:hover{background:#FAFAFE!important}
+  .dop-row:focus-visible,.dop-chip:focus-visible,.solid-btn:focus-visible,.ghost-btn:focus-visible,.dop-input:focus-visible,.dop-check:focus-visible,.dop-tab:focus-visible{outline:3px solid #4327E6;outline-offset:2px}
+  .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+  .dop-skel{background:linear-gradient(90deg,#EEEFF6,#F6F7FB,#EEEFF6);background-size:200% 100%;border-radius:8px;animation:skelPulse 1.3s ease-in-out infinite}
+  .dop-grid-head,.dop-grid-row{display:grid;grid-template-columns:1.6fr 1fr 1fr 1.4fr 1fr .9fr;gap:14px;align-items:center}
+  .dop-badge{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:700;padding:3px 9px;border-radius:20px;white-space:nowrap}
+  @media (max-width: 1100px) {
+    .dop-grid-head{display:none}
+    .dop-grid-row{display:flex;flex-direction:column;align-items:flex-start;gap:6px}
+    .dop-clocks{grid-template-columns:1fr!important}
+    .dop-filtros-grid{grid-template-columns:1fr!important}
+  }
+</style>
+</helmet>
+<main style="flex:1;min-width:0;display:flex;flex-direction:column">
+  <dc-import name="Topbar" title="Demurrage Operacional" subtitle="Fila oficial, relógios do cliente e da Rocket e valores apurados — exatamente como o backend decidiu." icon-path="M3 6h11v9H3z M14 9h4l3 3v3h-7 M6.5 19a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3 M17.5 19a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3" hint-size="100%,110px"></dc-import>
+
+  <!-- Avisos ARIA-LIVE: ordem_alterada / cursor_invalido / filtro inválido — nunca o texto do servidor. -->
+  <div role="status" aria-live="polite" style="position:absolute;width:1px;height:1px;overflow:hidden">{{ avisoLive }}</div>
+  <sc-if value="{{ mostrarAvisoFaixa }}" hint-placeholder-val="{{ false }}">
+    <div role="status" style="background:#FEF4E1;border-bottom:1px solid #F5E6C8;color:#8A5A09;font-size:13px;font-weight:600;padding:10px 28px;text-align:center">{{ avisoFaixaTexto }}</div>
+  </sc-if>
+
+  <!-- ===================== BLOQUEIOS DE SESSÃO/ACESSO (seção 5/10) ===================== -->
+  <sc-if value="{{ mostrarBloqueio }}" hint-placeholder-val="{{ false }}">
+    <div style="flex:1;display:flex;align-items:center;justify-content:center;padding:40px">
+      <div style="text-align:center;max-width:460px;background:#fff;border:1px solid #E6E8F2;border-radius:16px;padding:44px 34px" role="alert">
+        <div style="width:54px;height:54px;border-radius:14px;background:#F1F2F8;display:flex;align-items:center;justify-content:center;margin:0 auto 16px" aria-hidden="true"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#5A6076" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/></svg></div>
+        <div style="font-size:18px;font-weight:800;color:#161A2E;margin-bottom:8px">{{ bloqueioTitulo }}</div>
+        <div style="font-size:13.5px;line-height:1.6;color:#6B7192">{{ bloqueioTexto }}</div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ mostrarTela }}" hint-placeholder-val="{{ false }}">
+
+  <!-- ===================== VIEW: FILA ===================== -->
+  <sc-if value="{{ vwFila }}" hint-placeholder-val="{{ true }}">
+  <div style="padding:20px 28px 40px" role="region" aria-label="Fila operacional de demurrage">
+
+    <!-- Resumo por balde — contagens de /filtros, clicáveis (aplica o filtro de prioridade). -->
+    <sc-if value="{{ temResumo }}" hint-placeholder-val="{{ false }}">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px" role="group" aria-label="Resumo por prioridade">
+        <sc-for list="{{ resumoBaldes }}" as="rb" hint-placeholder-count="4">
+          <button class="dop-chip ghost-btn" onClick="{{ rb.aplicar }}" aria-pressed="{{ rb.ativo }}" style="text-align:left;border:1px solid {{ rb.borda }};background:{{ rb.fundo }};border-radius:14px;padding:12px 14px;cursor:pointer;font-family:inherit">
+            <div style="font-size:11px;color:#7A8099;font-weight:700;text-transform:uppercase;letter-spacing:.03em">{{ rb.rotulo }}</div>
+            <div style="font-size:22px;font-weight:800;color:{{ rb.cor }};margin-top:4px">{{ rb.total }}</div>
+          </button>
+        </sc-for>
+      </div>
+    </sc-if>
+
+    <!-- Filtros -->
+    <div style="background:#fff;border:1px solid #EAEBF4;border-radius:16px;padding:16px 18px;margin-bottom:16px">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+        <button class="ghost-btn" onClick="{{ toggleFiltros }}" aria-expanded="{{ filtrosAbertos }}" aria-controls="dop-filtros-painel" style="display:flex;align-items:center;gap:8px;background:#fff;border:1px solid #E6E8F2;border-radius:10px;padding:9px 14px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;color:#161A2E">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M7 12h10M10 18h4"/></svg>
+          Filtros{{ contadorFiltrosTexto }}
+        </button>
+        <span style="font-size:12.5px;color:#7A8099;margin-left:auto">{{ mostrandoTexto }}</span>
+        <button class="ghost-btn" onClick="{{ limparFiltros }}" style="background:#fff;border:1px solid #E6E8F2;border-radius:10px;padding:9px 14px;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer;color:#5A6076">Limpar</button>
+      </div>
+
+      <sc-if value="{{ filtrosAbertos }}" hint-placeholder-val="{{ true }}">
+      <div id="dop-filtros-painel" class="dop-filtros-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">
+        <label style="display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:700;color:#5A6076">Busca (processo, BL ou contêiner)
+          <input class="dop-input" type="text" value="{{ filtros.busca }}" onChange="{{ onBusca }}" placeholder="Ex.: IM2151, HBL123, MSKU1234567" style="height:40px;border:1px solid #E6E8F2;border-radius:9px;padding:0 12px;font-family:inherit;font-size:13px">
+        </label>
+        <label style="display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:700;color:#5A6076">Responsável
+          <select class="dop-input" value="{{ filtros.responsavel }}" onChange="{{ onCampoResponsavel }}" style="height:40px;border:1px solid #E6E8F2;border-radius:9px;padding:0 10px;font-family:inherit;font-size:13px">
+            <option value="">Todos</option>
+            <sc-for list="{{ opcoesResponsaveis }}" as="o" hint-placeholder-count="3"><option value="{{ o.valor }}">{{ o.rotulo }}</option></sc-for>
+          </select>
+        </label>
+        <label style="display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:700;color:#5A6076">Cliente
+          <select class="dop-input" value="{{ filtros.cliente }}" onChange="{{ onCampoCliente }}" style="height:40px;border:1px solid #E6E8F2;border-radius:9px;padding:0 10px;font-family:inherit;font-size:13px">
+            <option value="">Todos</option>
+            <sc-for list="{{ opcoesClientes }}" as="o" hint-placeholder-count="3"><option value="{{ o.valor }}">{{ o.rotulo }}</option></sc-for>
+          </select>
+        </label>
+        <label style="display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:700;color:#5A6076">Armador
+          <select class="dop-input" value="{{ filtros.armador }}" onChange="{{ onCampoArmador }}" style="height:40px;border:1px solid #E6E8F2;border-radius:9px;padding:0 10px;font-family:inherit;font-size:13px">
+            <option value="">Todos</option>
+            <sc-for list="{{ opcoesArmadores }}" as="o" hint-placeholder-count="3"><option value="{{ o.valor }}">{{ o.rotulo }}</option></sc-for>
+          </select>
+        </label>
+        <label style="display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:700;color:#5A6076">Estado
+          <select class="dop-input" value="{{ filtros.estado }}" onChange="{{ onCampoEstado }}" style="height:40px;border:1px solid #E6E8F2;border-radius:9px;padding:0 10px;font-family:inherit;font-size:13px">
+            <option value="">Todos</option>
+            <sc-for list="{{ opcoesEstado }}" as="o" hint-placeholder-count="3"><option value="{{ o.valor }}">{{ o.rotulo }}</option></sc-for>
+          </select>
+        </label>
+        <label style="display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:700;color:#5A6076">Prioridade
+          <select class="dop-input" value="{{ filtros.prioridade }}" onChange="{{ onCampoPrioridade }}" style="height:40px;border:1px solid #E6E8F2;border-radius:9px;padding:0 10px;font-family:inherit;font-size:13px">
+            <option value="">Todas</option>
+            <sc-for list="{{ opcoesBalde }}" as="o" hint-placeholder-count="3"><option value="{{ o.valor }}">{{ o.rotulo }}</option></sc-for>
+          </select>
+        </label>
+        <label style="display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:700;color:#5A6076">Período em
+          <select class="dop-input" value="{{ filtros.periodoCampo }}" onChange="{{ onCampoPeriodoCampo }}" style="height:40px;border:1px solid #E6E8F2;border-radius:9px;padding:0 10px;font-family:inherit;font-size:13px">
+            <option value="descarga">Descarga</option>
+            <option value="devolucao">Devolução</option>
+          </select>
+        </label>
+        <div style="display:flex;gap:8px">
+          <label style="display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:700;color:#5A6076;flex:1">de
+            <input class="dop-input" type="date" value="{{ filtros.periodoInicio }}" onChange="{{ onCampoPeriodoInicio }}" style="height:40px;border:1px solid #E6E8F2;border-radius:9px;padding:0 10px;font-family:inherit;font-size:13px">
+          </label>
+          <label style="display:flex;flex-direction:column;gap:5px;font-size:12px;font-weight:700;color:#5A6076;flex:1">até
+            <input class="dop-input" type="date" value="{{ filtros.periodoFim }}" onChange="{{ onCampoPeriodoFim }}" style="height:40px;border:1px solid #E6E8F2;border-radius:9px;padding:0 10px;font-family:inherit;font-size:13px">
+          </label>
+        </div>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:14px;padding-top:14px;border-top:1px solid #F0F1F7">
+        <sc-for list="{{ checkboxesFiltro }}" as="cb" hint-placeholder-count="7">
+          <label style="display:flex;align-items:center;gap:7px;font-size:12.5px;font-weight:600;color:#3C4258;cursor:pointer">
+            <input class="dop-check" type="checkbox" checked="{{ cb.marcado }}" onChange="{{ cb.onChange }}" style="width:16px;height:16px">{{ cb.rotulo }}
+          </label>
+        </sc-for>
+        <label style="display:flex;align-items:center;gap:7px;font-size:12.5px;font-weight:700;color:#4327E6;cursor:pointer">
+          <input class="dop-check" type="checkbox" checked="{{ filtros.incluirSilenciosos }}" onChange="{{ onToggleSilenciosos }}" style="width:16px;height:16px">
+          Incluir monitoramento silencioso
+        </label>
+      </div>
+      <sc-if value="{{ mostrarAvisoBuscaSilenciosos }}" hint-placeholder-val="{{ false }}">
+        <div role="status" style="margin-top:10px;font-size:12px;color:#4327E6;background:#F3F1FE;border:1px solid #E4E1FA;border-radius:9px;padding:9px 12px">A busca incluiu automaticamente os processos em monitoramento silencioso.</div>
+      </sc-if>
+      </sc-if>
+    </div>
+
+    <!-- LOADING (primeira carga) -->
+    <sc-if value="{{ mostrarCarregandoInicial }}" hint-placeholder-val="{{ false }}">
+      <div aria-busy="true" aria-label="Carregando fila" style="display:flex;flex-direction:column;gap:10px">
+        <sc-for list="{{ esqueletoLinhas }}" as="e" hint-placeholder-count="5">
+          <div class="dop-skel" style="height:64px;border-radius:14px"></div>
+        </sc-for>
+      </div>
+    </sc-if>
+
+    <!-- ERRO -->
+    <sc-if value="{{ mostrarErroFila }}" hint-placeholder-val="{{ false }}">
+      <div style="display:flex;align-items:center;justify-content:center;padding:60px 20px">
+        <div style="text-align:center;max-width:420px;background:#fff;border:1px solid #F4DEDE;border-radius:16px;padding:36px 28px" role="alert">
+          <div style="width:50px;height:50px;border-radius:13px;background:#FDECEC;display:flex;align-items:center;justify-content:center;margin:0 auto 14px" aria-hidden="true"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#E5484D" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg></div>
+          <div style="font-size:16px;font-weight:800;color:#161A2E;margin-bottom:6px">{{ erroFilaMensagem }}</div>
+          <button onClick="{{ tentarDeNovo }}" class="solid-btn" style="margin-top:10px;background:#0D1227;color:#fff;border:none;border-radius:10px;padding:11px 18px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer">Tentar de novo</button>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- VAZIO -->
+    <sc-if value="{{ mostrarVazio }}" hint-placeholder-val="{{ false }}">
+      <div style="display:flex;align-items:center;justify-content:center;padding:60px 20px">
+        <div style="text-align:center;max-width:460px;background:#fff;border:1px solid #E6E8F2;border-radius:16px;padding:40px 30px">
+          <div style="width:54px;height:54px;border-radius:14px;background:#E7F6EF;display:flex;align-items:center;justify-content:center;margin:0 auto 16px" aria-hidden="true"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#1F9D6B" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg></div>
+          <div style="font-size:17px;font-weight:800;color:#161A2E;margin-bottom:8px">{{ vazioTitulo }}</div>
+          <sc-if value="{{ vazioMostrarLimpar }}" hint-placeholder-val="{{ false }}">
+            <button onClick="{{ limparFiltros }}" class="ghost-btn" style="margin-top:4px;background:#fff;border:1px solid #E6E8F2;border-radius:10px;padding:9px 16px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;color:#4327E6">Limpar filtros</button>
+          </sc-if>
+          <sc-if value="{{ vazioMostrarSilenciosos }}" hint-placeholder-val="{{ false }}">
+            <button onClick="{{ onVerSilenciosos }}" class="ghost-btn" style="margin-top:4px;background:#fff;border:1px solid #E6E8F2;border-radius:10px;padding:9px 16px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;color:#4327E6">Ver também os processos em monitoramento silencioso</button>
+          </sc-if>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- CONTEÚDO -->
+    <sc-if value="{{ mostrarConteudoFila }}" hint-placeholder-val="{{ false }}">
+    <div style="animation:pageIn .3s ease both">
+      <div role="table" aria-label="Processos em aberto" style="background:#fff;border:1px solid #EAEBF4;border-radius:16px;overflow:hidden">
+        <div class="dop-grid-head" role="row" style="padding:12px 18px;background:#FAFAFE;border-bottom:1px solid #EEEFF6;font-size:11px;font-weight:700;color:#9AA0B4;text-transform:uppercase;letter-spacing:.04em">
+          <span role="columnheader">Processo</span><span role="columnheader">Estado</span><span role="columnheader">Prioridade</span><span role="columnheader">Contêiner líder</span><span role="columnheader">Próximo vencimento</span><span role="columnheader">Pendências</span>
+        </div>
+        <sc-for list="{{ itensFila }}" as="it" hint-placeholder-count="3">
+          <div class="dop-row dop-grid-row row-hover" role="row" tabIndex="0" onClick="{{ it.abrir }}" onKeyDown="{{ it.onKeyDown }}" aria-label="{{ it.ariaLabel }}" style="padding:16px 18px;border-bottom:1px solid #F2F3F9;cursor:pointer;position:relative">
+            <span style="position:absolute;left:0;top:0;bottom:0;width:4px;background:{{ it.corBalde }}" aria-hidden="true"></span>
+            <div role="cell">
+              <div style="font-family:'JetBrains Mono',monospace;font-size:13.5px;font-weight:700;color:#161A2E">{{ it.numeroProcesso }}</div>
+              <div style="font-size:11.5px;color:#9AA0B4;margin-top:2px">{{ it.clienteLinha }}</div>
+            </div>
+            <div role="cell">
+              <span class="dop-badge" style="background:{{ it.estadoFundo }};color:{{ it.estadoCor }}">{{ it.estadoRotulo }}</span>
+            </div>
+            <div role="cell">
+              <span class="dop-badge" style="background:{{ it.baldeFundo }};color:{{ it.corBalde }}">{{ it.baldeRotulo }}</span>
+              <div style="font-size:11px;color:#9AA0B4;margin-top:4px;line-height:1.4">{{ it.motivoCurto }}</div>
+            </div>
+            <div role="cell">
+              <sc-if value="{{ it.temLider }}" hint-placeholder-val="{{ false }}">
+                <div style="font-size:11px;color:#9AA0B4;font-weight:700;text-transform:uppercase;letter-spacing:.03em">Contêiner líder</div>
+                <div style="font-family:'JetBrains Mono',monospace;font-size:12.5px;font-weight:700;color:#4327E6">{{ it.liderNumero }}</div>
+              </sc-if>
+              <sc-if value="{{ it.semLider }}" hint-placeholder-val="{{ false }}">
+                <span style="font-size:12px;color:#9AA0B4">Ainda não derivado</span>
+              </sc-if>
+            </div>
+            <div role="cell">
+              <span style="font-size:12px;color:#5A6076">{{ it.proximoVencimentoTexto }}</span>
+            </div>
+            <div role="cell" style="display:flex;gap:6px;flex-wrap:wrap">
+              <sc-if value="{{ it.temPendencias }}" hint-placeholder-val="{{ false }}"><span class="dop-badge" style="background:#FEF4E1;color:#B9760A">{{ it.pendenciasTexto }}</span></sc-if>
+              <sc-if value="{{ it.temFalhas }}" hint-placeholder-val="{{ false }}"><span class="dop-badge" style="background:#FDECEC;color:#C2333A">{{ it.falhasTexto }}</span></sc-if>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+
+      <div style="display:flex;justify-content:center;margin-top:18px">
+        <sc-if value="{{ temMais }}" hint-placeholder-val="{{ false }}">
+          <button onClick="{{ carregarMais }}" disabled="{{ carregandoMais }}" class="ghost-btn" style="background:#fff;border:1px solid #E6E8F2;border-radius:10px;padding:11px 22px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;color:#4327E6">{{ carregarMaisTexto }}</button>
+        </sc-if>
+      </div>
+    </div>
+    </sc-if>
+  </div>
+  </sc-if>
+
+  <!-- ===================== VIEW: DETALHE DO PROCESSO ===================== -->
+  <sc-if value="{{ vwProcesso }}" hint-placeholder-val="{{ false }}">
+  <div style="padding:20px 28px 40px" role="region" aria-label="Detalhe do processo" onKeyDown="{{ onEscVoltarFila }}">
+    <button onClick="{{ voltarFila }}" class="ghost-btn" style="display:flex;align-items:center;gap:7px;background:#fff;border:1px solid #E6E8F2;border-radius:10px;padding:9px 14px;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer;color:#5A6076;margin-bottom:16px">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M19 12H5M11 18l-6-6 6-6"/></svg>Voltar à fila
+    </button>
+
+    <sc-if value="{{ procCarregando }}" hint-placeholder-val="{{ false }}">
+      <div aria-busy="true" class="dop-skel" style="height:220px;border-radius:16px"></div>
+    </sc-if>
+
+    <sc-if value="{{ procErro }}" hint-placeholder-val="{{ false }}">
+      <div style="background:#fff;border:1px solid #F4DEDE;border-radius:16px;padding:30px;text-align:center" role="alert">
+        <div style="font-size:15px;font-weight:700;color:#161A2E;margin-bottom:12px">{{ procErroMensagem }}</div>
+        <button onClick="{{ voltarFila }}" class="ghost-btn" style="background:#fff;border:1px solid #E6E8F2;border-radius:10px;padding:9px 16px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;color:#4327E6">Voltar à fila</button>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ procPronto }}" hint-placeholder-val="{{ false }}">
+    <div style="animation:pageIn .3s ease both">
+      <!-- Avisos no topo (seção 29.1) -->
+      <sc-if value="{{ proc.temAvisos }}" hint-placeholder-val="{{ false }}">
+        <div role="alert" style="display:flex;gap:10px;flex-wrap:wrap;background:#FEF4E1;border:1px solid #F5E6C8;border-radius:12px;padding:12px 16px;margin-bottom:16px;font-size:12.5px;color:#8A5A09;font-weight:700">
+          <span>{{ proc.avisosTexto }}</span>
+        </div>
+      </sc-if>
+
+      <div style="background:#fff;border:1px solid #EAEBF4;border-radius:18px;padding:22px 24px;margin-bottom:16px">
+        <div style="display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:16px">
+          <div>
+            <div style="font-family:'JetBrains Mono',monospace;font-size:19px;font-weight:800;color:#161A2E">{{ proc.numeroProcesso }}</div>
+            <div style="font-size:12.5px;color:#7A8099;margin-top:4px">{{ proc.linhaIdentificacao }}</div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <span class="dop-badge" style="background:{{ proc.estadoFundo }};color:{{ proc.estadoCor }}">{{ proc.estadoRotulo }}</span>
+            <span class="dop-badge" style="background:{{ proc.baldeFundo }};color:{{ proc.corBalde }}">{{ proc.baldeRotulo }}</span>
+            <span class="dop-badge" style="background:#F1F2F8;color:#5A6076">{{ proc.apuracaoStatusTexto }}</span>
+          </div>
+        </div>
+        <div style="margin-top:12px;font-size:13px;color:#3C4258;line-height:1.5"><b>Motivo:</b> {{ proc.motivoTexto }}</div>
+        <sc-if value="{{ proc.temLider }}" hint-placeholder-val="{{ false }}">
+          <div style="margin-top:10px;font-size:12.5px;color:#4327E6"><b>Contêiner líder:</b> {{ proc.liderNumero }} — determina o estado e a prioridade do processo.</div>
+        </sc-if>
+        <sc-if value="{{ proc.temProximoVencimento }}" hint-placeholder-val="{{ false }}">
+          <div style="margin-top:6px;font-size:12.5px;color:#5A6076">{{ proc.proximoVencimentoTexto }}</div>
+        </sc-if>
+      </div>
+
+      <!-- Agregado financeiro do processo (DV-01) -->
+      <div class="dop-clocks" style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+        <sc-for list="{{ proc.agregados }}" as="ag" hint-placeholder-count="2">
+          <div style="background:#fff;border:1px solid #EAEBF4;border-radius:16px;padding:18px 20px">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+              <h3 style="font-size:13.5px;font-weight:800;color:#161A2E;text-transform:uppercase;letter-spacing:.03em">{{ ag.titulo }}</h3>
+              <span class="dop-badge" style="background:{{ ag.completoFundo }};color:{{ ag.completoCor }};margin-left:auto">{{ ag.completoTexto }}</span>
+            </div>
+            <sc-if value="{{ ag.semGrupos }}" hint-placeholder-val="{{ false }}"><div style="font-size:12.5px;color:#9AA0B4">Nenhum valor confirmado ou estimado ainda.</div></sc-if>
+            <sc-for list="{{ ag.grupos }}" as="g" hint-placeholder-count="1">
+              <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #F2F3F9">
+                <span style="font-size:13px;font-weight:700;color:#161A2E">{{ g.texto }}</span>
+                <span style="font-size:11.5px;color:#9AA0B4">{{ g.composicaoTexto }}</span>
+              </div>
+            </sc-for>
+            <div style="display:flex;gap:12px;margin-top:10px;font-size:11.5px;color:#9AA0B4">
+              <span>{{ ag.pendentesTexto }}</span><span>{{ ag.indisponiveisTexto }}</span><span>{{ ag.semAplicacaoTexto }}</span>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+
+      <!-- Abas -->
+      <div role="tablist" aria-label="Seções do processo" style="display:flex;gap:4px;background:#F1F2F8;border-radius:12px;padding:4px;margin-bottom:16px;max-width:460px">
+        <sc-for list="{{ proc.abas }}" as="ab" hint-placeholder-count="3">
+          <button class="dop-tab" role="tab" aria-selected="{{ ab.ativa }}" onClick="{{ ab.selecionar }}" style="flex:1;border:none;border-radius:9px;padding:10px;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer;background:{{ ab.fundo }};color:{{ ab.cor }}">{{ ab.rotulo }}</button>
+        </sc-for>
+      </div>
+
+      <!-- Aba: Contêineres -->
+      <sc-if value="{{ proc.abaConteineres }}" hint-placeholder-val="{{ true }}">
+        <div style="background:#fff;border:1px solid #EAEBF4;border-radius:16px;overflow:hidden">
+          <sc-for list="{{ proc.containersVm }}" as="c" hint-placeholder-count="2">
+            <div class="dop-row row-hover" role="button" tabIndex="0" onClick="{{ c.abrir }}" onKeyDown="{{ c.onKeyDown }}" aria-label="{{ c.ariaLabel }}" style="display:flex;flex-wrap:wrap;align-items:center;gap:16px;padding:16px 18px;border-bottom:1px solid #F2F3F9;cursor:pointer">
+              <div style="min-width:140px"><div style="font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;color:#161A2E">{{ c.numero }}</div><span class="dop-badge" style="background:{{ c.estadoFundo }};color:{{ c.estadoCor }};margin-top:4px">{{ c.estadoRotulo }}</span></div>
+              <div style="font-size:12px;color:#5A6076">Cliente: {{ c.clienteResumo }}</div>
+              <div style="font-size:12px;color:#5A6076">Rocket: {{ c.rocketResumo }}</div>
+              <div style="font-size:12px;color:#9AA0B4;margin-left:auto">{{ c.minutasTexto }}</div>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#9AA0B4" stroke-width="2.2" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+            </div>
+          </sc-for>
+        </div>
+      </sc-if>
+
+      <!-- Aba: Timeline -->
+      <sc-if value="{{ proc.abaTimeline }}" hint-placeholder-val="{{ false }}">
+        <div style="background:#fff;border:1px solid #EAEBF4;border-radius:16px;padding:8px">
+          <sc-if value="{{ tl.carregando }}" hint-placeholder-val="{{ false }}"><div aria-busy="true" class="dop-skel" style="height:120px;margin:12px;border-radius:12px"></div></sc-if>
+          <sc-if value="{{ tl.vazia }}" hint-placeholder-val="{{ false }}"><div style="padding:30px;text-align:center;font-size:13px;color:#9AA0B4">Nenhum evento registrado para este processo.</div></sc-if>
+          <sc-for list="{{ tl.eventos }}" as="ev" hint-placeholder-count="3">
+            <div style="display:grid;grid-template-columns:110px 150px 1fr 90px;gap:12px;align-items:start;padding:14px 16px;border-bottom:1px solid #F2F3F9;font-size:12.5px">
+              <div style="color:#9AA0B4">{{ ev.dataOperacionalTexto }}</div>
+              <div style="color:#9AA0B4">{{ ev.registradoEmTexto }}</div>
+              <div>
+                <div style="font-weight:700;color:#161A2E">{{ ev.tipoRotulo }}</div>
+                <div style="color:#5A6076;margin-top:2px">{{ ev.resumo }}</div>
+                <div style="color:#9AA0B4;margin-top:3px">{{ ev.rodape }}</div>
+              </div>
+              <span class="dop-badge" style="background:{{ ev.origemFundo }};color:{{ ev.origemCor }};justify-self:start">{{ ev.origemRotulo }}</span>
+            </div>
+          </sc-for>
+          <sc-if value="{{ tl.temMais }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;justify-content:center;padding:14px"><button onClick="{{ carregarMaisTimeline }}" class="ghost-btn" style="background:#fff;border:1px solid #E6E8F2;border-radius:10px;padding:9px 18px;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer;color:#4327E6">Carregar mais eventos</button></div>
+          </sc-if>
+        </div>
+      </sc-if>
+
+      <!-- Aba: Fechamento e reaberturas -->
+      <sc-if value="{{ proc.abaFechamento }}" hint-placeholder-val="{{ false }}">
+        <div style="background:#fff;border:1px solid #EAEBF4;border-radius:16px;padding:20px">
+          <sc-if value="{{ proc.temFechamento }}" hint-placeholder-val="{{ false }}">
+            <div style="font-size:13px;color:#3C4258"><b>Fechado em</b> {{ proc.fechamentoEm }}</div>
+            <div style="font-size:12.5px;color:#7A8099;margin-top:4px">{{ proc.fechamentoJustificativa }}</div>
+          </sc-if>
+          <sc-if value="{{ proc.semFechamento }}" hint-placeholder-val="{{ false }}"><div style="font-size:13px;color:#9AA0B4">Processo em aberto (OPEN) — sem fechamento registrado.</div></sc-if>
+          <sc-if value="{{ proc.temReaberturas }}" hint-placeholder-val="{{ false }}">
+            <div style="margin-top:16px;padding-top:16px;border-top:1px solid #F0F1F7">
+              <h4 style="font-size:12.5px;font-weight:800;color:#161A2E;margin-bottom:10px">Reaberturas</h4>
+              <sc-for list="{{ proc.reaberturasVm }}" as="r" hint-placeholder-count="1">
+                <div style="font-size:12.5px;color:#5A6076;padding:6px 0;border-bottom:1px solid #F5F6FA">{{ r.texto }}</div>
+              </sc-for>
+            </div>
+          </sc-if>
+        </div>
+      </sc-if>
+    </div>
+    </sc-if>
+  </div>
+  </sc-if>
+
+  <!-- ===================== VIEW: DETALHE DO CONTÊINER ===================== -->
+  <sc-if value="{{ vwContainer }}" hint-placeholder-val="{{ false }}">
+  <div style="padding:20px 28px 40px" role="region" aria-label="Detalhe do contêiner" onKeyDown="{{ onEscVoltarProcesso }}">
+    <button onClick="{{ voltarProcesso }}" class="ghost-btn" style="display:flex;align-items:center;gap:7px;background:#fff;border:1px solid #E6E8F2;border-radius:10px;padding:9px 14px;font-family:inherit;font-size:12.5px;font-weight:700;cursor:pointer;color:#5A6076;margin-bottom:16px">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M19 12H5M11 18l-6-6 6-6"/></svg>Voltar ao processo
+    </button>
+
+    <sc-if value="{{ ctCarregando }}" hint-placeholder-val="{{ false }}"><div aria-busy="true" class="dop-skel" style="height:260px;border-radius:16px"></div></sc-if>
+
+    <sc-if value="{{ ctErro }}" hint-placeholder-val="{{ false }}">
+      <div style="background:#fff;border:1px solid #F4DEDE;border-radius:16px;padding:30px;text-align:center" role="alert">
+        <div style="font-size:15px;font-weight:700;color:#161A2E">{{ ctErroMensagem }}</div>
+        <button onClick="{{ voltarProcesso }}" class="ghost-btn" style="margin-top:12px;background:#fff;border:1px solid #E6E8F2;border-radius:10px;padding:9px 16px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;color:#4327E6">Voltar</button>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ ctPronto }}" hint-placeholder-val="{{ false }}">
+    <div style="animation:pageIn .3s ease both">
+      <div style="background:#fff;border:1px solid #EAEBF4;border-radius:18px;padding:20px 24px;margin-bottom:16px;display:flex;flex-wrap:wrap;align-items:center;gap:12px">
+        <div style="font-family:'JetBrains Mono',monospace;font-size:17px;font-weight:800;color:#161A2E">{{ ct.numero }}</div>
+        <span class="dop-badge" style="background:{{ ct.estadoFundo }};color:{{ ct.estadoCor }}">{{ ct.estadoRotulo }}</span>
+        <sc-for list="{{ ct.badges }}" as="b" hint-placeholder-count="2"><span class="dop-badge" style="background:#F1F2F8;color:#5A6076">{{ b.rotulo }}</span></sc-for>
+        <div style="margin-left:auto;font-size:12px;color:#9AA0B4">{{ ct.trackingTexto }}</div>
+      </div>
+
+      <!-- Dois relógios — SEPARADOS, nunca um status geral. -->
+      <div class="dop-clocks" style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+        <sc-for list="{{ ct.relogiosVm }}" as="rl" hint-placeholder-count="2">
+          <section aria-label="{{ rl.titulo }}" style="background:#fff;border:1px solid #EAEBF4;border-radius:16px;padding:18px 20px">
+            <h3 style="font-size:13.5px;font-weight:800;color:#161A2E;text-transform:uppercase;letter-spacing:.03em;margin-bottom:12px">{{ rl.titulo }}</h3>
+            <sc-if value="{{ rl.temStatusEspecial }}" hint-placeholder-val="{{ false }}">
+              <div role="alert" style="background:#F1F2F8;border-radius:10px;padding:10px 12px;font-size:12.5px;color:#5A6076;margin-bottom:12px"><b>{{ rl.statusTexto }}</b><sc-if value="{{ rl.temMotivo }}" hint-placeholder-val="{{ false }}"> — {{ rl.statusMotivo }}</sc-if></div>
+            </sc-if>
+            <sc-if value="{{ rl.temAvisoCache }}" hint-placeholder-val="{{ false }}">
+              <div role="status" style="background:#FEF4E1;border-radius:10px;padding:9px 12px;font-size:12px;color:#8A5A09;margin-bottom:12px">{{ rl.avisoCache }}</div>
+            </sc-if>
+            <dl style="display:flex;flex-direction:column;gap:9px;font-size:12.5px">
+              <div style="display:flex;justify-content:space-between"><dt style="color:#9AA0B4">Descarga</dt><dd style="font-weight:700;color:#161A2E">{{ rl.descargaTexto }}</dd></div>
+              <div style="display:flex;justify-content:space-between"><dt style="color:#9AA0B4">Free Time</dt><dd style="font-weight:700;color:#161A2E">{{ rl.freeTimeTexto }}</dd></div>
+              <div style="display:flex;justify-content:space-between"><dt style="color:#9AA0B4">Último dia livre</dt><dd style="font-weight:700;color:#161A2E">{{ rl.ultimoDiaLivreTexto }}</dd></div>
+              <div style="display:flex;justify-content:space-between"><dt style="color:#9AA0B4">1º dia de demurrage</dt><dd style="font-weight:700;color:#161A2E">{{ rl.primeiroDiaTexto }}</dd></div>
+              <div style="display:flex;justify-content:space-between"><dt style="color:#9AA0B4">Apurado até</dt><dd style="font-weight:700;color:#161A2E">{{ rl.apuradoAteTexto }}</dd></div>
+              <div style="display:flex;justify-content:space-between"><dt style="color:#9AA0B4">Dias (relógio guardado)</dt><dd style="font-weight:700;color:#161A2E">{{ rl.diasTexto }}</dd></div>
+              <div style="display:flex;justify-content:space-between"><dt style="color:#9AA0B4">Dias operacionais (hoje)</dt><dd style="font-weight:700;color:#161A2E">{{ rl.diasOperacionaisTexto }}</dd></div>
+            </dl>
+            <div style="margin-top:14px;padding-top:14px;border-top:1px solid #F0F1F7">
+              <div style="font-size:11px;color:#9AA0B4;font-weight:700;text-transform:uppercase;letter-spacing:.03em">Valor</div>
+              <div style="font-size:15px;font-weight:800;color:#161A2E;margin-top:4px">{{ rl.valorTexto }}</div>
+              <div style="font-size:11.5px;color:#7A8099;margin-top:2px">{{ rl.valorRotulo }}</div>
+            </div>
+            <sc-if value="{{ rl.temTabela }}" hint-placeholder-val="{{ false }}">
+              <div style="margin-top:10px;font-size:11.5px;color:#9AA0B4">{{ rl.tabelaTexto }}</div>
+            </sc-if>
+            <sc-if value="{{ rl.temPrazoTexto }}" hint-placeholder-val="{{ false }}">
+              <div style="margin-top:10px;font-size:12px;color:{{ rl.prazoCor }}">{{ rl.prazoTexto }}</div>
+            </sc-if>
+          </section>
+        </sc-for>
+      </div>
+
+      <!-- Minutas -->
+      <sc-if value="{{ ct.temMinutas }}" hint-placeholder-val="{{ false }}">
+        <div style="background:#fff;border:1px solid #EAEBF4;border-radius:16px;padding:18px 20px;margin-top:16px">
+          <h3 style="font-size:13px;font-weight:800;color:#161A2E;margin-bottom:10px">Minutas</h3>
+          <sc-for list="{{ ct.minutasVm }}" as="m" hint-placeholder-count="1">
+            <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid #F5F6FA;font-size:12.5px">
+              <span class="dop-badge" style="background:#F1F2F8;color:#5A6076">{{ m.estado }}</span>
+              <span style="color:#5A6076">{{ m.datasTexto }}</span>
+              <sc-if value="{{ m.divergente }}" hint-placeholder-val="{{ false }}"><span style="color:#C2333A;font-weight:700">Divergente do tracking</span></sc-if>
+            </div>
+          </sc-for>
+        </div>
+      </sc-if>
+
+      <!-- Informação interna — Responsabilidade (NUNCA aparece na fila). -->
+      <div style="background:#F8F7FE;border:1px solid #ECE9FB;border-radius:16px;padding:18px 20px;margin-top:16px" aria-label="Informação interna sobre responsabilidade">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="2"><path d="M12 3 4 7v10l8 4 8-4V7Z"/></svg>
+          <h3 style="font-size:13px;font-weight:800;color:#4327E6;text-transform:uppercase;letter-spacing:.03em">Informação interna — Responsabilidade</h3>
+        </div>
+        <div style="font-size:13px;font-weight:700;color:#161A2E">{{ ct.respEstadoRotulo }}</div>
+        <sc-if value="{{ ct.temDecisao }}" hint-placeholder-val="{{ false }}">
+          <dl style="display:flex;flex-direction:column;gap:7px;font-size:12.5px;margin-top:10px">
+            <div style="display:flex;justify-content:space-between"><dt style="color:#7A8099">Versão</dt><dd style="font-weight:700">{{ ct.decisaoVersao }}</dd></div>
+            <div style="display:flex;justify-content:space-between"><dt style="color:#7A8099">Dias Rocket / Cliente</dt><dd style="font-weight:700">{{ ct.decisaoDias }}</dd></div>
+            <div style="display:flex;justify-content:space-between"><dt style="color:#7A8099">Valor Rocket</dt><dd style="font-weight:700">{{ ct.decisaoValorRocket }}</dd></div>
+            <div style="display:flex;justify-content:space-between"><dt style="color:#7A8099">Valor Cliente</dt><dd style="font-weight:700">{{ ct.decisaoValorCliente }}</dd></div>
+            <div style="display:flex;justify-content:space-between"><dt style="color:#7A8099">Autor / Data</dt><dd style="font-weight:700">{{ ct.decisaoAutorData }}</dd></div>
+          </dl>
+          <div style="font-size:12px;color:#5A6076;margin-top:8px;line-height:1.5">{{ ct.decisaoJustificativa }}</div>
+        </sc-if>
+        <sc-if value="{{ ct.temInvalidada }}" hint-placeholder-val="{{ false }}">
+          <div role="status" style="margin-top:10px;font-size:12px;color:#B9760A;background:#FEF4E1;border-radius:9px;padding:8px 10px">{{ ct.invalidadaTexto }}</div>
+        </sc-if>
+      </div>
+    </div>
+    </sc-if>
+  </div>
+  </sc-if>
+
+  </sc-if>
+</main>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  constructor(props){
+    super(props);
+    var storage = null;
+    try { storage = window.sessionStorage; } catch(e){}
+    this._storage = storage;
+    var filtrosSalvos = DemurrageV2.carregarFiltros(storage);
+    this.state = {
+      view: 'fila',
+      filtros: filtrosSalvos,
+      filtrosAbertos: true,
+      avisoBuscaSilenciosos: false,
+      avisoFaixa: null,
+      bloqueio: null,
+      fila: DemurrageV2.estadoPaginacaoInicial(),
+      opcoesFiltros: null,
+      processoId: null, processo: null, procCarregando: false, procErro: null,
+      abaProcesso: 'conteineres',
+      timeline: { eventos: [], cursor: null, carregando: false, vazio: false },
+      containerId: null, container: null, ctCarregando: false, ctErro: null,
+    };
+  }
+
+  componentDidMount(){
+    this._pedido = 0;
+    this.carregarFila(true);
+    this.carregarOpcoesFiltros();
+    this._onFocus = (e) => { var dt = e && e.detail; if (dt && dt.module === 'demurrageop' && dt.id) this.abrirProcesso(dt.id); };
+    window.addEventListener('priora:focus', this._onFocus);
+    var p = window.PrioraBus && window.PrioraBus.consume('demurrageop');
+    if (p && p.id) setTimeout(() => this.abrirProcesso(p.id), 60);
+  }
+  componentWillUnmount(){
+    window.removeEventListener('priora:focus', this._onFocus);
+    clearTimeout(this._avisoTimer);
+  }
+
+  /* ---------------- fetch wrapper: nunca envia organizationId; traduz erro pela tabela fixa ---------------- */
+  buscar(caminho){
+    return fetch('/api/demurrage/v2' + caminho, { credentials: 'same-origin' }).then(function(r){
+      return r.json().catch(function(){ return null; }).then(function(corpo){ return { status: r.status, ok: r.ok, corpo: corpo }; });
+    });
+  }
+
+  /* ---------------- FILA ---------------- */
+  chaveFiltrosAtual(){ return DemurrageV2.chaveFiltros(this.state.filtros); }
+
+  carregarFila(primeiraPagina){
+    var chave = this.chaveFiltrosAtual();
+    this._pedido++;
+    var meuPedido = this._pedido;
+    if (primeiraPagina) this.setState(function(s){ return { fila: DemurrageV2.reduzirPaginacao(s.fila, { tipo: 'FILTROS_MUDARAM', chave: chave }) }; });
+    else this.setState(function(s){ return { fila: DemurrageV2.reduzirPaginacao(s.fila, { tipo: 'CARREGANDO_MAIS' }) }; });
+
+    var cursor = primeiraPagina ? null : this.state.fila.cursor;
+    var query = DemurrageV2.construirQueryFila(this.state.filtros, cursor ? { cursor: cursor } : null);
+    var self = this;
+    this.buscar('/processos' + (query ? '?' + query : '')).then(function(resp){
+      if (meuPedido !== self._pedido && !primeiraPagina) return; // resposta atrasada de "carregar mais" cancelado por nova busca.
+      if (!resp.ok) { self.tratarErroFila(resp, chave); return; }
+      self.setState(function(s){
+        return { fila: DemurrageV2.reduzirPaginacao(s.fila, { tipo: 'PAGINA_CARREGADA', chave: chave, substituir: primeiraPagina, dados: resp.corpo }) };
+      });
+    }).catch(function(){
+      self.setState(function(s){ return { fila: DemurrageV2.reduzirPaginacao(s.fila, { tipo: 'ERRO', chave: chave, erro: DemurrageV2.classificarErro(0, null) }) }; });
+    });
+  }
+
+  tratarErroFila(resp, chave){
+    var self = this;
+    var cls = DemurrageV2.classificarErro(resp.status, resp.corpo);
+    if (cls.acao === 'sessao_encerrada') { this.setState({ bloqueio: { tipo: 'sessao', titulo: 'Sessão encerrada', texto: cls.mensagem } }); return; }
+    if (cls.acao === 'acesso_restrito') { this.setState({ bloqueio: { tipo: 'acesso', titulo: 'Acesso restrito', texto: cls.mensagem } }); return; }
+    if (cls.acao === 'organizacao_ambigua') { this.setState({ bloqueio: { tipo: 'organizacao', titulo: 'Organização ambígua', texto: cls.mensagem } }); return; }
+    if (cls.acao === 'reiniciar_fila') {
+      this.mostrarAviso(cls.mensagem);
+      this.setState(function(s){ return { fila: DemurrageV2.reduzirPaginacao(s.fila, { tipo: 'REINICIAR', chave: chave, aviso: cls.mensagem }) }; });
+      setTimeout(function(){ self.carregarFila(true); }, 30);
+      return;
+    }
+    if (cls.acao === 'filtro_invalido') {
+      this.mostrarAviso(cls.mensagem);
+      this.setState({ filtros: DemurrageV2.filtrosPadrao() });
+      setTimeout(function(){ self.carregarFila(true); }, 30);
+      return;
+    }
+    this.setState(function(s){ return { fila: DemurrageV2.reduzirPaginacao(s.fila, { tipo: 'ERRO', chave: chave, erro: cls }) }; });
+  }
+
+  mostrarAviso(texto){
+    clearTimeout(this._avisoTimer);
+    this.setState({ avisoFaixa: texto });
+    this._avisoTimer = setTimeout(() => this.setState({ avisoFaixa: null }), 6000);
+  }
+
+  carregarOpcoesFiltros(){
+    var self = this;
+    this.buscar('/filtros').then(function(resp){ if (resp.ok) self.setState({ opcoesFiltros: resp.corpo }); });
+  }
+
+  carregarMais(){ if (this.state.fila.cursor && !this.state.fila.carregando) this.carregarFila(false); }
+  tentarDeNovo(){ this.carregarFila(true); }
+
+  atualizarFiltros(parcial){
+    var anterior = this.state.filtros;
+    var novo = Object.assign({}, anterior, parcial);
+    var resultado = DemurrageV2.aplicarAutoIncluirSilenciosos(anterior, novo);
+    DemurrageV2.salvarFiltros(this._storage, resultado.filtros);
+    this.setState({ filtros: resultado.filtros, avisoBuscaSilenciosos: resultado.autoHabilitado });
+    var self = this;
+    clearTimeout(this._filtroTimer);
+    this._filtroTimer = setTimeout(function(){ self.carregarFila(true); }, 260);
+  }
+  onCampo(campo){ var self = this; return function(e){ var v = e && e.target ? e.target.value : e; self.atualizarFiltros(((o) => { o[campo] = v === '' ? null : v; return o; })({})); }; }
+  onBusca(e){ this.atualizarFiltros({ busca: e.target.value || null }); }
+  onToggleSilenciosos(e){ this.atualizarFiltros({ incluirSilenciosos: !!e.target.checked }); }
+  checkboxFiltro(campo, rotulo){
+    var self = this;
+    return { rotulo: rotulo, marcado: this.state.filtros[campo] === true, onChange: function(e){ self.atualizarFiltros(((o) => { o[campo] = e.target.checked ? true : null; return o; })({})); } };
+  }
+  limparFiltros(){
+    var padrao = DemurrageV2.filtrosPadrao();
+    DemurrageV2.salvarFiltros(this._storage, padrao);
+    this.setState({ filtros: padrao, avisoBuscaSilenciosos: false });
+    var self = this; setTimeout(function(){ self.carregarFila(true); }, 10);
+  }
+  toggleFiltros(){ this.setState(function(s){ return { filtrosAbertos: !s.filtrosAbertos }; }); }
+  onVerSilenciosos(){ this.atualizarFiltros({ incluirSilenciosos: true }); }
+  aplicarBalde(codigo){ var self = this; return function(){ self.atualizarFiltros({ prioridade: self.state.filtros.prioridade === codigo ? null : codigo }); }; }
+
+  /* ---------------- DETALHE DE PROCESSO ---------------- */
+  abrirProcesso(id){
+    this.setState({ view: 'processo', processoId: id, processo: null, procCarregando: true, procErro: null, abaProcesso: 'conteineres', timeline: { eventos: [], cursor: null, carregando: false, vazio: false } });
+    var self = this;
+    this.buscar('/processos/' + id).then(function(resp){
+      if (!resp.ok) { self.setState({ procCarregando: false, procErro: DemurrageV2.classificarErro(resp.status, resp.corpo) }); return; }
+      self.setState({ procCarregando: false, processo: resp.corpo });
+    }).catch(function(){ self.setState({ procCarregando: false, procErro: DemurrageV2.classificarErro(0, null) }); });
+  }
+  voltarFila(){ this.setState({ view: 'fila', processoId: null, processo: null }); }
+  onEscVoltarFila(e){ if (e.key === 'Escape') this.voltarFila(); }
+  selecionarAba(nome){ var self = this; return function(){ self.setState({ abaProcesso: nome }); if (nome === 'timeline' && self.state.timeline.eventos.length === 0) self.carregarTimeline(true); }; }
+
+  carregarTimeline(primeiraPagina){
+    var self = this;
+    this.setState(function(s){ return { timeline: Object.assign({}, s.timeline, { carregando: true }) }; });
+    var cursor = primeiraPagina ? null : this.state.timeline.cursor;
+    this.buscar('/processos/' + this.state.processoId + '/timeline' + (cursor ? '?cursor=' + encodeURIComponent(cursor) : '')).then(function(resp){
+      if (!resp.ok) { self.setState(function(s){ return { timeline: Object.assign({}, s.timeline, { carregando: false }) }; }); return; }
+      self.setState(function(s){
+        var eventos = primeiraPagina ? resp.corpo.eventos : s.timeline.eventos.concat(resp.corpo.eventos);
+        return { timeline: { eventos: eventos, cursor: resp.corpo.cursor, carregando: false, vazio: eventos.length === 0 } };
+      });
+    }).catch(function(){ self.setState(function(s){ return { timeline: Object.assign({}, s.timeline, { carregando: false }) }; }); });
+  }
+  carregarMaisTimeline(){ this.carregarTimeline(false); }
+
+  /* ---------------- DETALHE DE CONTÊINER ---------------- */
+  abrirContainer(id){
+    this.setState({ view: 'container', containerId: id, container: null, ctCarregando: true, ctErro: null });
+    var self = this;
+    this.buscar('/containers/' + id).then(function(resp){
+      if (!resp.ok) { self.setState({ ctCarregando: false, ctErro: DemurrageV2.classificarErro(resp.status, resp.corpo) }); return; }
+      self.setState({ ctCarregando: false, container: resp.corpo });
+    }).catch(function(){ self.setState({ ctCarregando: false, ctErro: DemurrageV2.classificarErro(0, null) }); });
+  }
+  voltarProcesso(){ this.setState({ view: 'processo', containerId: null, container: null }); }
+  onEscVoltarProcesso(e){ if (e.key === 'Escape') this.voltarProcesso(); }
+
+  /* ---------------- view-models ---------------- */
+  corBalde(codigo){
+    var m = { CRITICA_15: '#E5484D', CRITICA_7_14: '#E8990C', ATENCAO_1_6: '#E8990C', DEVOLVIDO_TRATAMENTO: '#4327E6', PRAZO_PREVENTIVO: '#1F9D6B', SILENCIOSO: '#9AA0B4' };
+    return m[codigo] || '#9AA0B4';
+  }
+  fundoBalde(codigo){
+    var m = { CRITICA_15: '#FDECEC', CRITICA_7_14: '#FEF4E1', ATENCAO_1_6: '#FEF4E1', DEVOLVIDO_TRATAMENTO: '#EEEBFE', PRAZO_PREVENTIVO: '#E7F6EF', SILENCIOSO: '#F1F2F8' };
+    return m[codigo] || '#F1F2F8';
+  }
+  rotuloBalde(codigo){
+    var m = { CRITICA_15: 'Crítico 15+', CRITICA_7_14: 'Crítico 7–14', ATENCAO_1_6: 'Atenção 1–6', DEVOLVIDO_TRATAMENTO: 'Devolvido — tratamento', PRAZO_PREVENTIVO: 'Prazo preventivo', SILENCIOSO: 'Silencioso' };
+    return m[codigo] || String(codigo);
+  }
+
+  /** Filtros para os controles da UI: strings `null` → '' (React não aceita `null` em `value` controlado); booleanos ficam como estão. */
+  vmFiltrosControlados(filtros){
+    var out = Object.assign({}, filtros);
+    ['responsavel','cliente','armador','estado','prioridade','periodoCampo','periodoInicio','periodoFim','busca'].forEach(function(campo){
+      if (out[campo] === null || out[campo] === undefined) out[campo] = '';
+    });
+    return out;
+  }
+
+  vmItemFila(vm, bruto){
+    var self = this;
+    var lider = vm.lider;
+    return Object.assign({}, vm, {
+      corBalde: this.corBalde(vm.balde), baldeFundo: this.fundoBalde(vm.balde), baldeRotulo: this.rotuloBalde(vm.balde),
+      estadoFundo: '#F1F2F8', estadoCor: '#3C4258',
+      clienteLinha: [vm.cliente, vm.house].filter(Boolean).join(' · ') || '—',
+      motivoCurto: vm.motivo || '',
+      temLider: !!lider, semLider: !lider, liderNumero: lider ? lider.numero : '',
+      proximoVencimentoTexto: vm.proximoVencimento ? vm.proximoVencimento.texto : 'Sem próximo vencimento conhecido',
+      temPendencias: vm.pendenciasTotal > 0, pendenciasTexto: vm.pendenciasTotal + ' pendência(s)',
+      temFalhas: vm.falhasTotal > 0, falhasTexto: vm.falhasTotal + ' falha(s) técnica(s)',
+      ariaLabel: 'Processo ' + (vm.numeroProcesso || '') + ', ' + vm.estadoRotulo + ', ' + this.rotuloBalde(vm.balde) + '. Abrir detalhe.',
+      abrir: function(){ self.abrirProcesso(vm.processoId); },
+      onKeyDown: function(e){ if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); self.abrirProcesso(vm.processoId); } },
+    });
+  }
+
+  vmAgregadoLado(titulo,ladoFormatado){
+    var grupos = ladoFormatado.grupos.map(function(g){
+      return { texto: g.texto, composicaoTexto: g.confirmados + ' confirmado(s) · ' + g.estimados + ' estimado(s)' + (g.estimativasProvisorias ? ' · ' + g.estimativasProvisorias + ' provisória(s)' : '') };
+    });
+    return {
+      titulo: titulo, grupos: grupos, semGrupos: grupos.length === 0,
+      completoFundo: ladoFormatado.completo ? '#E7F6EF' : '#FEF4E1', completoCor: ladoFormatado.completo ? '#177D54' : '#B9760A',
+      completoTexto: ladoFormatado.completo ? 'Completo' : 'Incompleto',
+      pendentesTexto: ladoFormatado.pendentes + ' pendente(s)', indisponiveisTexto: ladoFormatado.indisponiveis + ' indisponível(is)', semAplicacaoTexto: ladoFormatado.semAplicacao + ' sem demurrage',
+    };
+  }
+
+  vmRelogio(rl){
+    var temStatusEspecial = !rl.statusOk;
+    var tabelaTexto = rl.tabela ? ('Tabela ' + (rl.tabela.id ? 'v' + (rl.tabela.versao || '') : 'não identificada') + (rl.tabela.fonte ? ' · ' + rl.tabela.fonte : '')) : null;
+    return Object.assign({}, rl, {
+      temStatusEspecial: temStatusEspecial, temMotivo: !!rl.statusMotivo,
+      temAvisoCache: !!rl.avisoCache,
+      descargaTexto: (rl.descarga && rl.descarga.data) || 'Não informado',
+      freeTimeTexto: rl.freeTimeDias != null ? (rl.freeTimeDias + ' dia(s)' + (rl.freeTimeFonte ? ' · ' + rl.freeTimeFonte : '')) : 'Não informado',
+      ultimoDiaLivreTexto: rl.ultimoDiaLivre || '—',
+      primeiroDiaTexto: rl.primeiroDiaDemurrage || '—',
+      apuradoAteTexto: rl.dataFinalApuracao || '—',
+      diasTexto: rl.dias != null ? String(rl.dias) : '—',
+      diasOperacionaisTexto: rl.diasOperacionais != null ? String(rl.diasOperacionais) : '—',
+      valorTexto: rl.valor.textoValor || '—', valorRotulo: rl.valor.rotulo,
+      temTabela: !!tabelaTexto, tabelaTexto: tabelaTexto,
+      temPrazoTexto: !!(rl.prazo && rl.prazo.texto), prazoTexto: rl.prazo ? rl.prazo.texto : null,
+      prazoCor: rl.prazo && rl.prazo.vencido ? '#C2333A' : (rl.prazo && rl.prazo.emPrazoProximo ? '#B9760A' : '#5A6076'),
+    });
+  }
+
+  vmEvento(ev){
+    var rodapeParts = [];
+    if (ev.fonte) rodapeParts.push(ev.fonte);
+    if (ev.autorNome) rodapeParts.push(ev.autorNome);
+    if (ev.containerId) rodapeParts.push('Contêiner');
+    else if (ev.escopo === 'embarque') rodapeParts.push('Embarque');
+    if (ev.evidenciaRef) rodapeParts.push('Ref.: ' + ev.evidenciaRef);
+    return Object.assign({}, ev, {
+      dataOperacionalTexto: ev.dataOperacional || '—',
+      registradoEmTexto: ev.registradoEm || '—',
+      origemFundo: ev.origem === 'humano' ? '#EEEBFE' : '#F1F2F8', origemCor: ev.origem === 'humano' ? '#4327E6' : '#5A6076',
+      rodape: rodapeParts.join(' · '),
+    });
+  }
+
+  renderVals(){
+    var self = this;
+    var s = this.state;
+    var DV2 = window.DemurrageV2;
+
+    var base = {
+      mostrarBloqueio: !!s.bloqueio, bloqueioTitulo: s.bloqueio ? s.bloqueio.titulo : '', bloqueioTexto: s.bloqueio ? s.bloqueio.texto : '',
+      mostrarTela: !s.bloqueio,
+      mostrarAvisoFaixa: !!s.avisoFaixa, avisoFaixaTexto: s.avisoFaixa || '', avisoLive: s.avisoFaixa || '',
+      vwFila: s.view === 'fila', vwProcesso: s.view === 'processo', vwContainer: s.view === 'container',
+    };
+    if (s.bloqueio) return base;
+
+    /* ---------- FILA ---------- */
+    var telaFila = DV2.estadoTela(s.fila);
+    var itensVm = DV2.prepararItensFila(s.fila.itens).map(function(vm, i){ return self.vmItemFila(vm, s.fila.itens[i]); });
+    var filtrosAtivosCount = 0;
+    ['responsavel','cliente','armador','estado','prioridade','comPendencia','comFalhaTecnica','dentroDoFreeTime','emDemurrage','devolvido','responsabilidadeEmAnalise','exposicaoIndisponivel','busca'].forEach(function(c){ if (s.filtros[c]) filtrosAtivosCount++; });
+    if (s.filtros.periodoInicio && s.filtros.periodoFim) filtrosAtivosCount++;
+
+    var opt = s.opcoesFiltros;
+    var mkOpcoes = function(lista, valorCampo, rotuloCampo){ return (lista || []).map(function(o){ return { valor: o[valorCampo], rotulo: o[rotuloCampo] }; }); };
+    var resumoBaldes = opt ? opt.baldes.filter(function(b){ return b.codigo !== 'SILENCIOSO'; }).map(function(b){
+      return {
+        rotulo: self.rotuloBalde(b.codigo), total: b.total, cor: self.corBalde(b.codigo), fundo: self.fundoBalde(b.codigo),
+        borda: s.filtros.prioridade === b.codigo ? self.corBalde(b.codigo) : '#EAEBF4', ativo: s.filtros.prioridade === b.codigo,
+        aplicar: self.aplicarBalde(b.codigo),
+      };
+    }) : [];
+
+    Object.assign(base, {
+      filtrosAbertos: s.filtrosAbertos, toggleFiltros: () => self.toggleFiltros(),
+      contadorFiltrosTexto: filtrosAtivosCount > 0 ? ' (' + filtrosAtivosCount + ' ativos)' : '',
+      mostrandoTexto: 'Mostrando ' + itensVm.length + ' de ' + s.fila.total,
+      limparFiltros: () => self.limparFiltros(),
+      filtros: self.vmFiltrosControlados(s.filtros),
+      onBusca: (e) => self.onBusca(e), onToggleSilenciosos: (e) => self.onToggleSilenciosos(e),
+      onCampoResponsavel: self.onCampo('responsavel'), onCampoCliente: self.onCampo('cliente'),
+      onCampoArmador: self.onCampo('armador'), onCampoEstado: self.onCampo('estado'),
+      onCampoPrioridade: self.onCampo('prioridade'), onCampoPeriodoCampo: self.onCampo('periodoCampo'),
+      onCampoPeriodoInicio: self.onCampo('periodoInicio'), onCampoPeriodoFim: self.onCampo('periodoFim'),
+      mostrarAvisoBuscaSilenciosos: s.avisoBuscaSilenciosos,
+      opcoesResponsaveis: mkOpcoes(opt && opt.responsaveis, 'membershipId', 'nome'),
+      opcoesClientes: mkOpcoes(opt && opt.clientes, 'id', 'nome'),
+      opcoesArmadores: mkOpcoes(opt && opt.armadores, 'id', 'nome'),
+      opcoesEstado: (opt ? opt.estados : []).map(function(o){ return { valor: o.codigo, rotulo: DV2.rotuloEstadoOperacional(o.codigo) }; }),
+      opcoesBalde: (opt ? opt.baldes : []).map(function(b){ return { valor: b.codigo, rotulo: self.rotuloBalde(b.codigo) }; }),
+      checkboxesFiltro: [
+        self.checkboxFiltro('comPendencia', 'Com pendência'), self.checkboxFiltro('comFalhaTecnica', 'Com falha técnica'),
+        self.checkboxFiltro('dentroDoFreeTime', 'No Free Time'), self.checkboxFiltro('emDemurrage', 'Em demurrage'),
+        self.checkboxFiltro('devolvido', 'Devolvido'), self.checkboxFiltro('responsabilidadeEmAnalise', 'Resp. em análise'),
+        self.checkboxFiltro('exposicaoIndisponivel', 'Exposição indisponível'),
+      ],
+      temResumo: resumoBaldes.length > 0, resumoBaldes: resumoBaldes,
+      mostrarCarregandoInicial: telaFila.mostrarCarregandoInicial, esqueletoLinhas: [1,2,3,4,5],
+      mostrarErroFila: telaFila.mostrarErro, erroFilaMensagem: s.fila.erro ? s.fila.erro.mensagem : '',
+      tentarDeNovo: () => self.tentarDeNovo(),
+      mostrarVazio: telaFila.mostrarVazio,
+      vazioTitulo: filtrosAtivosCount > 0 ? 'Nenhum processo atende aos filtros.' : 'Nada exige ação agora.',
+      vazioMostrarLimpar: telaFila.mostrarVazio && filtrosAtivosCount > 0,
+      vazioMostrarSilenciosos: telaFila.mostrarVazio && filtrosAtivosCount === 0 && !s.filtros.incluirSilenciosos,
+      onVerSilenciosos: () => self.onVerSilenciosos(),
+      mostrarConteudoFila: telaFila.mostrarConteudo,
+      itensFila: itensVm,
+      temMais: !!s.fila.cursor, carregandoMais: telaFila.mostrarCarregandoMais,
+      carregarMaisTexto: telaFila.mostrarCarregandoMais ? 'Carregando…' : 'Carregar mais',
+      carregarMais: () => self.carregarMais(),
+    });
+
+    /* ---------- PROCESSO ---------- */
+    var procFmt = s.processo ? DV2.formatarProcessoDetalhe(s.processo) : null;
+    if (procFmt) {
+      var agregados = [self.vmAgregadoLado('Cliente', procFmt.agregadoFinanceiro.cliente), self.vmAgregadoLado('Rocket', procFmt.agregadoFinanceiro.rocket)];
+      var containersVm = procFmt.containers.map(function(c){
+        return {
+          numero: c.numero, estadoRotulo: c.estadoRotulo, estadoFundo: '#F1F2F8', estadoCor: '#3C4258',
+          clienteResumo: c.relogios.cliente.valor.textoValor || c.relogios.cliente.valor.rotulo,
+          rocketResumo: c.relogios.rocket.valor.textoValor || c.relogios.rocket.valor.rotulo,
+          minutasTexto: (c.minutas.length) + ' minuta(s)',
+          ariaLabel: 'Contêiner ' + c.numero + '. Abrir detalhe.',
+          abrir: function(){ self.abrirContainer(c.containerId); },
+          onKeyDown: function(e){ if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); self.abrirContainer(c.containerId); } },
+        };
+      });
+      var avisos = [];
+      if (procFmt.pendenciasTotal > 0) avisos.push(procFmt.pendenciasTotal + ' pendência(s) aberta(s)');
+      if (procFmt.falhasTotal > 0) avisos.push(procFmt.falhasTotal + ' falha(s) técnica(s)');
+
+      Object.assign(base, {
+        procCarregando: s.procCarregando, procErro: !!s.procErro, procErroMensagem: s.procErro ? s.procErro.mensagem : '',
+        procPronto: !s.procCarregando && !s.procErro && !!procFmt,
+        voltarFila: () => self.voltarFila(), onEscVoltarFila: (e) => self.onEscVoltarFila(e),
+        proc: {
+          temAvisos: avisos.length > 0, avisosTexto: avisos.join(' · '),
+          numeroProcesso: procFmt.numeroProcesso || '—',
+          linhaIdentificacao: [procFmt.cliente, procFmt.house, procFmt.mbl, procFmt.armador].filter(Boolean).join(' · '),
+          estadoRotulo: procFmt.estadoRotulo, estadoFundo: '#F1F2F8', estadoCor: '#3C4258',
+          baldeRotulo: self.rotuloBalde(procFmt.balde), corBalde: self.corBalde(procFmt.balde), baldeFundo: self.fundoBalde(procFmt.balde),
+          apuracaoStatusTexto: procFmt.apuracaoStatus === 'FINAL' ? 'Apuração FINAL' : 'Apuração aberta (OPEN)',
+          motivoTexto: procFmt.motivo || 'Sem motivo registrado.',
+          temLider: !!procFmt.lider, liderNumero: procFmt.lider ? procFmt.lider.numero : '',
+          temProximoVencimento: !!procFmt.proximoVencimento, proximoVencimentoTexto: procFmt.proximoVencimento ? procFmt.proximoVencimento.texto : '',
+          agregados: agregados,
+          abas: [
+            { rotulo: 'Contêineres', ativa: s.abaProcesso === 'conteineres', fundo: s.abaProcesso === 'conteineres' ? '#fff' : 'transparent', cor: s.abaProcesso === 'conteineres' ? '#161A2E' : '#7A8099', selecionar: self.selecionarAba('conteineres') },
+            { rotulo: 'Timeline', ativa: s.abaProcesso === 'timeline', fundo: s.abaProcesso === 'timeline' ? '#fff' : 'transparent', cor: s.abaProcesso === 'timeline' ? '#161A2E' : '#7A8099', selecionar: self.selecionarAba('timeline') },
+            { rotulo: 'Fechamento', ativa: s.abaProcesso === 'fechamento', fundo: s.abaProcesso === 'fechamento' ? '#fff' : 'transparent', cor: s.abaProcesso === 'fechamento' ? '#161A2E' : '#7A8099', selecionar: self.selecionarAba('fechamento') },
+          ],
+          abaConteineres: s.abaProcesso === 'conteineres', abaTimeline: s.abaProcesso === 'timeline', abaFechamento: s.abaProcesso === 'fechamento',
+          containersVm: containersVm,
+          temFechamento: !!procFmt.fechamento, semFechamento: !procFmt.fechamento,
+          fechamentoEm: procFmt.fechamento ? procFmt.fechamento.em : '', fechamentoJustificativa: procFmt.fechamento ? (procFmt.fechamento.justificativa || '') : '',
+          temReaberturas: procFmt.reaberturas.length > 0,
+          reaberturasVm: procFmt.reaberturas.map(function(r){ return { texto: r.estado + ' — ' + (r.justificativa || 'sem justificativa') + ' (' + r.criadoEm + ')' }; }),
+        },
+        tl: {
+          carregando: s.timeline.carregando && s.timeline.eventos.length === 0,
+          vazia: !s.timeline.carregando && s.timeline.eventos.length === 0,
+          eventos: DV2.prepararEventosTimeline(s.timeline.eventos).map(function(ev){ return self.vmEvento(ev); }),
+          temMais: !!s.timeline.cursor,
+        },
+        carregarMaisTimeline: () => self.carregarMaisTimeline(),
+      });
+    }
+
+    /* ---------- CONTÊINER ---------- */
+    var ctFmt = s.container ? DV2.formatarContainerDetalhe(s.container) : null;
+    if (ctFmt) {
+      var resp = ctFmt.responsabilidade;
+      Object.assign(base, {
+        ctCarregando: s.ctCarregando, ctErro: !!s.ctErro, ctErroMensagem: s.ctErro ? s.ctErro.mensagem : '',
+        ctPronto: !s.ctCarregando && !s.ctErro && !!ctFmt,
+        voltarProcesso: () => self.voltarProcesso(), onEscVoltarProcesso: (e) => self.onEscVoltarProcesso(e),
+        ct: {
+          numero: ctFmt.numero, estadoRotulo: ctFmt.estadoRotulo, estadoFundo: '#F1F2F8', estadoCor: '#3C4258',
+          badges: ctFmt.badges,
+          trackingTexto: ctFmt.trackingAtualizadoEm ? ('Tracking atualizado em ' + ctFmt.trackingAtualizadoEm) : 'Sem tracking registrado',
+          relogiosVm: [self.vmRelogio(ctFmt.relogios.cliente), self.vmRelogio(ctFmt.relogios.rocket)],
+          temMinutas: ctFmt.minutas.length > 0,
+          minutasVm: ctFmt.minutas.map(function(m){
+            return { estado: m.estado, divergente: m.divergenteDoTracking, datasTexto: [m.dataInformada, m.dataValidada].filter(Boolean).join(' → ') || 'Sem data' };
+          }),
+          respEstadoRotulo: resp ? resp.estadoRotulo : 'Sem demurrage',
+          temDecisao: !!(resp && resp.decisaoVigente),
+          decisaoVersao: resp && resp.decisaoVigente ? resp.decisaoVigente.versao : '',
+          decisaoDias: resp && resp.decisaoVigente ? (resp.decisaoVigente.diasRocket + ' / ' + resp.decisaoVigente.diasCliente) : '',
+          decisaoValorRocket: resp && resp.decisaoVigente ? (resp.decisaoVigente.valorRocketTexto || 'Não informado') : '',
+          decisaoValorCliente: resp && resp.decisaoVigente ? (resp.decisaoVigente.valorClienteTexto || 'Não informado') : '',
+          decisaoAutorData: resp && resp.decisaoVigente ? ((resp.decisaoVigente.autor || 'Sem autor') + ' em ' + resp.decisaoVigente.decididoEm) : '',
+          decisaoJustificativa: resp && resp.decisaoVigente ? resp.decisaoVigente.justificativa : '',
+          temInvalidada: !!(resp && resp.invalidada),
+          invalidadaTexto: resp && resp.invalidada ? ('Decisão anterior invalidada: ' + resp.invalidada.motivo) : '',
+        },
+      });
+    }
+
+    return base;
+  }
+}
+</script>
+</body>
+</html>
