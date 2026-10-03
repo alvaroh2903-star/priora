@@ -7,10 +7,12 @@ import { OrganizationRepository } from '../persistence/organizationRepository';
 import { ProcessoRepository } from '../persistence/processoRepository';
 import { ContainerRepository } from '../persistence/containerRepository';
 import { recalcularApuracaoContainer } from '../apuracao/recalcularApuracao';
+import { passagemDoCalendario } from '../apuracao/passagemCalendario';
 import { seedRocketTermoPorEmbarque, seedRocketTermoUnico } from '../tariffs/seed/rocketTermoPorEmbarque';
 import { buscarDetalheContainer, buscarDetalheProcesso } from '../leitura/detalhe';
 import { buscarFilaOperacional, contarEstadosEBaldes } from '../leitura/filaOperacional';
 import { filtroFilaVazio } from '../leitura/contrato';
+import { centavosExatos, formatarCentavos, somarCentavosExatos } from '../leitura/moedaExata';
 
 /**
  * Fase D12 v1.2 — DV-03 (contêiner líder), DV-04 (derivação atual
@@ -277,11 +279,12 @@ test('DV-01: agregado do processo soma os contêineres do MESMO lado/moeda, nunc
     for (const id of [c1, c2]) await recalcularApuracaoContainer(pool, id, { dataReferencia: hoje });
 
     const det = await buscarDetalheProcesso(pool, orgId, processoId, hoje);
-    const somaEsperada = det!.conteineres.reduce((acc, c) => acc + (c.relogios.cliente.valor.total ?? 0), 0);
-    assert.ok(det!.agregadoFinanceiro.cliente.length >= 1);
-    const grupo = det!.agregadoFinanceiro.cliente.find((g) => g.moeda !== null);
+    const somaEsperada = formatarCentavos(somarCentavosExatos(det!.conteineres.map((c) => centavosExatos(c.relogios.cliente.valor.total!))));
+    assert.ok(det!.agregadoFinanceiro.cliente.gruposPorMoeda.length >= 1);
+    const grupo = det!.agregadoFinanceiro.cliente.gruposPorMoeda[0];
     assert.ok(grupo, 'há um grupo com moeda conhecida');
-    assert.equal(grupo!.subtotalConhecido, somaEsperada, 'subtotalConhecido é a soma dos envelopes dos contêineres, nunca inventado');
+    assert.equal(grupo!.subtotalConhecido, somaEsperada, 'subtotalConhecido é a soma exata dos envelopes dos contêineres, nunca inventado');
+    assert.equal(det!.agregadoFinanceiro.cliente.completo, true);
     // Rocket é SEMPRE separado do cliente — nenhuma moeda/valor do cliente aparece somado ao lado Rocket.
     assert.notDeepEqual(det!.agregadoFinanceiro.rocket, det!.agregadoFinanceiro.cliente);
 
@@ -304,9 +307,10 @@ test('DV-01: Termo Único usa o motor correspondente — subtotal nunca mistura 
 
     const det = await buscarDetalheProcesso(pool, orgId, processoId, hoje);
     assert.equal(det!.conteineres[0].relogios.cliente.valor.situacao, 'ESTIMADO');
-    const grupo = det!.agregadoFinanceiro.cliente.find((g) => g.moeda !== null)!;
+    const grupo = det!.agregadoFinanceiro.cliente.gruposPorMoeda[0];
     assert.equal(grupo.estimados, 1);
-    assert.equal(grupo.subtotalConhecido, det!.conteineres[0].relogios.cliente.valor.total);
+    assert.equal(grupo.subtotalConhecido, formatarCentavos(centavosExatos(det!.conteineres[0].relogios.cliente.valor.total!)));
+    assert.equal(det!.agregadoFinanceiro.cliente.completo, true);
   } finally { await pool.end(); }
 });
 
@@ -323,11 +327,9 @@ test('DV-01: contêiner sem tarifa aplicável (INDISPONIVEL) nunca vira zero —
 
     const det = await buscarDetalheProcesso(pool, orgId, processoId, hoje);
     assert.equal(det!.conteineres[0].relogios.rocket.valor.situacao, 'INDISPONIVEL');
-    const semMoeda = det!.agregadoFinanceiro.rocket.find((g) => g.moeda === null);
-    assert.ok(semMoeda, 'grupo sem moeda existe para o lado Rocket');
-    assert.equal(semMoeda!.indisponiveis, 1);
-    assert.equal(semMoeda!.completo, false);
-    assert.ok(!det!.agregadoFinanceiro.rocket.some((g) => g.moeda !== null), 'nenhum valor inventado em nenhuma moeda');
+    assert.equal(det!.agregadoFinanceiro.rocket.gruposPorMoeda.length, 0, 'indisponível nunca é apresentado como grupo de moeda');
+    assert.equal(det!.agregadoFinanceiro.rocket.indisponiveis, 1);
+    assert.equal(det!.agregadoFinanceiro.rocket.completo, false, 'o LADO Rocket fica incompleto — achado #2 da auditoria');
   } finally { await pool.end(); }
 });
 
@@ -361,5 +363,150 @@ test('DV-05: próximo vencimento do processo aponta o relógio/contêiner certo 
     const fila = await buscarFilaOperacional(pool, { organizationId: orgId, filtros: filtroFilaVazio(), hoje: '2026-11-08' });
     const item = fila.itens.find((i) => i.processo.id === processoId)!;
     assert.deepEqual(item.proximoVencimento, det1!.proximoVencimento, 'fila e detalhe concordam sobre o próximo vencimento');
+  } finally { await pool.end(); }
+});
+
+/* ===================================================================== *
+ * v1.2.1 — correções da auditoria sobre a D12 v1.2.
+ * ===================================================================== */
+
+/** Todas as tabelas-base do schema — para fingerprint de zero-escrita (igual ao G7 da D12). */
+async function todasAsTabelas(pool: Pool): Promise<string[]> {
+  const { rows } = await pool.query(
+    `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE' ORDER BY table_name`,
+  );
+  return rows.map((r: any) => r.table_name);
+}
+
+test('v1.2.1 #1 (integração): relógio com cache desatualizado ALÉM do LFD — detalhe/fila mostram vencido, NUNCA dias negativos; zero gravação', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await setup(pool);
+    const { orgId, processoId } = await criarProcesso(pool, 'V121A');
+    // C1: descarga 2026-11-01, FT 10 → LFD 2026-11-10. Derivado em 2026-11-05 (bem ANTES do LFD):
+    // cache persiste diasDemurrage=0, estado MONITORAMENTO_SILENCIOSO. NENHUM novo recálculo depois disto.
+    const c1 = await criarContainer(pool, orgId, processoId, 'V121A1', { discharge: '2026-11-01', houseFT: 10, masterFT: 10, hoje: '2026-11-05' });
+    // C2: vence bem mais tarde (2026-12-05) — fica dentro do Free Time na leitura abaixo, prova que
+    // o próximo vencimento do processo ignora o contêiner vencido e nunca escolhe um prazo passado.
+    const c2 = await criarContainer(pool, orgId, processoId, 'V121A2', { discharge: '2026-11-01', houseFT: 35, masterFT: 35, hoje: '2026-11-05' });
+
+    const tabelas = await todasAsTabelas(pool);
+    const antes = await fingerprintTabelas(pool, tabelas);
+
+    // Leitura em 2026-11-15: 5 dias DEPOIS do LFD de C1 (2026-11-10), sem nenhum recálculo entre as datas.
+    const hojeLeitura = '2026-11-15';
+    const det = await buscarDetalheProcesso(pool, orgId, processoId, hojeLeitura);
+    const dc1 = await buscarDetalheContainer(pool, orgId, c1, hojeLeitura);
+    const fila = await buscarFilaOperacional(pool, { organizationId: orgId, filtros: { ...filtroFilaVazio(), incluirSilenciosos: true }, hoje: hojeLeitura });
+    const item = fila.itens.find((i) => i.processo.id === processoId)!;
+
+    // O bloco de prazo do relógio cliente de C1 nunca expõe um negativo e está corretamente vencido.
+    const relogioC1 = dc1!.relogios.cliente;
+    assert.equal(relogioC1.vencido, true);
+    assert.equal(relogioC1.diasRestantes, null, 'nunca um negativo (achado #1)');
+    assert.equal(relogioC1.dentroDoFreeTime, false);
+    assert.equal(relogioC1.emPrazoProximo, false);
+    assert.equal(relogioC1.proximoMarco, null);
+    // O mesmo bloco, visto pelo detalhe de processo (mesmo contêiner embutido).
+    const c1NoDetalheDoProcesso = det!.conteineres.find((c) => c.containerId === c1)!;
+    assert.deepEqual(c1NoDetalheDoProcesso.relogios.cliente, relogioC1, 'detalhe de contêiner e detalhe de processo concordam');
+
+    // Consistência lifecycle/prioridade/contrato de leitura: o estado do contêiner (lido do cache,
+    // nunca recalculado aqui) pode continuar MONITORAMENTO_SILENCIOSO nesta janela — mas NUNCA
+    // afirma falsamente "ainda dentro do prazo" ou "prazo próximo" quando o relógio já venceu.
+    assert.notEqual(c1NoDetalheDoProcesso.estado.codigo, 'PRAZO_PROXIMO');
+
+    // O próximo vencimento do PROCESSO nunca escolhe o prazo já passado de C1 — só C2 (ainda dentro do Free Time).
+    assert.equal(det!.proximoVencimento!.containerId, c2);
+    assert.ok(det!.proximoVencimento!.diasRestantes >= 0, 'nunca um próximo vencimento com dias negativos');
+    assert.deepEqual(item.proximoVencimento, det!.proximoVencimento, 'fila e detalhe concordam sobre o próximo vencimento mesmo na janela de cache desatualizado');
+
+    // Zero gravação: nenhuma das leituras acima tocou o banco.
+    const depois = await fingerprintTabelas(pool, tabelas);
+    assert.equal(antes, depois);
+
+    // A janela fecha no tick diário (passagem do calendário, FORA da leitura): o relógio é
+    // recalculado com finalDate = hoje e estado, prioridade e contrato de leitura convergem.
+    await passagemDoCalendario(pool, hojeLeitura, { organizationId: orgId });
+    const dc1Depois = await buscarDetalheContainer(pool, orgId, c1, hojeLeitura);
+    assert.equal(dc1Depois!.relogios.cliente.dias, 5, 'cache recalculado pelo tick: 5 dias após o LFD 2026-11-10');
+    assert.equal(dc1Depois!.relogios.cliente.vencido, true);
+    assert.equal(dc1Depois!.relogios.cliente.diasRestantes, null);
+    assert.equal(dc1Depois!.estado.codigo, 'EM_DEMURRAGE_ATENCAO');
+    const detDepois = await buscarDetalheProcesso(pool, orgId, processoId, hojeLeitura);
+    assert.equal(detDepois!.lider!.containerId, c1, 'C1 passa a liderar (em demurrage)');
+    assert.equal(detDepois!.proximoVencimento!.containerId, c2, 'o próximo vencimento continua sendo o de C2, nunca o já passado');
+  } finally { await pool.end(); }
+});
+
+test('v1.2.1 #2 (integração): um contêiner confirmado + um pendente no MESMO lado — o LADO fica incompleto mesmo com um grupo de moeda "ok"', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await setup(pool);
+    const { orgId, processoId } = await processoComTarifa(pool, 'V121B', { termoTipo: 'embarque', diaria: 100 });
+    const hoje = '2026-11-20';
+    // C1: demurrage confirmada, valor ESTIMADO numa moeda real.
+    const c1 = await criarContainer(pool, orgId, processoId, 'V121B1', { discharge: '2026-11-01', houseFT: 5, masterFT: 5, hoje });
+    await pool.query(`UPDATE containers SET container_type_id = (SELECT id FROM container_types WHERE codigo = '20DV') WHERE id = $1`, [c1]);
+    await recalcularApuracaoContainer(pool, c1, { dataReferencia: hoje });
+    // C2: SEM nenhum Free Time informado → relógio cliente PENDING → envelope PENDENTE.
+    const containers = new ContainerRepository(pool);
+    await containers.create(orgId, processoId, 'V121B2');
+
+    const det = await buscarDetalheProcesso(pool, orgId, processoId, hoje);
+    assert.equal(det!.conteineres[0].relogios.cliente.valor.situacao, 'ESTIMADO');
+    assert.equal(det!.agregadoFinanceiro.cliente.gruposPorMoeda.length, 1, 'o grupo de moeda em si está íntegro');
+    assert.equal(det!.agregadoFinanceiro.cliente.pendentes, 1);
+    assert.equal(det!.agregadoFinanceiro.cliente.completo, false, 'o LADO fica incompleto — não é mais "escondido" atrás de um grupo de moeda completo');
+
+    const fila = await buscarFilaOperacional(pool, { organizationId: orgId, filtros: filtroFilaVazio(), hoje });
+    const item = fila.itens.find((i) => i.processo.id === processoId)!;
+    assert.deepEqual(item.agregadoFinanceiro, det!.agregadoFinanceiro, 'fila e detalhe produzem o MESMO agregado');
+  } finally { await pool.end(); }
+});
+
+test('v1.2.1 #3 (integração): soma monetária exata ponta a ponta — 10.01 + 20.02 + 30.03 = 60.06, nunca um resíduo de ponto flutuante', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await setup(pool);
+    const { orgId, processoId } = await criarProcesso(pool, 'V121C');
+    const tabela = await seedRocketTermoPorEmbarque(pool, {
+      organizationId: orgId,
+      diarias: [{ equipamento: '20DV', valorDia: 10.01 }, { equipamento: '40HC', valorDia: 20.02 }, { equipamento: '20OT', valorDia: 30.03 }],
+    });
+    const { rows } = await pool.query(
+      `INSERT INTO condicoes_comerciais (organization_id, termo_tipo, tabela_id, fonte_documental) VALUES ($1, 'embarque', $2, 'teste') RETURNING id`,
+      [orgId, tabela],
+    );
+    await pool.query(`UPDATE processos SET condicao_comercial_id = $2 WHERE id = $1`, [processoId, rows[0].id]);
+
+    // Descarga 2026-11-01, FT 5 → LFD 2026-11-05. Hoje 2026-11-06 → exatamente 1 dia de demurrage em cada um.
+    const hoje = '2026-11-06';
+    // Ordem dos números de contêiner = ordem do detalhe: 20.02, 30.03, 10.01 — nesta ordem a soma
+    // ingênua em ponto flutuante dá 60.059999999999995 (o teste discrimina a implementação antiga).
+    const equipamentos = ['40HC', '20OT', '20DV'];
+    assert.notEqual(20.02 + 30.03 + 10.01, 60.06, 'premissa: a soma ingênua nesta ordem falha');
+    for (const [i, equipamento] of equipamentos.entries()) {
+      const c = await criarContainer(pool, orgId, processoId, `V121C${i}`, { discharge: '2026-11-01', houseFT: 5, masterFT: 5, hoje });
+      await pool.query(`UPDATE containers SET container_type_id = (SELECT id FROM container_types WHERE codigo = $2) WHERE id = $1`, [c, equipamento]);
+      await recalcularApuracaoContainer(pool, c, { dataReferencia: hoje });
+    }
+
+    // A tabela Rocket×cliente (Termo por Embarque) alimenta o lado CLIENTE.
+    const det = await buscarDetalheProcesso(pool, orgId, processoId, hoje);
+    const totais = det!.conteineres.map((c) => c.relogios.cliente.valor.total).sort();
+    assert.deepEqual(totais, [10.01, 20.02, 30.03], 'cada contêiner tem exatamente o NUMERIC(14,2) do motor');
+    for (const c of det!.conteineres) assert.equal(c.relogios.cliente.valor.situacao, 'ESTIMADO');
+    assert.equal(det!.agregadoFinanceiro.cliente.gruposPorMoeda.length, 1);
+    const grupo = det!.agregadoFinanceiro.cliente.gruposPorMoeda[0];
+    assert.equal(grupo.moeda, 'USD');
+    assert.equal(grupo.subtotalConhecido, '60.06', 'soma exata, string decimal canônica');
+    assert.equal(grupo.estimados, 3);
+    assert.equal(det!.agregadoFinanceiro.cliente.completo, true);
+
+    // Fila e detalhe: agregado idêntico.
+    const fila = await buscarFilaOperacional(pool, { organizationId: orgId, filtros: filtroFilaVazio(), hoje });
+    const item = fila.itens.find((i) => i.processo.id === processoId)!;
+    assert.deepEqual(item.agregadoFinanceiro, det!.agregadoFinanceiro);
   } finally { await pool.end(); }
 });

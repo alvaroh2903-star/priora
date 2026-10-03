@@ -76,19 +76,39 @@ const BLOCO_PENDENTE: BlocoPrazoRelogio = {
 
 /**
  * Bloco de prazo de UM relógio (cliente usa House, Rocket usa Master — os
- * relógios entram aqui já separados, nunca fundidos). Regras (DV-05):
- *  - relógio não OK (Free Time ausente ou sem descarga) → pendente;
- *  - `diasDemurrage` ≥ 1 (depois do último dia livre) → vencido, sem marco;
- *  - senão, ainda dentro do Free Time (inclui o próprio último dia livre,
- *    onde `diasRestantes = 0`) → marco = fim do Free Time.
+ * relógios entram aqui já separados, nunca fundidos). Regras (DV-05,
+ * corrigidas na v1.2.1 — achado #1 da auditoria):
+ *  - relógio não OK (Free Time ausente ou sem descarga), ou sem último dia
+ *    livre conhecido → pendente;
+ *  - a COMPARAÇÃO DE DATA CIVIL (`hoje` × `ultimoDiaLivre`) é AUTORITATIVA
+ *    para esta interpretação — nunca `clock.diasDemurrage` (o cache
+ *    `relogios`, que só é atualizado no próximo recálculo/tick). Antes desta
+ *    correção, a função consultava `diasDemurrage` PRIMEIRO: numa janela
+ *    real em que o cache ainda está `diasDemurrage = 0` mas `hoje` já passou
+ *    do último dia livre (relógio ainda não recalculado), o bloco expunha
+ *    `diasRestantes` NEGATIVO com `dentroDoFreeTime = true` e
+ *    `vencido = false` — uma leitura autocontraditória. Agora: `hoje >
+ *    ultimoDiaLivre` ⇒ sempre `vencido = true`, `diasRestantes = null`,
+ *    `dentroDoFreeTime = false`, `emPrazoProximo = false`,
+ *    `proximoMarco = null` — nunca um negativo, e nunca fabricando um
+ *    `diasDemurrage` que o cache não tem (o cache em si NUNCA é lido, tocado
+ *    ou recalculado aqui; é só a interpretação PURA da data que muda).
+ *  - senão (hoje ainda dentro do Free Time, inclui o próprio último dia
+ *    livre, onde `diasRestantes = 0`) → marco = fim do Free Time.
+ *
+ * O mesmo padrão (filtrar por `dias >= 0` sobre a data civil, nunca por
+ * `diasDemurrage` do cache) já era usado por `containerState.ts`
+ * (`menorDiasAteVencimento`) e por `priorityEngine.ts` (`diasAteVencimento`)
+ * — esta correção só alinha `blocoPrazoRelogio` ao que o resto do lifecycle
+ * já fazia, restaurando a consistência entre estado, prioridade e o
+ * contrato de leitura nesta mesma janela de cache desatualizado.
  */
 export function blocoPrazoRelogio(clock: ClockFact, hoje: CivilDate, limiar: number | null): BlocoPrazoRelogio {
-  if (clock.status !== 'OK') return BLOCO_PENDENTE;
-  if (clock.diasDemurrage >= 1) {
+  if (clock.status !== 'OK' || !clock.ultimoDiaLivre) return BLOCO_PENDENTE;
+  const dias = diasAteUltimoDiaLivre(clock.ultimoDiaLivre, hoje);
+  if (dias < 0) {
     return { diasRestantes: null, dentroDoFreeTime: false, emPrazoProximo: false, vencido: true, proximoMarco: null };
   }
-  if (!clock.ultimoDiaLivre) return BLOCO_PENDENTE;
-  const dias = diasAteUltimoDiaLivre(clock.ultimoDiaLivre, hoje);
   return {
     diasRestantes: dias,
     dentroDoFreeTime: true,

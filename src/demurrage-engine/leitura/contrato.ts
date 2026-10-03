@@ -1,6 +1,7 @@
 import { CivilDate } from '../temporal/civilDate';
 import { Badge, EstadoOperacional, PrioridadeBalde, Responsabilidade } from '../lifecycle/types';
 import { BlocoPrazoRelogio } from '../lifecycle/prazoFreeTime';
+import { centavosExatos, somarCentavosExatos, formatarCentavos } from './moedaExata';
 
 /**
  * Fase D12 (Gate G1) — Contrato operacional e API interna da Demurrage.
@@ -308,73 +309,97 @@ export interface ProximoVencimentoLeitura {
 }
 
 /* ------------------------------------------------------------------ *
- * Agregação financeira do processo por moeda e por lado (D12 v1.2, DV-01).
- * Função PURA sobre os envelopes já traduzidos (`envelopeDeValor`) de CADA
- * contêiner do processo — nunca soma moedas diferentes, nunca cruza cliente
- * × Rocket. `moeda: null` é o grupo "sem moeda determinável": junta
- * pendentes, indisponíveis e sem-aplicação (que não têm moeda na origem —
- * `envelopeDeValor` só preenche `moeda` para CONFIRMADO/ESTIMADO/
- * ESTIMADO_PROVISORIO). `completo` nesse grupo é só sobre pendente/
- * indisponível: "sem aplicação" (sem demurrage) nunca marca o grupo como
- * incompleto — são coisas diferentes (seção DV-01).
+ * Agregação financeira do processo por moeda e por lado (D12 v1.2, DV-01;
+ * corrigida na v1.2.1 — achados #2 e #3 da auditoria). Função PURA sobre os
+ * envelopes já traduzidos (`envelopeDeValor`) de CADA contêiner do processo
+ * — nunca soma moedas diferentes, nunca cruza cliente × Rocket.
+ *
+ * #2 (completude no nível do LADO): pendente/indisponível/sem-aplicação NÃO
+ * são "grupos de moeda" — `envelopeDeValor` só preenche `moeda` para
+ * CONFIRMADO/ESTIMADO/ESTIMADO_PROVISORIO, então eles nunca poderiam virar
+ * um grupo de moeda de verdade (`moeda: null` apresentado ao lado de `moeda:
+ * 'BRL'` como se fosse "outra moeda" é exatamente a ambiguidade que a
+ * auditoria apontou). A completude agora é um campo do LADO
+ * (`AgregadoFinanceiroLado.completo`), autoritativo: `false` quando há
+ * QUALQUER contêiner pendente ou indisponível naquele lado, `true` quando
+ * todo contêiner aplicável tem valor conhecido (confirmado zero incluso).
+ * `NAO_APLICAVEL` (sem demurrage) nunca marca o lado como incompleto — é uma
+ * resposta definitiva, não uma informação faltando.
+ *
+ * #3 (soma exata): `subtotalConhecido` é somado em centavos exatos
+ * (`moedaExata.ts`, `bigint`), nunca com `+` de ponto flutuante, e sai como
+ * STRING decimal canônica com duas casas ("60.06") — representação
+ * canônica do agregado monetário; nenhuma conversão para `number` no
+ * caminho até a apresentação.
  * ------------------------------------------------------------------ */
 
 export interface GrupoFinanceiroPorMoeda {
-  moeda: string | null;
-  /** Soma de CONFIRMADO + ESTIMADO + ESTIMADO_PROVISORIO nesta moeda; nunca
-   * tratado como total definitivo quando `completo=false`. null no grupo
-   * `moeda=null` (nada de conhecido a somar ali). */
-  subtotalConhecido: number | null;
+  moeda: string;
+  /** Soma EXATA de CONFIRMADO + ESTIMADO + ESTIMADO_PROVISORIO nesta moeda, como string decimal com duas casas
+   * (ex.: "60.06", "0.00"). Calculada em centavos `bigint`; nunca `number` (ver `moedaExata.ts`). */
+  subtotalConhecido: string;
   confirmados: number;
   estimados: number;
   estimativasProvisorias: number;
+}
+
+/**
+ * Agregado financeiro de UM lado (cliente OU Rocket) do processo.
+ * `completo` aqui é a fonte ÚNICA e autoritativa de completude — nenhum
+ * grupo de `gruposPorMoeda` carrega seu próprio `completo` (evitaria duas
+ * leituras possivelmente contraditórias do mesmo dado).
+ */
+export interface AgregadoFinanceiroLado {
+  gruposPorMoeda: GrupoFinanceiroPorMoeda[];
   pendentes: number;
   indisponiveis: number;
   semAplicacao: number;
+  /** Autoritativo: `false` ⇔ `pendentes > 0 || indisponiveis > 0`. `semAplicacao` nunca entra nesta conta. */
   completo: boolean;
 }
 
 export interface AgregadoFinanceiroLeitura {
-  cliente: GrupoFinanceiroPorMoeda[];
-  rocket: GrupoFinanceiroPorMoeda[];
+  cliente: AgregadoFinanceiroLado;
+  rocket: AgregadoFinanceiroLado;
 }
 
-function agregarLado(envelopes: ValorEnvelope[]): GrupoFinanceiroPorMoeda[] {
-  const porMoeda = new Map<string, GrupoFinanceiroPorMoeda>();
-  const semMoeda: GrupoFinanceiroPorMoeda = {
-    moeda: null, subtotalConhecido: null, confirmados: 0, estimados: 0, estimativasProvisorias: 0,
-    pendentes: 0, indisponiveis: 0, semAplicacao: 0, completo: true,
-  };
+function agregarLado(envelopes: ValorEnvelope[]): AgregadoFinanceiroLado {
+  const porMoeda = new Map<string, { subtotalCentavos: bigint; confirmados: number; estimados: number; estimativasProvisorias: number }>();
+  let pendentes = 0;
+  let indisponiveis = 0;
+  let semAplicacao = 0;
+
   for (const env of envelopes) {
-    if (env.situacao === 'PENDENTE') { semMoeda.pendentes++; semMoeda.completo = false; continue; }
-    if (env.situacao === 'INDISPONIVEL') { semMoeda.indisponiveis++; semMoeda.completo = false; continue; }
-    if (env.situacao === 'NAO_APLICAVEL') { semMoeda.semAplicacao++; continue; }
-    // CONFIRMADO / ESTIMADO / ESTIMADO_PROVISORIO sempre carregam moeda (envelopeDeValor).
+    if (env.situacao === 'PENDENTE') { pendentes++; continue; }
+    if (env.situacao === 'INDISPONIVEL') { indisponiveis++; continue; }
+    if (env.situacao === 'NAO_APLICAVEL') { semAplicacao++; continue; }
+    // CONFIRMADO / ESTIMADO / ESTIMADO_PROVISORIO sempre carregam moeda e total (envelopeDeValor).
     const moeda = env.moeda as string;
-    if (!porMoeda.has(moeda)) {
-      porMoeda.set(moeda, {
-        moeda, subtotalConhecido: 0, confirmados: 0, estimados: 0, estimativasProvisorias: 0,
-        pendentes: 0, indisponiveis: 0, semAplicacao: 0, completo: true,
-      });
-    }
+    const centavos = centavosExatos(env.total as number);
+    if (!porMoeda.has(moeda)) porMoeda.set(moeda, { subtotalCentavos: 0n, confirmados: 0, estimados: 0, estimativasProvisorias: 0 });
     const grupo = porMoeda.get(moeda)!;
-    const total = env.total ?? 0;
-    grupo.subtotalConhecido = (grupo.subtotalConhecido ?? 0) + total;
+    grupo.subtotalCentavos = somarCentavosExatos([grupo.subtotalCentavos, centavos]);
     if (env.situacao === 'CONFIRMADO') grupo.confirmados++;
     else if (env.situacao === 'ESTIMADO') grupo.estimados++;
     else grupo.estimativasProvisorias++;
   }
-  const grupos = Array.from(porMoeda.values()).sort((a, b) => (a.moeda! < b.moeda! ? -1 : a.moeda! > b.moeda! ? 1 : 0));
-  // O grupo sem moeda só aparece quando há algo para contar ali (nunca um grupo vazio "fantasma").
-  if (semMoeda.pendentes || semMoeda.indisponiveis || semMoeda.semAplicacao) grupos.push(semMoeda);
-  return grupos;
+
+  const gruposPorMoeda: GrupoFinanceiroPorMoeda[] = Array.from(porMoeda.entries())
+    .map(([moeda, g]) => ({
+      moeda, subtotalConhecido: formatarCentavos(g.subtotalCentavos),
+      confirmados: g.confirmados, estimados: g.estimados, estimativasProvisorias: g.estimativasProvisorias,
+    }))
+    .sort((a, b) => (a.moeda < b.moeda ? -1 : a.moeda > b.moeda ? 1 : 0));
+
+  return { gruposPorMoeda, pendentes, indisponiveis, semAplicacao, completo: pendentes === 0 && indisponiveis === 0 };
 }
 
 /**
  * Agrega os envelopes de TODOS os contêineres do processo, lado cliente e
  * lado Rocket SEMPRE separados (nunca somados entre si). Nenhuma soma
  * cruzando moeda; `null`/UNAVAILABLE/pendente nunca viram zero — só contados
- * em categorias próprias.
+ * em categorias próprias, e decidem a completude do LADO (nunca de um
+ * grupo de moeda isolado).
  */
 export function agregarFinanceiroProcesso(containers: Array<{ cliente: ValorEnvelope; rocket: ValorEnvelope }>): AgregadoFinanceiroLeitura {
   return {
