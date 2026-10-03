@@ -328,49 +328,57 @@ voltando a checar `diasDemurrage` antes da data → 3 testes puros e o teste
 de integração #1 falham; (b) soma voltando a ponto flutuante → o teste de
 integração #3 falha. Os arquivos originais foram restaurados em seguida.
 
-## 9. Validação completa
+## 9. Validação completa (v1.2.1)
 
-> **v1.2.1:** corrida final da v1.2.1 em andamento — os números desta seção
-> ainda são os da v1.2 e serão substituídos no commit seguinte.
+Todas as corridas foram feitas **isoladas** (nada mais acessando o
+PostgreSQL ao mesmo tempo — na v1.2, corridas em paralelo com o benchmark
+haviam produzido falhas transitórias de pool sem relação com a entrega).
 
 | Suíte | Resultado |
 |---|---|
-| Engine completa (`npm run test:demurrage-engine`, inclui D10, D11, D12 completa — G1–G7, v1.1, v1.2 —, lifecycle/prioridade, relógios, tarifas/apuração, rotas V2, os novos `prazoFreeTimeV12.test.ts` e `leituraD12V12.test.ts`) | **662/662** (626 da base v1.1 + 25 de `prazoFreeTimeV12.test.ts`¹ + 11 de `leituraD12V12.test.ts`) |
+| Testes puros novos (`prazoFreeTimeV12.test.ts`) | 46/46 |
+| Integração D12 v1.2/v1.2.1 (`leituraD12V12.test.ts`) | 14/14 |
+| D12 completa (G1–G7, v1.1, v1.2, v1.2.1: `leitura*`, `demurrageV2Routes`, `prazoFreeTimeV12`) | 117/117 |
+| D10 (`registroDemurrage`, v1.1, v1.2) | 69/69 |
+| D11 (`responsabilidadeDecisao`, v1.1, v1.2, auditoria) | 59/59 |
+| Lifecycle e prioridade (`lifecycle`) | 29/29 |
+| Relógios (`relogios`, `dualClockCalculator`, `freeTimeClock`, `civilDate`) | 66/66 |
+| Tarifas e apuração (`tariffs`, `apuracao` v1–v1.4, `closing`) | 87/87 |
+| Rotas V2 (`demurrageV2Routes`, `leituraAutorizacao`) | 17/17 |
+| **Engine completa** (`npm run test:demurrage-engine`) | **686/686** (626 da base + 46 puros + 14 de integração) — log de 4.185 linhas, nenhum `not ok` |
 | V1 (`npm test`) | 25/25 |
 | `tsc --noEmit` | limpo |
 | `npm run build` | limpo |
 
-¹ A primeira corrida da engine completa foi feita duas vezes em paralelo com
-o benchmark de queries (abaixo) e mostrou 29–33 falhas transitórias — todas
-em arquivos sem relação com esta entrega (ex.: `vesselSharing.test.ts`,
-erro genérico de pool do `pg`), reproduzidas só sob disputa de conexões
-Postgres entre a suíte e o benchmark correndo ao mesmo tempo. Uma corrida
-**isolada** (nada mais acessando o banco), registrada no log completo de
-4.042 linhas sem nenhuma ocorrência de `not ok`, deu **662/662** — o número
-reportado acima. Nenhum teste foi pulado para obter este resultado.
+Zero falhas e **zero testes ignorados** em todas as linhas.
 
-Zero escrita: a suíte `demurrageV2Routes.test.ts` (G7, já existente, roda
-contra o schema inteiro) e os testes desta entrega (fingerprint
-antes/depois) confirmam zero escrita em todas as leituras novas e
-reescritas, incluindo os caminhos em lote de `detalhe.ts` e
-`relogioRepository.buscarValidosEmLote`.
+**Zero escrita em todos os GETs.** O teste G7 de `demurrageV2Routes`
+(fingerprint de TODAS as tabelas antes/depois de chamar fila, fila com
+filtros e cursores, detalhe de processo, timeline, detalhe de contêiner e
+`/filtros`) continua verde com os payloads da v1.2.1; o novo teste de
+integração do achado #1 repete o fingerprint do schema inteiro em torno
+das leituras feitas DENTRO da janela de cache desatualizado.
 
-### Benchmarks de custo constante (banco descartável, fixtures por SQL direto)
+**Fila × detalhe.** Agregados financeiros idênticos (`deepEqual`) nos
+testes dos achados #2 e #3 e no de Termo por Embarque; `proximoVencimento`
+idêntico na fila e no detalhe, inclusive dentro da janela de cache
+desatualizado.
+
+### Benchmarks de custo constante (banco descartável, fixtures por SQL direto, rodados após a suíte)
 
 | Endpoint | Volume | Queries | Tempo |
 |---|---|---|---|
-| Fila (página de 50) | 1 processo | 13 | 22 ms |
-| | 300 processos | 13 | 39 ms |
-| | 1.000 processos | 13 | 53–57 ms |
-| | 2.000 processos | 13 | 99–122 ms |
-| Detalhe de processo | 1 contêiner | 21 | 19–23 ms |
-| | 10 contêineres | 21 | 23 ms |
-| | 100 contêineres | 21 | 35 ms |
-| | 500 contêineres | 21 | 62 ms |
+| Fila (página de 50) | 1 processo | 13 | 16 ms |
+| | 300 processos | 13 | 37 ms |
+| | 1.000 processos | 13 | 57 ms |
+| | 2.000 processos | 13 | 91 ms |
+| Detalhe de processo | 1 contêiner | 21 | 16 ms |
+| | 10 contêineres | 21 | 17 ms |
+| | 100 contêineres | 21 | 34 ms |
+| | 500 contêineres | 21 | 68 ms |
 
-O número de queries é CONSTANTE em todos os quatro pontos de cada linha —
-confirma que DV-01/DV-03/DV-05 (todos aditivos nesta entrega) não
-introduziram N+1 nem na fila nem no detalhe de processo.
+Mesmos números de consultas da v1.2: as três correções são puras (nenhuma
+consulta nova), e o custo continua constante em relação ao volume.
 
 ## 10. Limites respeitados
 
@@ -382,4 +390,10 @@ tarifários, não dupliquei regras temporais (uma única fonte em
 surgiu). Organização sempre da sessão; moedas e relógios nunca misturados;
 fila, detalhes e filtros concordam entre si para o mesmo `hoje`.
 
-**Esta entrega não está aprovada nem congelada.** Aguardo auditoria.
+Na v1.2.1, além disso: nenhuma migration; D10, D11, rotas V1, motores
+tarifários, Portal, Supabase, HeadCargo e Liberação intocados (diff restrito
+a `prazoFreeTime.ts`, `contrato.ts`, o novo `moedaExata.ts`, os dois arquivos
+de teste da v1.2 e este relatório).
+
+**A D12 v1.2/v1.2.1 não está aprovada nem congelada, e a D13 não foi
+iniciada.** Aguardo auditoria.
