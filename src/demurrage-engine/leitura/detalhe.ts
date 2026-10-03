@@ -6,7 +6,7 @@ import { consolidarProcesso } from '../lifecycle/processConsolidation';
 import { CivilDate } from '../temporal/civilDate';
 import { hojeOperacional } from '../time/operationalDate';
 import { ContainerLifecycle } from '../lifecycle/types';
-import { blocoPrazoRelogio, escolherProximoVencimentoProcesso, CandidatoProximoVencimento } from '../lifecycle/prazoFreeTime';
+import { blocoPrazoRelogio, diasDemurrageOperacionais, escolherProximoVencimentoProcesso, CandidatoProximoVencimento } from '../lifecycle/prazoFreeTime';
 import {
   AutorLeitura, CONTRATO_LEITURA_V1, ContainerDetalheV1, DecisaoResponsabilidadeLeitura, DoisRelogiosLeitura, LiderLeitura,
   ProcessoDetalheV1, RelogioLeitura, ResponsabilidadeLeitura, TabelaComercialLeitura,
@@ -266,10 +266,13 @@ function construirRelogio(params: {
   clock: ContainerLifecycle['facts']['clienteClock'];
   hoje: CivilDate;
   limiar: number | null;
+  emptyReturn: boolean;
 }): RelogioLeitura {
   const r = params.relogioRow;
   const status: RelogioLeitura['status'] = r?.estado ?? 'PENDING';
   const dias = status === 'OK' ? (r?.dias_demurrage ?? 0) : null;
+  // v1.2.2: dias OPERACIONAIS — a mesma regra pura do estado/prioridade, sobre o mesmo ClockFact.
+  const diasOperacionais = status === 'OK' ? diasDemurrageOperacionais(params.clock, params.hoje, params.emptyReturn) : null;
   return {
     descarga: params.descarga,
     freeTime: {
@@ -283,14 +286,18 @@ function construirRelogio(params: {
     primeiroDiaDemurrage: r?.primeiro_dia_demurrage ?? null,
     dataFinalApuracao: r?.data_final_apuracao ?? null,
     dias,
+    diasOperacionais,
     status,
     pendencias: r?.pendencias ?? [],
     motivo: r?.motivo ?? null,
     calculadoEm: isoTimestamp(r?.calculated_at ?? null),
     cache: params.cache,
-    valor: envelopeDeValor({ relogioStatus: status, diasDemurrage: dias, valor: params.valorAtivo }),
+    valor: envelopeDeValor({
+      relogioStatus: status, diasDemurrage: diasOperacionais, valor: params.valorAtivo,
+      valorDefasado: dias !== null && diasOperacionais !== null && diasOperacionais > dias,
+    }),
     tabela: params.tabela,
-    ...prazoRelogioLeituraDe(blocoPrazoRelogio(params.clock, params.hoje, params.limiar)),
+    ...prazoRelogioLeituraDe(blocoPrazoRelogio(params.clock, params.hoje, params.limiar, params.emptyReturn)),
   };
 }
 
@@ -336,12 +343,12 @@ function montarDetalheContainerDeDados(
     cliente: construirRelogio({
       relogioRow: rel.cliente, cache: cache?.cliente.validade ?? 'AUSENTE', valorAtivo: valorClienteAtivo,
       tabela: tabelaDe(tabelaClienteRow), descarga, freeTimeDias: row.house_free_time_days,
-      freeTimeObs: obsHouseFt, fallbackManual: fallback?.house ?? null, clock: pacote.facts.clienteClock, hoje, limiar,
+      freeTimeObs: obsHouseFt, fallbackManual: fallback?.house ?? null, clock: pacote.facts.clienteClock, hoje, limiar, emptyReturn: pacote.facts.emptyReturn,
     }),
     rocket: construirRelogio({
       relogioRow: rel.rocket, cache: cache?.rocket.validade ?? 'AUSENTE', valorAtivo: valorRocketAtivo,
       tabela: tabelaDe(tabelaRocketRow), descarga, freeTimeDias: row.master_free_time_days,
-      freeTimeObs: obsMasterFt, fallbackManual: fallback?.master ?? null, clock: pacote.facts.rocketClock, hoje, limiar,
+      freeTimeObs: obsMasterFt, fallbackManual: fallback?.master ?? null, clock: pacote.facts.rocketClock, hoje, limiar, emptyReturn: pacote.facts.emptyReturn,
     }),
   };
 
@@ -454,7 +461,7 @@ export async function buscarDetalheProcesso(pool: Pool, organizationId: string, 
     const numero = numeroPorContainerId.get(pacote.facts.containerId) ?? '';
     for (const relogio of ['cliente', 'rocket'] as const) {
       const clock = relogio === 'cliente' ? pacote.facts.clienteClock : pacote.facts.rocketClock;
-      const bloco = blocoPrazoRelogio(clock, h, pacote.facts.prazoProximoThresholdDias);
+      const bloco = blocoPrazoRelogio(clock, h, pacote.facts.prazoProximoThresholdDias, pacote.facts.emptyReturn);
       if (bloco.proximoMarco) candidatosVencimento.push({ containerId: pacote.facts.containerId, numero, relogio, marco: bloco.proximoMarco });
     }
   }

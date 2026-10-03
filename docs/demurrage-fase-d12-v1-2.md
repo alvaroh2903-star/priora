@@ -1,4 +1,4 @@
-# Fase D12 v1.2 (+ v1.2.1 corretiva) — correção do contrato operacional (NÃO aprovada, NÃO congelada)
+# Fase D12 v1.2 (+ v1.2.1 e v1.2.2 corretivas) — correção do contrato operacional (NÃO aprovada, NÃO congelada)
 
 > **Status:** entregue para auditoria. Base: `1bdd406` (D12 v1.1 aprovada e
 > congelada) + `3eb89aa` (diagnóstico D13, aprovado). Reabertura **controlada
@@ -16,6 +16,109 @@
 > atualizadas para refletir o estado atual. Escopo estritamente limitado aos
 > três achados; nenhuma migration; D10, D11, rotas V1, motores tarifários,
 > Portal, Supabase, HeadCargo e Liberação intocados.
+
+> **v1.2.2 (corretiva, sobre `73dc31f`):** corrige a última inconsistência
+> operacional — o estado do lifecycle continuava preso ao cache do relógio
+> entre a virada da data e o tick diário, e o processo podia sumir da fila
+> padrão justamente no dia em que a demurrage começa. Correção da derivação
+> pura da Fase 7 **explicitamente autorizada** e restrita; seção 00 abaixo.
+> As seções 7, 8 e 9 foram atualizadas.
+
+## 00. v1.2.2 — estado operacional vivo depois do fim do Free Time
+
+### Problema
+
+Entre a meia-noite e o recálculo diário (`passagemDoCalendario`), o relógio
+guardado ainda tem `diasDemurrage = 0`. A v1.2.1 já fazia o bloco de prazo
+dizer "vencido" pela data civil, mas o estado do contêiner, a prioridade, os
+badges e o status de apuração do lifecycle continuavam lendo o cache: o
+contêiner seguia `MONITORAMENTO_SILENCIOSO`, balde `SILENCIOSO`, e o processo
+saía da fila operacional padrão exatamente no primeiro dia de demurrage.
+
+### Regra única (`lifecycle/prazoFreeTime.ts`)
+
+```ts
+diasDemurrageOperacionais(clock, hoje, emptyReturn) =
+  max(clock.diasDemurrage, max(0, hoje − clock.ultimoDiaLivre))
+```
+
+- Semântica de dia civil igual à do motor temporal (`finalDate − LFD`): no
+  último dia livre 0; no dia seguinte 1; sétimo dia após 7; décimo quinto 15.
+- Só extrapola relógio `OK` com `ultimoDiaLivre`. `PENDING`/`INVALID` nunca
+  são extrapolados.
+- Com Empty Return, vale o cache, apurado com a data efetiva de devolução —
+  nunca se acumula depois dela; devolvido dentro do Free Time fica em zero
+  para sempre.
+- `max`: o cache nunca é reduzido (caso de cache à frente da data civil).
+- Nada é gravado nem recalculado; nenhum valor monetário nasce da regra.
+- Cliente só com o relógio House, Rocket só com o Master — a função recebe
+  UM relógio de cada vez; os dois continuam separados.
+
+`relogioOperacional(clock, hoje, emptyReturn)` devolve o mesmo `ClockFact`
+com os dias operacionais. `menorDiasAteVencimentoOperacional` e
+`blocoPrazoRelogio` também passaram a usá-la.
+
+### Quem consome a regra (a mesma, não uma exceção da D12)
+
+| Consumidor | Arquivo | O que passa a usar dias operacionais |
+|---|---|---|
+| Estado do contêiner | `containerState.derivarEstadoContainer` | `clienteEmDemurrage`, `rocketExposta`, severidade, `EM_DEMURRAGE_ATENCAO`/`CRITICO`, escalada 15+, badges, `PRAZO_PROXIMO` |
+| Status de apuração do lifecycle | `containerState.derivarApuracaoDemurrageStatusOperacional` (usado por `LifecycleRepository`) | relógio válido com dias ≥ 1 → `DEMURRAGE_CONFIRMADA`; nunca `ZERO_CONFIRMADO` para ativo além do LFD; relógio faltante segue a regra de pendência existente |
+| Prioridade | `priorityEngine` | balde (via severidade), desempate #1 (via severidade), desempate #5 (vencimento futuro pela mesma regra) |
+| Consolidação e líder | `consolidarProcesso` (inalterado) | recebe os pacotes já corrigidos |
+| Fato de cadência do lifecycle | `LifecycleRepository` (`algumEmDemurrage`) | mesma semântica que o scheduler já usava (`schedulerWorker`: `hoje > menor LFD`); a política de cadência não mudou |
+| Leitura D12 | `blocoPrazoRelogio`, envelopes da fila e do detalhe | bloco de prazo, `diasOperacionais`, `PENDENTE` quando o valor guardado é de menos dias |
+
+O `LifecycleRepository` continua guardando em `facts` os relógios do CACHE;
+as engines aplicam a regra sobre eles (o pipeline persiste, nos dias em que
+o tick roda, exatamente o mesmo resultado que a leitura já mostrava).
+
+### Responsabilidade
+
+Nenhuma decisão é criada ou confirmada. Com `DEMURRAGE_CONFIRMADA`, a
+derivação existente (`derivarResponsabilidade`) passa a `EM_ANALISE` quando
+não há decisão gravada — como já acontecia depois do tick. Nenhuma
+responsabilidade Rocket é inferida.
+
+### Valor financeiro na janela
+
+O valor ativo de `valores_apurados` foi apurado para os dias do cache. Quando
+os dias operacionais são maiores, o envelope sai `PENDENTE` (novo parâmetro
+`valorDefasado` de `envelopeDeValor`) — nunca `NAO_APLICAVEL` ("sem
+demurrage"), nunca um valor fabricado. O agregado do lado fica
+`completo: false` até o recálculo legítimo do pipeline.
+
+### Contrato de leitura (aditivo)
+
+- `RelogioLeitura.diasOperacionais` — dias que decidem estado/prioridade/prazo;
+  `dias` continua sendo o do relógio guardado.
+- `PrazoRelogioLeitura.encerradoPorDevolucao` — relógio parado pela
+  devolução: sem prazo futuro, sem marco; `vencido` só se houve demurrage
+  até a devolução. Isto também corrige um efeito colateral da v1.2.1: um
+  contêiner devolvido dentro do Free Time, lido depois do LFD, aparecia
+  "vencido" no bloco de prazo.
+
+### Ajustes em testes existentes (transparência)
+
+- `lifecycle.test.ts`: 26 relógios de fixtures puras tinham o cache **um dia
+  atrás** do próprio `hoje` da fixture (ex.: `hoje = 2026-09-13`, LFD
+  `09-09`, cache 3 dias; pela semântica do motor temporal seriam 4). Com a
+  regra autorizada, o motor passa a ler 4. Movi o LFD dessas fixtures para o
+  dia em que o cache está exatamente atual (`09-10`); **nenhuma expectativa
+  foi alterada**.
+- `leituraFiltros.test.ts`: o teste semeava dados em `2026-09-20` mas
+  chamava `buscarOpcoesFiltros` sem `hoje`, lendo na data real do relógio da
+  máquina. Só passava porque o cache congelava a severidade; agora recebe o
+  `hoje` do próprio teste.
+- `leituraD12V12.test.ts`, "DV-03: o líder muda com a passagem da data": a
+  versão anterior só funcionava porque o contêiner vencido SAÍA da disputa —
+  o próprio defeito desta correção. Reescrita com uma troca legítima:
+  contêiner com Free Time faltante (pendência) lidera enquanto o outro está
+  silencioso; quando o LFD do outro passa, ele entra em demurrage e assume a
+  liderança, sem nenhuma gravação.
+- O teste de integração da janela (v1.2.1 #1) passou a exigir o estado
+  correto antes do tick (`EM_DEMURRAGE_ATENCAO`, `dias = 0`,
+  `diasOperacionais = 5`).
 
 ## 0. v1.2.1 — correção dos três achados da auditoria
 
@@ -247,8 +350,10 @@ mantido por compatibilidade e documentado como tal — `agregadoFinanceiro`
 (`blocoPrazoRelogio`, pura):
 
 - relógio não `OK` (Free Time ausente ou sem descarga) → bloco pendente;
-- `hoje > ultimoDiaLivre` (comparação de data civil, autoritativa — v1.2.1,
-  achado #1) → `vencido: true`, `diasRestantes: null` (nunca um negativo),
+- com Empty Return (v1.2.2) → `encerradoPorDevolucao: true`, sem prazo nem
+  marco; `vencido` só se houve demurrage até a devolução;
+- dias operacionais ≥ 1 (v1.2.2; a v1.2.1 já fazia a data civil prevalecer)
+  → `vencido: true`, `diasRestantes: null` (nunca um negativo),
   `dentroDoFreeTime: false`, `emPrazoProximo: false`, `proximoMarco: null`,
   esteja o cache `relogios` já recalculado ou não;
 - senão, dentro do Free Time (inclui o próprio último dia livre, onde
@@ -282,21 +387,13 @@ existe.
   v1.2 ("não duplicar regras temporais" foi lido como "não ter dois
   cálculos da MESMA regra", não como "toda regra que usa dias deve ser uma
   só função").
-- **Janela de cache desatualizado (virada da data → tick diário).** Entre a
-  virada da data civil e o momento em que `passagemDoCalendario` recalcula
-  o relógio, o cache `relogios` ainda tem o `diasDemurrage` da véspera.
-  Desde a v1.2.1 o **contrato de leitura** já trata essa janela corretamente
-  pela data civil (relógio vencido, sem dias negativos, fora do próximo
-  vencimento — seção 0, achado #1). O que permanece por desenho: o **estado
-  e a severidade** do contêiner (ex.: `EM_DEMURRAGE_ATENCAO`, dias de
-  demurrage, balde) vêm das funções congeladas da Fase 7 sobre o cache e só
-  mudam depois do tick — a leitura não pode recalcular o relógio nem
-  fabricar `diasDemurrage`. Nessa janela o estado nunca é `PRAZO_PROXIMO`
-  para o relógio já vencido (pode continuar, por exemplo,
-  `MONITORAMENTO_SILENCIOSO` até o tick). Se for desejável que o estado do
-  lifecycle sinalize a janela por si só, isso exige decisão de produto e
-  alteração de regra congelada da Fase 7 — fora do escopo desta corretiva;
-  fica registrado para decisão.
+- **Janela de cache desatualizado (virada da data → tick diário).**
+  Resolvida na v1.2.2 (seção 00): estado, prioridade, badges, apuração do
+  lifecycle e leitura usam os mesmos dias operacionais; o tick só atualiza
+  o relógio guardado, a validade do cache (`OBSOLETO` → `VALIDO`) e o valor
+  financeiro. Fora desta regra continuam, por desenho: o valor monetário
+  (só o pipeline apura) e o fechamento (`closingService`, que lê relógios
+  guardados de contêineres devolvidos — nos quais a regra não extrapola).
 
 ## 8. Testes (`__tests__/prazoFreeTimeV12.test.ts` + `__tests__/leituraD12V12.test.ts`)
 
@@ -310,7 +407,27 @@ existe.
 | **v1.2.1 #3** — soma exata (9) | `0.10 + 0.20 = "0.30"`; `10.01 + 20.02 + 30.03 = "60.06"` em três ordens (inclusive a ordem em que o ponto flutuante falha); zero confirmado `"0.00"`; limite de `NUMERIC(14,2)` e somas de 100 e 1.000 parcelas no limite (16–18 dígitos) exatas; string do Postgres e `number` equivalente dão os mesmos centavos; fuzz de 200.000 valores `NUMERIC(14,2)` aleatórios (string → `Number` → centavos → string) idênticos; não finito, mais de duas casas, exponencial, texto malformado e acima de `NUMERIC(14,2)` lançam erro |
 | DV-01 agregação (16) | um confirmado; mesma moeda; moedas diferentes; confirmado+estimado; **v1.2.1 #2:** confirmado+indisponível (lado incompleto, grupo de moeda intacto); confirmado+pendente; confirmado+sem aplicação (completo); todos indisponíveis; todos pendentes; todos sem aplicação (completo); zero confirmado; múltiplas moedas no mesmo lado (exatas); cliente completo × Rocket incompleto e o inverso; cliente×Rocket nunca se cruzam; estimado nunca confirmado; estimativa provisória em categoria própria |
 
-### Integração (PostgreSQL real, pipeline oficial) — `leituraD12V12.test.ts`, 14 testes (11 → 14 na v1.2.1)
+### Puros (sem banco) — `estadoOperacionalV122.test.ts`, 20 testes (novo na v1.2.2)
+
+| Ponto | Testes |
+|---|---|
+| Regra (4) | LFD → 0, LFD+1 → 1, LFD+7 → 7, LFD+15 → 15, antes do LFD → 0; `PENDING`/`INVALID` nunca extrapolados; `OK` sem LFD nunca extrapolado; função pura (entrada intacta) |
+| Casos 1–11 (11) | 1 no LFD: zero, `PRAZO_PROXIMO`, apuração `ZERO_CONFIRMADO`; 2 LFD+1 com cache 0: `EM_DEMURRAGE_ATENCAO`, `ATENCAO_1_6`, bloco vencido; 3 LFD+6: atenção; 4 LFD+7: crítico, `CRITICA_7_14`; 5 LFD+15: crítico, escalada, `CRITICA_15`; 6 só cliente vencido: só o badge do cliente; 7 só Rocket vencido: só o badge Rocket; 8 um pendente + outro vencido: demurrage + `pendenciaDadosCliente`, `DEMURRAGE_CONFIRMADA`; 9 Empty Return dentro do Free Time lido meses depois: zero, `CONCLUIDO_PARA_ROCKET`, bloco encerrado e não vencido; 10 Empty Return depois do LFD: preserva 4 dias, nunca acumula, `DEVOLVIDO_AGUARDANDO_TRATAMENTO`; 11 cache maior que a extrapolação: nunca reduz |
+| Caso 12 puro (1) | em LFD+1, +7 e +15: estado, prioridade, apuração e bloco de prazo idênticos com cache 0 e com cache atualizado |
+| Apuração, responsabilidade, prioridade, envelope (4) | ativo além do LFD nunca `ZERO_CONFIRMADO`; responsabilidade `EM_ANALISE`, nunca decisão nem Rocket automática; recém-vencido passa à frente do ainda livre; valor de menos dias → `PENDENTE`, valor atual segue normal |
+
+### Integração (PostgreSQL real, pipeline oficial) — `leituraD12V12.test.ts`, 16 testes (11 → 14 na v1.2.1 → 16 na v1.2.2)
+
+| Ponto | Testes |
+|---|---|
+| **v1.2.2 janela** | processo persistido `MONITORAMENTO_SILENCIOSO`/`SILENCIOSO`; leitura em LFD+1 sem tick: a **fila padrão** já inclui o processo, `EM_DEMURRAGE_ATENCAO`, `ATENCAO_1_6`, líder = o contêiner vencido (fila e detalhe), `/filtros` conta o mesmo estado/balde, bloco vencido com `dias = 0`, `diasOperacionais = 1`, cache `OBSOLETO`, valor `PENDENTE`, lado cliente incompleto, fila = detalhe no agregado, responsabilidade `EM_ANALISE` sem decisão, próximo vencimento = o outro contêiner; **fingerprint de todas as tabelas idêntico**. Depois de `passagemDoCalendario`: estado persistido igual ao que a leitura já mostrava; estado, prioridade, líder, badges, contagens, próximo vencimento e interpretação de prazo idênticos; só `dias` (0 → 1), `cache` (`OBSOLETO` → `VALIDO`) e o valor (`PENDENTE` → `ESTIMADO`, por recálculo legítimo) mudam |
+| **v1.2.2 Empty Return** | devolvido dentro do Free Time, lido 40 dias depois do LFD: `CONCLUIDO_PARA_ROCKET`, cliente e Rocket com 0 dias e 0 dias operacionais, não vencidos, encerrados, sem marco; sem próximo vencimento; fora da fila padrão; zero escrita |
+
+**Mutação (v1.2.2).** Com a regra operacional desligada (devolvendo só o
+cache), 12 dos 20 testes puros e 3 testes de integração falham; o arquivo
+original foi restaurado.
+
+### Integração anterior — detalhamento (v1.2/v1.2.1)
 
 | Ponto | Testes |
 |---|---|
@@ -329,6 +446,9 @@ de integração #1 falham; (b) soma voltando a ponto flutuante → o teste de
 integração #3 falha. Os arquivos originais foram restaurados em seguida.
 
 ## 9. Validação completa (v1.2.1)
+
+> **v1.2.2:** corrida final em andamento — os números abaixo ainda são os da
+> v1.2.1 e serão substituídos no commit seguinte.
 
 Todas as corridas foram feitas **isoladas** (nada mais acessando o
 PostgreSQL ao mesmo tempo — na v1.2, corridas em paralelo com o benchmark

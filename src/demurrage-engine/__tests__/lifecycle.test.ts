@@ -63,7 +63,7 @@ test('estado: PRAZO_PROXIMO só com limiar definido; nunca é "Atenção"; TBD (
 
 test('estado: cliente 3 em demurrage / Rocket livre → EM_DEMURRAGE_ATENCAO + badge clienteEmDemurrage', () => {
   const s = derivarEstadoContainer(facts({
-    clienteClock: clock({ diasDemurrage: 3, ultimoDiaLivre: '2026-09-09' }),
+    clienteClock: clock({ diasDemurrage: 3, ultimoDiaLivre: '2026-09-10' }),
     rocketClock: clock({ diasDemurrage: 0, ultimoDiaLivre: '2026-09-25' }),
   }));
   assert.equal(s.estado, 'EM_DEMURRAGE_ATENCAO');
@@ -74,8 +74,8 @@ test('estado: cliente 3 em demurrage / Rocket livre → EM_DEMURRAGE_ATENCAO + b
 
 test('estado: cliente 8 / Rocket 2 → CRITICO (severidade = relógio mais avançado), sem agregar', () => {
   const s = derivarEstadoContainer(facts({
-    clienteClock: clock({ diasDemurrage: 8, ultimoDiaLivre: '2026-09-04' }),
-    rocketClock: clock({ diasDemurrage: 2, ultimoDiaLivre: '2026-09-10' }),
+    clienteClock: clock({ diasDemurrage: 8, ultimoDiaLivre: '2026-09-05' }),
+    rocketClock: clock({ diasDemurrage: 2, ultimoDiaLivre: '2026-09-11' }),
   }));
   assert.equal(s.estado, 'EM_DEMURRAGE_CRITICO');
   assert.equal(s.severidadeDias, 8);
@@ -99,8 +99,8 @@ test('estado: 16 dias → escalationRequired; balde CRITICA_15; promoção liter
 
 test('estado: 9 dias + tracking desatualizado → CRITICA_7_14 SEM promoção (só literal 15+)', () => {
   const s = derivarEstadoContainer(facts({
-    clienteClock: clock({ diasDemurrage: 9, ultimoDiaLivre: '2026-09-03' }),
-    rocketClock: clock({ diasDemurrage: 9, ultimoDiaLivre: '2026-09-03' }),
+    clienteClock: clock({ diasDemurrage: 9, ultimoDiaLivre: '2026-09-04' }),
+    rocketClock: clock({ diasDemurrage: 9, ultimoDiaLivre: '2026-09-04' }),
     cadenciaVencida: true,
   }));
   const p = derivarPrioridadeContainer(s);
@@ -117,7 +117,7 @@ test('estado: sem demurrage + cadência vencida → TRACKING_DESATUALIZADO princ
 test('estado: House ausente + Master válido VENCIDO 8d → EM_DEMURRAGE_* + badge pendenciaDadosCliente', () => {
   const s = derivarEstadoContainer(facts({
     clienteClock: { status: 'PENDING', diasDemurrage: 0, ultimoDiaLivre: null },
-    rocketClock: clock({ diasDemurrage: 8, ultimoDiaLivre: '2026-09-04' }),
+    rocketClock: clock({ diasDemurrage: 8, ultimoDiaLivre: '2026-09-05' }),
   }));
   assert.equal(s.estado, 'EM_DEMURRAGE_CRITICO');
   assert.ok(s.badges.includes('pendenciaDadosCliente'));
@@ -143,8 +143,8 @@ test('estado: Empty Return, demurrage ZERO confirmada → CONCLUIDO_PARA_ROCKET 
 test('estado: Empty Return com demurrage confirmada → DEVOLVIDO_AGUARDANDO_TRATAMENTO (balde 4)', () => {
   const s = derivarEstadoContainer(facts({
     emptyReturn: true,
-    clienteClock: clock({ diasDemurrage: 3, ultimoDiaLivre: '2026-09-09' }),
-    rocketClock: clock({ diasDemurrage: 3, ultimoDiaLivre: '2026-09-09' }),
+    clienteClock: clock({ diasDemurrage: 3, ultimoDiaLivre: '2026-09-10' }),
+    rocketClock: clock({ diasDemurrage: 3, ultimoDiaLivre: '2026-09-10' }),
   }));
   assert.equal(s.apuracaoDemurrageStatus, 'DEMURRAGE_CONFIRMADA');
   assert.equal(s.estado, 'DEVOLVIDO_AGUARDANDO_TRATAMENTO');
@@ -166,7 +166,7 @@ test('estado: responsabilidadeEmAnalise → DEVOLVIDO mesmo com ZERO confirmada'
 
 test('apuração (helper): ZERO_CONFIRMADO | DEMURRAGE_CONFIRMADA | INDETERMINADA', () => {
   const ok0 = clock({ diasDemurrage: 0 });
-  const okDias = clock({ diasDemurrage: 5, ultimoDiaLivre: '2026-09-07' });
+  const okDias = clock({ diasDemurrage: 5, ultimoDiaLivre: '2026-09-08' });
   const pend = { status: 'PENDING', diasDemurrage: 0, ultimoDiaLivre: null } as const;
   assert.equal(derivarApuracaoDemurrageStatus(ok0, ok0), 'ZERO_CONFIRMADO');
   assert.equal(derivarApuracaoDemurrageStatus(okDias, ok0), 'DEMURRAGE_CONFIRMADA');
@@ -201,7 +201,7 @@ test('v4.1: relógio com dias de demurrage mas SEM valores_apurados após Empty 
   // valorCliente/exposicaoRocket indisponíveis (default) — não apagam a existência dos dias.
   const s = derivarEstadoContainer(facts({
     emptyReturn: true,
-    clienteClock: clock({ diasDemurrage: 5, ultimoDiaLivre: '2026-09-07' }),
+    clienteClock: clock({ diasDemurrage: 5, ultimoDiaLivre: '2026-09-08' }),
     rocketClock: clock({ diasDemurrage: 0, ultimoDiaLivre: '2026-09-25' }),
   }));
   assert.equal(s.apuracaoDemurrageStatus, 'DEMURRAGE_CONFIRMADA');
@@ -220,7 +220,7 @@ test('v4.1: ambos OK com 0 dias após Empty Return → ZERO_CONFIRMADO → CONCL
 test('v4.1: um relógio vencido e outro PENDING após Empty Return → DEMURRAGE_CONFIRMADA → DEVOLVIDO', () => {
   const s = derivarEstadoContainer(facts({
     emptyReturn: true,
-    clienteClock: clock({ diasDemurrage: 8, ultimoDiaLivre: '2026-09-04' }),
+    clienteClock: clock({ diasDemurrage: 8, ultimoDiaLivre: '2026-09-05' }),
     rocketClock: { status: 'PENDING', diasDemurrage: 0, ultimoDiaLivre: null },
   }));
   assert.equal(s.apuracaoDemurrageStatus, 'DEMURRAGE_CONFIRMADA');
@@ -230,28 +230,28 @@ test('v4.1: um relógio vencido e outro PENDING após Empty Return → DEMURRAGE
 /* ---- Desempate (Cap. 22.7), com o #3 contextual ---- */
 
 test('desempate #1: mais dias de demurrage vence', () => {
-  const a = full({ containerId: 'a', clienteClock: clock({ diasDemurrage: 10, ultimoDiaLivre: '2026-09-02' }), rocketClock: clock({ diasDemurrage: 10, ultimoDiaLivre: '2026-09-02' }) });
-  const b = full({ containerId: 'b', clienteClock: clock({ diasDemurrage: 8, ultimoDiaLivre: '2026-09-04' }), rocketClock: clock({ diasDemurrage: 8, ultimoDiaLivre: '2026-09-04' }) });
+  const a = full({ containerId: 'a', clienteClock: clock({ diasDemurrage: 10, ultimoDiaLivre: '2026-09-03' }), rocketClock: clock({ diasDemurrage: 10, ultimoDiaLivre: '2026-09-03' }) });
+  const b = full({ containerId: 'b', clienteClock: clock({ diasDemurrage: 8, ultimoDiaLivre: '2026-09-05' }), rocketClock: clock({ diasDemurrage: 8, ultimoDiaLivre: '2026-09-05' }) });
   const fila = ordenarFila([b, a]);
   assert.deepEqual(fila.map((i) => i.facts.containerId), ['a', 'b']);
 });
 
 test('desempate #3 contextual: ambos com exposição → compara exposicaoRocket (mesma moeda)', () => {
-  const base = { clienteClock: clock({ diasDemurrage: 8, ultimoDiaLivre: '2026-09-04' }), rocketClock: clock({ diasDemurrage: 8, ultimoDiaLivre: '2026-09-04' }) };
+  const base = { clienteClock: clock({ diasDemurrage: 8, ultimoDiaLivre: '2026-09-05' }), rocketClock: clock({ diasDemurrage: 8, ultimoDiaLivre: '2026-09-05' }) };
   const a = full({ ...base, containerId: 'a', exposicaoRocket: { total: 900, moeda: 'USD', disponivel: true } });
   const b = full({ ...base, containerId: 'b', exposicaoRocket: { total: 1200, moeda: 'USD', disponivel: true } });
   assert.deepEqual(ordenarFila([a, b]).map((i) => i.facts.containerId), ['b', 'a']);
 });
 
 test('desempate #3 contextual: nenhum com exposição → compara valorCliente; nunca cruza com exposicaoRocket', () => {
-  const base = { clienteClock: clock({ diasDemurrage: 8, ultimoDiaLivre: '2026-09-04' }), rocketClock: clock({ diasDemurrage: 0, ultimoDiaLivre: '2026-09-25' }) };
+  const base = { clienteClock: clock({ diasDemurrage: 8, ultimoDiaLivre: '2026-09-05' }), rocketClock: clock({ diasDemurrage: 0, ultimoDiaLivre: '2026-09-25' }) };
   const a = full({ ...base, containerId: 'a', valorCliente: { total: 500, moeda: 'BRL', disponivel: true } });
   const b = full({ ...base, containerId: 'b', valorCliente: { total: 800, moeda: 'BRL', disponivel: true } });
   assert.deepEqual(ordenarFila([a, b]).map((i) => i.facts.containerId), ['b', 'a']);
 });
 
 test('desempate #3: moeda diferente/indisponível → empate → decide pelo #4 (tracking mais antigo)', () => {
-  const base = { clienteClock: clock({ diasDemurrage: 8, ultimoDiaLivre: '2026-09-04' }), rocketClock: clock({ diasDemurrage: 8, ultimoDiaLivre: '2026-09-04' }) };
+  const base = { clienteClock: clock({ diasDemurrage: 8, ultimoDiaLivre: '2026-09-05' }), rocketClock: clock({ diasDemurrage: 8, ultimoDiaLivre: '2026-09-05' }) };
   const a = full({ ...base, containerId: 'a', exposicaoRocket: { total: 900, moeda: 'USD', disponivel: true }, ultimaConsultaValida: '2026-09-12' });
   const b = full({ ...base, containerId: 'b', exposicaoRocket: { total: 1200, moeda: 'BRL', disponivel: true }, ultimaConsultaValida: '2026-09-05' });
   // #3 empata (moedas diferentes); #4: b tem tracking mais antigo → b antes.
@@ -259,8 +259,8 @@ test('desempate #3: moeda diferente/indisponível → empate → decide pelo #4 
 });
 
 test('fila: baldes ordenam antes do desempate; SILENCIOSO sai da fila principal', () => {
-  const critico = full({ containerId: 'crit', clienteClock: clock({ diasDemurrage: 8, ultimoDiaLivre: '2026-09-04' }), rocketClock: clock({ diasDemurrage: 8, ultimoDiaLivre: '2026-09-04' }) });
-  const atencao = full({ containerId: 'aten', clienteClock: clock({ diasDemurrage: 3, ultimoDiaLivre: '2026-09-09' }), rocketClock: clock({ diasDemurrage: 3, ultimoDiaLivre: '2026-09-09' }) });
+  const critico = full({ containerId: 'crit', clienteClock: clock({ diasDemurrage: 8, ultimoDiaLivre: '2026-09-05' }), rocketClock: clock({ diasDemurrage: 8, ultimoDiaLivre: '2026-09-05' }) });
+  const atencao = full({ containerId: 'aten', clienteClock: clock({ diasDemurrage: 3, ultimoDiaLivre: '2026-09-10' }), rocketClock: clock({ diasDemurrage: 3, ultimoDiaLivre: '2026-09-10' }) });
   const silen = full({ containerId: 'sil' });
   const fila = ordenarFila([atencao, silen, critico]);
   assert.deepEqual(fila.map((i) => i.facts.containerId), ['crit', 'aten']);
@@ -268,7 +268,7 @@ test('fila: baldes ordenam antes do desempate; SILENCIOSO sai da fila principal'
 
 test('consolidação: líder é o de maior prioridade; concluído não mascara ativo; composição correta', () => {
   const c1 = full({ containerId: 'c1', emptyReturn: true }); // ZERO confirmada → CONCLUIDO
-  const c2 = full({ containerId: 'c2', clienteClock: clock({ diasDemurrage: 8, ultimoDiaLivre: '2026-09-04' }), rocketClock: clock({ diasDemurrage: 8, ultimoDiaLivre: '2026-09-04' }) }); // CRITICO
+  const c2 = full({ containerId: 'c2', clienteClock: clock({ diasDemurrage: 8, ultimoDiaLivre: '2026-09-05' }), rocketClock: clock({ diasDemurrage: 8, ultimoDiaLivre: '2026-09-05' }) }); // CRITICO
   const c3 = full({ containerId: 'c3', clienteClock: { status: 'PENDING', diasDemurrage: 0, ultimoDiaLivre: null }, rocketClock: clock({ diasDemurrage: 0, ultimoDiaLivre: '2026-09-29' }) }); // PENDENCIA
   const cons = consolidarProcesso([c1, c2, c3])!;
   assert.equal(cons.estadoMaisRelevante, 'EM_DEMURRAGE_CRITICO');

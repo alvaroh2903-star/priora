@@ -178,24 +178,25 @@ test('DV-03: o líder muda com a passagem da data, SEM nenhuma gravação', { sk
   try {
     await setup(pool);
     const { orgId, processoId } = await criarProcesso(pool, 'DV03D');
-    // Mesma descarga, LFDs vizinhos (A: 11-10, B: 11-11) — ambos derivados em D1 = 11-08 (dentro do Prazo Próximo).
-    const a = await criarContainer(pool, orgId, processoId, 'DV03D1', { discharge: '2026-11-01', houseFT: 10, masterFT: 10, hoje: '2026-11-08' });
-    const b = await criarContainer(pool, orgId, processoId, 'DV03D2', { discharge: '2026-11-01', houseFT: 11, masterFT: 11, hoje: '2026-11-08' });
+    // A: descarga 2026-11-01, FT 10 → LFD 2026-11-10, derivado em 2026-11-05 (dentro do Free Time).
+    const a = await criarContainer(pool, orgId, processoId, 'DV03D1', { discharge: '2026-11-01', houseFT: 10, masterFT: 10, hoje: '2026-11-05' });
+    // B: sem nenhum Free Time informado → relógios PENDING → PENDENCIA_DE_DADOS (balde PRAZO_PREVENTIVO).
+    const b = (await new ContainerRepository(pool).create(orgId, processoId, 'DV03D2')).id;
 
-    const { rows: tabelas } = await pool.query(
-      `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE' ORDER BY table_name`,
-    );
-    const nomes = tabelas.map((r: any) => r.table_name);
-
-    // D1 = 2026-11-08: A a 2 dias do LFD (11-10), B a 3 dias do LFD (11-11) — A vence o desempate #5 (menor tempo até o vencimento).
+    const nomes = await todasAsTabelas(pool);
     const antes = await fingerprintTabelas(pool, nomes);
-    const det1 = await buscarDetalheProcesso(pool, orgId, processoId, '2026-11-08');
-    assert.equal(det1!.lider!.containerId, a, 'A está mais perto do próprio vencimento em 11-08');
 
-    // D2 = 2026-11-11: o LFD de A (11-10) já passou — a leitura ao vivo vê dias negativos e tira A do Prazo Próximo
-    // (cache do relógio NUNCA recalculada: só a comparação de datas é ao vivo). B ainda está dentro do limiar (0 dias).
+    // D1 = 2026-11-05: A silencioso (5 dias até o LFD), B em pendência → B lidera.
+    const det1 = await buscarDetalheProcesso(pool, orgId, processoId, '2026-11-05');
+    assert.equal(det1!.lider!.containerId, b);
+    assert.equal(det1!.prioridade.balde, 'PRAZO_PREVENTIVO');
+
+    // D2 = 2026-11-11 (LFD de A + 1), sem nenhum tick: A já está em demurrage pela regra operacional
+    // (v1.2.2) → EM_DEMURRAGE_ATENCAO, balde ATENCAO_1_6 → A passa a liderar.
     const det2 = await buscarDetalheProcesso(pool, orgId, processoId, '2026-11-11');
-    assert.equal(det2!.lider!.containerId, b, 'líder muda para B só pela passagem da data');
+    assert.equal(det2!.lider!.containerId, a, 'líder muda para A só pela passagem da data');
+    assert.equal(det2!.prioridade.balde, 'ATENCAO_1_6');
+
     const depois = await fingerprintTabelas(pool, nomes);
     assert.equal(antes, depois, 'as duas leituras (datas diferentes) não gravaram nada');
   } finally { await pool.end(); }
@@ -411,10 +412,12 @@ test('v1.2.1 #1 (integração): relógio com cache desatualizado ALÉM do LFD �
     const c1NoDetalheDoProcesso = det!.conteineres.find((c) => c.containerId === c1)!;
     assert.deepEqual(c1NoDetalheDoProcesso.relogios.cliente, relogioC1, 'detalhe de contêiner e detalhe de processo concordam');
 
-    // Consistência lifecycle/prioridade/contrato de leitura: o estado do contêiner (lido do cache,
-    // nunca recalculado aqui) pode continuar MONITORAMENTO_SILENCIOSO nesta janela — mas NUNCA
-    // afirma falsamente "ainda dentro do prazo" ou "prazo próximo" quando o relógio já venceu.
-    assert.notEqual(c1NoDetalheDoProcesso.estado.codigo, 'PRAZO_PROXIMO');
+    // v1.2.2: o estado usa os MESMOS dias operacionais do bloco de prazo — já em demurrage
+    // (5 dias após o LFD) antes de qualquer tick; o relógio guardado continua com 0 dias.
+    assert.equal(c1NoDetalheDoProcesso.estado.codigo, 'EM_DEMURRAGE_ATENCAO');
+    assert.equal(relogioC1.dias, 0, 'cache intocado');
+    assert.equal(relogioC1.diasOperacionais, 5);
+    assert.equal(det!.lider!.containerId, c1);
 
     // O próximo vencimento do PROCESSO nunca escolhe o prazo já passado de C1 — só C2 (ainda dentro do Free Time).
     assert.equal(det!.proximoVencimento!.containerId, c2);
@@ -508,5 +511,134 @@ test('v1.2.1 #3 (integração): soma monetária exata ponta a ponta — 10.01 + 
     const fila = await buscarFilaOperacional(pool, { organizationId: orgId, filtros: filtroFilaVazio(), hoje });
     const item = fila.itens.find((i) => i.processo.id === processoId)!;
     assert.deepEqual(item.agregadoFinanceiro, det!.agregadoFinanceiro);
+  } finally { await pool.end(); }
+});
+
+/* ===================================================================== *
+ * v1.2.2 — estado operacional vivo depois do fim do Free Time.
+ * ===================================================================== */
+
+test('v1.2.2 (integração): virada após o LFD, sem tick — a fila PADRÃO já mostra o processo em demurrage; depois do tick, tudo idêntico', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await setup(pool);
+    const { orgId, processoId } = await processoComTarifa(pool, 'V122A', { termoTipo: 'embarque', diaria: 100 });
+    // A: descarga 2026-11-01, FT 10 → LFD 2026-11-10. B: FT 30 → LFD 2026-11-30. Ambos derivados em 2026-11-05.
+    const a = await criarContainer(pool, orgId, processoId, 'V122A1', { discharge: '2026-11-01', houseFT: 10, masterFT: 10, hoje: '2026-11-05' });
+    const b = await criarContainer(pool, orgId, processoId, 'V122A2', { discharge: '2026-11-01', houseFT: 30, masterFT: 30, hoje: '2026-11-05' });
+    await pool.query(`UPDATE containers SET container_type_id = (SELECT id FROM container_types WHERE codigo = '20DV') WHERE id = ANY($1)`, [[a, b]]);
+    for (const id of [a, b]) await recalcularApuracaoContainer(pool, id, { dataReferencia: '2026-11-05' });
+
+    // Persistido como MONITORAMENTO_SILENCIOSO.
+    const { rows: [persistido] } = await pool.query(`SELECT estado_mais_relevante, prioridade_balde FROM processos WHERE id = $1`, [processoId]);
+    assert.equal(persistido.estado_mais_relevante, 'MONITORAMENTO_SILENCIOSO');
+    assert.equal(persistido.prioridade_balde, 'SILENCIOSO');
+
+    const tabelas = await todasAsTabelas(pool);
+    const antes = await fingerprintTabelas(pool, tabelas);
+
+    // Hoje operacional = LFD de A + 1. Nenhum tick rodou.
+    const hoje = '2026-11-11';
+    const ler = async () => {
+      const fila = await buscarFilaOperacional(pool, { organizationId: orgId, filtros: filtroFilaVazio(), hoje }); // fila PADRÃO (sem silenciosos)
+      const det = await buscarDetalheProcesso(pool, orgId, processoId, hoje);
+      const dcA = await buscarDetalheContainer(pool, orgId, a, hoje);
+      const contagens = await contarEstadosEBaldes(pool, orgId, hoje);
+      return { item: fila.itens.find((i) => i.processo.id === processoId), det: det!, dcA: dcA!, contagens };
+    };
+
+    const pre = await ler();
+    assert.ok(pre.item, 'a fila padrão já inclui o processo, no dia em que a demurrage começa');
+    for (const [nome, estado, balde] of [
+      ['fila', pre.item!.estadoMaisRelevante.codigo, pre.item!.prioridade.balde],
+      ['detalhe de processo', pre.det.estadoMaisRelevante.codigo, pre.det.prioridade.balde],
+    ] as const) {
+      assert.equal(estado, 'EM_DEMURRAGE_ATENCAO', nome);
+      assert.equal(balde, 'ATENCAO_1_6', nome);
+    }
+    assert.equal(pre.dcA.estado.codigo, 'EM_DEMURRAGE_ATENCAO');
+    assert.equal(pre.item!.lider!.containerId, a);
+    assert.equal(pre.det.lider!.containerId, a);
+    // /filtros conta o mesmo estado/balde.
+    assert.deepEqual(pre.contagens.estados, [{ codigo: 'EM_DEMURRAGE_ATENCAO', total: 1 }]);
+    assert.deepEqual(pre.contagens.baldes, [{ codigo: 'ATENCAO_1_6', total: 1 }]);
+    // Bloco de prazo vencido; relógio guardado intocado (0 dias), dias operacionais = 1; cache marcado obsoleto.
+    const relA = pre.dcA.relogios.cliente;
+    assert.equal(relA.vencido, true);
+    assert.equal(relA.diasRestantes, null);
+    assert.equal(relA.dias, 0);
+    assert.equal(relA.diasOperacionais, 1);
+    assert.equal(relA.cache, 'OBSOLETO');
+    // Valor financeiro PENDENTE até o recálculo legítimo — nunca "sem demurrage", nunca fabricado.
+    assert.equal(relA.valor.situacao, 'PENDENTE');
+    assert.equal(pre.det.agregadoFinanceiro.cliente.pendentes, 1);
+    assert.equal(pre.det.agregadoFinanceiro.cliente.completo, false);
+    assert.deepEqual(pre.item!.agregadoFinanceiro, pre.det.agregadoFinanceiro);
+    // Responsabilidade: só a derivação existente (EM_ANALISE), nenhuma decisão criada.
+    assert.equal(pre.dcA.interno.responsabilidade.estadoDerivado, 'EM_ANALISE');
+    assert.equal(pre.dcA.interno.responsabilidade.decisaoVigente, null);
+    // O próximo vencimento é o de B (A já venceu).
+    assert.equal(pre.det.proximoVencimento!.containerId, b);
+
+    // Zero escrita: nenhuma linha de nenhuma tabela mudou com todos esses GETs.
+    assert.equal(await fingerprintTabelas(pool, tabelas), antes);
+
+    // Tick diário: o cache alcança a data civil.
+    await passagemDoCalendario(pool, hoje, { organizationId: orgId });
+    const { rows: [depoisTick] } = await pool.query(`SELECT estado_mais_relevante, prioridade_balde FROM processos WHERE id = $1`, [processoId]);
+    assert.equal(depoisTick.estado_mais_relevante, 'EM_DEMURRAGE_ATENCAO', 'o tick persiste o mesmo estado que a leitura já mostrava');
+
+    const pos = await ler();
+    // Estado, prioridade, líder, contagens e próximo vencimento: logicamente idênticos.
+    assert.deepEqual(pos.item!.estadoMaisRelevante, pre.item!.estadoMaisRelevante);
+    assert.deepEqual(pos.item!.prioridade, pre.item!.prioridade);
+    assert.deepEqual(pos.item!.lider, pre.item!.lider);
+    assert.deepEqual(pos.det.lider, pre.det.lider);
+    assert.deepEqual(pos.det.estadoMaisRelevante, pre.det.estadoMaisRelevante);
+    assert.deepEqual(pos.dcA.estado, pre.dcA.estado);
+    assert.deepEqual(pos.dcA.badges, pre.dcA.badges);
+    assert.deepEqual(pos.contagens, pre.contagens);
+    assert.deepEqual(pos.det.proximoVencimento, pre.det.proximoVencimento);
+    // Interpretação de prazo idêntica; só o relógio guardado e a validade do cache ficam atuais.
+    const relApos = pos.dcA.relogios.cliente;
+    for (const k of ['vencido', 'diasRestantes', 'dentroDoFreeTime', 'emPrazoProximo', 'proximoMarco', 'encerradoPorDevolucao', 'diasOperacionais'] as const) {
+      assert.deepEqual(relApos[k], relA[k], k);
+    }
+    assert.equal(relApos.dias, 1, 'relógio guardado alcançou a data');
+    assert.equal(relApos.cache, 'VALIDO');
+    // O valor agora existe, por recálculo legítimo do pipeline (não pela leitura).
+    assert.equal(relApos.valor.situacao, 'ESTIMADO');
+    assert.equal(pos.det.agregadoFinanceiro.cliente.completo, true);
+  } finally { await pool.end(); }
+});
+
+test('v1.2.2 (integração): Empty Return dentro do Free Time, lido muito depois do LFD — continua zero, concluído, sem prazo', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await setup(pool);
+    const { orgId, processoId } = await criarProcesso(pool, 'V122B');
+    // LFD 2026-11-10; devolução efetiva 2026-11-08 (dentro do Free Time).
+    const c = await criarContainer(pool, orgId, processoId, 'V122B1', { discharge: '2026-11-01', houseFT: 10, masterFT: 10, hoje: '2026-11-08' });
+    await pool.query(`UPDATE containers SET effective_return_date = '2026-11-08' WHERE id = $1`, [c]);
+    await recalcularApuracaoContainer(pool, c, { dataReferencia: '2026-11-08' });
+
+    const tabelas = await todasAsTabelas(pool);
+    const antes = await fingerprintTabelas(pool, tabelas);
+    const hoje = '2026-12-20'; // 40 dias depois do LFD
+    const dc = await buscarDetalheContainer(pool, orgId, c, hoje);
+    assert.equal(dc!.estado.codigo, 'CONCLUIDO_PARA_ROCKET');
+    for (const lado of ['cliente', 'rocket'] as const) {
+      const r = dc!.relogios[lado];
+      assert.equal(r.dias, 0);
+      assert.equal(r.diasOperacionais, 0, 'nunca acumula depois da devolução');
+      assert.equal(r.vencido, false);
+      assert.equal(r.encerradoPorDevolucao, true);
+      assert.equal(r.proximoMarco, null);
+    }
+    const det = await buscarDetalheProcesso(pool, orgId, processoId, hoje);
+    assert.equal(det!.proximoVencimento, null, 'contêiner devolvido não tem prazo futuro');
+    const fila = await buscarFilaOperacional(pool, { organizationId: orgId, filtros: filtroFilaVazio(), hoje });
+    assert.ok(!fila.itens.some((i) => i.processo.id === processoId), 'concluído fica fora da fila padrão');
+    assert.equal(await fingerprintTabelas(pool, tabelas), antes);
   } finally { await pool.end(); }
 });

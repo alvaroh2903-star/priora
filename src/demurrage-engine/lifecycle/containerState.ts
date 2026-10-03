@@ -1,4 +1,5 @@
-import { diasAteUltimoDiaLivre, estaEmPrazoProximo } from './prazoFreeTime';
+import { CivilDate } from '../temporal/civilDate';
+import { estaEmPrazoProximo, menorDiasAteVencimentoOperacional, relogioOperacional } from './prazoFreeTime';
 import { ApuracaoDemurrageStatus, Badge, ClockFact, ContainerLifecycleFacts, ContainerStateResult, EstadoOperacional } from './types';
 
 /**
@@ -19,6 +20,20 @@ export function derivarApuracaoDemurrageStatus(cliente: ClockFact, rocket: Clock
 }
 
 /**
+ * D12 v1.2.2 — status de apuração OPERACIONAL usado pelo lifecycle: o mesmo
+ * `derivarApuracaoDemurrageStatus`, sobre os dias operacionais de cada
+ * relógio (`relogioOperacional`). Um contêiner ativo cujo relógio válido já
+ * passou do último dia livre nunca é `ZERO_CONFIRMADO`, mesmo antes do tick
+ * diário atualizar o cache. Com Empty Return, os dias são os do cache
+ * (apurados até a devolução) — nada muda para contêineres devolvidos.
+ */
+export function derivarApuracaoDemurrageStatusOperacional(
+  cliente: ClockFact, rocket: ClockFact, hoje: CivilDate, emptyReturn: boolean,
+): ApuracaoDemurrageStatus {
+  return derivarApuracaoDemurrageStatus(relogioOperacional(cliente, hoje, emptyReturn), relogioOperacional(rocket, hoje, emptyReturn));
+}
+
+/**
  * Fase 7 — estado operacional do contêiner (Cap. 21), função PURA.
  *
  * Precedência (§4 da especificação v4):
@@ -30,21 +45,10 @@ export function derivarApuracaoDemurrageStatus(cliente: ClockFact, rocket: Clock
  * avançado, mas cliente e Rocket seguem separados nos fatos/badges.
  */
 
-/** Dias até o vencimento mais próximo entre relógios OK dentro do prazo (null se nenhum). */
-function menorDiasAteVencimento(facts: ContainerLifecycleFacts): number | null {
-  const candidatos: number[] = [];
-  for (const clock of [facts.clienteClock, facts.rocketClock]) {
-    if (clock.status === 'OK' && clock.diasDemurrage === 0 && clock.ultimoDiaLivre) {
-      const dias = diasAteUltimoDiaLivre(clock.ultimoDiaLivre, facts.hoje);
-      if (dias >= 0) candidatos.push(dias);
-    }
-  }
-  return candidatos.length ? Math.min(...candidatos) : null;
-}
-
 function ehPrazoProximo(facts: ContainerLifecycleFacts): boolean {
-  // Limiar null → desligado (estaEmPrazoProximo trata); fonte única em prazoFreeTime.ts.
-  const dias = menorDiasAteVencimento(facts);
+  // Limiar null → desligado (estaEmPrazoProximo trata). Dias até o vencimento
+  // vêm do MESMO bloco de prazo da leitura (prazoFreeTime.ts, v1.2.2).
+  const dias = menorDiasAteVencimentoOperacional([facts.clienteClock, facts.rocketClock], facts.hoje, facts.emptyReturn);
   return estaEmPrazoProximo(dias, facts.prazoProximoThresholdDias);
 }
 
@@ -88,8 +92,11 @@ function motivoDe(estado: EstadoOperacional, facts: ContainerLifecycleFacts, bad
 }
 
 export function derivarEstadoContainer(facts: ContainerLifecycleFacts): ContainerStateResult {
-  const cliente = facts.clienteClock;
-  const rocket = facts.rocketClock;
+  // D12 v1.2.2: dias OPERACIONAIS (cache + passagem da data civil; nunca após
+  // Empty Return). Severidade, demurrage do cliente, exposição Rocket,
+  // ATENCAO/CRITICO, escalada 15+ e badges usam a mesma regra pura.
+  const cliente = relogioOperacional(facts.clienteClock, facts.hoje, facts.emptyReturn);
+  const rocket = relogioOperacional(facts.rocketClock, facts.hoje, facts.emptyReturn);
 
   const clienteEmDemurrage = cliente.status === 'OK' && cliente.diasDemurrage >= 1;
   const rocketExposta = rocket.status === 'OK' && rocket.diasDemurrage >= 1;

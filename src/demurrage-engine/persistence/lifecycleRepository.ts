@@ -2,9 +2,9 @@ import { Pool } from 'pg';
 import { getPool } from '../db/pool';
 import { CivilDate } from '../temporal/civilDate';
 import { avaliarCadencia, deveConsultarAgora, CadenciaInput } from '../scheduler/cadencePolicy';
-import { derivarEstadoContainer, derivarApuracaoDemurrageStatus } from '../lifecycle/containerState';
+import { derivarEstadoContainer, derivarApuracaoDemurrageStatusOperacional } from '../lifecycle/containerState';
 import { derivarPrioridadeContainer } from '../lifecycle/priorityEngine';
-import { PRAZO_PROXIMO_DIAS_PADRAO } from '../lifecycle/prazoFreeTime';
+import { PRAZO_PROXIMO_DIAS_PADRAO, relogioOperacional } from '../lifecycle/prazoFreeTime';
 import { consolidarProcesso } from '../lifecycle/processConsolidation';
 import { derivarResponsabilidade } from '../lifecycle/responsabilidade';
 import { Badge, ClockFact, ContainerLifecycle, ContainerLifecycleFacts, ContainerStateResult, DocumentaryStatus, ProcessoLifecycleResult, Responsabilidade, ValorFact } from '../lifecycle/types';
@@ -23,6 +23,8 @@ import { RelogioRepository } from './relogioRepository';
  *    standalone/batch garantem a projeção via `RelogioRepository` antes de derivar.
  *  - `apuracaoDemurrageStatus` (v4.1) é derivado dos RELÓGIOS (não de valores_apurados):
  *    ver `derivarApuracaoDemurrageStatus`. valores_apurados NÃO decide se houve demurrage.
+ *    D12 v1.2.2: sobre os dias OPERACIONAIS (`relogioOperacional`): um relógio OK que já
+ *    passou do último dia livre conta como demurrage mesmo antes do tick diário.
  *  - `valorCliente`/`exposicaoRocket` = o valor ativo de maior total por relógio,
  *    com `disponivel=false` quando total é NULL ou confirmation_status='UNAVAILABLE'.
  *  - `responsabilidadeEmAnalise` e `divergenciaValor` = false (sem fonte na Fase 7;
@@ -191,6 +193,12 @@ export class LifecycleRepository {
       const ultimaConsultaValida: CivilDate | null = ultimaConsultaPorContainer.get(containerId) ?? null;
       const falhaTrackingAtiva = falhaTrackingPorContainer.has(containerId);
 
+      // D12 v1.2.2: dias OPERACIONAIS (regra pura única em prazoFreeTime.ts) para
+      // os fatos derivados abaixo. Os relógios guardados em `facts` continuam
+      // sendo os do CACHE — as engines aplicam a mesma regra sobre eles.
+      const clienteOp = relogioOperacional(clocks.cliente, config.hoje, emptyReturn);
+      const rocketOp = relogioOperacional(clocks.rocket, config.hoje, emptyReturn);
+
       const houseLFD = lastFreeDay(c.discharge_date, c.house_free_time_days);
       const masterLFD = lastFreeDay(c.discharge_date, c.master_free_time_days);
       const cadInput: CadenciaInput = {
@@ -198,9 +206,11 @@ export class LifecycleRepository {
         houseLastFreeDay: houseLFD,
         masterLastFreeDay: masterLFD,
         emptyReturn: emptyReturnDate,
+        // Mesma semântica que o scheduler já usa (schedulerWorker: hoje > menor LFD);
+        // a política de cadência em si não muda.
         algumEmDemurrage:
-          (clocks.cliente.status === 'OK' && clocks.cliente.diasDemurrage >= 1) ||
-          (clocks.rocket.status === 'OK' && clocks.rocket.diasDemurrage >= 1),
+          (clienteOp.status === 'OK' && clienteOp.diasDemurrage >= 1) ||
+          (rocketOp.status === 'OK' && rocketOp.diasDemurrage >= 1),
         hoje: config.hoje,
       };
       const suspenso = avaliarCadencia(cadInput).automaticTracking === 'SUSPENDED';
@@ -208,7 +218,7 @@ export class LifecycleRepository {
 
       const clienteClock = clocks.cliente;
       const rocketClock = clocks.rocket;
-      const apuracaoDemurrageStatus = derivarApuracaoDemurrageStatus(clienteClock, rocketClock);
+      const apuracaoDemurrageStatus = derivarApuracaoDemurrageStatusOperacional(clienteClock, rocketClock, config.hoje, emptyReturn);
       const responsabilidade = derivarResponsabilidade(apuracaoDemurrageStatus, c.responsabilidade ?? null);
 
       let documentaryStatus: ContainerLifecycleFacts['documentaryStatus'] = 'NAO_APLICAVEL';

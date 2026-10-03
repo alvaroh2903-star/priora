@@ -127,7 +127,7 @@ test('D12 G5 — GET /filtros: opções e contagens batem com os dados reais da 
     const clienteA = await new ClienteRepository(pool).create(org.id, 'Cliente Opções');
     await processo(pool, org.id, 'IM-D12-F5-5', 'FVEE', { clienteId: clienteA.id, dischargeDate: '2026-09-01', freeTimeDias: 6, hoje });
 
-    const opcoes = await buscarOpcoesFiltros(pool, org.id);
+    const opcoes = await buscarOpcoesFiltros(pool, org.id, hoje);
     assert.equal(opcoes.contrato, 'demurrage.leitura.v1');
     assert.ok(opcoes.clientes.some((c) => c.id === clienteA.id));
     assert.ok(opcoes.armadores.some((a) => a.codigo === 'MAERSK'));

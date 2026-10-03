@@ -3,7 +3,7 @@ import { LifecycleRepository } from '../persistence/lifecycleRepository';
 import { ordenarFila, ordenarTodos, compararDesempate } from '../lifecycle/priorityEngine';
 import { composicaoDeEstados, consolidarProcesso } from '../lifecycle/processConsolidation';
 import { ContainerLifecycle, ProcessoLifecycleResult } from '../lifecycle/types';
-import { blocoPrazoRelogio, escolherProximoVencimentoProcesso, CandidatoProximoVencimento } from '../lifecycle/prazoFreeTime';
+import { blocoPrazoRelogio, diasDemurrageOperacionais, escolherProximoVencimentoProcesso, CandidatoProximoVencimento } from '../lifecycle/prazoFreeTime';
 import { hojeOperacional } from '../time/operationalDate';
 import { CivilDate } from '../temporal/civilDate';
 import {
@@ -494,17 +494,20 @@ export async function buscarFilaOperacional(pool: Pool, input: BuscarFilaInput):
   function envelopesDoContainer(pacote: ContainerLifecycle): { cliente: ReturnType<typeof envelopeDeValor>; rocket: ReturnType<typeof envelopeDeValor> } {
     const vrows = valoresPorContainer.get(pacote.facts.containerId) ?? [];
     const motorAplicavel = motorClienteAplicavelDe(termoTipoPorContainer.get(pacote.facts.containerId) ?? null);
+    const { facts } = pacote;
+    // v1.2.2: dias OPERACIONAIS (mesma regra do estado); valor apurado para menos dias = defasado.
+    const envelope = (clock: typeof facts.clienteClock, valor: ReturnType<typeof selecionarValorAtivo>) => {
+      const diasOp = diasDemurrageOperacionais(clock, facts.hoje, facts.emptyReturn);
+      return envelopeDeValor({
+        relogioStatus: clock.status,
+        diasDemurrage: clock.status === 'OK' ? diasOp : null,
+        valor,
+        valorDefasado: clock.status === 'OK' && diasOp > clock.diasDemurrage,
+      });
+    };
     return {
-      cliente: envelopeDeValor({
-        relogioStatus: pacote.facts.clienteClock.status,
-        diasDemurrage: pacote.facts.clienteClock.status === 'OK' ? pacote.facts.clienteClock.diasDemurrage : null,
-        valor: selecionarValorAtivo(vrows, 'cliente', motorAplicavel),
-      }),
-      rocket: envelopeDeValor({
-        relogioStatus: pacote.facts.rocketClock.status,
-        diasDemurrage: pacote.facts.rocketClock.status === 'OK' ? pacote.facts.rocketClock.diasDemurrage : null,
-        valor: selecionarValorAtivo(vrows, 'rocket', null),
-      }),
+      cliente: envelope(facts.clienteClock, selecionarValorAtivo(vrows, 'cliente', motorAplicavel)),
+      rocket: envelope(facts.rocketClock, selecionarValorAtivo(vrows, 'rocket', null)),
     };
   }
 
@@ -539,7 +542,7 @@ export async function buscarFilaOperacional(pool: Pool, input: BuscarFilaInput):
       const numero = numeroPorContainerId.get(pacote.facts.containerId) ?? '';
       for (const relogio of ['cliente', 'rocket'] as const) {
         const clock = relogio === 'cliente' ? pacote.facts.clienteClock : pacote.facts.rocketClock;
-        const bloco = blocoPrazoRelogio(clock, hoje, pacote.facts.prazoProximoThresholdDias);
+        const bloco = blocoPrazoRelogio(clock, hoje, pacote.facts.prazoProximoThresholdDias, pacote.facts.emptyReturn);
         if (bloco.proximoMarco) candidatosVencimento.push({ containerId: pacote.facts.containerId, numero, relogio, marco: bloco.proximoMarco });
       }
     }

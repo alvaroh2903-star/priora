@@ -43,6 +43,40 @@ export function inicioDoPrazoProximo(ultimoDiaLivre: CivilDate, limiar: number):
 }
 
 /* ------------------------------------------------------------------ *
+ * D12 v1.2.2 — dias de demurrage OPERACIONAIS (correção autorizada da
+ * derivação pura da Fase 7). Regra ÚNICA, consumida pelo estado do
+ * contêiner, pelo status de apuração do lifecycle, pela prioridade e pela
+ * leitura operacional (D12):
+ *
+ *   dias operacionais = max(cache.diasDemurrage, max(0, hoje − ultimoDiaLivre))
+ *
+ * Semântica de dia civil: no último dia livre → 0; no dia seguinte → 1; no
+ * sétimo dia após → 7; no décimo quinto → 15 (a mesma contagem do motor
+ * temporal, que apura `finalDate − ultimoDiaLivre`).
+ *
+ * Só extrapola relógio `OK` com `ultimoDiaLivre`, de contêiner SEM Empty
+ * Return. Relógio `PENDING`/`INVALID` nunca é extrapolado. Com Empty Return
+ * o relógio parou na data de devolução: vale o resultado do cache, apurado
+ * com a data efetiva de devolução — nunca se acumula depois dela, e um
+ * contêiner devolvido dentro do Free Time continua com zero dias, por mais
+ * tarde que seja hoje. O cache nunca é reduzido (`max`), nunca é gravado
+ * nem recalculado aqui, e nenhum valor monetário nasce desta função.
+ * ------------------------------------------------------------------ */
+
+/** Dias de demurrage operacionais de UM relógio (cliente = House, Rocket = Master; nunca combinados). */
+export function diasDemurrageOperacionais(clock: ClockFact, hoje: CivilDate, emptyReturn: boolean): number {
+  if (clock.status !== 'OK') return 0;
+  if (emptyReturn || !clock.ultimoDiaLivre) return clock.diasDemurrage;
+  return Math.max(clock.diasDemurrage, Math.max(0, toOrdinal(hoje) - toOrdinal(clock.ultimoDiaLivre)));
+}
+
+/** O mesmo `ClockFact`, com `diasDemurrage` substituído pelos dias operacionais (relógio não `OK` volta intacto). */
+export function relogioOperacional(clock: ClockFact, hoje: CivilDate, emptyReturn: boolean): ClockFact {
+  if (clock.status !== 'OK') return clock;
+  return { ...clock, diasDemurrage: diasDemurrageOperacionais(clock, hoje, emptyReturn) };
+}
+
+/* ------------------------------------------------------------------ *
  * D12 v1.2, DV-05 — bloco de prazo por relógio e próximo vencimento do
  * processo. Funções PURAS sobre o `ClockFact` já montado por
  * `lifecycleRepository` (que por sua vez só LÊ o cache `relogios` — nenhum
@@ -60,62 +94,66 @@ export interface MarcoOperacional {
 }
 
 export interface BlocoPrazoRelogio {
-  /** Dias corridos até o fim do Free Time. null quando o relógio não está OK
-   * ou já venceu — "valores negativos não devem ser apresentados como dias
-   * restantes" (DV-05): o vencimento vira `vencido=true`, nunca um negativo. */
+  /** Dias corridos até o fim do Free Time. null quando o relógio não está OK,
+   * já venceu ou parou por Empty Return — nunca um negativo (DV-05). */
   diasRestantes: number | null;
   dentroDoFreeTime: boolean;
   emPrazoProximo: boolean;
   vencido: boolean;
   proximoMarco: MarcoOperacional | null;
+  /** v1.2.2: o relógio parou na devolução do vazio — não há mais prazo futuro a vigiar. */
+  encerradoPorDevolucao: boolean;
 }
-
-const BLOCO_PENDENTE: BlocoPrazoRelogio = {
-  diasRestantes: null, dentroDoFreeTime: false, emPrazoProximo: false, vencido: false, proximoMarco: null,
-};
 
 /**
  * Bloco de prazo de UM relógio (cliente usa House, Rocket usa Master — os
- * relógios entram aqui já separados, nunca fundidos). Regras (DV-05,
- * corrigidas na v1.2.1 — achado #1 da auditoria):
- *  - relógio não OK (Free Time ausente ou sem descarga), ou sem último dia
- *    livre conhecido → pendente;
- *  - a COMPARAÇÃO DE DATA CIVIL (`hoje` × `ultimoDiaLivre`) é AUTORITATIVA
- *    para esta interpretação — nunca `clock.diasDemurrage` (o cache
- *    `relogios`, que só é atualizado no próximo recálculo/tick). Antes desta
- *    correção, a função consultava `diasDemurrage` PRIMEIRO: numa janela
- *    real em que o cache ainda está `diasDemurrage = 0` mas `hoje` já passou
- *    do último dia livre (relógio ainda não recalculado), o bloco expunha
- *    `diasRestantes` NEGATIVO com `dentroDoFreeTime = true` e
- *    `vencido = false` — uma leitura autocontraditória. Agora: `hoje >
- *    ultimoDiaLivre` ⇒ sempre `vencido = true`, `diasRestantes = null`,
- *    `dentroDoFreeTime = false`, `emPrazoProximo = false`,
- *    `proximoMarco = null` — nunca um negativo, e nunca fabricando um
- *    `diasDemurrage` que o cache não tem (o cache em si NUNCA é lido, tocado
- *    ou recalculado aqui; é só a interpretação PURA da data que muda).
- *  - senão (hoje ainda dentro do Free Time, inclui o próprio último dia
- *    livre, onde `diasRestantes = 0`) → marco = fim do Free Time.
+ * relógios entram aqui já separados, nunca fundidos).
  *
- * O mesmo padrão (filtrar por `dias >= 0` sobre a data civil, nunca por
- * `diasDemurrage` do cache) já era usado por `containerState.ts`
- * (`menorDiasAteVencimento`) e por `priorityEngine.ts` (`diasAteVencimento`)
- * — esta correção só alinha `blocoPrazoRelogio` ao que o resto do lifecycle
- * já fazia, restaurando a consistência entre estado, prioridade e o
- * contrato de leitura nesta mesma janela de cache desatualizado.
+ * v1.2.2: a decisão "vencido / dentro do Free Time" usa os MESMOS dias
+ * operacionais de `diasDemurrageOperacionais` que decidem o estado do
+ * contêiner e a prioridade — uma regra só para lifecycle, prioridade e D12:
+ *  - relógio não OK (Free Time ausente ou sem descarga), ou sem último dia
+ *    livre → pendente;
+ *  - com Empty Return → encerrado: sem prazo futuro, sem marco; `vencido`
+ *    só se houve demurrage até a data de devolução (cache);
+ *  - dias operacionais ≥ 1 → vencido, `diasRestantes = null` (nunca um
+ *    negativo), sem marco. Cobre a janela entre a virada da data e o tick
+ *    diário (cache ainda em 0) — achado #1 da v1.2.1 — e o cache à frente
+ *    da data civil (nunca reduzido);
+ *  - senão (dias operacionais = 0 ⇒ hoje ≤ último dia livre; inclui o
+ *    próprio último dia livre, `diasRestantes = 0`) → marco = fim do Free Time.
  */
-export function blocoPrazoRelogio(clock: ClockFact, hoje: CivilDate, limiar: number | null): BlocoPrazoRelogio {
-  if (clock.status !== 'OK' || !clock.ultimoDiaLivre) return BLOCO_PENDENTE;
+export function blocoPrazoRelogio(
+  clock: ClockFact, hoje: CivilDate, limiar: number | null, emptyReturn = false,
+): BlocoPrazoRelogio {
+  const base = { diasRestantes: null, dentroDoFreeTime: false, emPrazoProximo: false, proximoMarco: null, encerradoPorDevolucao: emptyReturn };
+  if (clock.status !== 'OK' || !clock.ultimoDiaLivre) return { ...base, vencido: false };
+  const diasOperacionais = diasDemurrageOperacionais(clock, hoje, emptyReturn);
+  if (emptyReturn || diasOperacionais >= 1) return { ...base, vencido: diasOperacionais >= 1 };
   const dias = diasAteUltimoDiaLivre(clock.ultimoDiaLivre, hoje);
-  if (dias < 0) {
-    return { diasRestantes: null, dentroDoFreeTime: false, emPrazoProximo: false, vencido: true, proximoMarco: null };
-  }
   return {
     diasRestantes: dias,
     dentroDoFreeTime: true,
     emPrazoProximo: estaEmPrazoProximo(dias, limiar),
     vencido: false,
     proximoMarco: { tipo: 'FIM_FREE_TIME', data: clock.ultimoDiaLivre, diasRestantes: dias },
+    encerradoPorDevolucao: false,
   };
+}
+
+/**
+ * Dias até o vencimento AINDA FUTURO mais próximo entre os dois relógios do
+ * contêiner (null quando nenhum está dentro do Free Time). Fonte única para o
+ * estado `PRAZO_PROXIMO` (`containerState`) e para o desempate #5
+ * (`priorityEngine`) — o mesmo `blocoPrazoRelogio` que a leitura expõe.
+ */
+export function menorDiasAteVencimentoOperacional(
+  clocks: ClockFact[], hoje: CivilDate, emptyReturn: boolean,
+): number | null {
+  const candidatos = clocks
+    .map((c) => blocoPrazoRelogio(c, hoje, null, emptyReturn).diasRestantes)
+    .filter((d): d is number => d !== null);
+  return candidatos.length ? Math.min(...candidatos) : null;
 }
 
 /** Candidato a próximo vencimento de UM relógio de UM contêiner, para a escolha do processo. */

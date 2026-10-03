@@ -51,8 +51,12 @@ export type ConfirmationStatusValor = 'ESTIMATED' | 'ESTIMATED_PROVISIONAL' | 'C
  */
 export function envelopeDeValor(input: {
   relogioStatus: RelogioStatus;
+  /** Dias de demurrage OPERACIONAIS do relógio (D12 v1.2.2, `diasDemurrageOperacionais`). */
   diasDemurrage: number | null;
   valor: { confirmationStatus: ConfirmationStatusValor; total: number | null; moeda: string | null } | null;
+  /** v1.2.2: o valor ativo foi apurado para MENOS dias do que os operacionais (cache ainda
+   * não recalculado pelo tick diário) — não representa o período atual. */
+  valorDefasado?: boolean;
 }): ValorEnvelope {
   if (input.relogioStatus !== 'OK') {
     return { situacao: 'PENDENTE', total: null, moeda: null };
@@ -61,7 +65,9 @@ export function envelopeDeValor(input: {
   if (dias <= 0) {
     return { situacao: 'NAO_APLICAVEL', total: null, moeda: null };
   }
-  if (!input.valor) {
+  if (!input.valor || input.valorDefasado) {
+    // Sem valor, ou valor de um período anterior: PENDENTE até o recálculo legítimo —
+    // nunca um valor fabricado, nunca "sem demurrage".
     return { situacao: 'PENDENTE', total: null, moeda: null };
   }
   switch (input.valor.confirmationStatus) {
@@ -120,6 +126,8 @@ export interface PrazoRelogioLeitura {
   emPrazoProximo: boolean;
   vencido: boolean;
   proximoMarco: { tipo: 'FIM_FREE_TIME'; data: string; diasRestantes: number } | null;
+  /** v1.2.2: o relógio parou na devolução do vazio — não há prazo futuro. */
+  encerradoPorDevolucao: boolean;
 }
 
 /** Forma comum aos dois relógios (cliente e rocket) — ver seção 3 do diagnóstico. */
@@ -130,8 +138,12 @@ export interface RelogioLeitura extends PrazoRelogioLeitura {
   primeiroDiaDemurrage: string | null;
   /** Data até a qual o valor foi apurado — a mesma resposta de "apurado até" (DV-05). */
   dataFinalApuracao: string | null;
-  /** diasDemurrage (relógio cliente) ou diasExposicao (relógio rocket) — mesmo campo, semântica documentada no rótulo do relógio. */
+  /** diasDemurrage (relógio cliente) ou diasExposicao (relógio rocket) — mesmo campo, semântica documentada no rótulo do relógio.
+   * É o valor do RELÓGIO GUARDADO (cache), apurado até `dataFinalApuracao`. */
   dias: number | null;
+  /** v1.2.2: dias de demurrage OPERACIONAIS hoje (`max(dias, hoje − ultimoDiaLivre)`, sem extrapolar
+   * após Empty Return) — os que decidem estado, prioridade e bloco de prazo. null quando o relógio não está OK. */
+  diasOperacionais: number | null;
   status: RelogioStatus;
   pendencias: string[];
   motivo: string | null;
@@ -150,6 +162,7 @@ export function prazoRelogioLeituraDe(bloco: BlocoPrazoRelogio): PrazoRelogioLei
     emPrazoProximo: bloco.emPrazoProximo,
     vencido: bloco.vencido,
     proximoMarco: bloco.proximoMarco ? { tipo: bloco.proximoMarco.tipo, data: bloco.proximoMarco.data, diasRestantes: bloco.proximoMarco.diasRestantes } : null,
+    encerradoPorDevolucao: bloco.encerradoPorDevolucao,
   };
 }
 
