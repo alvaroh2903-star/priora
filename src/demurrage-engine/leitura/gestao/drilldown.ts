@@ -193,7 +193,7 @@ function specDoIndicador(
       };
     }
     case 'G-D-SEM-RESPONSABILIDADE': {
-      // D14 v1.2 — mesma definição de `eficiencia.ts` (residual): sem decisão vigente CONFIRMADA_ROCKET/CONFIRMADA_CLIENTE/DIVIDIDA (uma decisão NAO_APLICAVEL não atribui responsabilidade).
+      // D14 v1.3 — "sem decisão" significa NENHUMA decisão vigente, de qualquer status (NAO_APLICAVEL é uma decisão válida: tem indicador próprio).
       const periodo = ctx.periodo!;
       return {
         grao: 'container', params: [organizationId, periodo.inicio, periodo.fim],
@@ -201,16 +201,19 @@ function specDoIndicador(
           WHERE c.organization_id = $1 AND p.apuracao_status = 'FINAL' AND p.fechado_em::date >= $2 AND p.fechado_em::date <= $3
             AND NOT EXISTS (
               SELECT 1 FROM responsabilidade_decisoes d WHERE d.container_id = c.id
-                AND d.status IN ('CONFIRMADA_ROCKET', 'CONFIRMADA_CLIENTE', 'DIVIDIDA')
                 AND NOT EXISTS (SELECT 1 FROM responsabilidade_decisoes d2 WHERE d2.substitui_decisao_id = d.id)
             )`,
       };
     }
     case 'G-D-RESP-CONFIRMADA-ROCKET':
     case 'G-D-RESP-CONFIRMADA-CLIENTE':
-    case 'G-D-RESP-DIVIDIDA': {
+    case 'G-D-RESP-DIVIDIDA':
+    case 'G-D-RESP-NAO-APLICAVEL': {
       const periodo = ctx.periodo!;
-      const status = { 'G-D-RESP-CONFIRMADA-ROCKET': 'CONFIRMADA_ROCKET', 'G-D-RESP-CONFIRMADA-CLIENTE': 'CONFIRMADA_CLIENTE', 'G-D-RESP-DIVIDIDA': 'DIVIDIDA' }[indicadorId];
+      const status = {
+        'G-D-RESP-CONFIRMADA-ROCKET': 'CONFIRMADA_ROCKET', 'G-D-RESP-CONFIRMADA-CLIENTE': 'CONFIRMADA_CLIENTE',
+        'G-D-RESP-DIVIDIDA': 'DIVIDIDA', 'G-D-RESP-NAO-APLICAVEL': 'NAO_APLICAVEL',
+      }[indicadorId];
       return {
         grao: 'container', params: [organizationId, periodo.inicio, periodo.fim, status],
         baseSql: `SELECT c.id AS id_ord FROM containers c

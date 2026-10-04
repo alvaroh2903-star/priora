@@ -6,7 +6,7 @@ import { autorizarInterno, AutorizedRequest, criarAutorizarInterno, PapelInterno
 import { ErroLeitura } from '../demurrage-engine/leitura/contrato';
 import { montarGestaoOperacional, FiltrosOperacional } from '../demurrage-engine/leitura/gestao/operacional';
 import { montarGestaoFinanceiro } from '../demurrage-engine/leitura/gestao/financeiro';
-import { montarGestaoResponsabilidade } from '../demurrage-engine/leitura/gestao/responsabilidade';
+import { listarDecisoesResponsabilidade, montarGestaoResponsabilidade } from '../demurrage-engine/leitura/gestao/responsabilidade';
 import { montarGestaoEficiencia, PeriodoObrigatorio } from '../demurrage-engine/leitura/gestao/eficiencia';
 import { montarGestaoQualidade, PeriodoFiltro } from '../demurrage-engine/leitura/gestao/qualidade';
 import { buscarComposicaoIndicador } from '../demurrage-engine/leitura/gestao/drilldown';
@@ -128,10 +128,28 @@ export function criarDemurrageGestaoRouter(deps: DemurrageGestaoRoutesDeps = {})
     } catch (err) { tratarErroLeitura(err, res, next); }
   });
 
-  /** GET /responsabilidade — Grupo C (Cap. 30.3). Leitura aberta a ANALYST (decisão); decidir continua exclusivo de MANAGER/ADMIN (D11, autor_papel). */
+  /** GET /responsabilidade — Grupo C (Cap. 30.3): RESUMO limitado (D14 v1.3 — o detalhe é paginado em /responsabilidade/decisoes). Leitura aberta a ANALYST (decisão); decidir continua exclusivo de MANAGER/ADMIN (D11, autor_papel). */
   router.get('/responsabilidade', async (req: AutorizedRequest, res: Response, next: NextFunction) => {
     try {
       const resposta = await montarGestaoResponsabilidade(pool(), req.autorizacao!.organizationId);
+      res.json(resposta);
+    } catch (err) { tratarErroLeitura(err, res, next); }
+  });
+
+  /**
+   * GET /responsabilidade/decisoes — detalhe PAGINADO das decisões vigentes (D14 v1.3 #2): keyset assinado sobre
+   * `(decidido_em DESC, id DESC)`. Filtros opcionais: `status`, `processo`, `container` (nenhuma regra de negócio nova).
+   */
+  router.get('/responsabilidade/decisoes', async (req: AutorizedRequest, res: Response, next: NextFunction) => {
+    try {
+      const { limite, cursor } = paginacaoDaQuery(req.query);
+      const q = req.query;
+      const resposta = await listarDecisoesResponsabilidade(pool(), req.autorizacao!.organizationId, {
+        limite, cursor,
+        status: typeof q.status === 'string' ? q.status : undefined,
+        processoId: typeof q.processo === 'string' ? q.processo : undefined,
+        containerId: typeof q.container === 'string' ? q.container : undefined,
+      });
       res.json(resposta);
     } catch (err) { tratarErroLeitura(err, res, next); }
   });

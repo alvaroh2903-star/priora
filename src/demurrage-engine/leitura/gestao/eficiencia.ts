@@ -128,9 +128,17 @@ export interface GestaoEficienciaV1 {
     responsabilidadeConfirmadaRocket: number;
     responsabilidadeConfirmadaCliente: number;
     responsabilidadeDividida: number;
+    /**
+     * D14 v1.3 — decisão vigente `NAO_APLICAVEL`: decisão VÁLIDA, versionada e auditada (D11) cujo significado é "atribuição de
+     * responsabilidade não se aplica". NÃO é ausência de decisão — nunca entra em `semResponsabilidadeAtribuida`.
+     */
+    responsabilidadeNaoAplicavel: number;
     /** Contêineres de processo FINAL cujo envelope cliente OU Rocket ainda está pendente/indisponível — nunca contados como "sem custo"; esperado 0, medido sempre. */
     integridadePendenciaRemanescente: number;
-    /** Contêineres de processo FINAL sem decisão de responsabilidade vigente — fora das 3 contagens de responsabilidade acima, nunca escondidos. */
+    /**
+     * D14 v1.3 — contêineres de processo FINAL SEM NENHUMA decisão de responsabilidade vigente (qualquer status). As 5 categorias
+     * (Rocket, cliente, dividida, não aplicável, sem decisão) são mutuamente exclusivas e SOMAM `totalContaineresFinal`.
+     */
     semResponsabilidadeAtribuida: number;
     totalContaineresFinal: number;
   };
@@ -308,7 +316,7 @@ export async function montarGestaoEficiencia(
   const containerIds: string[] = containerRows.map((r) => r.container_id);
 
   let semCustoCliente = 0, comCustoCliente = 0, semExposicaoRocket = 0, comExposicaoRocket = 0, semValorNenhumLado = 0, integridadePendenciaRemanescente = 0;
-  let respRocket = 0, respCliente = 0, respDividida = 0, semResponsabilidade = 0;
+  let respRocket = 0, respCliente = 0, respDividida = 0, respNaoAplicavel = 0, semResponsabilidade = 0;
 
   if (containerIds.length > 0) {
     const envelopes = await buscarEnvelopesSelecionadosDaOrganizacao(pool, organizationId, h, { containerIds });
@@ -339,7 +347,8 @@ export async function montarGestaoEficiencia(
       if (status === 'CONFIRMADA_ROCKET') respRocket++;
       else if (status === 'CONFIRMADA_CLIENTE') respCliente++;
       else if (status === 'DIVIDIDA') respDividida++;
-      else semResponsabilidade++;
+      else if (status === 'NAO_APLICAVEL') respNaoAplicavel++;
+      else semResponsabilidade++; // só `undefined`: nenhuma decisão vigente (o CHECK de `status` impede qualquer outro valor)
     }
   }
 
@@ -361,7 +370,7 @@ export async function montarGestaoEficiencia(
     mediaDiasResolucaoPendencias: media(resolucaoPendencias, resolucaoPendencias.n),
     concluidos: {
       semCustoCliente, comCustoCliente, semExposicaoRocket, comExposicaoRocket, semValorNenhumLado,
-      responsabilidadeConfirmadaRocket: respRocket, responsabilidadeConfirmadaCliente: respCliente, responsabilidadeDividida: respDividida,
+      responsabilidadeConfirmadaRocket: respRocket, responsabilidadeConfirmadaCliente: respCliente, responsabilidadeDividida: respDividida, responsabilidadeNaoAplicavel: respNaoAplicavel,
       integridadePendenciaRemanescente, semResponsabilidadeAtribuida: semResponsabilidade, totalContaineresFinal: containerIds.length,
     },
   };

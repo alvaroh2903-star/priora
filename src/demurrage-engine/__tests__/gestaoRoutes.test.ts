@@ -116,7 +116,7 @@ test('D14 G5 — CLIENT recebe 403 em toda rota de Gestão; sem sessão recebe 4
   try {
     const org = await setup(pool);
     const homeClient = await usuarioInterno(pool, org.id, 'CLIENT');
-    const rotas = [...ROTAS_GET, `/indicadores/G-A1/composicao`];
+    const rotas = [...ROTAS_GET, '/responsabilidade/decisoes', `/indicadores/G-A1/composicao`];
     for (const rota of rotas) {
       const semSessao = await fetch(`${app.base}${rota}`);
       assert.equal(semSessao.status, 401, `sem sessão em ${rota}`);
@@ -265,6 +265,13 @@ test('D14 G6 — ZERO ESCRITAS: nenhuma das 6 rotas de Gestão altera UMA LINHA 
     }
     const rComp = await fetch(`${app.base}/indicadores/G-A1/composicao`, { headers: { 'x-test-home-account-id': home } });
     assert.equal(rComp.status, 200);
+    // D14 v1.3 — detalhe paginado de responsabilidade (primeira página e a seguinte por cursor): nenhuma escrita.
+    const rDet = await fetch(`${app.base}/responsabilidade/decisoes?limite=1`, { headers: { 'x-test-home-account-id': home } });
+    assert.equal(rDet.status, 200);
+    const det = await rDet.json();
+    assert.equal(det.itens.length, 1);
+    const rDet2 = await fetch(`${app.base}/responsabilidade/decisoes?limite=1&cursor=${encodeURIComponent(det.cursor ?? 'x')}`, { headers: { 'x-test-home-account-id': home } });
+    assert.ok([200, 400].includes(rDet2.status));
     // D14 v1.2 — também as composições SQL de G-E7/G-E8 e as sem composição (200 explícito, nunca escrita).
     for (const id of ['G-E7', 'G-E8', 'G-E9', 'G-D-INTEGRIDADE', 'G-D-SEM-CUSTO-CLIENTE']) {
       const r = await fetch(`${app.base}/indicadores/${id}/composicao`, { headers: { 'x-test-home-account-id': home } });
@@ -273,5 +280,58 @@ test('D14 G6 — ZERO ESCRITAS: nenhuma das 6 rotas de Gestão altera UMA LINHA 
     }
     const depois = await fingerprintBanco(pool);
     assert.equal(depois, antes, 'o fingerprint completo do banco não muda — nenhuma rota de Gestão escreve');
+  } finally { await app.close(); await pool.end(); }
+});
+
+test('D14 v1.3 #2 — rota /responsabilidade (resumo sem `decisoes`) e /responsabilidade/decisoes (detalhe paginado): decisão real de D11, RBAC, validação e filtros', { skip: !url }, async () => {
+  const pool = testPool();
+  const app = await subirApp(pool);
+  try {
+    const org = await setup(pool);
+    const { containerId, processoId } = await processoDevolvido(pool, org.id, 'IM-D14-V13-RESP', 'VTRA');
+    await confirmarResponsabilidadeClienteIntegral(pool, { containerId, hoje: '2026-09-20' as any, organizationId: org.id });
+    const hAnalyst = await usuarioInterno(pool, org.id, 'ANALYST');
+    const hManager = await usuarioInterno(pool, org.id, 'MANAGER');
+    const hAdmin = await usuarioInterno(pool, org.id, 'ADMIN');
+    const get = (caminho: string, home: string) => fetch(`${app.base}${caminho}`, { headers: { 'x-test-home-account-id': home } });
+
+    for (const home of [hAnalyst, hManager, hAdmin]) {
+      const resumo = await (await get('/responsabilidade', home)).json();
+      assert.equal('decisoes' in resumo, false, 'o resumo não carrega mais a coleção completa');
+      assert.deepEqual(resumo.porStatus, [{ status: 'CONFIRMADA_CLIENTE', total: 1 }]);
+      const r = await get('/responsabilidade/decisoes', home);
+      assert.equal(r.status, 200, 'ANALYST/MANAGER/ADMIN leem o detalhe');
+      const det = await r.json();
+      assert.equal(det.contrato, 'demurrage.gestao.responsabilidade.decisoes.v1');
+      assert.equal(det.total, 1);
+      assert.equal(det.cursor, null);
+      const item = det.itens[0];
+      assert.equal(item.status, 'CONFIRMADA_CLIENTE');
+      assert.equal(item.containerId, containerId);
+      assert.equal(item.processoId, processoId);
+      for (const campo of ['numeroProcesso', 'diasRocket', 'diasCliente', 'moeda', 'valorRocketTexto', 'valorClienteTexto', 'justificativa', 'evidenciaRef', 'decididoEm']) {
+        assert.ok(campo in item, `campo aprovado preservado: ${campo}`);
+      }
+    }
+
+    for (const [caminho, status, codigo] of [
+      ['/responsabilidade/decisoes?limite=0', 400, 'valor_invalido'],
+      ['/responsabilidade/decisoes?limite=1.5', 400, 'valor_invalido'],
+      ['/responsabilidade/decisoes?limite=abc', 400, 'valor_invalido'],
+      ['/responsabilidade/decisoes?cursor=adulterado123', 400, 'cursor_invalido'],
+      ['/responsabilidade/decisoes?status=QUALQUER', 400, 'valor_invalido'],
+      ['/responsabilidade/decisoes?processo=nao-uuid', 400, 'valor_invalido'],
+      [`/responsabilidade/decisoes?organizationId=${randomUUID()}`, 400, 'parametro_nao_aceito'],
+    ] as const) {
+      const r = await get(caminho, hManager);
+      assert.equal(r.status, status, caminho);
+      assert.equal((await r.json()).error, codigo, caminho);
+    }
+    const filtrado = await (await get('/responsabilidade/decisoes?status=DIVIDIDA', hManager)).json();
+    assert.equal(filtrado.total, 0);
+    const porProcesso = await (await get(`/responsabilidade/decisoes?processo=${processoId}&container=${containerId}`, hManager)).json();
+    assert.equal(porProcesso.total, 1);
+    const outroOrg = await (await get(`/responsabilidade/decisoes?processo=${randomUUID()}`, hManager)).json();
+    assert.equal(outroOrg.total, 0);
   } finally { await app.close(); await pool.end(); }
 });

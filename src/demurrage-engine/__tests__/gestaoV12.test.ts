@@ -36,7 +36,7 @@ const INDICADORES_COM_COMPOSICAO_SQL = [
   'G-A1', 'G-A2', 'G-A3', 'G-A4', 'G-A5', 'G-A6', 'G-A7', 'G-A8', 'G-A9', 'G-A10',
   'G-C-CONFIRMADA_ROCKET', 'G-C-CONFIRMADA_CLIENTE', 'G-C-DIVIDIDA', 'G-C-NAO_APLICAVEL',
   'G-D-TOTAL-FINAL', 'G-D-SEM-RESPONSABILIDADE',
-  'G-D-RESP-CONFIRMADA-ROCKET', 'G-D-RESP-CONFIRMADA-CLIENTE', 'G-D-RESP-DIVIDIDA',
+  'G-D-RESP-CONFIRMADA-ROCKET', 'G-D-RESP-CONFIRMADA-CLIENTE', 'G-D-RESP-DIVIDIDA', 'G-D-RESP-NAO-APLICAVEL',
   'G-E7', 'G-E8',
 ];
 
@@ -202,6 +202,7 @@ test('D14 v1.2 #1 — benchmark PostgreSQL por estratégia disponível: 100 vs 1
     esperado.set('G-D-RESP-CONFIRMADA-ROCKET', eficiencia.concluidos.responsabilidadeConfirmadaRocket);
     esperado.set('G-D-RESP-CONFIRMADA-CLIENTE', eficiencia.concluidos.responsabilidadeConfirmadaCliente);
     esperado.set('G-D-RESP-DIVIDIDA', eficiencia.concluidos.responsabilidadeDividida);
+    esperado.set('G-D-RESP-NAO-APLICAVEL', eficiencia.concluidos.responsabilidadeNaoAplicavel);
     const resp = await montarGestaoResponsabilidade(pool, orgGrande.id);
     for (const st of ['CONFIRMADA_ROCKET', 'CONFIRMADA_CLIENTE', 'DIVIDIDA', 'NAO_APLICAVEL']) {
       esperado.set(`G-C-${st}`, resp.porStatus.find((x) => x.status === st)?.total ?? 0);
