@@ -72,7 +72,7 @@ test('D14 v1.1 #8 — registro: todo indicador G-A* publicado por /operacional e
       assert.ok(descritor, `${ind.id} publicado por /operacional precisa ter entrada no registro (nunca um 404 surpresa no drill-down)`);
       assert.equal(descritor!.grao, ind.grao, `${ind.id}: grão do registro diverge do grão publicado pelo contrato`);
       if (descritor!.drilldownDisponivel) {
-        const comp = await buscarComposicaoIndicador(pool, org.id, ind.id, { hoje: '2026-09-20' as any });
+        const comp = await buscarComposicaoIndicador(pool, org.id, ind.id, {});
         assert.equal(comp.total, ind.valor, `${ind.id}: total da composição precisa reconciliar com o valor do indicador`);
       }
     }
@@ -125,7 +125,7 @@ test('D14 v1.1 #8 — registro: todo indicador marcado drilldownDisponivel:true 
     const periodo = { periodoInicio: '2000-01-01', periodoFim: '2100-12-31' };
     for (const descritor of listarIndicadoresRegistrados()) {
       if (!descritor.drilldownDisponivel) continue;
-      const opts: any = { hoje };
+      const opts: any = {};
       if (descritor.requerPeriodo) opts.periodo = { inicio: periodo.periodoInicio, fim: periodo.periodoFim };
       const comp = await buscarComposicaoIndicador(pool, org.id, descritor.id, opts);
       assert.equal(comp.drilldownDisponivel, true, `${descritor.id}: registrado como disponível, mas a composição real devolveu indisponível — drift entre registro e drilldown.ts`);
@@ -148,7 +148,7 @@ test('D14 v1.1 #9 — paginação por keyset (G-A1): sem duplicar nem perder lin
     while (true) {
       const limite = primeiraPassada ? 10 : 7; // D14 v1.1 #9 — troca de tamanho de página no meio da paginação é permitida.
       primeiraPassada = false;
-      const comp = await buscarComposicaoIndicador(pool, org.id, 'G-A1', { hoje: '2026-09-20' as any, limite, cursor });
+      const comp = await buscarComposicaoIndicador(pool, org.id, 'G-A1', { limite, cursor });
       paginas++;
       assert.equal(comp.total, TOTAL);
       for (const item of comp.itens) {
@@ -170,28 +170,28 @@ test('D14 v1.1 #9 — cursor adulterado/cruzado é rejeitado: organização erra
     const orgB = await new OrganizationRepository(pool).create('Rocket B', 'rocket-d14-v11-drilldown-b');
     await gerarContainersComEstado(pool, org.id, 5, 'PRAZO_PROXIMO');
 
-    const comp = await buscarComposicaoIndicador(pool, org.id, 'G-A1', { hoje: '2026-09-20' as any, limite: 1 });
+    const comp = await buscarComposicaoIndicador(pool, org.id, 'G-A1', { limite: 1 });
     assert.ok(comp.cursor, 'pré-condição: há próxima página');
 
     await assert.rejects(
-      () => buscarComposicaoIndicador(pool, orgB.id, 'G-A1', { hoje: '2026-09-20' as any, cursor: comp.cursor }),
+      () => buscarComposicaoIndicador(pool, orgB.id, 'G-A1', { cursor: comp.cursor }),
       (e: any) => e.status === 400 && e.codigo === 'cursor_invalido',
       'cursor de uma organização nunca é aceito por outra',
     );
     await assert.rejects(
-      () => buscarComposicaoIndicador(pool, org.id, 'G-A2', { hoje: '2026-09-20' as any, cursor: comp.cursor }),
+      () => buscarComposicaoIndicador(pool, org.id, 'G-A2', { cursor: comp.cursor }),
       (e: any) => e.status === 400 && e.codigo === 'cursor_invalido',
       'cursor de G-A1 nunca é aceito por G-A2',
     );
     await assert.rejects(
-      () => buscarComposicaoIndicador(pool, org.id, 'G-A1', { hoje: '2026-09-20' as any, cursor: 'lixo-adulterado-123' }),
+      () => buscarComposicaoIndicador(pool, org.id, 'G-A1', { cursor: 'lixo-adulterado-123' }),
       (e: any) => e.status === 400 && e.codigo === 'cursor_invalido',
       'payload corrompido/ilegível nunca é aceito',
     );
     // Cursor sintaticamente válido (mesma assinatura HMAC), mas com v (versão de ordenação) errada.
     const forjadoVersaoErrada = codificarCursorAssinado({ v: 'versao-forjada', organizationId: org.id, indicadorId: 'G-A1', filtroHash: 'x', lastId: 'y' });
     await assert.rejects(
-      () => buscarComposicaoIndicador(pool, org.id, 'G-A1', { hoje: '2026-09-20' as any, cursor: forjadoVersaoErrada }),
+      () => buscarComposicaoIndicador(pool, org.id, 'G-A1', { cursor: forjadoVersaoErrada }),
       (e: any) => e.status === 400 && e.codigo === 'cursor_invalido',
       'versão de ordenação divergente de VERSAO_CURSOR_COMPOSICAO é rejeitada',
     );
@@ -249,13 +249,13 @@ test('D14 v1.1 #9 — paginação por keyset no PostgreSQL permanece com contage
     const org100 = await new OrganizationRepository(pool).create('Rocket 100', 'rocket-d14-v11-keyset-100');
     await gerarMassa(pool, org100.id, 100);
     const { contador: c100, restaurar: r100 } = contarConsultas(pool);
-    const comp100 = await buscarComposicaoIndicador(pool, org100.id, 'G-A1', { hoje: '2026-09-20' as any, limite: 20 });
+    const comp100 = await buscarComposicaoIndicador(pool, org100.id, 'G-A1', { limite: 20 });
     r100();
 
     const orgGrande = await new OrganizationRepository(pool).create('Rocket 10k', 'rocket-d14-v11-keyset-10k');
     await gerarMassa(pool, orgGrande.id, 10000);
     const { contador: cGrande, restaurar: rGrande } = contarConsultas(pool);
-    const compGrande = await buscarComposicaoIndicador(pool, orgGrande.id, 'G-A1', { hoje: '2026-09-20' as any, limite: 20 });
+    const compGrande = await buscarComposicaoIndicador(pool, orgGrande.id, 'G-A1', { limite: 20 });
     rGrande();
 
     assert.equal(c100.n, cGrande.n, 'o número de consultas SQL é o MESMO para 100 e para 10.000+ linhas correspondentes — sem N+1, sem carregar a população inteira');

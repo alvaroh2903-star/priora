@@ -190,7 +190,7 @@ async function medir(pool: Pool, organizationId: string, hoje: string, detalhar 
     ['/responsabilidade', () => montarGestaoResponsabilidade(pool, organizationId)],
     ['/eficiencia', () => montarGestaoEficiencia(pool, organizationId, { inicio: '2000-01-01' as any, fim: '2100-12-31' as any }, hoje as any)],
     ['/qualidade', () => montarGestaoQualidade(pool, organizationId, { inicio: '2000-01-01' as any, fim: '2100-12-31' as any }, hoje as any)],
-    ['/indicadores/G-A1/composicao', () => buscarComposicaoIndicador(pool, organizationId, 'G-A1', { hoje: hoje as any })],
+    ['/indicadores/G-A1/composicao', () => buscarComposicaoIndicador(pool, organizationId, 'G-A1', {})],
   ];
   for (const [rota, fn] of casos) {
     if (detalhar) console.log(`  -- ${rota} --`);

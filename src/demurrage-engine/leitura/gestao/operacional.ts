@@ -171,7 +171,7 @@ export async function montarGestaoOperacional(
     { id: 'G-A4', rotulo: 'Em demurrage — Crítico (7–14)', valor: Number(p.a4_critico_7_14), grao: 'processo', dimensao: 'balde', mutuamenteExclusivoCom: BALDE_IDS.filter((x) => x !== 'G-A4') },
     { id: 'G-A5', rotulo: 'Críticos 15+ dias', valor: Number(p.a5_critico_15), grao: 'processo', dimensao: 'balde', mutuamenteExclusivoCom: BALDE_IDS.filter((x) => x !== 'G-A5') },
     { id: 'G-A6', rotulo: 'Contêineres com exposição Rocket', valor: Number(c.a6_exposicao_rocket), grao: 'container', dimensao: 'independente', mutuamenteExclusivoCom: [] },
-    { id: 'G-A7', rotulo: 'Processos com tracking desatualizado', valor: Number(c.a7_tracking_desatualizado), grao: 'container', dimensao: 'independente', mutuamenteExclusivoCom: [] },
+    { id: 'G-A7', rotulo: 'Contêineres com tracking desatualizado', valor: Number(c.a7_tracking_desatualizado), grao: 'container', dimensao: 'independente', mutuamenteExclusivoCom: [] },
     { id: 'G-A8', rotulo: 'Processos com dados críticos pendentes', valor: Number(p.a8_dados_pendentes), grao: 'processo', dimensao: 'independente', mutuamenteExclusivoCom: [] },
     { id: 'G-A9', rotulo: 'Processos aguardando tratamento', valor: Number(p.a9_aguardando_tratamento), grao: 'processo', dimensao: 'estado_processo', mutuamenteExclusivoCom: ESTADO_PROCESSO_IDS.filter((x) => x !== 'G-A9') },
     { id: 'G-A10', rotulo: 'Processos concluídos operacionalmente', valor: Number(p.a10_concluidos), grao: 'processo', dimensao: 'fechamento', mutuamenteExclusivoCom: [] },

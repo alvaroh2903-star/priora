@@ -1,13 +1,10 @@
 import { createHash } from 'crypto';
 import { Pool } from 'pg';
 import { CivilDate } from '../../temporal/civilDate';
-import { hojeOperacional } from '../../time/operationalDate';
-import { avaliarCadencia, CadenciaInput } from '../../scheduler/cadencePolicy';
 import { ErroLeitura } from '../contrato';
 import { codificarCursorAssinado, decodificarCursorAssinado } from '../cursorAssinado';
 import { FiltrosOperacional } from './operacional';
 import { PeriodoObrigatorio, validarPeriodoObrigatorio } from './eficiencia';
-import { buscarEnvelopesSelecionadosDaOrganizacao } from './selecaoFinanceira';
 import { buscarDescritorIndicador } from './indicadorRegistry';
 
 /**
@@ -34,16 +31,12 @@ import { buscarDescritorIndicador } from './indicadorRegistry';
  *         total vem de um `count(*)` separado sobre a MESMA predicate —
  *         consultas e memória permanecem limitadas independente do tamanho
  *         da população (testado com 10.000+ linhas no benchmark de G7).
- *       - Indicadores que dependem da seleção financeira (G-D-SEM-CUSTO-
- *         CLIENTE e os outros 5 "concluídos" do Grupo D, e G-E9) não têm
- *         como evitar calcular a população candidata em lote (a classificação
- *         usa `envelopeDoRelogio`/`avaliarCadencia`, lógica de negócio que
- *         nunca é duplicada em SQL) — mas essa população já é
- *         estruturalmente limitada (só contêineres de processo FINAL DENTRO
- *         do período, ou só contêineres rastreáveis da organização para
- *         G-E9), nunca o universo aberto que o Grupo A pode ter. Dentro
- *         dela, a paginação ainda é por KEYSET (nunca por offset) sobre a
- *         lista já ordenada.
+ *       - D14 v1.2 (achado #1): o antigo modo `memoria` (6 indicadores de
+ *         conclusão financeira do Grupo D e G-E9) foi REMOVIDO — carregava a
+ *         população inteira, classificava e reordenava em memória a cada
+ *         página. Esses 7 indicadores agora são `drilldownDisponivel: false`
+ *         no registro e nunca chegam a `specDoIndicador`. Toda composição
+ *         disponível é paginada exclusivamente dentro do PostgreSQL.
  *     O cursor assinado agora liga explicitamente organização, indicador,
  *     um hash do período/filtros aplicados e a posição do keyset — qualquer
  *     divergência nesses campos (organização, indicador, período, filtros,
@@ -78,7 +71,6 @@ export interface ComposicaoIndicadorV1 {
 export interface ComposicaoOpts {
   limite?: number;
   cursor?: string | null;
-  hoje?: CivilDate;
   /** Exigido quando o indicador registrado tem `requerPeriodo: true` (D14 v1.1 #1/#8). */
   periodo?: { inicio?: CivilDate; fim?: CivilDate };
   /** Só usado quando o indicador registrado tem `aceitaFiltrosOperacionais: true` (hoje, todo o Grupo A). */
@@ -115,15 +107,14 @@ function condicoesFiltrosOperacionais(
   return sufixo;
 }
 
-type SpecIndicador =
-  | { modo: 'sql'; grao: 'container' | 'processo'; baseSql: string; params: unknown[] }
-  | { modo: 'memoria'; grao: 'container' | 'processo'; ids: string[] };
+/** Toda composição disponível é uma predicate SQL paginada no PostgreSQL (D14 v1.2 #1) — nunca uma população carregada em memória. */
+interface SpecIndicador { grao: 'container' | 'processo'; baseSql: string; params: unknown[] }
 
-/** Monta a especificação de busca (SQL puro ou em memória) de cada indicador — a MESMA predicate usada para contá-lo nos módulos de leitura. */
-async function specDoIndicador(
-  pool: Pool, organizationId: string, indicadorId: string,
-  ctx: { periodo: PeriodoObrigatorio | null; filtros: FiltrosOperacional; hoje: CivilDate },
-): Promise<SpecIndicador> {
+/** A MESMA predicate usada para contar o indicador nos módulos de leitura. */
+function specDoIndicador(
+  organizationId: string, indicadorId: string,
+  ctx: { periodo: PeriodoObrigatorio | null; filtros: FiltrosOperacional },
+): SpecIndicador {
   const filtroProcesso = (params: unknown[]) => condicoesFiltrosOperacionais('processo', params, ctx.filtros);
   const filtroContainer = (params: unknown[]) => condicoesFiltrosOperacionais('container', params, ctx.filtros);
 
@@ -131,37 +122,37 @@ async function specDoIndicador(
     case 'G-A1': {
       const params: unknown[] = [organizationId];
       const f = filtroContainer(params);
-      return { modo: 'sql', grao: 'container', params, baseSql: `SELECT c.id AS id_ord FROM containers c JOIN processos p ON p.id = c.processo_id WHERE c.organization_id = $1 AND c.estado IS NOT NULL${f}` };
+      return { grao: 'container', params, baseSql: `SELECT c.id AS id_ord FROM containers c JOIN processos p ON p.id = c.processo_id WHERE c.organization_id = $1 AND c.estado IS NOT NULL${f}` };
     }
     case 'G-A2':
     case 'G-A3': {
       const estado = indicadorId === 'G-A2' ? 'PRAZO_PROXIMO' : 'EM_DEMURRAGE_ATENCAO';
       const params: unknown[] = [organizationId, estado];
       const f = filtroContainer(params);
-      return { modo: 'sql', grao: 'container', params, baseSql: `SELECT c.id AS id_ord FROM containers c JOIN processos p ON p.id = c.processo_id WHERE c.organization_id = $1 AND c.estado = $2${f}` };
+      return { grao: 'container', params, baseSql: `SELECT c.id AS id_ord FROM containers c JOIN processos p ON p.id = c.processo_id WHERE c.organization_id = $1 AND c.estado = $2${f}` };
     }
     case 'G-A4':
     case 'G-A5': {
       const balde = indicadorId === 'G-A4' ? 'CRITICA_7_14' : 'CRITICA_15';
       const params: unknown[] = [organizationId, balde];
       const f = filtroProcesso(params);
-      return { modo: 'sql', grao: 'processo', params, baseSql: `SELECT p.id AS id_ord FROM processos p WHERE p.organization_id = $1 AND p.prioridade_balde = $2${f}` };
+      return { grao: 'processo', params, baseSql: `SELECT p.id AS id_ord FROM processos p WHERE p.organization_id = $1 AND p.prioridade_balde = $2${f}` };
     }
     case 'G-A6': {
       const params: unknown[] = [organizationId];
       const f = filtroContainer(params);
-      return { modo: 'sql', grao: 'container', params, baseSql: `SELECT c.id AS id_ord FROM containers c JOIN processos p ON p.id = c.processo_id WHERE c.organization_id = $1 AND 'rocketExposta' = ANY(c.estado_badges)${f}` };
+      return { grao: 'container', params, baseSql: `SELECT c.id AS id_ord FROM containers c JOIN processos p ON p.id = c.processo_id WHERE c.organization_id = $1 AND 'rocketExposta' = ANY(c.estado_badges)${f}` };
     }
     case 'G-A7': {
       const params: unknown[] = [organizationId];
       const f = filtroContainer(params);
-      return { modo: 'sql', grao: 'container', params, baseSql: `SELECT c.id AS id_ord FROM containers c JOIN processos p ON p.id = c.processo_id WHERE c.organization_id = $1 AND 'trackingDesatualizado' = ANY(c.estado_badges)${f}` };
+      return { grao: 'container', params, baseSql: `SELECT c.id AS id_ord FROM containers c JOIN processos p ON p.id = c.processo_id WHERE c.organization_id = $1 AND 'trackingDesatualizado' = ANY(c.estado_badges)${f}` };
     }
     case 'G-A8': {
       const params: unknown[] = [organizationId];
       const f = filtroProcesso(params);
       return {
-        modo: 'sql', grao: 'processo', params,
+        grao: 'processo', params,
         baseSql: `SELECT p.id AS id_ord FROM processos p
           WHERE p.organization_id = $1
             AND (p.estado_mais_relevante = 'PENDENCIA_DE_DADOS'
@@ -171,12 +162,12 @@ async function specDoIndicador(
     case 'G-A9': {
       const params: unknown[] = [organizationId];
       const f = filtroProcesso(params);
-      return { modo: 'sql', grao: 'processo', params, baseSql: `SELECT p.id AS id_ord FROM processos p WHERE p.organization_id = $1 AND p.estado_mais_relevante = 'DEVOLVIDO_AGUARDANDO_TRATAMENTO'${f}` };
+      return { grao: 'processo', params, baseSql: `SELECT p.id AS id_ord FROM processos p WHERE p.organization_id = $1 AND p.estado_mais_relevante = 'DEVOLVIDO_AGUARDANDO_TRATAMENTO'${f}` };
     }
     case 'G-A10': {
       const params: unknown[] = [organizationId];
       const f = filtroProcesso(params);
-      return { modo: 'sql', grao: 'processo', params, baseSql: `SELECT p.id AS id_ord FROM processos p WHERE p.organization_id = $1 AND p.apuracao_status = 'FINAL'${f}` };
+      return { grao: 'processo', params, baseSql: `SELECT p.id AS id_ord FROM processos p WHERE p.organization_id = $1 AND p.apuracao_status = 'FINAL'${f}` };
     }
     case 'G-C-CONFIRMADA_ROCKET':
     case 'G-C-CONFIRMADA_CLIENTE':
@@ -187,7 +178,7 @@ async function specDoIndicador(
         'G-C-DIVIDIDA': 'DIVIDIDA', 'G-C-NAO_APLICAVEL': 'NAO_APLICAVEL',
       }[indicadorId];
       return {
-        modo: 'sql', grao: 'container', params: [organizationId, status],
+        grao: 'container', params: [organizationId, status],
         baseSql: `SELECT d.container_id AS id_ord FROM responsabilidade_decisoes d
           WHERE d.organization_id = $1 AND d.status = $2
             AND NOT EXISTS (SELECT 1 FROM responsabilidade_decisoes d2 WHERE d2.substitui_decisao_id = d.id)`,
@@ -196,19 +187,21 @@ async function specDoIndicador(
     case 'G-D-TOTAL-FINAL': {
       const periodo = ctx.periodo!;
       return {
-        modo: 'sql', grao: 'container', params: [organizationId, periodo.inicio, periodo.fim],
+        grao: 'container', params: [organizationId, periodo.inicio, periodo.fim],
         baseSql: `SELECT c.id AS id_ord FROM containers c JOIN processos p ON p.id = c.processo_id
           WHERE c.organization_id = $1 AND p.apuracao_status = 'FINAL' AND p.fechado_em::date >= $2 AND p.fechado_em::date <= $3`,
       };
     }
     case 'G-D-SEM-RESPONSABILIDADE': {
+      // D14 v1.2 — mesma definição de `eficiencia.ts` (residual): sem decisão vigente CONFIRMADA_ROCKET/CONFIRMADA_CLIENTE/DIVIDIDA (uma decisão NAO_APLICAVEL não atribui responsabilidade).
       const periodo = ctx.periodo!;
       return {
-        modo: 'sql', grao: 'container', params: [organizationId, periodo.inicio, periodo.fim],
+        grao: 'container', params: [organizationId, periodo.inicio, periodo.fim],
         baseSql: `SELECT c.id AS id_ord FROM containers c JOIN processos p ON p.id = c.processo_id
           WHERE c.organization_id = $1 AND p.apuracao_status = 'FINAL' AND p.fechado_em::date >= $2 AND p.fechado_em::date <= $3
             AND NOT EXISTS (
               SELECT 1 FROM responsabilidade_decisoes d WHERE d.container_id = c.id
+                AND d.status IN ('CONFIRMADA_ROCKET', 'CONFIRMADA_CLIENTE', 'DIVIDIDA')
                 AND NOT EXISTS (SELECT 1 FROM responsabilidade_decisoes d2 WHERE d2.substitui_decisao_id = d.id)
             )`,
       };
@@ -219,7 +212,7 @@ async function specDoIndicador(
       const periodo = ctx.periodo!;
       const status = { 'G-D-RESP-CONFIRMADA-ROCKET': 'CONFIRMADA_ROCKET', 'G-D-RESP-CONFIRMADA-CLIENTE': 'CONFIRMADA_CLIENTE', 'G-D-RESP-DIVIDIDA': 'DIVIDIDA' }[indicadorId];
       return {
-        modo: 'sql', grao: 'container', params: [organizationId, periodo.inicio, periodo.fim, status],
+        grao: 'container', params: [organizationId, periodo.inicio, periodo.fim, status],
         baseSql: `SELECT c.id AS id_ord FROM containers c
            JOIN processos p ON p.id = c.processo_id
            JOIN responsabilidade_decisoes d ON d.container_id = c.id
@@ -229,74 +222,21 @@ async function specDoIndicador(
       };
     }
     case 'G-E7': {
+      // D14 v1.2 #2 — mesma predicate de `qualidade.ts:tiposNaoReconhecidos` (grão processo, DISTINCT, null excluído).
       return {
-        modo: 'sql', grao: 'processo', params: [organizationId],
+        grao: 'processo', params: [organizationId],
         baseSql: `SELECT DISTINCT dp.processo_id AS id_ord FROM demurrage_pendencias dp
-          WHERE dp.organization_id = $1 AND dp.estado = 'aberta' AND dp.tipo IN ('tipo_ausente', 'tipo_nao_reconhecido')`,
+          WHERE dp.organization_id = $1 AND dp.estado = 'aberta' AND dp.tipo IN ('tipo_ausente', 'tipo_nao_reconhecido')
+            AND dp.processo_id IS NOT NULL`,
       };
     }
     case 'G-E8': {
+      // D14 v1.2 #3 — mesma predicate de `qualidade.ts:tabelasIndisponiveis` (grão contêiner, DISTINCT).
       return {
-        modo: 'sql', grao: 'container', params: [organizationId],
-        baseSql: `SELECT va.container_id AS id_ord FROM valores_apurados va JOIN containers c ON c.id = va.container_id
+        grao: 'container', params: [organizationId],
+        baseSql: `SELECT DISTINCT va.container_id AS id_ord FROM valores_apurados va JOIN containers c ON c.id = va.container_id
           WHERE c.organization_id = $1 AND va.calculation_status IN ('OPEN', 'FINAL') AND va.confirmation_status = 'UNAVAILABLE'`,
       };
-    }
-    case 'G-D-SEM-CUSTO-CLIENTE':
-    case 'G-D-COM-CUSTO-CLIENTE':
-    case 'G-D-SEM-EXPOSICAO-ROCKET':
-    case 'G-D-COM-EXPOSICAO-ROCKET':
-    case 'G-D-SEM-VALOR-NENHUM-LADO':
-    case 'G-D-INTEGRIDADE': {
-      const periodo = ctx.periodo!;
-      const { rows: containerRows } = await pool.query(
-        `SELECT c.id FROM containers c JOIN processos p ON p.id = c.processo_id
-          WHERE c.organization_id = $1 AND p.apuracao_status = 'FINAL' AND p.fechado_em::date >= $2 AND p.fechado_em::date <= $3
-          ORDER BY c.id`,
-        [organizationId, periodo.inicio, periodo.fim],
-      );
-      const containerIds: string[] = containerRows.map((row) => row.id);
-      if (!containerIds.length) return { modo: 'memoria', grao: 'container', ids: [] };
-      const envelopes = await buscarEnvelopesSelecionadosDaOrganizacao(pool, organizationId, ctx.hoje, { containerIds });
-      const PENDENTE_INDISPONIVEL = new Set(['PENDENTE', 'INDISPONIVEL']);
-      const COM_VALOR = new Set(['CONFIRMADO', 'ESTIMADO', 'ESTIMADO_PROVISORIO']);
-      const filtrada = envelopes.filter((e) => {
-        const semIntegridade = PENDENTE_INDISPONIVEL.has(e.cliente.situacao) || PENDENTE_INDISPONIVEL.has(e.rocket.situacao);
-        if (indicadorId === 'G-D-INTEGRIDADE') return semIntegridade;
-        if (semIntegridade) return false;
-        if (indicadorId === 'G-D-SEM-CUSTO-CLIENTE') return e.cliente.situacao === 'NAO_APLICAVEL';
-        if (indicadorId === 'G-D-COM-CUSTO-CLIENTE') return COM_VALOR.has(e.cliente.situacao);
-        if (indicadorId === 'G-D-SEM-EXPOSICAO-ROCKET') return e.rocket.situacao === 'NAO_APLICAVEL';
-        if (indicadorId === 'G-D-COM-EXPOSICAO-ROCKET') return COM_VALOR.has(e.rocket.situacao);
-        return e.cliente.situacao === 'NAO_APLICAVEL' && e.rocket.situacao === 'NAO_APLICAVEL'; // G-D-SEM-VALOR-NENHUM-LADO
-      });
-      return { modo: 'memoria', grao: 'container', ids: filtrada.map((e) => e.containerId) };
-    }
-    case 'G-E9': {
-      const { rows } = await pool.query(
-        `SELECT c.processo_id, c.discharge_date, c.effective_return_date, c.tracking_return_date,
-                rh.ultimo_dia_livre AS house_lfd, rh.dias_demurrage AS house_dias,
-                rm.ultimo_dia_livre AS master_lfd, rm.dias_demurrage AS master_dias
-           FROM containers c
-           LEFT JOIN relogios rh ON rh.container_id = c.id AND rh.tipo = 'cliente'
-           LEFT JOIN relogios rm ON rm.container_id = c.id AND rm.tipo = 'rocket'
-          WHERE c.organization_id = $1`,
-        [organizationId],
-      );
-      const processosSuspensos = new Set<string>();
-      for (const row of rows) {
-        const emptyReturn = (row.effective_return_date ?? row.tracking_return_date) !== null;
-        const input: CadenciaInput = {
-          dischargeDate: row.discharge_date,
-          houseLastFreeDay: row.house_lfd,
-          masterLastFreeDay: row.master_lfd,
-          emptyReturn: emptyReturn ? (row.effective_return_date ?? row.tracking_return_date) : null,
-          algumEmDemurrage: Number(row.house_dias ?? 0) > 0 || Number(row.master_dias ?? 0) > 0,
-          hoje: ctx.hoje,
-        };
-        if (avaliarCadencia(input).automaticTracking === 'SUSPENDED') processosSuspensos.add(row.processo_id as string);
-      }
-      return { modo: 'memoria', grao: 'processo', ids: Array.from(processosSuspensos) };
     }
     default:
       // Indicadores com `drilldownDisponivel: false` nunca chegam aqui (interceptados antes); qualquer outro ID é desconhecido.
@@ -321,15 +261,6 @@ async function paginarSql(pool: Pool, baseSql: string, baseParams: unknown[], li
   const temMais = rows.length > limite;
   const pageIds = rows.slice(0, limite).map((row) => row.id_ord as string);
   return { total, pageIds, proximoId: temMais ? pageIds[pageIds.length - 1] : null };
-}
-
-/** Pagina uma spec `memoria` por KEYSET sobre a lista já ordenada — nunca `slice(offset, offset+limite)` (D14 v1.1 #9: offset nunca é usado, mesmo em memória). */
-function paginarMemoria(ids: string[], limite: number, lastId: string | null): { total: number; pageIds: string[]; proximoId: string | null } {
-  const ordenados = [...ids].sort();
-  const inicio = lastId === null ? 0 : ordenados.findIndex((id) => id > lastId);
-  const pagina = inicio === -1 ? [] : ordenados.slice(inicio, inicio + limite);
-  const temMais = inicio !== -1 && inicio + limite < ordenados.length;
-  return { total: ordenados.length, pageIds: pagina, proximoId: temMais ? pagina[pagina.length - 1] : null };
 }
 
 async function buscarLinhasExibicao(pool: Pool, grao: 'container' | 'processo', ids: string[]): Promise<LinhaComposicao[]> {
@@ -374,7 +305,6 @@ export async function buscarComposicaoIndicador(pool: Pool, organizationId: stri
   const periodo = descritor.requerPeriodo ? validarPeriodoObrigatorio(opts.periodo as any) : null;
   const filtros = descritor.aceitaFiltrosOperacionais ? (opts.filtros ?? {}) : {};
   const limite = Math.min(opts.limite ?? LIMITE_PADRAO, MAX_LIMITE);
-  const hoje = opts.hoje ?? hojeOperacional();
 
   const filtroHash = hashContexto(periodo, filtros);
   let lastId: string | null = null;
@@ -392,16 +322,8 @@ export async function buscarComposicaoIndicador(pool: Pool, organizationId: stri
     lastId = payload.lastId;
   }
 
-  const spec = await specDoIndicador(pool, organizationId, indicadorId, { periodo, filtros, hoje });
-
-  let total: number;
-  let pageIds: string[];
-  let proximoId: string | null;
-  if (spec.modo === 'sql') {
-    ({ total, pageIds, proximoId } = await paginarSql(pool, spec.baseSql, spec.params, limite, lastId));
-  } else {
-    ({ total, pageIds, proximoId } = paginarMemoria(spec.ids, limite, lastId));
-  }
+  const spec = specDoIndicador(organizationId, indicadorId, { periodo, filtros });
+  const { total, pageIds, proximoId } = await paginarSql(pool, spec.baseSql, spec.params, limite, lastId);
 
   const itens = await buscarLinhasExibicao(pool, spec.grao, pageIds);
   const cursor = proximoId !== null

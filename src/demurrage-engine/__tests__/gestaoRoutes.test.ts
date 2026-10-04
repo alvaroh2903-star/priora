@@ -265,6 +265,12 @@ test('D14 G6 — ZERO ESCRITAS: nenhuma das 6 rotas de Gestão altera UMA LINHA 
     }
     const rComp = await fetch(`${app.base}/indicadores/G-A1/composicao`, { headers: { 'x-test-home-account-id': home } });
     assert.equal(rComp.status, 200);
+    // D14 v1.2 — também as composições SQL de G-E7/G-E8 e as sem composição (200 explícito, nunca escrita).
+    for (const id of ['G-E7', 'G-E8', 'G-E9', 'G-D-INTEGRIDADE', 'G-D-SEM-CUSTO-CLIENTE']) {
+      const r = await fetch(`${app.base}/indicadores/${id}/composicao`, { headers: { 'x-test-home-account-id': home } });
+      assert.equal(r.status, 200, `composição de ${id}`);
+      if (id !== 'G-E7' && id !== 'G-E8') assert.equal((await r.json()).drilldownDisponivel, false, `${id} sem composição paginável`);
+    }
     const depois = await fingerprintBanco(pool);
     assert.equal(depois, antes, 'o fingerprint completo do banco não muda — nenhuma rota de Gestão escreve');
   } finally { await app.close(); await pool.end(); }

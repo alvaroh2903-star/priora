@@ -179,18 +179,27 @@ async function freeTimePorFonte(pool: Pool, organizationId: string) {
   return rows[0];
 }
 
+/**
+ * G-E7 (D14 v1.2 #2) — grão PROCESSO: `count(DISTINCT processo_id)`, nunca
+ * linhas de pendência (um processo com duas pendências qualificadas conta
+ * UMA vez). Mesma predicate de `drilldown.ts` (G-E7). `processo_id` é NOT
+ * NULL no esquema; a predicate ainda exclui null explicitamente: um null
+ * hipotético NUNCA vira um "processo" contado.
+ */
 async function tiposNaoReconhecidos(pool: Pool, organizationId: string): Promise<number> {
   const { rows } = await pool.query(
-    `SELECT count(*)::int AS n FROM demurrage_pendencias
-      WHERE organization_id = $1 AND estado = 'aberta' AND tipo IN ('tipo_ausente', 'tipo_nao_reconhecido')`,
+    `SELECT count(DISTINCT processo_id)::int AS n FROM demurrage_pendencias
+      WHERE organization_id = $1 AND estado = 'aberta' AND tipo IN ('tipo_ausente', 'tipo_nao_reconhecido')
+        AND processo_id IS NOT NULL`,
     [organizationId],
   );
   return Number(rows[0].n);
 }
 
+/** G-E8 (D14 v1.2 #3) — grão CONTÊINER: `count(DISTINCT container_id)`; vários lados/motores UNAVAILABLE do mesmo contêiner contam UMA vez. Mesma predicate de `drilldown.ts` (G-E8). */
 async function tabelasIndisponiveis(pool: Pool, organizationId: string): Promise<number> {
   const { rows } = await pool.query(
-    `SELECT count(*)::int AS n
+    `SELECT count(DISTINCT va.container_id)::int AS n
        FROM valores_apurados va
        JOIN containers c ON c.id = va.container_id
       WHERE c.organization_id = $1 AND va.calculation_status IN ('OPEN', 'FINAL') AND va.confirmation_status = 'UNAVAILABLE'`,
