@@ -168,7 +168,7 @@ test('D14 G4 — os 8 indicadores de conclusão + integridade + total, construí
     const finD = await closingD.finalizarProcesso({ processoId: procD.id, papel: 'MANAGER', config: { hoje: '2026-04-11' as any } });
     assert.deepEqual(finD, { ok: true });
 
-    const resp = await montarGestaoEficiencia(pool, org.id, undefined, '2026-04-11' as any);
+    const resp = await montarGestaoEficiencia(pool, org.id, { inicio: '2000-01-01' as any, fim: '2100-12-31' as any }, '2026-04-11' as any);
     const { concluidos } = resp;
     assert.equal(concluidos.totalContaineresFinal, 4, 'os 4 contêineres FINAL contam, nenhum a mais nem a menos');
     assert.equal(concluidos.semCustoCliente, 2, 'B e C: cliente NAO_APLICAVEL');
@@ -197,7 +197,7 @@ test('D14 G4 — processo ainda OPEN nunca entra em nenhuma média ou indicador 
     await setEffective(pool, containerId, '2026-05-10'); // devolvido, mas o processo NUNCA foi finalizado.
     await recalcularApuracaoContainer(pool, containerId, { dataReferencia: '2026-05-10' as any });
 
-    const resp = await montarGestaoEficiencia(pool, org.id, undefined, '2026-05-10' as any);
+    const resp = await montarGestaoEficiencia(pool, org.id, { inicio: '2000-01-01' as any, fim: '2100-12-31' as any }, '2026-05-10' as any);
     assert.equal(resp.concluidos.totalContaineresFinal, 0, 'sem nenhum processo FINAL, nada é contado');
     assert.equal(resp.mediaDiasDescargaAteEmptyReturn.amostra, 0, 'OPEN nunca entra nas médias (decisão #2)');
   } finally { await pool.end(); }
@@ -219,7 +219,7 @@ test('D14 G4 — reabertura e refechamento contam o contêiner UMA VEZ nos totai
     const fin1 = await closing.finalizarProcesso({ processoId: proc.id, papel: 'MANAGER', config: { hoje: '2026-06-05' as any } });
     assert.deepEqual(fin1, { ok: true });
 
-    const resp1 = await montarGestaoEficiencia(pool, org.id, undefined, '2026-06-05' as any);
+    const resp1 = await montarGestaoEficiencia(pool, org.id, { inicio: '2000-01-01' as any, fim: '2100-12-31' as any }, '2026-06-05' as any);
     assert.equal(resp1.concluidos.totalContaineresFinal, 1);
 
     const sol = await closing.solicitarReabertura({ processoId: proc.id, justificativa: 'Teste D14 G4: reabertura/refechamento.' });
@@ -230,12 +230,12 @@ test('D14 G4 — reabertura e refechamento contam o contêiner UMA VEZ nos totai
 
     const procAberto = (await pool.query(`SELECT apuracao_status FROM processos WHERE id = $1`, [proc.id])).rows[0];
     assert.equal(procAberto.apuracao_status, 'OPEN');
-    const respAberto = await montarGestaoEficiencia(pool, org.id, undefined, '2026-06-06' as any);
+    const respAberto = await montarGestaoEficiencia(pool, org.id, { inicio: '2000-01-01' as any, fim: '2100-12-31' as any }, '2026-06-06' as any);
     assert.equal(respAberto.concluidos.totalContaineresFinal, 0, 'reaberto: sai dos totais FINAL enquanto está em revisão');
 
     const fin2 = await closing.finalizarProcesso({ processoId: proc.id, papel: 'MANAGER', config: { hoje: '2026-06-06' as any } });
     assert.deepEqual(fin2, { ok: true });
-    const resp2 = await montarGestaoEficiencia(pool, org.id, undefined, '2026-06-06' as any);
+    const resp2 = await montarGestaoEficiencia(pool, org.id, { inicio: '2000-01-01' as any, fim: '2100-12-31' as any }, '2026-06-06' as any);
     assert.equal(resp2.concluidos.totalContaineresFinal, 1, 'refechado: conta UMA VEZ — a mesma linha de processos, nunca duplicada pelo ciclo anterior');
   } finally { await pool.end(); }
 });
@@ -264,9 +264,84 @@ test('D14 G4 — datas naturais por família: o período de G-D1/D2/D3 usa a dat
     // O MESMO período (março/2026) não casa com `fechado_em` (data REAL, hoje) — os indicadores de conclusão (filtrados por fechado_em) ficam vazios, prova de que NÃO há um override genérico de data compartilhado entre famílias.
     assert.equal(respDevolucao.concluidos.totalContaineresFinal, 0, 'concluídos usam fechado_em (data real), nunca a data de devolução simulada do período');
 
-    // Sem período, os concluídos aparecem normalmente.
-    const respSemPeriodo = await montarGestaoEficiencia(pool, org.id, undefined, '2026-03-05' as any);
-    assert.equal(respSemPeriodo.concluidos.totalContaineresFinal, 1);
+    // D14 v1.1 #1 — período é agora OBRIGATÓRIO (nunca mais "ausente" = desde sempre).
+    // Um período LARGO que cubra a data REAL de fechamento (hoje, em qualquer dia em que o teste rode)
+    // faz os concluídos aparecerem normalmente — a prova de que a família de datas de G-D1/D2/D3
+    // (devolução simulada) continua INDEPENDENTE da família de datas dos concluídos (fechamento real).
+    const respPeriodoLargo = await montarGestaoEficiencia(pool, org.id, { inicio: '2000-01-01' as any, fim: '2100-12-31' as any }, '2026-03-05' as any);
+    assert.equal(respPeriodoLargo.concluidos.totalContaineresFinal, 1);
+  } finally { await pool.end(); }
+});
+
+test('D14 v1.1 #1 — /eficiencia (montarGestaoEficiencia) exige período: ausência de inicio OU fim, período invertido, ou data civil inexistente são erros determinísticos', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    const org = await setup(pool);
+    await assert.rejects(
+      () => montarGestaoEficiencia(pool, org.id, undefined as any, '2026-03-05' as any),
+      (e: any) => e.status === 400 && e.codigo === 'periodo_obrigatorio',
+    );
+    await assert.rejects(
+      () => montarGestaoEficiencia(pool, org.id, { inicio: '2026-01-01', fim: undefined } as any, '2026-03-05' as any),
+      (e: any) => e.status === 400 && e.codigo === 'periodo_obrigatorio',
+    );
+    await assert.rejects(
+      () => montarGestaoEficiencia(pool, org.id, { inicio: '2026-03-10', fim: '2026-01-01' } as any, '2026-03-05' as any),
+      (e: any) => e.status === 400 && e.codigo === 'periodo_invertido',
+    );
+    await assert.rejects(
+      () => montarGestaoEficiencia(pool, org.id, { inicio: '2026-02-30', fim: '2026-03-10' } as any, '2026-03-05' as any),
+      (e: any) => e.status === 400 && e.codigo === 'valor_invalido',
+      'data civil inexistente (30 de fevereiro) é rejeitada, não só a FORMA do texto',
+    );
+  } finally { await pool.end(); }
+});
+
+test('D14 v1.1 #2 — G-D4: DOIS motores comerciais ATIVOS/FINAL no mesmo lado cliente — só o motor aplicável do processo (seleção autoritativa G1) contribui à média', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    const org = await setup(pool);
+    await seedArmadorTabelaNormalizada(pool, 'MAERSK', { valorDia: 80, vigenciaInicio: '2026-01-01' });
+    const tabelaEmbarque = await seedRocketTermoPorEmbarque(pool, { organizationId: org.id });
+
+    // Processo de termo_tipo='embarque' → motor aplicável do lado cliente é 'termo_embarque' (motorClienteAplicavelDe).
+    const proc = await new ProcessoRepository(pool).create({ organizationId: org.id, numeroProcesso: 'IM-D14-V11-2-A', clienteId: null });
+    await condicaoEmbarque(pool, org.id, proc.id, tabelaEmbarque);
+    const containerId = await novoContainer(pool, org.id, proc.id, 'DMAA0000001', { discharge: '2026-05-01', houseFT: 5, masterFT: 100 });
+    await setEffective(pool, containerId, '2026-05-10');
+    await recalcularApuracaoContainer(pool, containerId, { dataReferencia: '2026-05-10' as any });
+    const relCliente = await relogio(pool, containerId, 'cliente');
+    assert.equal(relCliente.dias_demurrage, 5, 'pré-condição: 5 dias de demurrage no lado cliente');
+
+    // Achado corretivo #2: injeta, ENQUANTO o processo ainda está OPEN (o
+    // trigger de congelamento só bloqueia escrita depois de FINAL — nunca
+    // contornado aqui), uma SEGUNDA linha ATIVA no mesmo lado cliente, mas de
+    // um motor comercial que NUNCA é o aplicável deste processo (termo_unico
+    // — o pipeline real nunca grava isso para um processo de termo_tipo=
+    // 'embarque'). dias_cobrados absurdo (99999) para tornar qualquer
+    // contaminação óbvia na média.
+    await pool.query(
+      `INSERT INTO valores_apurados
+         (container_id, relogio_tipo, motor_comercial, total, moeda, confirmation_status, dias_cobrados, calculation_status, engine_version, input_hash)
+       VALUES ($1, 'cliente', 'termo_unico', '99999.00', 'USD', 'ESTIMATED', 99999, 'OPEN', 'teste-d14-v11', 'hash-v11-2')`,
+      [containerId],
+    );
+
+    await decidirResponsabilidade(pool, {
+      organizationId: org.id, containerId, autorMembershipId: await novoGestor(pool, org.id),
+      status: 'CONFIRMADA_CLIENTE', baseRelogio: 'RELOGIO_CLIENTE',
+      periodos: [{ lado: 'CLIENTE', inicio: relCliente.primeiro_dia_demurrage, fim: relCliente.data_final_apuracao }],
+      justificativa: 'Sem causa Rocket alegada.', evidenciaRef: 'evid://v11-2', hojeReferencia: '2026-05-11' as any,
+    });
+    const closing = new ClosingService(pool);
+    const minuta = await closing.registrarMinuta({ containerId, numeroInformado: 'DMAA0000001', dataInformada: '2026-05-10' as any });
+    await closing.validarMinuta({ minutaId: minuta.id, papel: 'MANAGER', config: { hoje: '2026-05-11' as any } });
+    const fin = await closing.finalizarProcesso({ processoId: proc.id, papel: 'MANAGER', config: { hoje: '2026-05-11' as any } });
+    assert.deepEqual(fin, { ok: true });
+
+    const resp = await montarGestaoEficiencia(pool, org.id, { inicio: '2000-01-01' as any, fim: '2100-12-31' as any }, '2026-05-11' as any);
+    assert.equal(resp.mediaDiasDemurrageCliente.amostra, 1, 'o contêiner conta UMA VEZ, nunca duas por ter duas linhas ativas de motores diferentes');
+    assert.equal(resp.mediaDiasDemurrageCliente.media, 5, 'a média usa só o motor aplicável (termo_embarque, 5 dias) — nunca os 99999 do motor termo_unico, que não é o do processo');
   } finally { await pool.end(); }
 });
 
@@ -303,7 +378,7 @@ test('D14 G4 — integridadePendenciaRemanescente nunca é mascarada como "sem c
     // `gestaoSelecaoFinanceira.test.ts`.
     await pool.query(`UPDATE processos SET apuracao_status = 'FINAL', fechado_em = now() WHERE id = $1`, [proc.id]);
 
-    const resp = await montarGestaoEficiencia(pool, org.id, undefined, '2026-07-05' as any);
+    const resp = await montarGestaoEficiencia(pool, org.id, { inicio: '2000-01-01' as any, fim: '2100-12-31' as any }, '2026-07-05' as any);
     assert.equal(resp.concluidos.integridadePendenciaRemanescente, 1, 'o contêiner com relógio pendente é contado como pendência remanescente');
     assert.equal(resp.concluidos.semCustoCliente, 0, 'nunca reclassificado como "sem custo" por omissão');
     assert.equal(resp.concluidos.totalContaineresFinal, 1, 'o total de contêineres FINAL continua correto — a pendência é um contador PARALELO, nunca escondido');

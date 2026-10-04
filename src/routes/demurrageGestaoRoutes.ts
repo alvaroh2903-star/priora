@@ -7,8 +7,8 @@ import { ErroLeitura } from '../demurrage-engine/leitura/contrato';
 import { montarGestaoOperacional, FiltrosOperacional } from '../demurrage-engine/leitura/gestao/operacional';
 import { montarGestaoFinanceiro } from '../demurrage-engine/leitura/gestao/financeiro';
 import { montarGestaoResponsabilidade } from '../demurrage-engine/leitura/gestao/responsabilidade';
-import { montarGestaoEficiencia, PeriodoFiltro } from '../demurrage-engine/leitura/gestao/eficiencia';
-import { montarGestaoQualidade } from '../demurrage-engine/leitura/gestao/qualidade';
+import { montarGestaoEficiencia, PeriodoObrigatorio } from '../demurrage-engine/leitura/gestao/eficiencia';
+import { montarGestaoQualidade, PeriodoFiltro } from '../demurrage-engine/leitura/gestao/qualidade';
 import { buscarComposicaoIndicador } from '../demurrage-engine/leitura/gestao/drilldown';
 
 /**
@@ -27,6 +27,13 @@ import { buscarComposicaoIndicador } from '../demurrage-engine/leitura/gestao/dr
  * organização-level) — para ANALYST, o campo é OMITIDO e substituído por um
  * marcador explícito `{ acessoRestrito: true }`, nunca um valor fabricado e
  * nunca confundível com pendente/indisponível.
+ *
+ * D14 v1.1 (correção #1) — `/eficiencia` exige `periodoInicio` E
+ * `periodoFim`: ausência de QUALQUER um dos dois é `400 periodo_obrigatorio`
+ * determinístico — nunca mais um período "ausente" silenciosamente calcula
+ * a história inteira. `/qualidade` aceita um período OPCIONAL (as métricas
+ * vivas do Grupo E nunca dependem dele), mas valida a MESMA invariante
+ * quando qualquer uma das duas datas vem informada (as duas ou nenhuma).
  */
 
 export const RESTRITO_MANAGER_ADMIN = { acessoRestrito: true } as const;
@@ -52,25 +59,41 @@ function filtrosOperacionalDaQuery(query: Request['query']): FiltrosOperacional 
 
 const RE_DATA = /^\d{4}-\d{2}-\d{2}$/;
 
-function periodoDaQuery(query: Request['query']): PeriodoFiltro {
+/** Só valida a FORMA ('AAAA-MM-DD'); a existência real da data civil (rejeita 2026-02-30 etc.) é responsabilidade de quem consome (`validarPeriodoObrigatorio`/`validarPeriodoOpcional`, que usam `toOrdinal`). */
+function lerCampoData(query: Request['query'], campo: 'periodoInicio' | 'periodoFim'): string | undefined {
+  const valor = query[campo];
+  if (valor === undefined) return undefined;
+  if (typeof valor !== 'string' || !RE_DATA.test(valor)) throw new ErroLeitura(400, 'valor_invalido', { campo });
+  return valor;
+}
+
+/** `/eficiencia` (D14 v1.1 #1) — as duas datas são OBRIGATÓRIAS aqui; a validação de data civil real e `inicio <= fim` roda de novo dentro de `montarGestaoEficiencia` (defesa em profundidade). */
+function periodoObrigatorioDaQuery(query: Request['query']): PeriodoObrigatorio {
+  const inicio = lerCampoData(query, 'periodoInicio');
+  const fim = lerCampoData(query, 'periodoFim');
+  if (inicio === undefined || fim === undefined) {
+    throw new ErroLeitura(400, 'periodo_obrigatorio', { campos: ['periodoInicio', 'periodoFim'] });
+  }
+  return { inicio: inicio as any, fim: fim as any };
+}
+
+/** `/qualidade` — período OPCIONAL; `montarGestaoQualidade` valida a invariante "as duas ou nenhuma" + data civil real + `inicio <= fim`. */
+function periodoOpcionalDaQuery(query: Request['query']): PeriodoFiltro {
   const periodo: PeriodoFiltro = {};
-  if (typeof query.periodoInicio === 'string') {
-    if (!RE_DATA.test(query.periodoInicio)) throw new ErroLeitura(400, 'valor_invalido', { campo: 'periodoInicio' });
-    periodo.inicio = query.periodoInicio as any;
-  }
-  if (typeof query.periodoFim === 'string') {
-    if (!RE_DATA.test(query.periodoFim)) throw new ErroLeitura(400, 'valor_invalido', { campo: 'periodoFim' });
-    periodo.fim = query.periodoFim as any;
-  }
+  const inicio = lerCampoData(query, 'periodoInicio');
+  const fim = lerCampoData(query, 'periodoFim');
+  if (inicio !== undefined) periodo.inicio = inicio as any;
+  if (fim !== undefined) periodo.fim = fim as any;
   return periodo;
 }
 
 function paginacaoDaQuery(query: Request['query']): { limite?: number; cursor: string | null } {
   let limite: number | undefined;
   if (query.limite !== undefined) {
-    const n = Number(query.limite);
-    if (!Number.isFinite(n) || n < 1) throw new ErroLeitura(400, 'valor_invalido', { campo: 'limite' });
-    limite = n;
+    const texto = String(query.limite);
+    // D14 v1.1 (validação adicional) — `limite` precisa ser um INTEIRO positivo: nunca '1.5', '0', negativo, nem notação científica/hex que `Number()` aceitaria.
+    if (!/^[1-9]\d*$/.test(texto)) throw new ErroLeitura(400, 'valor_invalido', { campo: 'limite' });
+    limite = Number(texto);
   }
   const cursor = query.cursor !== undefined ? String(query.cursor) : null;
   return { limite, cursor };
@@ -113,29 +136,31 @@ export function criarDemurrageGestaoRouter(deps: DemurrageGestaoRoutesDeps = {})
     } catch (err) { tratarErroLeitura(err, res, next); }
   });
 
-  /** GET /eficiencia — Grupo D (Cap. 30.4): médias históricas-por-período + 8 indicadores de conclusão (G4). Período obrigatório para as médias; sem período, os campos de média vêm com amostra 0 (nunca uma média "desde sempre" implícita). */
+  /** GET /eficiencia — Grupo D (Cap. 30.4): médias históricas-por-período OBRIGATÓRIO + 8 indicadores de conclusão (G4, D14 v1.1 #1). */
   router.get('/eficiencia', async (req: AutorizedRequest, res: Response, next: NextFunction) => {
     try {
-      const periodo = periodoDaQuery(req.query);
+      const periodo = periodoObrigatorioDaQuery(req.query);
       const resposta = await montarGestaoEficiencia(pool(), req.autorizacao!.organizationId, periodo);
       res.json(resposta);
     } catch (err) { tratarErroLeitura(err, res, next); }
   });
 
-  /** GET /qualidade — Grupo E (Cap. 30.5). */
+  /** GET /qualidade — Grupo E (Cap. 30.5). Período OPCIONAL (só as métricas históricas G-E1/E2/E4 dependem dele — D14 v1.1 #1). */
   router.get('/qualidade', async (req: AutorizedRequest, res: Response, next: NextFunction) => {
     try {
-      const periodo = periodoDaQuery(req.query);
+      const periodo = periodoOpcionalDaQuery(req.query);
       const resposta = await montarGestaoQualidade(pool(), req.autorizacao!.organizationId, periodo);
       res.json(resposta);
     } catch (err) { tratarErroLeitura(err, res, next); }
   });
 
-  /** GET /indicadores/:indicadorId/composicao — drill-down (Cap. 30.7), cursor assinado igual ao da D12. */
+  /** GET /indicadores/:indicadorId/composicao — drill-down (Cap. 30.7), cursor assinado por keyset (D14 v1.1 #9). Período/filtros são OPCIONAIS aqui: só exigidos quando o indicador registrado precisa deles (`drilldown.ts` valida). */
   router.get('/indicadores/:indicadorId/composicao', async (req: AutorizedRequest, res: Response, next: NextFunction) => {
     try {
       const { limite, cursor } = paginacaoDaQuery(req.query);
-      const resposta = await buscarComposicaoIndicador(pool(), req.autorizacao!.organizationId, req.params.indicadorId, { limite, cursor });
+      const periodo = periodoOpcionalDaQuery(req.query);
+      const filtros = filtrosOperacionalDaQuery(req.query);
+      const resposta = await buscarComposicaoIndicador(pool(), req.autorizacao!.organizationId, req.params.indicadorId, { limite, cursor, periodo, filtros });
       res.json(resposta);
     } catch (err) { tratarErroLeitura(err, res, next); }
   });

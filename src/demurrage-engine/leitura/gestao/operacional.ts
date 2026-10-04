@@ -16,9 +16,18 @@ import { isoTimestamp } from '../contrato';
  * um total. Cada `IndicadorContagem` carrega sua `dimensao` e os IDs com que
  * é mutuamente exclusivo (só dentro da MESMA dimensão); dimensões diferentes
  * são independentes e um processo pode contar em várias ao mesmo tempo.
+ *
+ * D14 v1.1 #7 — achado corretivo: `estado` misturava dois GRÃOS diferentes
+ * (G-A2/G-A3 são estado do CONTÊINER; G-A9 é `estado_mais_relevante` do
+ * PROCESSO) sob a mesma dimensão, declarando-os mutuamente exclusivos entre
+ * si. Grãos diferentes nunca são comparáveis diretamente (um processo com 3
+ * contêineres pode ter um em G-A2 e nenhum populando G-A9, sem contradição
+ * nenhuma) — por isso as dimensões `estado_container` (G-A2/G-A3) e
+ * `estado_processo` (G-A9, hoje sozinho na própria dimensão) foram
+ * separadas. `mutuamenteExclusivoCom` nunca mais cruza grão.
  */
 
-export type Dimensao = 'estado' | 'balde' | 'populacional' | 'independente' | 'fechamento';
+export type Dimensao = 'estado_container' | 'estado_processo' | 'balde' | 'populacional' | 'independente' | 'fechamento';
 
 export interface IndicadorContagem {
   id: string;
@@ -87,6 +96,21 @@ export async function montarGestaoOperacional(
   const sufixoProcesso = condicoesProcesso.length ? ` AND ${condicoesProcesso.join(' AND ')}` : '';
   const sufixoContainer = condicoesContainer.length ? ` AND ${condicoesContainer.join(' AND ')}` : '';
 
+  // Params da consulta 2 (grão PROCESSO): o mesmo prefixo de `condicoesProcesso`
+  // da consulta 1, MAIS o `containerTypeId` de novo (índice próprio — a consulta
+  // 2 não compartilha array de params com a 1).
+  const paramsProcesso: unknown[] = params.slice(0, 1 + condicoesProcesso.length);
+  // D14 v1.1 #6 — `tipoEquipamento` nos indicadores de grão PROCESSO: EXISTS
+  // (semi-join, nunca um JOIN que faria o processo contar uma vez POR
+  // contêiner que bate o filtro — um processo com 3 contêineres do tipo
+  // certo não pode contar 3 vezes). Mesmo `container_type_id` da consulta 1,
+  // nunca uma segunda leitura do filtro.
+  let existsTipoEquipamento = '';
+  if (filtros.containerTypeId) {
+    paramsProcesso.push(filtros.containerTypeId);
+    existsTipoEquipamento = ` AND EXISTS (SELECT 1 FROM containers ce WHERE ce.processo_id = p.id AND ce.container_type_id = $${paramsProcesso.length})`;
+  }
+
   // Consulta 1 — grão CONTÊINER (estado, badges independentes, frescor).
   const { rows: contRows } = await pool.query(
     `SELECT
@@ -119,10 +143,8 @@ export async function montarGestaoOperacional(
              OR EXISTS (SELECT 1 FROM demurrage_pendencias dp WHERE dp.processo_id = p.id AND dp.estado = 'aberta')
         )::int AS a8_dados_pendentes
        FROM processos p
-      WHERE p.organization_id = $1${sufixoProcesso}`,
-    // `params` é [organizationId, ...condicoesProcesso, ...condicoesContainer] nesta ordem de push;
-    // a consulta 2 não filtra por contêiner, então usa só o prefixo correspondente a condicoesProcesso.
-    params.slice(0, 1 + condicoesProcesso.length),
+      WHERE p.organization_id = $1${sufixoProcesso}${existsTipoEquipamento}`,
+    paramsProcesso,
   );
 
   const c = contRows[0];
@@ -135,19 +157,23 @@ export async function montarGestaoOperacional(
     registrosComProjecaoDesatualizadaOuAusente: Number(c.registros_desatualizados),
   };
 
-  const ESTADO_IDS = ['G-A2', 'G-A3', 'G-A9'];
+  // D14 v1.1 #7 — duas dimensões SEPARADAS por grão: `estado_container`
+  // (G-A2/G-A3, grão contêiner) e `estado_processo` (G-A9, grão processo,
+  // hoje sozinho). Nunca mais um ID de um grão referencia o de outro.
+  const ESTADO_CONTAINER_IDS = ['G-A2', 'G-A3'];
+  const ESTADO_PROCESSO_IDS = ['G-A9'];
   const BALDE_IDS = ['G-A4', 'G-A5'];
 
   const indicadores: IndicadorContagem[] = [
     { id: 'G-A1', rotulo: 'Contêineres em monitoramento', valor: Number(c.a1_monitoramento), grao: 'container', dimensao: 'populacional', mutuamenteExclusivoCom: [] },
-    { id: 'G-A2', rotulo: 'Contêineres com prazo próximo', valor: Number(c.a2_prazo_proximo), grao: 'container', dimensao: 'estado', mutuamenteExclusivoCom: ESTADO_IDS.filter((x) => x !== 'G-A2') },
-    { id: 'G-A3', rotulo: 'Em demurrage — Atenção (1–6)', valor: Number(c.a3_atencao), grao: 'container', dimensao: 'estado', mutuamenteExclusivoCom: ESTADO_IDS.filter((x) => x !== 'G-A3') },
+    { id: 'G-A2', rotulo: 'Contêineres com prazo próximo', valor: Number(c.a2_prazo_proximo), grao: 'container', dimensao: 'estado_container', mutuamenteExclusivoCom: ESTADO_CONTAINER_IDS.filter((x) => x !== 'G-A2') },
+    { id: 'G-A3', rotulo: 'Em demurrage — Atenção (1–6)', valor: Number(c.a3_atencao), grao: 'container', dimensao: 'estado_container', mutuamenteExclusivoCom: ESTADO_CONTAINER_IDS.filter((x) => x !== 'G-A3') },
     { id: 'G-A4', rotulo: 'Em demurrage — Crítico (7–14)', valor: Number(p.a4_critico_7_14), grao: 'processo', dimensao: 'balde', mutuamenteExclusivoCom: BALDE_IDS.filter((x) => x !== 'G-A4') },
     { id: 'G-A5', rotulo: 'Críticos 15+ dias', valor: Number(p.a5_critico_15), grao: 'processo', dimensao: 'balde', mutuamenteExclusivoCom: BALDE_IDS.filter((x) => x !== 'G-A5') },
     { id: 'G-A6', rotulo: 'Contêineres com exposição Rocket', valor: Number(c.a6_exposicao_rocket), grao: 'container', dimensao: 'independente', mutuamenteExclusivoCom: [] },
     { id: 'G-A7', rotulo: 'Processos com tracking desatualizado', valor: Number(c.a7_tracking_desatualizado), grao: 'container', dimensao: 'independente', mutuamenteExclusivoCom: [] },
     { id: 'G-A8', rotulo: 'Processos com dados críticos pendentes', valor: Number(p.a8_dados_pendentes), grao: 'processo', dimensao: 'independente', mutuamenteExclusivoCom: [] },
-    { id: 'G-A9', rotulo: 'Processos aguardando tratamento', valor: Number(p.a9_aguardando_tratamento), grao: 'processo', dimensao: 'estado', mutuamenteExclusivoCom: ESTADO_IDS.filter((x) => x !== 'G-A9') },
+    { id: 'G-A9', rotulo: 'Processos aguardando tratamento', valor: Number(p.a9_aguardando_tratamento), grao: 'processo', dimensao: 'estado_processo', mutuamenteExclusivoCom: ESTADO_PROCESSO_IDS.filter((x) => x !== 'G-A9') },
     { id: 'G-A10', rotulo: 'Processos concluídos operacionalmente', valor: Number(p.a10_concluidos), grao: 'processo', dimensao: 'fechamento', mutuamenteExclusivoCom: [] },
   ];
 

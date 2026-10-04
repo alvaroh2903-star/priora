@@ -69,13 +69,62 @@ test('D14 G6 — isolamento: um tracking target COMPARTILHADO entre duas organiz
     await fetch_(pool, b1.targetId, { cached: true, dia: '2026-09-03' });
     await fetch_(pool, a2.targetId, { cached: false, dia: '2026-09-04' }); // target compartilhado — UMA consulta real serve as duas organizações.
 
-    const respA = await montarGestaoQualidade(pool, orgA.id);
-    const respB = await montarGestaoQualidade(pool, orgB.id);
+    const periodo = { inicio: '2026-09-01' as any, fim: '2026-09-04' as any };
+    const respA = await montarGestaoQualidade(pool, orgA.id, periodo);
+    const respB = await montarGestaoQualidade(pool, orgB.id, periodo);
 
-    assert.equal(respA.consultasRealizadas, 3, 'A: 2 (T1 exclusivo) + 1 (T3 compartilhado) — nunca as 0 realizadas de B (T2)');
-    assert.equal(respA.respostasReaproveitadasCache, 0, 'A nunca vê o cache de T2 (exclusivo de B)');
-    assert.equal(respB.consultasRealizadas, 1, 'B: só o 1 do target compartilhado — nunca os 2 de T1 (exclusivo de A)');
-    assert.equal(respB.respostasReaproveitadasCache, 3, 'B: as 3 de T2 (exclusivo); nenhuma vazada de A');
+    assert.equal(respA.historico.periodoAplicado, true);
+    assert.equal(respA.historico.consultasRealizadas, 3, 'A: 2 (T1 exclusivo) + 1 (T3 compartilhado) — nunca as 0 realizadas de B (T2)');
+    assert.equal(respA.historico.respostasReaproveitadasCache, 0, 'A nunca vê o cache de T2 (exclusivo de B)');
+    assert.equal(respB.historico.consultasRealizadas, 1, 'B: só o 1 do target compartilhado — nunca os 2 de T1 (exclusivo de A)');
+    assert.equal(respB.historico.respostasReaproveitadasCache, 3, 'B: as 3 de T2 (exclusivo); nenhuma vazada de A');
+  } finally { await pool.end(); }
+});
+
+test('D14 v1.1 #4 — DOIS CONTÊINERES DA MESMA organização compartilhando UM target: a mesma consulta real conta UMA VEZ, nunca duas (achado corretivo: JOIN sem dedupe fazia fan-out)', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    const { orgA } = await setup(pool);
+    // Dois contêineres da MESMA organização vinculados ao MESMO MBL/target (ex.: mesmo embarque, dois processos).
+    const c1 = await containerComTarget(pool, orgA.id, 'IM-V11-DEDUP-1', 'DEDA0000001', 'maersk', 'MBL-DEDUP-MESMA-ORG');
+    const c2 = await containerComTarget(pool, orgA.id, 'IM-V11-DEDUP-2', 'DEDA0000002', 'maersk', 'MBL-DEDUP-MESMA-ORG');
+    assert.equal(c1.targetId, c2.targetId, 'pré-condição: mesmo target físico, dois contêineres do MESMO MBL');
+
+    await fetch_(pool, c1.targetId, { cached: false, dia: '2026-10-01' });
+    await fetch_(pool, c1.targetId, { cached: true, dia: '2026-10-02' });
+
+    const periodo = { inicio: '2026-10-01' as any, fim: '2026-10-02' as any };
+    const resp = await montarGestaoQualidade(pool, orgA.id, periodo);
+    assert.equal(resp.historico.consultasRealizadas, 1, 'UMA consulta real, nunca 2 (uma por contêiner vinculado ao mesmo target)');
+    assert.equal(resp.historico.respostasReaproveitadasCache, 1, 'idem para a resposta de cache');
+    assert.equal(resp.historico.taxaSucessoPorArmador!.find((r) => r.armador === 'maersk')?.total, 2, 'total por armador também não duplica (2 fetches reais, não 4)');
+  } finally { await pool.end(); }
+});
+
+test('D14 v1.1 #1 — /qualidade: período parcial (só inicio OU só fim) é 400 determinístico; período totalmente ausente mantém o histórico como "não aplicado" (nunca "desde sempre")', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    const { orgA } = await setup(pool);
+    await assert.rejects(
+      () => montarGestaoQualidade(pool, orgA.id, { inicio: '2026-01-01' } as any),
+      (e: any) => e.status === 400 && e.codigo === 'periodo_obrigatorio',
+    );
+    await assert.rejects(
+      () => montarGestaoQualidade(pool, orgA.id, { fim: '2026-01-01' } as any),
+      (e: any) => e.status === 400 && e.codigo === 'periodo_obrigatorio',
+    );
+    await assert.rejects(
+      () => montarGestaoQualidade(pool, orgA.id, { inicio: '2026-02-30', fim: '2026-03-01' } as any),
+      (e: any) => e.status === 400 && e.codigo === 'valor_invalido',
+    );
+    const resp = await montarGestaoQualidade(pool, orgA.id, undefined);
+    assert.equal(resp.historico.periodoAplicado, false);
+    assert.equal(resp.historico.consultasRealizadas, null, 'nunca "desde sempre" — null explícito quando nenhum período foi informado');
+    assert.equal(resp.historico.respostasReaproveitadasCache, null);
+    assert.equal(resp.historico.taxaSucessoPorArmador, null);
+    // As métricas VIVAS continuam calculadas independentemente do período.
+    assert.equal(typeof resp.conectoresComFalhaAberta, 'number');
+    assert.equal(typeof resp.processosComTrackingSuspensoAgora, 'number');
   } finally { await pool.end(); }
 });
 
@@ -126,6 +175,20 @@ test('D14 G6 — G-E9 usa a MESMA função pura congelada (avaliarCadencia) — 
 
     const resp = await montarGestaoQualidade(pool, orgA.id, undefined, hoje as any);
     assert.equal(resp.processosComTrackingSuspensoAgora, 1, 'só o contêiner com 30+ dias de demurrage sem devolução conta como suspenso');
+
+    // D14 v1.1 #5 — um SEGUNDO contêiner suspenso do MESMO processo nunca soma 2: o campo público
+    // é `processosComTrackingSuspensoAgora` (grão PROCESSO), não contêiner.
+    const cSusp2 = await new ContainerRepository(pool).create(orgA.id, procSusp.id, 'SUSP0000002');
+    await repo.applyObservation({ containerId: cSusp2.id, organizationId: orgA.id, campo: 'dischargeDate', valor: '2026-01-01', fonte: 'master_bl', observadoEm: emSusp });
+    await repo.applyObservation({ containerId: cSusp2.id, organizationId: orgA.id, campo: 'houseFreeTimeDays', valor: 5, fonte: 'house_document', observadoEm: emSusp });
+    await repo.applyObservation({ containerId: cSusp2.id, organizationId: orgA.id, campo: 'masterFreeTimeDays', valor: 5, fonte: 'master_bl', observadoEm: emSusp });
+    await recalcularApuracaoContainer(pool, cSusp2.id, { dataReferencia: hoje as any });
+
+    const respDepoisDoSegundoContainer = await montarGestaoQualidade(pool, orgA.id, undefined, hoje as any);
+    assert.equal(
+      respDepoisDoSegundoContainer.processosComTrackingSuspensoAgora, 1,
+      'dois contêineres suspensos do MESMO processo contam UMA VEZ — grão processo, nunca contêiner',
+    );
   } finally { await pool.end(); }
 });
 

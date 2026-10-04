@@ -27,7 +27,7 @@ import { buscarComposicaoIndicador } from '../leitura/gestao/drilldown';
 
 const url = testDatabaseUrl();
 
-function contarConsultas(pool: Pool, detalhar = false): { contador: { n: number }; restaurar: () => void } {
+export function contarConsultas(pool: Pool, detalhar = false): { contador: { n: number }; restaurar: () => void } {
   const original = pool.query.bind(pool);
   const contador = { n: 0 };
   (pool as any).query = (...args: any[]) => {
@@ -44,7 +44,7 @@ function contarConsultas(pool: Pool, detalhar = false): { contador: { n: number 
   return { contador, restaurar: () => { (pool as any).query = original; } };
 }
 
-async function gerarMassa(pool: Pool, organizationId: string, n: number): Promise<void> {
+export async function gerarMassa(pool: Pool, organizationId: string, n: number): Promise<void> {
   // 1) container_type de referência (já seedado pelas migrations).
   const { rows: ct } = await pool.query(`SELECT id FROM container_types WHERE codigo = '40HC' LIMIT 1`);
   const containerTypeId: string = ct[0].id;
@@ -188,8 +188,8 @@ async function medir(pool: Pool, organizationId: string, hoje: string, detalhar 
     ['/operacional', () => montarGestaoOperacional(pool, organizationId, {}, hoje as any)],
     ['/financeiro', () => montarGestaoFinanceiro(pool, organizationId, hoje as any)],
     ['/responsabilidade', () => montarGestaoResponsabilidade(pool, organizationId)],
-    ['/eficiencia', () => montarGestaoEficiencia(pool, organizationId, undefined, hoje as any)],
-    ['/qualidade', () => montarGestaoQualidade(pool, organizationId, undefined, hoje as any)],
+    ['/eficiencia', () => montarGestaoEficiencia(pool, organizationId, { inicio: '2000-01-01' as any, fim: '2100-12-31' as any }, hoje as any)],
+    ['/qualidade', () => montarGestaoQualidade(pool, organizationId, { inicio: '2000-01-01' as any, fim: '2100-12-31' as any }, hoje as any)],
     ['/indicadores/G-A1/composicao', () => buscarComposicaoIndicador(pool, organizationId, 'G-A1', { hoje: hoje as any })],
   ];
   for (const [rota, fn] of casos) {
@@ -297,4 +297,12 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+// D14 v1.1 #9 — guarda de execução: este módulo também é importado por
+// `gestaoDrilldown.test.ts` só para reaproveitar `gerarMassa`/`contarConsultas`
+// (massa sintética de 10.000+ linhas) no benchmark de paginação por keyset.
+// Sem a guarda, o simples `import` disparava o script completo (3 rodadas de
+// 100/1.000/10.000 processos) como efeito colateral — nunca intencional fora
+// da execução standalone documentada no cabeçalho deste arquivo.
+if (require.main === module) {
+  main().catch((e) => { console.error(e); process.exit(1); });
+}

@@ -627,7 +627,11 @@ export type CodigoErroLeitura =
   | 'cursor_invalido'
   | 'ordem_alterada'
   | 'valor_invalido'
-  | 'nao_encontrado';
+  | 'nao_encontrado'
+  /** D14 v1.1 — período histórico obrigatório ausente (nunca um "desde sempre" implícito). */
+  | 'periodo_obrigatorio'
+  /** D14 v1.1 — `periodoInicio` posterior a `periodoFim`. */
+  | 'periodo_invertido';
 
 export class ErroLeitura extends Error {
   constructor(

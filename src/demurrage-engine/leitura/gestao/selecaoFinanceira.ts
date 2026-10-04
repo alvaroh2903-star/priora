@@ -65,6 +65,15 @@ export interface EnvelopesContainer {
   /** Metadados do relógio de cada lado — usados só internamente (G2, diferença potencial); nunca expostos como estão no contrato público. */
   clienteRelogio: RelogioMetadados | null;
   rocketRelogio: RelogioMetadados | null;
+  /**
+   * D14 v1.1 (correção #2) — `dias_cobrados` da PRÓPRIA linha ativa
+   * selecionada por `selecionarValorAtivo`, por lado (null quando não há
+   * linha selecionada ou ela é UNAVAILABLE). Exposto para que `eficiencia.ts`
+   * (G-D4) calcule a média de dias de demurrage reaproveitando a MESMA
+   * seleção autoritativa (G1) em vez de somar `valores_apurados` cru.
+   */
+  clienteDiasCobrados?: number | null;
+  rocketDiasCobrados?: number | null;
 }
 
 export interface SelecaoFinanceiraOpts {
@@ -168,6 +177,8 @@ export async function buscarEnvelopesSelecionadosDaOrganizacao(
       rocket: envelopeDoRelogio(rocketClock, hoje, emptyReturn, valorRocketAtivo),
       clienteRelogio: rel.cliente ? { dataFinalApuracao: rel.cliente.data_final_apuracao, calculatedAt: isoTimestamp(rel.cliente.calculated_at) } : null,
       rocketRelogio: rel.rocket ? { dataFinalApuracao: rel.rocket.data_final_apuracao, calculatedAt: isoTimestamp(rel.rocket.calculated_at) } : null,
+      clienteDiasCobrados: valorClienteAtivo?.diasCobrados ?? null,
+      rocketDiasCobrados: valorRocketAtivo?.diasCobrados ?? null,
     };
   });
 }

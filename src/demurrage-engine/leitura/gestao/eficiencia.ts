@@ -1,6 +1,7 @@
 import { Pool } from 'pg';
-import { CivilDate } from '../../temporal/civilDate';
+import { CivilDate, toOrdinal } from '../../temporal/civilDate';
 import { hojeOperacional } from '../../time/operationalDate';
+import { ErroLeitura } from '../contrato';
 import { buscarEnvelopesSelecionadosDaOrganizacao } from './selecaoFinanceira';
 
 /**
@@ -11,8 +12,8 @@ import { buscarEnvelopesSelecionadosDaOrganizacao } from './selecaoFinanceira';
  *    indicador de conclusão (decisão #2 — processos abertos excluídos);
  *  - dias CORRIDOS (decisão #3), nunca úteis — subtração de `DATE` no
  *    próprio Postgres, nunca `CivilDate` reimplementada;
- *  - "dias de demurrage" usa `valores_apurados.dias_cobrados` da linha
- *    FINAL (decisão #1), nunca o cache vivo `relogios.dias_demurrage`;
+ *  - "dias de demurrage" usa `valores_apurados.dias_cobrados` da linha ATIVA
+ *    selecionada (decisão #1), nunca uma soma bruta de todas as linhas FINAL;
  *  - um processo com reaberturas conta UMA VEZ, pelo ciclo mais recente —
  *    automático aqui: `processos` tem uma única linha por processo (nunca
  *    duplicada por reabertura); o histórico de ciclos anteriores fica no
@@ -24,15 +25,75 @@ import { buscarEnvelopesSelecionadosDaOrganizacao } from './selecaoFinanceira';
  *    Empty Return para G-D1/D2/D3; 1º dia de demurrage para G-D4;
  *    fechamento para G-D5/D6 e os 8 indicadores de conclusão.
  *
- * Correção bloqueante 2 — G-D7/G-D8 (ambíguos) substituídos por 8
+ * Correção bloqueante 2 (D14 V1) — G-D7/G-D8 (ambíguos) substituídos por 8
  * indicadores separados, cada um com tratamento explícito de pendente/
  * indisponível (nunca "sem custo" por omissão) e um indicador de
  * integridade que nunca deixa pendência virar zero.
+ *
+ * D14 v1.1 — correções #1/#2/#3 do achado corretivo sobre o commit `60f2a4e`:
+ *  #1 `periodo` agora é OBRIGATÓRIO (tipo `PeriodoObrigatorio`, não mais
+ *     opcional) — toda a rota é inerentemente histórica (só processos
+ *     FINAL), então "sem período" nunca mais significa "desde sempre": o
+ *     TIPO não permite chamar esta função sem `inicio`/`fim`, e a validação
+ *     de forma/ordem (`inicio <= fim`, datas civis reais) é feita na rota
+ *     (`demurrageGestaoRoutes.ts`) e aqui de novo em `validarPeriodoObrigatorio`
+ *     (defesa em profundidade — nenhum chamador interno, inclusive o
+ *     drill-down, pode acidentalmente pular a validação);
+ *  #2 G-D4 deixou de somar `valores_apurados.dias_cobrados` cru (podia
+ *     contar duas linhas do mesmo contêiner/lado se dois motores comerciais
+ *     estivessem ativos ao mesmo tempo — o mesmo risco que o G1 da D14 V1 já
+ *     tinha corrigido para a seleção financeira, nunca propagado para esta
+ *     consulta). Agora reaproveita `buscarEnvelopesSelecionadosDaOrganizacao`
+ *     (G1 — `selecionarValorAtivo`/`motorClienteAplicavelDe`), que já reduz a
+ *     no máximo uma linha por lado/contêiner. Cliente e Rocket NUNCA mais são
+ *     misturados num único "por contêiner": `mediaDiasDemurrageCliente` e
+ *     `mediaDiasDemurrageRocket` são médias SEPARADAS, cada uma com a própria
+ *     amostra;
+ *  #3 G-D3 (`mediaDiasDescargaAteEmptyReturn`) usava só
+ *     `tracking_return_date` na subtração, ignorando `effective_return_date`
+ *     — um contêiner com SÓ minuta validada (sem *tracking_return_date*
+ *     correspondente, caso raro mas possível) saía silenciosamente da média.
+ *     Agora usa a MESMA data canônica de Empty Return de G-D1/D2:
+ *     `COALESCE(effective_return_date, tracking_return_date)`.
  */
 
 export interface PeriodoFiltro {
   inicio?: CivilDate;
   fim?: CivilDate;
+}
+
+/** Período histórico OBRIGATÓRIO (D14 v1.1 #1) — nunca um "desde sempre" implícito. */
+export interface PeriodoObrigatorio {
+  inicio: CivilDate;
+  fim: CivilDate;
+}
+
+/**
+ * Valida que o período tem as duas datas, que são datas civis REAIS (não só
+ * o formato `AAAA-MM-DD` — `toOrdinal` rejeita `2026-02-30`/`2026-13-01`/etc.)
+ * e que `inicio <= fim`. Lança `ErroLeitura(400, ...)` determinístico — nunca
+ * um `throw` genérico que vire 500.
+ */
+export function validarPeriodoObrigatorio(periodo: PeriodoObrigatorio | null | undefined): PeriodoObrigatorio {
+  if (!periodo || periodo.inicio === undefined || periodo.inicio === null || periodo.fim === undefined || periodo.fim === null) {
+    throw new ErroLeitura(400, 'periodo_obrigatorio', { campos: ['periodoInicio', 'periodoFim'] });
+  }
+  let inicioOrdinal: number;
+  let fimOrdinal: number;
+  try {
+    inicioOrdinal = toOrdinal(periodo.inicio);
+  } catch {
+    throw new ErroLeitura(400, 'valor_invalido', { campo: 'periodoInicio' });
+  }
+  try {
+    fimOrdinal = toOrdinal(periodo.fim);
+  } catch {
+    throw new ErroLeitura(400, 'valor_invalido', { campo: 'periodoFim' });
+  }
+  if (inicioOrdinal > fimOrdinal) {
+    throw new ErroLeitura(400, 'periodo_invertido', { periodoInicio: periodo.inicio, periodoFim: periodo.fim });
+  }
+  return { inicio: periodo.inicio, fim: periodo.fim };
 }
 
 export interface MediaComAmostra {
@@ -42,14 +103,17 @@ export interface MediaComAmostra {
 
 export interface GestaoEficienciaV1 {
   contrato: 'demurrage.gestao.eficiencia.v1';
+  periodo: PeriodoObrigatorio;
   /** G-D1. */
   percentualDevolvidoDentroHouseFT: { percentual: number | null; numerador: number; denominador: number };
   /** G-D2. */
   percentualDevolvidoDentroMasterFT: { percentual: number | null; numerador: number; denominador: number };
-  /** G-D3 — dias corridos descarga→Empty Return (tracking_return_date). */
+  /** G-D3 — dias corridos descarga→Empty Return, data canônica COALESCE(effective_return_date, tracking_return_date). */
   mediaDiasDescargaAteEmptyReturn: MediaComAmostra;
-  /** G-D4 — dias_cobrados da linha FINAL, cliente e Rocket juntos (cada um um ponto amostral). */
-  mediaDiasDemurrage: MediaComAmostra;
+  /** G-D4-CLIENTE — dias_cobrados da linha ATIVA selecionada do lado cliente (D14 v1.1 #2: nunca misturado com o Rocket). */
+  mediaDiasDemurrageCliente: MediaComAmostra;
+  /** G-D4-ROCKET — idem, lado Rocket. */
+  mediaDiasDemurrageRocket: MediaComAmostra;
   /** G-D5. */
   mediaDiasEmptyReturnAteConclusao: MediaComAmostra;
   /** G-D6. */
@@ -72,16 +136,14 @@ export interface GestaoEficienciaV1 {
   };
 }
 
-function condicaoPeriodo(campo: string, periodo: PeriodoFiltro | undefined, params: unknown[]): string {
-  if (!periodo?.inicio && !periodo?.fim) return '';
-  let sql = '';
-  if (periodo.inicio) { params.push(periodo.inicio); sql += ` AND ${campo} >= $${params.length}`; }
-  if (periodo.fim) { params.push(periodo.fim); sql += ` AND ${campo} <= $${params.length}`; }
-  return sql;
+function condicaoPeriodo(campo: string, periodo: PeriodoObrigatorio, params: unknown[]): string {
+  params.push(periodo.inicio, periodo.fim);
+  return ` AND ${campo} >= $${params.length - 1} AND ${campo} <= $${params.length}`;
 }
 
-async function mediaDiasDescargaRetorno(pool: Pool, organizationId: string, periodo?: PeriodoFiltro) {
+async function mediaDiasDescargaRetorno(pool: Pool, organizationId: string, periodo: PeriodoObrigatorio) {
   const params: unknown[] = [organizationId];
+  // D14 v1.1 #3 — mesma data canônica de Empty Return nas três consultas (G-D1/D2/D3): nunca só `tracking_return_date`.
   const condPeriodo = condicaoPeriodo('COALESCE(c.effective_return_date, c.tracking_return_date)', periodo, params);
   const { rows } = await pool.query(
     `SELECT
@@ -95,8 +157,12 @@ async function mediaDiasDescargaRetorno(pool: Pool, organizationId: string, peri
           WHERE c.master_free_time_days IS NOT NULL
             AND COALESCE(c.effective_return_date, c.tracking_return_date) <= c.discharge_date + (c.master_free_time_days - 1)
         )::int AS d2_numer,
-        avg(c.tracking_return_date - c.discharge_date) FILTER (WHERE c.tracking_return_date IS NOT NULL AND c.discharge_date IS NOT NULL) AS d3_media,
-        count(*) FILTER (WHERE c.tracking_return_date IS NOT NULL AND c.discharge_date IS NOT NULL)::int AS d3_n
+        avg(COALESCE(c.effective_return_date, c.tracking_return_date) - c.discharge_date) FILTER (
+          WHERE COALESCE(c.effective_return_date, c.tracking_return_date) IS NOT NULL AND c.discharge_date IS NOT NULL
+        ) AS d3_media,
+        count(*) FILTER (
+          WHERE COALESCE(c.effective_return_date, c.tracking_return_date) IS NOT NULL AND c.discharge_date IS NOT NULL
+        )::int AS d3_n
        FROM containers c
        JOIN processos p ON p.id = c.processo_id
       WHERE c.organization_id = $1 AND p.apuracao_status = 'FINAL'
@@ -106,20 +172,61 @@ async function mediaDiasDescargaRetorno(pool: Pool, organizationId: string, peri
   return rows[0];
 }
 
-async function mediaDiasDemurrageFinal(pool: Pool, organizationId: string, periodo?: PeriodoFiltro) {
-  const params: unknown[] = [organizationId];
-  const condPeriodo = condicaoPeriodo('r.primeiro_dia_demurrage', periodo, params);
-  const { rows } = await pool.query(
-    `SELECT avg(va.dias_cobrados) AS media, count(*)::int AS n
-       FROM valores_apurados va
-       JOIN containers c ON c.id = va.container_id
+/**
+ * G-D4 (D14 v1.1 #2) — contêineres de processo FINAL cujo relógio (cliente OU
+ * Rocket) teve seu PRIMEIRO dia de demurrage dentro do período, com a MÉDIA
+ * calculada sobre `dias_cobrados` da linha ATIVA SELECIONADA (G1,
+ * `buscarEnvelopesSelecionadosDaOrganizacao`) — nunca uma soma bruta de
+ * `valores_apurados`. Cliente e Rocket são universos e médias SEPARADOS.
+ */
+async function mediaDiasDemurrageFinal(
+  pool: Pool, organizationId: string, periodo: PeriodoObrigatorio, hoje: CivilDate,
+): Promise<{ cliente: MediaComAmostra; rocket: MediaComAmostra }> {
+  const paramsCliente: unknown[] = [organizationId];
+  const condCliente = condicaoPeriodo('r.primeiro_dia_demurrage', periodo, paramsCliente);
+  const { rows: clienteRows } = await pool.query(
+    `SELECT DISTINCT c.id AS container_id
+       FROM containers c
        JOIN processos p ON p.id = c.processo_id
-       LEFT JOIN relogios r ON r.container_id = va.container_id AND r.tipo = va.relogio_tipo
-      WHERE c.organization_id = $1 AND p.apuracao_status = 'FINAL'
-        AND va.calculation_status = 'FINAL' AND va.dias_cobrados IS NOT NULL AND va.dias_cobrados > 0${condPeriodo}`,
-    params,
+       JOIN relogios r ON r.container_id = c.id AND r.tipo = 'cliente'
+      WHERE c.organization_id = $1 AND p.apuracao_status = 'FINAL'${condCliente}`,
+    paramsCliente,
   );
-  return rows[0];
+
+  const paramsRocket: unknown[] = [organizationId];
+  const condRocket = condicaoPeriodo('r.primeiro_dia_demurrage', periodo, paramsRocket);
+  const { rows: rocketRows } = await pool.query(
+    `SELECT DISTINCT c.id AS container_id
+       FROM containers c
+       JOIN processos p ON p.id = c.processo_id
+       JOIN relogios r ON r.container_id = c.id AND r.tipo = 'rocket'
+      WHERE c.organization_id = $1 AND p.apuracao_status = 'FINAL'${condRocket}`,
+    paramsRocket,
+  );
+
+  const clienteIds = new Set<string>(clienteRows.map((r) => r.container_id as string));
+  const rocketIds = new Set<string>(rocketRows.map((r) => r.container_id as string));
+  const todosIds = Array.from(new Set<string>([...clienteIds, ...rocketIds]));
+
+  const media = (valores: number[]): MediaComAmostra => ({
+    media: valores.length === 0 ? null : Math.round((valores.reduce((a, b) => a + b, 0) / valores.length) * 100) / 100,
+    amostra: valores.length,
+  });
+
+  if (todosIds.length === 0) return { cliente: media([]), rocket: media([]) };
+
+  const envelopes = await buscarEnvelopesSelecionadosDaOrganizacao(pool, organizationId, hoje, { containerIds: todosIds });
+  const clienteValores: number[] = [];
+  const rocketValores: number[] = [];
+  for (const env of envelopes) {
+    if (clienteIds.has(env.containerId) && env.clienteDiasCobrados != null && env.clienteDiasCobrados > 0) {
+      clienteValores.push(env.clienteDiasCobrados);
+    }
+    if (rocketIds.has(env.containerId) && env.rocketDiasCobrados != null && env.rocketDiasCobrados > 0) {
+      rocketValores.push(env.rocketDiasCobrados);
+    }
+  }
+  return { cliente: media(clienteValores), rocket: media(rocketValores) };
 }
 
 /**
@@ -141,7 +248,7 @@ async function mediaDiasDemurrageFinal(pool: Pool, organizationId: string, perio
  * plano instável vs. ~7ms com `MATERIALIZED`, que torna o plano determinístico
  * independente da qualidade da estimativa.
  */
-async function mediaEmptyReturnAteConclusao(pool: Pool, organizationId: string, periodo?: PeriodoFiltro) {
+async function mediaEmptyReturnAteConclusao(pool: Pool, organizationId: string, periodo: PeriodoObrigatorio) {
   const params: unknown[] = [organizationId];
   const condPeriodo = condicaoPeriodo('p.fechado_em::date', periodo, params);
   const { rows } = await pool.query(
@@ -164,7 +271,7 @@ async function mediaEmptyReturnAteConclusao(pool: Pool, organizationId: string, 
   return rows[0];
 }
 
-async function mediaResolucaoPendencias(pool: Pool, organizationId: string, periodo?: PeriodoFiltro) {
+async function mediaResolucaoPendencias(pool: Pool, organizationId: string, periodo: PeriodoObrigatorio) {
   const params: unknown[] = [organizationId];
   const condPeriodo = condicaoPeriodo('dp.resolvido_em::date', periodo, params);
   const { rows } = await pool.query(
@@ -176,12 +283,15 @@ async function mediaResolucaoPendencias(pool: Pool, organizationId: string, peri
   return rows[0];
 }
 
-export async function montarGestaoEficiencia(pool: Pool, organizationId: string, periodo?: PeriodoFiltro, hoje?: CivilDate): Promise<GestaoEficienciaV1> {
+export async function montarGestaoEficiencia(
+  pool: Pool, organizationId: string, periodoEntrada: PeriodoObrigatorio, hoje?: CivilDate,
+): Promise<GestaoEficienciaV1> {
   const h = hoje ?? hojeOperacional();
+  const periodo = validarPeriodoObrigatorio(periodoEntrada);
 
   const [devolucao, demurrageFinal, emptyReturnConclusao, resolucaoPendencias] = await Promise.all([
     mediaDiasDescargaRetorno(pool, organizationId, periodo),
-    mediaDiasDemurrageFinal(pool, organizationId, periodo),
+    mediaDiasDemurrageFinal(pool, organizationId, periodo, h),
     mediaEmptyReturnAteConclusao(pool, organizationId, periodo),
     mediaResolucaoPendencias(pool, organizationId, periodo),
   ]);
@@ -241,10 +351,12 @@ export async function montarGestaoEficiencia(pool: Pool, organizationId: string,
 
   return {
     contrato: 'demurrage.gestao.eficiencia.v1',
+    periodo,
     percentualDevolvidoDentroHouseFT: { percentual: pct(devolucao.d1_numer, devolucao.d1_denom), numerador: devolucao.d1_numer, denominador: devolucao.d1_denom },
     percentualDevolvidoDentroMasterFT: { percentual: pct(devolucao.d2_numer, devolucao.d2_denom), numerador: devolucao.d2_numer, denominador: devolucao.d2_denom },
     mediaDiasDescargaAteEmptyReturn: media(devolucao, devolucao.d3_n),
-    mediaDiasDemurrage: media(demurrageFinal, demurrageFinal.n),
+    mediaDiasDemurrageCliente: demurrageFinal.cliente,
+    mediaDiasDemurrageRocket: demurrageFinal.rocket,
     mediaDiasEmptyReturnAteConclusao: media(emptyReturnConclusao, emptyReturnConclusao.n),
     mediaDiasResolucaoPendencias: media(resolucaoPendencias, resolucaoPendencias.n),
     concluidos: {

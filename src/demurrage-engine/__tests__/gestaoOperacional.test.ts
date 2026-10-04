@@ -76,6 +76,78 @@ async function montarContainer(
   return { processoId: proc.id, containerId: ct.id, numero, target };
 }
 
+/** Igual a `montarContainer`, mas adiciona um contêiner a um PROCESSO JÁ EXISTENTE (nunca cria um novo processo) — para cenários de processo com múltiplos contêineres de tipos diferentes. */
+async function adicionarContainerAoProcesso(
+  pool: Pool, orgId: string, processoId: string, numero: string,
+  p: { discharge: string; houseFT: number; masterFT: number; consultas: string[]; hoje: string; containerTypeCodigo: string },
+): Promise<string> {
+  const repo = new ContainerRepository(pool);
+  const ct = await repo.create(orgId, processoId, numero);
+  const em = new Date(`${p.discharge}T00:00:00Z`);
+  await repo.applyObservation({ containerId: ct.id, organizationId: orgId, campo: 'dischargeDate', valor: p.discharge, fonte: 'master_bl', observadoEm: em });
+  await repo.applyObservation({ containerId: ct.id, organizationId: orgId, campo: 'houseFreeTimeDays', valor: p.houseFT, fonte: 'house_document', observadoEm: em });
+  await repo.applyObservation({ containerId: ct.id, organizationId: orgId, campo: 'masterFreeTimeDays', valor: p.masterFT, fonte: 'master_bl', observadoEm: em });
+  await pool.query(`UPDATE containers SET container_type_id = (SELECT id FROM container_types WHERE codigo = $2) WHERE id = $1`, [ct.id, p.containerTypeCodigo]);
+  const { target } = await new TrackingTargetRepository(pool).upsert({ carrier: 'maersk', reference: `MBL${numero}` });
+  await new TrackingTargetRepository(pool).linkContainer(ct.id, target.id, { referenceType: 'mbl', referenceRaw: `MBL${numero}` });
+  for (const dia of p.consultas) {
+    await new TrackingRepository(pool).recordFetch({
+      trackingTargetId: target.id, status: 'ok', cached: false, resolved: true, carrier: 'maersk', eventsCount: 0,
+      iniciadoEm: new Date(`${dia}T12:00:00Z`), finalizadoEm: new Date(`${dia}T12:00:00Z`),
+    } as any);
+  }
+  await recalcularApuracaoContainer(pool, ct.id, { dataReferencia: p.hoje as any });
+  await new LifecycleRepository(pool).derivarContainerEConsolidar(ct.id, processoId, { hoje: p.hoje as any });
+  return ct.id;
+}
+
+test('D14 v1.1 #6 — filtro tipoEquipamento em indicador de grão PROCESSO (G-A4): processo com tipos de contêiner MISTOS conta UMA VEZ (nunca uma vez por contêiner que bate); processo SEM NENHUM contêiner do tipo filtrado é excluído', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    const org = await setup(pool);
+    const { rows: tipo40hc } = await pool.query(`SELECT id FROM container_types WHERE codigo = '40HC'`);
+    const { rows: tipo20dv } = await pool.query(`SELECT id FROM container_types WHERE codigo = '20DV'`);
+    const { rows: tipo20hc } = await pool.query(`SELECT id FROM container_types WHERE codigo = '20HC'`);
+    const idTipo40hc = tipo40hc[0].id as string;
+    const idTipo20dv = tipo20dv[0].id as string;
+    const idTipoSemNenhum = tipo20hc[0].id as string;
+
+    // Processo MISTO: container 1 (40HC) crítico 7-14; container 2 (20DV), mesmo cenário crítico.
+    // O processo deve contar UMA VEZ em G-A4 mesmo tendo 2 contêineres — e UMA VEZ também quando
+    // filtrado por 40HC (que só o container 1 tem) ou por 20DV (que só o container 2 tem).
+    const procMisto = await new ProcessoRepository(pool).create({ organizationId: org.id, numeroProcesso: 'IM-D14-V11-6-MISTO', clienteId: null });
+    await adicionarContainerAoProcesso(pool, org.id, procMisto.id, 'MISA0000001', {
+      discharge: '2026-09-01', houseFT: 6, masterFT: 6, consultas: ['2026-09-01'], hoje: '2026-09-20', containerTypeCodigo: '40HC',
+    });
+    await adicionarContainerAoProcesso(pool, org.id, procMisto.id, 'MISB0000001', {
+      discharge: '2026-09-01', houseFT: 6, masterFT: 6, consultas: ['2026-09-01'], hoje: '2026-09-20', containerTypeCodigo: '20DV',
+    });
+
+    // Processo SEM NENHUM contêiner 40HC/20DV (só 20HC) — também crítico 7-14, mas nunca deve
+    // aparecer quando o filtro é 40HC ou 20DV.
+    const procSemMatch = await new ProcessoRepository(pool).create({ organizationId: org.id, numeroProcesso: 'IM-D14-V11-6-SEM', clienteId: null });
+    await adicionarContainerAoProcesso(pool, org.id, procSemMatch.id, 'SEMA0000001', {
+      discharge: '2026-09-01', houseFT: 6, masterFT: 6, consultas: ['2026-09-01'], hoje: '2026-09-20', containerTypeCodigo: '20HC',
+    });
+
+    const respSemFiltro = await montarGestaoOperacional(pool, org.id, {}, '2026-09-20' as any);
+    const semFiltro = Object.fromEntries(respSemFiltro.indicadores.map((i) => [i.id, i.valor]));
+    assert.equal(semFiltro['G-A4'], 2, 'sem filtro: os dois processos críticos contam (misto + sem-match)');
+
+    const respA = await montarGestaoOperacional(pool, org.id, { containerTypeId: idTipo40hc }, '2026-09-20' as any);
+    const porIdA = Object.fromEntries(respA.indicadores.map((i) => [i.id, i.valor]));
+    assert.equal(porIdA['G-A4'], 1, 'filtro 40HC: só o processo misto conta, e conta UMA VEZ (nunca 2, mesmo tendo 2 contêineres)');
+
+    const respB = await montarGestaoOperacional(pool, org.id, { containerTypeId: idTipo20dv }, '2026-09-20' as any);
+    const porIdB = Object.fromEntries(respB.indicadores.map((i) => [i.id, i.valor]));
+    assert.equal(porIdB['G-A4'], 1, 'filtro 20DV: o MESMO processo misto conta (pelo outro contêiner), ainda UMA VEZ');
+
+    const respC = await montarGestaoOperacional(pool, org.id, { containerTypeId: idTipoSemNenhum }, '2026-09-20' as any);
+    const porIdC = Object.fromEntries(respC.indicadores.map((i) => [i.id, i.valor]));
+    assert.equal(porIdC['G-A4'], 1, 'filtro 20HC: só o processo "sem match" (único com 20HC) conta — o processo misto nunca tem 20HC');
+  } finally { await pool.end(); }
+});
+
 test('D14 G3 — contrato: aviso de dimensões independentes presente verbatim, dataOperacional preenchida', { skip: !url }, async () => {
   const pool = testPool();
   try {
@@ -113,8 +185,13 @@ test('D14 G3 — sobreposição de dimensões: um contêiner em ATENÇÃO conta 
     // As dimensões independentes nunca aparecem como mutuamente exclusivas de nada.
     assert.deepEqual(porId['G-A6'].mutuamenteExclusivoCom, []);
     assert.deepEqual(porId['G-A7'].mutuamenteExclusivoCom, []);
-    // G-A3 só é mutuamente exclusivo com outros indicadores da dimensão "estado".
-    assert.deepEqual(new Set(porId['G-A3'].mutuamenteExclusivoCom), new Set(['G-A2', 'G-A9']));
+    // D14 v1.1 #7 — G-A3 (grão CONTÊINER) só é mutuamente exclusivo com G-A2 (mesmo grão, dimensão
+    // "estado_container"); NUNCA com G-A9 (grão PROCESSO, dimensão separada "estado_processo") —
+    // grãos diferentes nunca são mutuamente exclusivos entre si.
+    assert.deepEqual(new Set(porId['G-A3'].mutuamenteExclusivoCom), new Set(['G-A2']));
+    assert.equal(porId['G-A3'].dimensao, 'estado_container');
+    assert.equal(porId['G-A9'].dimensao, 'estado_processo');
+    assert.deepEqual(porId['G-A9'].mutuamenteExclusivoCom, [], 'G-A9 está sozinho na própria dimensão de grão processo');
   } finally { await pool.end(); }
 });
 

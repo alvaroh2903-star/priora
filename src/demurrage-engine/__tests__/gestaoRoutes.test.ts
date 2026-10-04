@@ -258,7 +258,9 @@ test('D14 G6 — ZERO ESCRITAS: nenhuma das 6 rotas de Gestão altera UMA LINHA 
 
     const antes = await fingerprintBanco(pool);
     for (const rota of ROTAS_GET) {
-      const r = await fetch(`${app.base}${rota}`, { headers: { 'x-test-home-account-id': home } });
+      // D14 v1.1 #1 — /eficiencia agora exige período obrigatório; as demais rotas não.
+      const query = rota === '/eficiencia' ? '?periodoInicio=2000-01-01&periodoFim=2100-12-31' : '';
+      const r = await fetch(`${app.base}${rota}${query}`, { headers: { 'x-test-home-account-id': home } });
       assert.equal(r.status, 200, `rota ${rota} deveria responder 200`);
     }
     const rComp = await fetch(`${app.base}/indicadores/G-A1/composicao`, { headers: { 'x-test-home-account-id': home } });
