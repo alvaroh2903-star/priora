@@ -42,8 +42,15 @@ export interface LifecycleConfig {
   prazoProximoThresholdDias?: number | null;
 }
 
-/** ClockFact a partir de uma linha do cache `relogios` (AUSENTE → PENDING). */
-function clockFactDoCache(row: { estado: string; dias_demurrage: number | null; ultimo_dia_livre: CivilDate | null } | undefined): ClockFact {
+/**
+ * ClockFact a partir de uma linha do cache `relogios` (AUSENTE → PENDING).
+ * D14 (Gate G1) — exportada SEM alteração de corpo para a seleção financeira
+ * da Gestão construir o mesmo `ClockFact` que a fila/detalhe já usam, nunca
+ * uma segunda regra "ausente → PENDING" escrita à mão. Mudança só de
+ * visibilidade; todo chamador existente (`montarFatos*`) mantém o mesmo
+ * comportamento.
+ */
+export function clockFactDoCache(row: { estado: string; dias_demurrage: number | null; ultimo_dia_livre: CivilDate | null } | undefined): ClockFact {
   if (!row) return { status: 'PENDING', diasDemurrage: 0, ultimoDiaLivre: null };
   if (row.estado === 'OK') return { status: 'OK', diasDemurrage: row.dias_demurrage ?? 0, ultimoDiaLivre: row.ultimo_dia_livre };
   return { status: row.estado as ClockFact['status'], diasDemurrage: 0, ultimoDiaLivre: null };

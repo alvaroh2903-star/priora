@@ -408,7 +408,15 @@ export interface AgregadoFinanceiroLeitura {
   rocket: AgregadoFinanceiroLado;
 }
 
-function agregarLado(envelopes: ValorEnvelope[]): AgregadoFinanceiroLado {
+/**
+ * D14 (Gate G1/G2) — exportada SEM alteração de corpo para ser reaproveitada
+ * pela agregação de organização da Gestão (nunca uma segunda soma monetária
+ * escrita à mão). `agregarFinanceiroProcesso` (abaixo) continua sendo o único
+ * chamador dentro deste arquivo, com o mesmo comportamento de antes — esta
+ * mudança é só de visibilidade (`function` → `export function`), não de
+ * regra: nenhum teste ou chamador existente da D12 muda de resultado.
+ */
+export function agregarLado(envelopes: ValorEnvelope[]): AgregadoFinanceiroLado {
   const porMoeda = new Map<string, { subtotalCentavos: bigint; confirmados: number; estimados: number; estimativasProvisorias: number }>();
   let pendentes = 0;
   let indisponiveis = 0;
