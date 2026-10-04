@@ -1,449 +1,727 @@
 # Fase D15 — Diagnóstico e Planejamento (Exceções Operacionais e Casos de Borda)
 
-> **Status:** diagnóstico puro. **Nenhum código de produção, migration, rota ou
-> teste foi alterado nesta entrega.** Apenas este documento foi criado. A D15
-> **não foi iniciada como implementação** — depende de aprovação das decisões
-> listadas na §18. A D16 não foi tocada.
+> **Status:** diagnóstico puro, **revisão 2** sobre o commit `84ccb34`.
+> **Nenhum código de produção, migration, rota ou teste foi alterado nesta
+> entrega.** Apenas este documento foi atualizado. A D15 **continua não
+> implementada** — a revisão fixa as decisões de negócio e divide a
+> implementação futura em três blocos auditáveis (D15-A, D15-B, D15-C), mas
+> nenhum deles foi iniciado. A D16 não foi tocada.
 >
-> **Base analisada:** D10, D11, D12, D13 (contratos técnicos), D14 congelada no
-> commit `a162cc0` (v1.3, ainda NÃO aprovada/congelada formalmente, mas é o
-> HEAD estável usado como referência), as 34 migrations em
-> `src/demurrage-engine/db/migrations/`, e o código real de lifecycle,
-> tracking, tarifa, responsabilidade, apuração, fechamento e read-models.
->
-> **Limitação declarada de origem:** o Blueprint de 32 capítulos **não está
-> neste repositório** como arquivo (confirmado em
-> `docs/demurrage-blueprint-gap-analysis.md`: "anexado pelo usuário" — não
-> commitado). O Capítulo 31 foi reconstruído por citação cruzada em
-> `docs/demurrage-fase-d13-diagnostico.md` (linhas ~318–381) e nas referências
-> ao Cap. 31 em `docs/demurrage-migration-plan-v1-to-v2.md`. Essa
-> reconstrução é parcial e está marcada como decisão bloqueante (§18, D-1).
+> **O que mudou desde `84ccb34`:** o texto integral do Capítulo 31 do
+> Blueprint foi fornecido pelo usuário e **substitui toda reconstrução
+> indireta** da revisão anterior. Dez decisões antes listadas como
+> bloqueantes foram **fixadas pelo próprio usuário** nesta rodada (ver §9).
+> Os casos e contagens foram recalculados do zero (§4) em vez de corrigidos
+> linha a linha, porque o texto exato do Blueprint desdobra alguns casos que
+> antes estavam fundidos (ex.: 31.4, 31.5, 31.6/31.7, 31.13, 31.14) e dissolve
+> distinções que antes pareciam necessárias.
 
 ## 1. Resumo executivo
 
-A base Demurrage (D7–D14) já implementa uma fração substancial das exceções
-operacionais de alto impacto: dados ausentes de FT/tipo/armador/MBL,
-indisponibilidade de tarifa (nunca convertida a zero), divergência
-SI×Master, pendências de identidade de VesselCall, tracking individual
-obrigatório pós-descarga, consolidação multi-contêiner que nunca esconde um
-contêiner crítico, moedas separadas, e governança de fallback manual. Essa
-cobertura é real e testada (812 testes na engine, 88 em gestão, 66 na UI).
+Com o texto exato do Capítulo 31 em mãos, a cobertura real da base muda em
+dois sentidos: (a) alguns casos que a revisão anterior havia classificado
+como "cobertos estruturalmente" por aproximação (31.5, 31.6/31.7, 31.14) na
+verdade não atendem ao enunciado literal do Blueprint e passam a **não
+cobertos**; (b) todas as dez decisões de negócio que a revisão anterior
+listava como bloqueantes foram **fixadas pelo usuário** nesta rodada —
+nenhuma permanece em aberto como decisão de política. Resta exatamente
+**uma** lacuna de projeto genuinamente indeterminada (§10): o mecanismo
+concreto de "encaminhar para verificação de tracking" exigido pela 31.5.
 
-A investigação, no entanto, encontrou um núcleo de **defeitos existentes**
-concentrados em três áreas: (a) **integridade pós-FINAL** — mudanças
-materiais em descarga/FT/tipo/tracking após o fechamento são aceitas
-silenciosamente pelo motor de recálculo (NO-OP tratado como sucesso) sem
-sinalizar divergência nem forçar reabertura; (b) **fechamento e reabertura
-não-transacionais e sem trava** — `validarMinuta`, `finalizarProcesso` e
-`autorizarReabertura` fazem leitura-então-escrita fora de uma transação
-única e sem advisory lock, abrindo janelas de corrida (double-finalize,
-relógios desatualizados após crash); (c) **artefatos de pendência que nunca
-se resolvem** — `tipo_selecao_sem_observacao` e `atracacao_ambigua` não têm
-caminho de resolução no código atual, tornando-se órfãos permanentes por
-design, não por falha.
+O trabalho de implementação foi reorganizado em três blocos conforme
+solicitado — **D15-A** (integridade de estado final e reabertura), **D15-B**
+(integridade de dados e exceções) e **D15-C** (integridade tarifária e
+recuperação) — cada um auditável e congelável de forma independente antes
+do início do próximo. A versão/imutabilidade de tabela tarifária, antes
+tratada como decisão a ser potencialmente separada, agora é **obrigatória
+dentro de D15** (bloco D15-C), por determinação explícita do usuário.
 
-Fora desse núcleo, há um conjunto bem definido de **lacunas genuínas** que
-exigem decisão de negócio antes de qualquer código: validação de cronologia
-no lado do motor (Gate Out antes de descarga, Empty Return antes de Gate
-Out), política de reabertura compulsória por fonte divergente pós-FINAL,
-imutabilidade/versionamento de tabela tarifária, e o texto completo do
-Capítulo 31 do Blueprint (reconstruído aqui apenas por citação indireta).
+**Contagem recalculada (detalhe em §4):** **66** casos revisados (a revisão
+anterior contava 47; o Capítulo 31 exato desdobra subcasos que antes estavam
+fundidos — ver §4.1 para o mapeamento exato); **29** já corretamente
+cobertos; **31** exigem trabalho de D15 (7 no bloco A, 18 no bloco B, 6 no
+bloco C); **6** permanecem deferidos (3 integração externa, 1 frontend, 1
+Portal, 1 impossível sem fonte externa). Nenhuma decisão de negócio
+bloqueante resta pendente de aprovação, exceto o item único de §10.
 
-Nenhuma tabela de exceção universal se mostrou necessária: os artefatos
-existentes (`demurrage_pendencias`, `ft_divergencias`,
-`vessel_call_pendencias`, `tracking_incidents`, etc.) cobrem domínios
-distintos o bastante para não justificar consolidação, mas têm vocabulário
-de status inconsistente entre si (ver §3, §10).
+## 2. Decisões fixadas nesta rodada (aplicadas ao plano revisado)
 
-**Contagem:** 47 casos de exceção revisados nas áreas 1–8 do escopo
-mandatório; 24 já corretamente cobertos; 14 exigem trabalho de D15 (atrás de
-aprovação); 9 são defeitos existentes a corrigir dentro do próprio código
-já tocado; 9 casos (alguns coincidentes com os 47, listados separadamente em
-§10) são órfãos de artefato que dependem de decisão antes de correção. Ver
-tabela consolidada em §5 e números finais em §19 (nota: a soma dos
-subconjuntos passa de 47 porque um caso pode receber mais de uma
-sub-observação, mas cada caso recebe exatamente uma classificação final).
+Estas dez decisões, listadas como bloqueantes na revisão anterior (`84ccb34`,
+§18), foram **resolvidas pelo usuário** e passam a ser tratadas como
+especificação, não mais como escolha em aberto:
 
-## 2. Rastreabilidade do Capítulo 31 do Blueprint
+| Decisão | Resolução aplicada |
+|---|---|
+| Texto do Cap. 31 (antiga D-1) | Substituído pelo texto literal fornecido — ver §3. |
+| Mudança material pós-FINAL (antiga D-30) | Registrar o fato tentado/recebido e devolver `exige_reabertura` controlado; **nunca mutar a projeção FINAL selecionada** até reabertura autorizada por gestor. → D15-A. |
+| Empty Return inválido antes da descarga (antiga parte de D-12) | Preservar a evidência bruta, nunca promovê-la como retorno efetivo, criar inconsistência aberta, bloquear fechamento e notificar/rotear para gestão **e** verificação de tracking. → D15-B (ver lacuna residual em §10). |
+| Gate Out antes da descarga / Empty Return antes do Gate Out (antiga D-12) | Preservar a evidência bruta, criar pendência de cronologia e impedir a promoção posterior afetada até resolução. **Não** criar incidente técnico, a menos que o próprio processamento tenha falhado. → D15-B. |
+| Conflito de fonte (antiga D-17) | Preservar toda observação e usar o mecanismo de divergência já existente, **generalizado por campo/fonte** em vez de restrito a Master×SI. → D15-B. |
+| Tabelas tarifárias (antiga D-21) | Imutáveis após ativação/uso. Correções geram nova versão. Processos históricos permanecem vinculados à versão original, salvo reabertura explícita com recálculo. **Obrigatório em D15** (bloco D15-C), não mais candidato a fase separada. |
+| Histórico de tentativas de fonte de Free Time (antiga D-11) | Tabela satélite append-only associada à pendência; guarda fonte, timestamp da tentativa, resultado e evidência/referência sanitizada; última tentativa exposta por projeção/consulta; **nunca sobrescrita em JSONB**. → D15-B. |
+| `mismatchCarrier` e condição comercial ausente (antigas D-14/D-15) | Novos tipos explícitos em `demurrage_pendencias` para ambos. → D15-B. |
+| Descarga manual (antiga D-27) | Permanece proibida em D15; tracking oficial do armador continua sendo a fonte da verdade. Nenhuma mudança de código necessária — comportamento atual confirmado. |
+| Observações de mesma autoridade (antiga D-9) | `observado_em` mais novo vence. Uma observação mais antiga que chega depois permanece no ledger, mas não pode substituir uma observação mais nova já selecionada. → D15-B. |
+| Rotas públicas de mutação (antiga D-28) | D15 permanece em nível de serviço. Nenhuma rota pública de mutação antes da fase de frontend/fluxo de ação. Aplica-se a todos os blocos A/B/C. |
 
-O texto integral do Capítulo 31 não está disponível neste repositório.
-A tabela abaixo é a reconstrução feita a partir de citações indiretas em
-`docs/demurrage-fase-d13-diagnostico.md` e `docs/demurrage-migration-plan-v1-to-v2.md`,
-confrontada com o comportamento real do código. **Esta reconstrução deve ser
-aprovada ou substituída pelo texto original antes de qualquer gate de D15
-(decisão D-1, §18).**
+Nenhuma dessas dez decisões é tratada como aberta nesta revisão. A única
+lacuna de projeto que resta genuinamente indeterminada está isolada em §10.
 
-| Subcap. | Enunciado reconstruído | Estado real no código |
+## 3. Rastreabilidade exata do Capítulo 31
+
+Texto literal fornecido pelo usuário, subseção por subseção, confrontado com
+o comportamento real do código. A coluna "Classificação" usa os blocos
+D15-A/B/C definidos em §5–§7, ou `COB` (já corretamente coberto), ou
+`DEFER` quando o próprio Blueprint determina o deferimento.
+
+### 31.1 — Contêiner sem descarga no tracking
+> Relógios não iniciam; ETA, berço e HeadCargo não substituem a descarga; o
+> processo espera o evento oficial; falhas de conector seguem a política de
+> alerta.
+
+**Código real:** `relogios` permanece sem linha/`PENDING` até evento de
+descarga oficial via tracking; nenhum campo de ETA/berço/HeadCargo é
+promovido como data de descarga (`eventIngestion.ts` só promove
+`dischargeDate` a partir de `tracking_service`); falhas de conector seguem
+`failurePolicy.ts` (incidente no 3º `falha` consecutivo). **Classificação: COB.**
+
+### 31.2 — Datas de descarga diferentes
+> Contêineres do mesmo processo podem ter datas de descarga diferentes. Cada
+> contêiner inicia seus relógios a partir da própria descarga. O processo
+> nunca aplica uma data a todos os contêineres.
+
+**Código real:** `relogios` é por contêiner; `processConsolidation.ts` nunca
+funde datas entre contêineres do mesmo processo. **Classificação: COB.**
+
+### 31.3 — Free Time igual a zero
+> Free Time zero só é válido quando confirmado por fonte aprovada. A
+> cobrança desse relógio começa na data da descarga. Zero nunca deve ser
+> tratado como dado ausente.
+
+**Código real:** `relogios`/apuração tratam FT=0 como valor numérico válido,
+distinto de `PENDING` (ausência); a cobrança usa D0 = data de descarga.
+**Classificação: COB.**
+
+### 31.4 — Free Time ausente
+> Quando House ou Master Free Time não é encontrado em nenhuma fonte
+> aprovada: o relógio afetado fica pendente; Priora mostra as fontes
+> consultadas; Priora mostra o horário da última tentativa; os cálculos
+> dependentes permanecem bloqueados. ANALYST pode usar MANUAL_FALLBACK só
+> sob ausência total de fonte. Exige número de dias, identidade do relógio,
+> fonte ou justificativa e, quando disponível, documento ou comunicação do
+> processo. Priora registra autor e timestamp e notifica gestores. ANALYST
+> não pode sobrescrever Free Time existente. Se uma fonte mais forte aparecer
+> depois com valor diferente, Priora registra a divergência e a encaminha à
+> gestão sem substituir silenciosamente o fallback manual.
+
+Desdobrado em quatro subcasos porque o código trata cada um de forma distinta:
+
+| Subcaso | Código real | Classificação |
 |---|---|---|
-| 31.1 | Sem descarga → relógios não iniciados | **Coberto.** `relogios` permanece sem linha/`PENDING` até evento de descarga; lifecycle classifica como pendência de dados. |
-| 31.2 | Descargas em datas diferentes (multi-contêiner) | **Coberto.** Cada contêiner tem seu próprio relógio; consolidação de processo não funde datas. |
-| 31.3 | FT zero ≠ FT ausente (FT 0 → cobrança no dia da descarga) | **Coberto.** `relogios`/apuração tratam FT=0 como valor válido (cobrança desde D0), distinto de `PENDING`. |
-| 31.4 | FT ausente: fontes consultadas, última tentativa, cálculos bloqueados; PENDING nunca é zero | **Parcialmente coberto.** `PENDING` nunca é convertido a zero (confirmado em `bracketEngine.ts`/`valorApuradoRepository.ts`). **Faltando:** não há campo/estrutura que registre "fontes consultadas" e "última tentativa" de obtenção do FT para exibição ao analista — é lacuna genuína (§5, caso E-1). |
-| 31.5 | Empty Return antes da descarga → estado inválido | **Coberto estruturalmente**, mas sem aviso explícito dedicado (ver 31.5–31.7 abaixo). |
-| 31.6 | Evento retroativo recebido atrasado | **Parcialmente coberto.** Promoção por prioridade de fonte existe; **falta** validação cronológica explícita (Gate Out < descarga, ER < Gate Out) no motor — lacuna (§5, caso E-2). |
-| 31.7 | (relacionado a Empty Return, citado em conjunto com 31.5–31.6 e na Fase 8 do plano de migração) | Mesma lacuna de E-2; sem aviso dedicado de "ER inválido" distinto de erro genérico. |
-| 31.8 | Tabela tarifária incompleta | **Coberto.** Gap de faixa → `UNAVAILABLE`, nunca zero. |
-| 31.9 | Tipo de contêiner não reconhecido (bloqueia só a tarifa) | **Coberto.** `tipo_nao_reconhecido` em `demurrage_pendencias`; demais relógios continuam. |
-| 31.10 | Moedas separadas (cliente/armador) | **Coberto.** `moeda` por linha de valor apurado; mistura lança erro controlado em vez de somar moedas diferentes (ver defeito D-3 sobre o tratamento desse erro). |
-| 31.11 | Divergência HeadCargo | **Fora de escopo — depende de integração externa não presente no repositório.** Deferido (§9). |
-| 31.12 | Reabertura com valores preservados | **Parcialmente coberto.** `reaberturas`/snapshot preservam histórico (append-only em `valores_apurados`), mas o fluxo de reabertura em si tem defeitos de integridade (§4, D-4/D-5). |
-| 31.13 | Tracking suspenso após 30 dias | **Coberto.** `MAX_AUTOMATIC_TRACKING_WINDOW_REACHED` em `cadencePolicy`. |
-| 31.14 | Minuta divergente do tracking | **Parcialmente coberto.** `minutaValidation.ts` rejeita divergências de data conhecidas; **falta** registrar evento/pendência quando a minuta valida uma data diferente da congelada em processo já FINAL (hoje retorna apenas `exige_reabertura` sem rastro, §4 D-2). |
+| (a) relógio fica pendente, cálculos bloqueados | `PENDING` nunca convertido a zero; dependentes bloqueados (confirmado em `bracketEngine.ts`/`valorApuradoRepository.ts`) | **COB** |
+| (b) fontes consultadas + horário da última tentativa exibidos | **não existe** — nenhuma estrutura registra tentativas de obtenção além do valor final promovido | **D15-B** |
+| (c) governança do MANUAL_FALLBACK (dias, identidade, fonte/justificativa, doc, autor+timestamp, aviso a gestores) | implementado em `demurrage_fallback_manual_justificativas`/`avisos`, com validação de membership e evidência | **COB** |
+| (d) fonte mais forte chega depois do fallback manual → não substitui silenciosamente, registra divergência, encaminha à gestão | **defeito**: a promoção por prioridade (`FIELD_OBSERVATION_SOURCE_PRIORITY`) substitui automaticamente sempre que a nova prioridade for ≥, **sem essa exceção** para o caso em que o valor vigente veio de `manual_fallback` | **D15-B** |
 
-## 3. Inventário dos mecanismos de exceção existentes
+### 31.5 — Empty Return antes da descarga
+> Um Empty Return antes da descarga é inválido. Priora deve: impedir
+> fechamento automático; registrar uma inconsistência; enviar o caso para a
+> gestão; enviar o caso para verificação de tracking. Preservar a observação
+> bruta recebida para auditoria, mas não promovê-la como retorno efetivo
+> válido até resolução.
 
-| Artefato | Tabela(s) | Granularidade | Estados | Resolução | Autor registrado |
-|---|---|---|---|---|---|
-| Pendência de registro | `demurrage_pendencias` | processo+contêiner+tipo | `aberta`/`resolvida` | sim (sem `resolvido_por`) | não |
-| Pendência de Shipping Instructions | `si_pendencias` | processo | 8 tipos | sim | sim (`resolvido_por`) |
-| Divergência de Free Time | `ft_divergencias` + eventos | processo+contêiner | `aberta`/`reconhecida`/`resolvida`/`reaberta` | sim, com histórico de ocorrência (`ocorrencia_seq`) | sim |
-| Pendência de VesselCall | `vessel_call_pendencias` | vessel call | 4 tipos | parcial — `atracacao_ambigua` nunca resolvida | não |
-| Incidente de sincronização de VesselCall | `vessel_call_sync_incidents` | vessel call | append-only | n/a (histórico, não resolução) | sim |
-| Incidente de tracking | `tracking_incidents` | alvo de tracking | único aberto por alvo, `seq` | sim | sim |
-| Entrega de alerta de tracking | `tracking_alert_deliveries` | alerta | `PENDING`/`SENT`/`FAILED` | automática, **sem claim** | n/a |
-| Evento de fechamento | `closing_events` | processo | 14 `tipo_evento`, append-only | n/a (histórico) | sim |
-| Reabertura | `reaberturas` | processo | `SOLICITADA`/`AUTORIZADA`/`RECALCULADA`/`REFECHADA` | sim, **sem unicidade** | sim |
-| Minuta | `minutas` | processo | `RECEBIDA`/`VALIDADA`/`REJEITADA` | sim, unicidade parcial | sim |
-| Avisos de fallback manual | `demurrage_fallback_manual_avisos` | observação | fila com tentativas | sim, com teto | n/a |
-| Outbox pós-commit | `demurrage_pos_commit_outbox` | evento de domínio | `pendente`/`processando`/`concluido`/`falha` | automática, claim com geração | n/a |
-| Outbox de recálculo | `recalculo_outbox` | contêiner+tipo | `PENDING`/`PROCESSING`/`DONE`/`FAILED`, máx. 5 tentativas | automática | n/a |
-| Invalidação de responsabilidade | evento `RESPONSABILIDADE_INVALIDADA` em `closing_events` + projeção nula | contêiner | trigger de banco | automática (gatilho) | sistema |
-| Valor indisponível | `valores_apurados` forma `UNAVAILABLE` | contêiner+tipo clock | nunca convertido a zero | recalculado | sistema |
+**Código real hoje:** existe um estado `INVALID` em `relogios` que, por
+construção, mantém o lifecycle em `INDETERMINADA`/pendência de dados
+(bloqueia fechamento de forma indireta, via o gate geral de fechamento que
+exige ausência de `INDETERMINADA`). A observação bruta já é preservada
+(ledger append-only `field_observations`). **Porém** não existe: um registro
+de inconsistência nomeado e consultável como artefato próprio; envio
+explícito a gestão; envio explícito para verificação de tracking. Como o
+Blueprint exige os quatro efeitos como conjunto, e três dos quatro não
+existem como mecanismo observável, **este caso é reclassificado de "coberto
+estruturalmente" (como constava em `84ccb34`) para não coberto.**
+**Classificação: D15-B** (bloqueio indireto de fechamento já existe e deve
+ser preservado; faltam os três efeitos explícitos).
 
-**Observação de vocabulário:** três famílias de estado coexistem sem
-normalização — português livre (`aberta`/`resolvida`), enum maiúsculo
-(`PENDING`/`PROCESSING`/`DONE`/`FAILED`), e estados de ciclo de vida
-compostos (`SOLICITADA`/`AUTORIZADA`/...). Isso é tratado em §10 como gap de
-inventário, não como lacuna funcional.
+### 31.6 — Empty Return retroativo (tardio)
+> Quando o armador reporta depois um Empty Return retroativo: usar a data do
+> evento para fechar os relógios operacionalmente; recalcular a apuração;
+> preservar os cálculos anteriores no histórico; uma minuta válida, quando
+> recebida, prevalece como a data final de fechamento. **Este é um evento
+> tardio válido, não automaticamente uma violação de cronologia.**
 
-## 4. Matriz de comportamento atual (por caso investigado — áreas 1–2)
+**Código real:** hoje não há distinção entre "Empty Return tardio mas
+cronologicamente válido" (este caso) e "Empty Return antes do Gate Out"
+(violação real, ver 31.7/E-chronology abaixo) — ambos passam pelo mesmo
+caminho de promoção por prioridade sem checagem de ordem de eventos.
+O comportamento de recalcular e preservar histórico já existe genericamente
+(pipeline de `recalcularApuracao.ts` + append-only de `valores_apurados`),
+mas **a modelagem explícita deste caso como "válido por padrão, sujeito
+apenas a prevalência de minuta posterior"** não existe — é indistinguível,
+no código atual, de uma violação de cronologia. **Classificação: D15-B**
+(precisa existir como caminho positivo e separado da pendência de cronologia
+de §4/R39-R40).
 
-Legenda de classificação: **COB** = já corretamente coberto; **DEF** =
-defeito existente a corrigir; **D15** = implementar em D15 (pendente de
-aprovação); **EXT** = depende de módulo externo, deferido.
+### 31.7 — Mudança retroativa de tracking
+> Mudanças retroativas: recalculam relógios e valores enquanto o processo
+> está aberto; permanecem registradas em histórico; nunca modificam
+> silenciosamente um processo concluído; exigem reabertura autorizada por
+> gestor quando afetam financeiramente um processo concluído.
 
-| # | Caso | Estado persistido hoje | Pendência/incidente? | Bloqueia | Continua | Quem resolve | Recalcula? | Classe |
-|---|---|---|---|---|---|---|---|---|
-| 1 | Descarga ausente | `relogios` sem linha / `PENDING` | não (estado, não pendência) | tarifa, fechamento | nada a fazer até evento | tracking/manual fallback | n/a | COB |
-| 2 | House FT ausente | `PENDING` em `relogios`; `demurrage_pendencias` se aplicável | sim (SI) | apuração do clock House | Master continua | ANALYST/MANAGER via fallback ou SI | sim, ao promover | COB |
-| 3 | Master FT ausente | idem, `masterFreeTimeService` | sim (`ft_divergencias` se houver conflito) | apuração do clock Master | House continua | idem | sim | COB |
-| 4 | Tipo de contêiner ausente | `container_type_id` nulo | `demurrage_pendencias` (`tipo_ausente`) | só tarifa | relógios continuam | ANALYST via registro/tracking | sim, ao resolver | COB |
-| 5 | Armador ausente | `armador_id` nulo | `demurrage_pendencias` (`armador_ausente`) | tarifa do armador | demais continuam | ANALYST | sim | COB |
-| 6 | Armador não cadastrado | idem | `armador_nao_cadastrado` | idem | idem | ANALYST/ADMIN (cadastro) | sim | COB |
-| 7 | MBL/alvo de tracking ausente | `demurrage_pendencias` (`mbl_ausente`) | sim | tracking automático | fallback manual permitido | ANALYST | sim ao resolver | COB |
-| 8 | Tarifa do cliente indisponível | `valores_apurados` forma `UNAVAILABLE` | não há pendência dedicada hoje | fechamento (gate "valor confirmado") | demais clocks continuam | — (depende de condição comercial) | sim | **DEF** (ver D-6, falta pendência explícita) |
-| 9 | Tarifa/faixa do armador indisponível | idem `UNAVAILABLE`, nunca zero | não | idem | idem | — | sim | COB (o "nunca zero" é garantido; falta só sinalização dedicada, mas resultado é seguro) |
-| 10 | Conflito House/Master/SI | `ft_divergencias` (aberta/reaberta/atualizada/resolvida) | sim | nada bloqueia automaticamente — ambos valores convivem até convergência | sim | responsável + MANAGER/ADMIN | sim | COB |
-| 11 | Conflito de POD/vessel/voyage/identidade | `vessel_call_pendencias` (`pod_divergente`, `identidade_ambigua`) | sim | associação de evento | tracking compartilhado continua | ANALYST/MANAGER (sem rota de ação, só serviço) | sim ao associar | COB (mecanismo existe; **ação sem rota** é lacuna de interface, não de dado — D15 caso A-1) |
-| 12 | Fonte não reconhecida/suportada | rejeitada na ingestão (validação de contrato) | não persiste pendência — apenas erro de validação | ingestão do evento | demais eventos continuam | n/a (erro de payload) | não | COB |
-| 13 | Fallback manual com evidência completa | `demurrage_fallback_manual_justificativas` + aviso a MANAGER/ADMIN | sim (aviso) | nada | sim | MANAGER/ADMIN (ciente) | sim | COB |
-| 14 | Fallback manual sem evidência completa | rejeitado na validação do serviço (400) | não persiste | a própria ação | n/a | — | não | COB |
-| 15 | Descarga recebida após Gate Out | aceito e promovido se prioridade de fonte for suficiente; **sem checagem cronológica** | não | não bloqueia nada | sim, segue normalmente | — | sim (silenciosamente) | **DEF** (D-7 / caso E-2) |
-| 16 | Descarga corrigida após clocks/valores existirem | promoção por prioridade ≥, recalcula pipeline completo | não, se FINAL; se OPEN, recalcula sem aviso especial | nada, se OPEN | sim | — | sim, se OPEN; **NO-OP silencioso se FINAL** | **DEF** (D-8, caso central do núcleo pós-FINAL) |
-| 17 | Gate Out antes de descarga | aceito sem validação cronológica no motor | não | não | sim | — | sim | **DEF** (E-2) |
-| 18 | Empty Return antes de Gate Out | aceito sem validação cronológica | não | não | sim | — | sim | **DEF** (E-2) |
-| 19 | Empty Return corrigido/rejeitado | promovido por prioridade; rejeição manual sem fluxo dedicado | não | — | — | — | sim | D15 (E-2 cobre correção cronológica; rejeição explícita é decisão D-9) |
-| 20 | SI recebido após Master/House | reavaliado a cada tick (`ingestaoShippingInstructions.ts`) | sim, se tipo de associação exigir | associação | demais continuam | ANALYST | sim | COB |
-| 21 | Master/House recebido após fallback manual | promoção por prioridade (fontes de documento > manual) | não, promove silenciosamente | — | sim | — | sim | COB (prioridade de fonte é a regra correta; comportamento determinístico) |
-| 22 | Evento de tracking do armador após evidência manual | prioridade `tracking_service` 100 > `manual_fallback` 70 → promove | não | — | sim | — | sim | COB |
-| 23 | Observação antiga chega após uma mais nova já confirmada | promoção por prioridade ≥ **sem comparar `observado_em`** — pode substituir um valor mais novo por um mais antigo da mesma fonte ou de fonte com prioridade igual/maior | não | — | sim | — | sim | **DEF** (D-9, risco de regressão de dado) |
-| 24 | Processo reaberto após evento/valor mais recente já existir | `autorizarReabertura` não verifica se há evento posterior ao ponto de reabertura | não | — | sim, mas pode descartar contexto | MANAGER/ADMIN | sim | **DEF** (D-10) |
+Desdobrado em dois subcasos pela própria condição do Blueprint ("enquanto o
+processo está aberto" vs. "processo concluído"):
 
-## 5. Matriz de exceções não cobertas (consolidada, com classificação final)
+| Subcaso | Código real | Classificação |
+|---|---|---|
+| (a) processo OPEN: recalcula relógios/valores, mantém histórico | `recalcularApuracao.ts` já recalcula via pipeline transacional único; `valores_apurados`/`relogios` append-only preservam histórico | **COB** |
+| (b) processo FINAL: nunca modifica silenciosamente, exige reabertura autorizada | **defeito central**: `recalcularApuracao.ts` trata FINAL como NO-OP e devolve `skipped`, que o chamador trata como sucesso — não há sinalização nem exigência de reabertura | **D15-A** |
 
-| ID | Caso | Classificação final | Justificativa |
+### 31.8 — Tabela tarifária incompleta
+> Nunca selecionar uma tarifa semelhante por aproximação. Os dias continuam
+> sendo apurados, enquanto o valor permanece indisponível ou provisório
+> conforme o status da tabela tarifária. Tabelas parciais permanecem
+> `ESTIMATED_PROVISIONAL` até validação.
+
+**Código real:** `bracketEngine.ts` nunca aproxima — gap de faixa produz
+`UNAVAILABLE`; o motor nunca busca "a faixa mais próxima". A nomenclatura
+`ESTIMATED_PROVISIONAL` já existe como uma das formas de
+`valores_apurados` e é usada exatamente para tabela com validade não
+comprovada (`TARIFF_VERSION_NOT_PROVEN`). Os dias são sempre apurados
+independentemente do status monetário (relógios e valores são domínios
+separados). **Classificação: COB.**
+
+### 31.9 — Tipo de contêiner não reconhecido
+> Preservar o código original, manter os relógios ativos e bloquear apenas a
+> seleção de tarifa. Um gestor aprova um novo mapeamento antes do cálculo
+> definitivo.
+
+**Código real:** `demurrage_pendencias` tipo `tipo_nao_reconhecido`; código
+original preservado (não sobrescrito); relógios continuam normalmente;
+apenas a seleção de tarifa fica bloqueada até resolução. **Classificação: COB.**
+
+### 31.10 — Moedas diferentes
+> Manter moedas diferentes separadas. Nunca produzir um total combinado sem
+> taxa de câmbio, data e fonte explícitas.
+
+**Código real:** `moeda` é campo por linha de `valores_apurados`; não existe
+nenhum caminho de código que some valores de moedas diferentes em um total
+único — a mistura de moeda dentro do mesmo cálculo de faixa hoje lança
+exceção (comportamento a corrigir por ser um abort de transação inteira, não
+por produzir total incorreto — ver §6/R29). Nenhuma conversão automática de
+câmbio existe em lugar algum do código. **Classificação: COB** quanto ao
+enunciado do Blueprint (nunca combina moedas sem taxa/data/fonte); o defeito
+do abort de transação é tratado separadamente em D15-C (R29) por ser um
+problema de robustez, não de regra de negócio.
+
+### 31.11 — Divergência financeira HeadCargo
+> Divergência financeira é informação de gestão. Demurrage exibe o estado do
+> HeadCargo, mas não altera cobrança, pagamento ou saldo, e não retorna o
+> processo à fila operacional só por isso. **Deferir este item para a fase
+> de integração externa.**
+
+O próprio Blueprint determina o deferimento. **Classificação: DEFER
+(integração externa)** — nenhuma integração HeadCargo existe neste
+repositório; nada a implementar em D15.
+
+### 31.12 — Reabertura de processo concluído
+> Exige MANAGER ou outro papel explicitamente autorizado; justificativa;
+> histórico preservado; valores anteriores retidos para comparação.
+
+**Código real:** o mecanismo existe (`reaberturas`,
+`autorizarReabertura`/`solicitarReabertura`, histórico append-only em
+`valores_apurados`/snapshots), mas com defeitos de integridade: RBAC
+resolvido pelo papel informado pelo chamador em vez de membership real;
+fluxo não-transacional; sem proteção contra solicitação/reabertura
+duplicada. O enunciado literal do Blueprint ("exige MANAGER... justificativa
+... histórico preservado") é atendido em espírito, mas não com a robustez
+transacional/RBAC que o próprio sistema já aplica em outros fluxos (ex.:
+decisão de responsabilidade). **Classificação: D15-A.**
+
+### 31.13 — Tracking suspenso após 30 dias
+> Tracking automático para conforme o Capítulo 16. O processo permanece
+> aberto. Gestores podem realizar atualizações manuais de tracking sujeitas
+> ao cooldown aprovado.
+
+Desdobrado porque o código cobre uma parte e deixa a outra sem ponto de
+entrada:
+
+| Subcaso | Código real | Classificação |
+|---|---|---|
+| (a) suspensão automática após 30 dias, processo permanece aberto | `MAX_AUTOMATIC_TRACKING_WINDOW_REACHED` em `cadencePolicy` | **COB** |
+| (b) atualização manual por gestor sob cooldown aprovado | `podeAtualizarManual` (MANAGER/ADMIN, cooldown de 2h) **existe como função pura, mas sem nenhum serviço ou caminho de chamada** — função órfã, nunca invocada | **D15-B** (expor como função de serviço chamável, sem rota pública — consistente com a decisão de permanecer em nível de serviço) |
+
+### 31.14 — Minuta divergente do tracking
+> Quando uma minuta válida contém uma data diferente do tracking: preservar
+> as duas evidências; usar a data da minuta como `effective_return_date`
+> para o fechamento final; se isso mudar um processo concluído ou gerar
+> custo, enviar o caso à gestão para reabertura e revisão. **Não modelar a
+> divergência como simples rejeição.**
+
+**Código real:** para processo OPEN, `minutaValidation.ts` já usa a data da
+minuta validada como `effective_return_date` (comportamento correto, já
+alinhado ao enunciado). Para processo **FINAL**, se a data validada diverge
+da data congelada, o código hoje **apenas retorna `exige_reabertura` sem
+registrar evento/pendência** — não há um registro formal de que "a minuta
+diverge do tracking e por isso a reabertura foi exigida", e a evidência de
+tracking não é explicitamente preservada lado a lado com a evidência da
+minuta no mesmo registro consultável. Isso não é "modelar como rejeição
+simples" — é pior: não modela a divergência como artefato algum. **Correção
+necessária:** registrar a divergência (ambas as evidências) antes/junto do
+`exige_reabertura`, e usar esse registro para rotear à gestão.
+**Classificação: D15-A.**
+
+## 4. Registro consolidado de casos e contagens
+
+O registro completo (66 casos, cobrindo as subseções do Capítulo 31 — já
+detalhadas em §3 — mais as áreas 1–10 do escopo mandatório de investigação)
+está tabulado abaixo. Todas as contagens de §1 e §9 derivam exatamente desta
+tabela — nenhum número é estimado separadamente.
+
+### 4.1 Mapeamento de desdobramento em relação à revisão anterior (47 → 66)
+
+A revisão anterior (`84ccb34`) contava 47 casos porque fundia em uma única
+linha subcasos que o texto exato do Blueprint trata separadamente:
+31.4 (1 linha → 4 linhas, R04–R07), 31.5 (1 linha, reclassificada, R08),
+31.6/31.7 (fundidos em "evento retroativo" → 3 linhas distintas, R09–R11),
+31.13 (1 linha → 2 linhas, R17–R18), 31.14 (1 linha, agora com defeito
+preciso, R19). O restante do registro (R20–R66) preserva a substância da
+revisão anterior, com reclassificação onde uma decisão antes pendente agora
+está fixada (§2).
+
+### 4.2 Registro (R01–R19 = Capítulo 31, detalhado em §3; R20–R66 = demais áreas mandatórias)
+
+| ID | Caso | Área | Classificação |
 |---|---|---|---|
-| E-1 | Falta de "fontes consultadas / última tentativa" para FT ausente (31.4) | **D15** (pendente aprovação D-11) | Estrutura de dado nova e pequena (coluna/jsonb em pendência existente); não exige tabela nova. |
-| E-2 | Validação cronológica no motor (Gate Out < descarga; ER < Gate Out) | **D15** (pendente aprovação D-12) | Regra determinística, sem dependência externa; decisão necessária apenas sobre a ação ao detectar violação (pendência vs. incidente vs. bloqueio). |
-| E-3 | Rollback para VesselCall anterior por evento tardio | **correct existing defect** (D-13) | `vesselCallRepository.associarContainer` não verifica recência; comportamento gera ping-pong de associação. |
-| E-4 | Persistência de divergência de referência do armador (`mismatchCarrier`) | **D15** (pendente aprovação D-14) | `sincronizarReferencia` já calcula o valor; falta persistir/expor. |
-| E-5 | Pendência para condição comercial ausente (cliente sem modelo aplicável) | **D15** (pendente aprovação D-15) | Hoje bloqueia fechamento silenciosamente (`valor_cliente_nao_confirmado`) sem pendência nomeada. |
-| E-6 | Conflito de mesma fonte (`conflitoMesmaFonte`) não persistido | **correct existing defect** (D-16) | Calculado em `registrarProcessoDemurrage.ts` mas devolvido só ao chamador, nunca gravado. |
-| E-7 | Divergência de fonte House (quando só House conflita, não House×Master) | **decisão de negócio** (D-17) | Sistema atual só modela divergência Master×SI; não há decisão se House-vs-House merece artefato próprio. |
-| E-8 | Mudança pós-FINAL em descarga/FT/tipo/tracking_return | **correct existing defect** (D-8, núcleo) | Gatilho de banco só protege `effective_return_date`; motor trata recálculo em processo FINAL como NO-OP "sucesso". |
-| E-9 | Minuta validada com data diferente da congelada em processo FINAL | **correct existing defect** (D-2) | Hoje retorna `exige_reabertura` sem registrar evento/pendência — perde rastro de por que a reabertura foi necessária. |
-| E-10 | `validarMinuta` não-transacional | **correct existing defect** (D-4) | Crash entre `marcarValidada` e atualização de contêiner deixa `effective_return_date` setada com relógios desatualizados; o tick diário ignora contêineres já retornados. |
-| E-11 | `finalizarProcesso` sem trava/condição atômica | **correct existing defect** (D-5) | Dupla finalização concorrente pode inserir `fechamentos`/eventos duplicados. |
-| E-12 | `autorizarReabertura` não-transacional, sem checagem de estado prévio | **correct existing defect** (D-10) | Mesma classe de risco do D-4/D-5. |
-| E-13 | Reaberturas duplicadas / sem RBAC na solicitação | **correct existing defect** (D-18) | `solicitarReabertura` não valida papel nem unicidade; `reaberturas` sem constraint de unicidade. |
-| E-14 | `atracacao_ambigua` nunca resolvida | **correct existing defect** (D-19) | `resolverPendencias` exclui esse tipo por design; `resolverPendencia(hash)` existe mas não tem chamador — órfão permanente. |
-| E-15 | `tipo_selecao_sem_observacao` nunca resolvida | **correct existing defect** (D-20) | Criada só por backfill de migration (0030); nenhum caminho de resolução no código atual. |
-| E-16 | Imutabilidade/correção de tabela tarifária | **decisão de negócio** (D-21) | `tariff_tables`/`tariff_brackets` são mutáveis; hash de input exclui conteúdo da faixa — correção in-loco não gera novo cálculo. Decisão: versionamento obrigatório vs. correção direta com trigger de recálculo. |
-| E-17 | Overlap silencioso de faixas tarifárias | **correct existing defect** (D-22) | `bracketEngine.ts` usa o primeiro match em caso de overlap; deveria ser erro de configuração. |
-| E-18 | Moeda mista lança exceção que aborta a transação de recálculo inteira | **correct existing defect** (D-23) | Deveria produzir `UNAVAILABLE` localizado, não abortar todo o pipeline de apuração do processo. |
-| E-19 | Linhas presas em `PROCESSING` após crash na última tentativa | **correct existing defect** (D-24) | `recalculo_outbox`, `demurrage_fallback_manual_avisos`, `ft_divergencia_entregas`: reclaim só ocorre com `tentativas < max`; na última tentativa o crash deixa a linha presa e invisível (read-models só contam `FAILED` como esgotado). |
-| E-20 | Outbox pós-commit sem teto de tentativas | **correct existing defect** (D-25) | `demurrage_pos_commit_outbox` não tem limite de tentativas — retry infinito em caso de falha persistente. |
-| E-21 | Entrega de alerta de tracking sem claim | **correct existing defect** (D-26) | Múltiplas instâncias do scheduler podem enviar o mesmo alerta duas vezes. |
-| E-22 | Entrada manual de descarga (fonte não aceita hoje) | **impossible without an external source** / decisão de negócio (D-27) | `FONTES_POR_CAMPO` não aceita descarga via registro manual — decisão se deve ser permitido com governança equivalente ao fallback de FT. |
-| E-23 | Divergência HeadCargo (31.11) | **defer to integration phase** | Dependência explícita de módulo externo não presente neste repositório. |
-| E-24 | Cobrança confirmada do armador substituindo estimativa | **defer to integration phase** | Depende de fonte financeira externa (nenhum código atual seta `CONFIRMED`/`custo_real_confirmado_ref`). |
-| E-25 | Sugestão de possível responsabilidade (G-C0) | **defer to integration phase** (depende do módulo Liberação) | Confirmado ausente desde D14 (b137a07, §4). |
-| E-26 | Exposição de ação (rotas) para pendências/divergências/reaberturas | **defer to frontend** (recomendação: manter D15 em nível de serviço) | Toda mutação excepcional hoje só existe como função de serviço, sem rota HTTP (exceto captura de e-mail). Decisão D-28 sobre se D15 deve abrir rotas mínimas de ação. |
-| E-27 | Exposição ao Portal do Cliente | **defer to Portal** | Fora do escopo explícito da tarefa. |
-| E-28 | ETA/chegada antecipada de navio | **impossible without an external source** | Provedor de tracking atual não fornece esse dado no contrato existente. |
+| R01–R19 | Ver §3 (Capítulo 31 completo) | Blueprint Cap. 31 | 12 COB · 6 D15 (1-A, 5-B) · 1 DEFER |
+| R20 | Master FT ausente | 1 | COB |
+| R21 | House FT ausente | 1 | COB |
+| R22 | Tipo de contêiner ausente (sem observação) | 1 | COB |
+| R23 | Armador ausente | 1 | COB |
+| R24 | Armador não cadastrado | 1 | COB |
+| R25 | MBL/alvo de tracking ausente | 1 | COB |
+| R26 | Tarifa do cliente indisponível (condição comercial ausente) | 1, 7 | D15-B |
+| R27 | Tarifa/faixa do armador indisponível (gap) | 7 | COB |
+| R28 | Overlap de faixas tarifárias | 7 | D15-C |
+| R29 | Moeda mista aborta toda a transação de apuração | 7 | D15-C |
+| R30 | Tabela/faixa tarifária mutável após uso (imutabilidade/versionamento/hash) | 7 | D15-C |
+| R31 | Valor zero de tarifa válido vs. valor negativo rejeitado | 7 | COB |
+| R32 | Confirmação de cobrança do armador substituindo estimativa | 7 | DEFER (integração) |
+| R33 | Valor desatualizado com relógio fresco / valor fresco com relógio desatualizado | 7 | COB |
+| R34 | Mais de um motor comercial ativo / motor ausente | 7 | COB |
+| R35 | Conflito Master×SI (divergência de Free Time) | 1, 2 | COB |
+| R36 | Conflito apenas entre fontes House (sem Master) | 1, 2 | D15-B |
+| R37 | Conflito de mesma fonte (`conflitoMesmaFonte`) não persistido | 1, 2 | D15-B |
+| R38 | Divergência de referência do armador (`mismatchCarrier`) não persistida | 1, 6 | D15-B |
+| R39 | Gate Out antes da descarga | 2 | D15-B |
+| R40 | Empty Return antes do Gate Out (violação real, distinta de 31.6) | 2 | D15-B |
+| R41 | Observação da mesma fonte: a mais antiga chegando depois não substitui a mais nova já selecionada | 2, 8 | D15-B |
+| R42 | Associação ambígua de VesselCall (`identidade_ambigua`) | 6 | COB |
+| R43 | POD divergente mesma autoridade (`pod_divergente`) | 6 | COB |
+| R44 | Rollback para VesselCall anterior por evento tardio/cache | 6 | D15-B |
+| R45 | `atracacao_ambigua` nunca resolvida (órfã permanente) | 6, 10 | D15-B |
+| R46 | Tracking individual obrigatório após descarga de destino | 6 | COB |
+| R47 | Multi-contêiner: contêiner crítico nunca escondido por um concluído | 5 | COB |
+| R48 | Multi-contêiner: moedas/FT diferentes por contêiner no mesmo processo | 5 | COB |
+| R49 | Rodada compartilhada de VesselCall com uma referência falha (fencing, 2 tentativas) | 6, 8 | COB |
+| R50 | `applyObservation` sem lock/transação na ingestão | 8 | D15-B |
+| R51 | `validarMinuta` não-transacional | 3, 8 | D15-A |
+| R52 | `finalizarProcesso` sem trava/condição atômica (double-finalize) | 4, 8 | D15-A |
+| R53 | `autorizarReabertura` não-transacional, sem checagem de estado/duplicidade | 4, 8 | D15-A |
+| R54 | RBAC de fechamento/reabertura resolvido por papel informado pelo chamador, não por membership | 4, 9 | D15-A |
+| R55 | Reconhecimento/resolução de divergência de FT sem RBAC/motivo obrigatório | 9 | D15-B |
+| R56 | `tipo_selecao_sem_observacao` nunca resolvida (órfã permanente) | 10 | D15-B |
+| R57 | Linhas presas em `PROCESSING` na última tentativa (`recalculo_outbox`, avisos fallback, entregas FT) | 8 | D15-C |
+| R58 | Outbox pós-commit sem teto de tentativas | 8 | D15-C |
+| R59 | Entrega de alerta de tracking sem claim (double-send) | 8 | D15-C |
+| R60 | Exposição ao CLIENT (Rocket interna, diferença potencial, evidência de responsabilidade, incidentes, erros técnicos) | 9 | COB |
+| R61 | Vocabulário de status inconsistente entre artefatos de pendência | 10 | D15-B |
+| R62 | Entrada manual de descarga (decisão fixada: permanece proibida) | 1 | COB |
+| R63 | Sugestão de possível responsabilidade (depende de Liberação) | — | DEFER (integração) |
+| R64 | ETA/chegada antecipada | 6 | IMPOSSÍVEL sem fonte externa |
+| R65 | Exposição a rotas públicas de mutação para ações excepcionais | — | DEFER (frontend) |
+| R66 | Exposição ao Portal do Cliente | — | DEFER (Portal) |
 
-## 6. Grafo de recálculo e invalidação
+### 4.3 Totais
 
-| Mudança na origem | Relógios | Valores apurados | Responsabilidade | Apuração/Snapshot | Elegibilidade de fechamento | Lifecycle | Prioridade/Indicadores | Timeline |
-|---|---|---|---|---|---|---|---|---|
-| Data de descarga | recalculado | recalculado (nova base de dias) | invalidado se já havia decisão (trigger `responsabilidade_invalidar_por_relogio`) | novo snapshot no próximo fechamento | reavaliada | reclassificado | recalculado no próximo ciclo | evento registrado só via ingestão, não via correção pós-FINAL (ver D-8) |
-| House FT | recalculado | recalculado | invalidado se decisão existente dependia do clock | idem | reavaliada | idem | idem | registrado via `recalculo_outbox` |
-| Master FT | recalculado | recalculado | idem | idem | reavaliada | idem | idem | idem |
-| Tipo de contêiner | não afeta relógio | recalculado (tarifa) | não diretamente | idem | reavaliada | não | idem | registrado via pos-commit outbox |
-| Modelo comercial do cliente | não afeta relógio | recalculado (termo/motor comercial) | não diretamente | idem | reavaliada | não | idem | **sem gatilho dedicado** — depende de novo evento de origem para disparar recálculo (gap, ver D-29) |
-| Tarifa/versão do cliente | não afeta relógio | recalculado **só se novo hash de input mudar** | não | idem | reavaliada | não | idem | **sem gatilho de correção in-loco** (D-21/E-16) |
-| Tarifa/versão do armador | idem | idem | não | idem | reavaliada | não | idem | idem |
-| Data de retorno efetiva (FINAL) | guardado por trigger (`containers_effective_final_guard`) | bloqueado por trigger `valores_apurados_final_guard` | guardado (`containers_responsabilidade_projecao_guard` exige reabertura) | snapshot preservado | fechamento preservado até reabertura explícita | preservado | preservado | `RESPONSABILIDADE_INVALIDADA` só se decisão afetada |
-| Valor financeiro selecionado | não aplicável | versão `OPEN→FINAL/SUPERSEDED` append-only | invalidado por trigger `responsabilidade_invalidar_por_valor` se decisão referenciava o id de valor do cliente | novo snapshot | reavaliada | não | idem | sim, evento de invalidação |
-| Decisão de responsabilidade | não afeta relógio | não afeta valor apurado diretamente | nova versão append-only; FINAL exige reabertura (`EXIGE_REABERTURA`) | snapshot no fechamento | reavaliada (`responsabilidade != EM_ANALISE` é gate) | não | sim | pos-commit outbox dispara aviso |
-
-**Reparo pós-crash pelo outbox/scheduler:** confirmado parcialmente.
-`demurrage_pos_commit_outbox` e `recalculo_outbox` retomam itens `pendente`/`PENDING`
-após reinício (claim por geração/token), mas **não** reparam o caso em que a
-própria transação de origem (ex.: `validarMinuta`) já fez parte do trabalho
-fora da transação principal e falhou no meio (D-4). O outbox repara seu
-próprio domínio (recálculo agendado), não o domínio da chamada que deveria
-tê-lo enfileirado antes de falhar. Isso é consistente com os defeitos D-4/D-5
-listados acima — o outbox funciona corretamente para o que foi de fato
-enfileirado; o problema é a janela entre a leitura e a escrita que antecede o
-enfileiramento.
-
-## 7. Matriz de reabertura
-
-| Fato | Pode mudar com processo FINAL? | Força reabertura? | Preserva FINAL com histórico apenso? | Quem autoriza | Justificativa/evidência obrigatória hoje? | Duplicidade prevenida? | Pode retornar a FINAL com segurança? |
-|---|---|---|---|---|---|---|---|
-| Descarga (correção tardia) | Tecnicamente sim (sem guarda de trigger) | Deveria, mas hoje **não força** (D-8) | Não — sobrescreve silenciosamente | ninguém formalmente — qualquer ingestão | não | n/a | **não** — estado pode ficar inconsistente com o fechamento já emitido |
-| Empty Return (correção tardia) | Guardado por trigger em `effective_return_date` | sim, via `containers_effective_final_guard` | não (trigger bloqueia escrita direta) | fluxo de reabertura | sim, via `solicitarReabertura` | **não** (sem unicidade) | sim, via `autorizarReabertura` → `RECALCULADA` → `REFECHADA` |
-| Tarifa (correção) | Sim, tabela é mutável | **não** — correção in-loco não aciona nada | não | n/a | não | n/a | indeterminado — depende de decisão D-21 |
-| Free Time (correção) | Sim, via `recalculo_outbox` | **não automaticamente** se FINAL (NO-OP) | não | n/a | não | n/a | mesmo defeito D-8 |
-| Invalidação de responsabilidade | Guardado (`EXIGE_REABERTURA`) | sim | sim — versão anterior preservada append-only | MANAGER/ADMIN (nova decisão) | sim (`decidirResponsabilidade`) | sim (advisory lock por contêiner) | sim |
-| Cobrança confirmada do armador substituindo estimativa | depende de fonte externa | indeterminado | indeterminado | n/a | n/a | n/a | **defer to integration phase** |
-| Minuta divergente descoberta após fechamento | Sim, mas sem registro de evento (D-2) | retorna `exige_reabertura` | não — falta o evento | fluxo de reabertura (uma vez acionado) | sim, no fluxo de reabertura | **não** (sem unicidade em `reaberturas`) | sim, mas a causa raiz (minuta) não fica auditada |
-| Rollback de tracking/voyage rollover | Sim, sem checagem de recência (D-13) | **não** | não | n/a | não | n/a | indeterminado |
-| Correção manual após FINAL | Via `manual_fallback`, sem checagem de FINAL no serviço de registro para todos os campos | parcialmente | não uniformemente | ANALYST/MANAGER/ADMIN (governança de fallback) | sim (justificativa+evidência) | n/a | indeterminado |
-
-**Síntese:** a única trilha de reabertura madura e segura é a de
-**invalidação de responsabilidade** (D11, já congelada e com trigger de
-banco). Toda correção de fato "físico" (descarga, FT, tipo, tracking) após
-FINAL carece de uma política uniforme — esse é o maior item de decisão de
-D15 (D-30, §18).
-
-## 8. Matriz de concorrência e recuperação
-
-| Caminho de mutação | Chave de idempotência | Lock/constraint | Limite transacional | Recuperação de crash | Fencing | Limite de retry | Histórico append-only |
-|---|---|---|---|---|---|---|---|
-| Registro de processo | não há idempotency key externa; depende de advisory lock | advisory lock (processo, depois contêineres ordenados) | sim, única transação | reentrada idempotente por recomputar estado | não aplicável (single-shot) | n/a | pendências sim; processo não |
-| Ingestão de documento/SI | reavaliação idempotente a cada tick | nenhum lock explícito citado no código revisado | por item | reentrância segura (reavalia) | não | não | `si_pendencias` sim |
-| Ingestão de tracking | promoção por prioridade (idempotente na prática, mas ver D-9) | `applyObservationComClient` usa `FOR UPDATE`; `applyObservation` (pool) **não** usa lock | `applyObservation` não é transacional — **DEF** (D-31) | parcial | não | não | `field_observations` sim |
-| Rodada de VesselCall compartilhada | `vessel_call_rodadas.epoca` como fencing | sim | por rodada | sim, campo `epoca` reconhece rodada obsoleta | **sim** (`epoca`) | 2 tentativas por rodada | `vessel_call_sync_incidents` sim |
-| Promoção de observação | prioridade ≥ (determinística) | `FOR UPDATE` só na variante com client | ver acima | ver acima | não | n/a | append-only |
-| Recálculo de relógio | hash de input | advisory lock por contêiner (`recalcularApuracaoProcesso`) | sim, pipeline único | outbox reagenda | não | 5 tentativas (`recalculo_outbox`) | `relogios`/`valores_apurados` append-only (via FINAL/SUPERSEDED) |
-| Apuração tarifária | hash de input (exclui faixa, D-21) | mesmo lock do recálculo | sim | idem | não | idem | sim |
-| Decisão de responsabilidade | versão append-only + `substitui_decisao_id` | advisory lock por contêiner | sim | n/a (uma escrita) | não | n/a | sim |
-| Fechamento de processo | **nenhuma** — check-then-act fora de transação (D-5) | **nenhum** | **não** | **não** — pode duplicar | não | n/a | `fechamentos` sem unicidade |
-| Reabertura | **nenhuma** (D-18) | **nenhum** | **não** (D-10) | parcial | não | n/a | `reaberturas` sem unicidade |
-| Entrega de notificação | nenhuma | nenhum | n/a | **não** — sem claim (D-26) | não | não | `tracking_alert_deliveries` não é append-only |
-| Outbox pós-commit | geração + claim com token | sim (claim) | por item | sim | **sim** (geração) | **nenhum teto** (D-25) | sim |
-
-## 9. Matriz de permissões e auditoria
-
-| Ação excepcional | ANALYST | MANAGER | ADMIN | CLIENT | Worker | Justificativa | Evidência | Autor | Timestamp | Valor anterior/novo | Aviso a gestores | Incidente técnico | Aprovação explícita |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| Resolver pendência de registro | sim | sim | sim | **403** | não | não exigida hoje (gap) | não | **não registrado** (gap) | sim (estado) | sim (estado) | não | não | não |
-| Fallback manual (FT) | sim (com membership) | sim | sim | **403** | não | **sim** | **sim** (`evidenciaRef`) | sim | sim | sim | sim (MANAGER/ADMIN) | não | implícita (governança) |
-| Reconhecer/resolver divergência FT | qualquer `usuario` string — **sem RBAC** (gap) | idem | idem | deveria ser 403, não verificado | não | opcional (gap) | não | string livre (gap) | sim | sim | não | não | não |
-| Decisão de responsabilidade | não (MANAGER/ADMIN apenas) | sim | sim | **403** | não | sim | sim | sim (via membership) | sim | sim (versão anterior preservada) | não explícito | sim (se FINAL, `EXIGE_REABERTURA`) | implícita |
-| Validar minuta | depende de `papel` informado pelo chamador — **RBAC não resolvido por membership** (gap D-32) | sim | sim | **deveria ser 403** | não | não | sim (minuta) | ator opcional (gap) | sim | sim | não | não | não |
-| Finalizar processo | idem gap de papel | sim | sim | **403** | não | não | não | ator opcional (gap) | sim | n/a | não | não | não |
-| Solicitar reabertura | sem RBAC (gap D-18) | sim | sim | **deveria ser 403** | não | não validada (gap) | não exigida (gap) | sim | sim | n/a | não | não | não |
-| Autorizar reabertura | **não** | sim | sim | **403** | não | não exigida (gap) | não | sim | sim | n/a | não | não | implícita (papel) |
-| Leitura de indicadores de gestão | sim | sim | sim | **403 (D11, confirmado)** | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |
-
-**Confirmação da regra de exposição ao CLIENT:** auditado e confirmado —
-todas as rotas V2 de Demurrage/Gestão retornam 403 para CLIENT (D12). Nenhum
-read-model excorre exposição interna da Rocket, diferença potencial,
-evidência de responsabilidade, incidentes internos ou erros técnicos para
-esse papel. As lacunas de RBAC acima (divergência FT, minuta/fechamento sem
-resolução de papel por membership) **não vazam dados ao CLIENT** — são rotas
-internas (ANALYST/MANAGER/ADMIN) e hoje o maior risco é um ANALYST exercendo
-uma ação de MANAGER por papel mal resolvido, não exposição ao CLIENT. Ainda
-assim, são defeitos de auditoria (D-32, D-33).
-
-## 10. Dependências externas explicitamente deferidas
-
-| Dependência | Módulo/fonte externa | Casos afetados | Classificação |
-|---|---|---|---|
-| HeadCargo | integração ainda não implementada neste repositório | 31.11, divergência de referência completa | defer to integration phase |
-| Fonte financeira de custo real confirmado | sistema financeiro externo | substituição de valor estimado por confirmado | defer to integration phase |
-| Módulo Liberação | não possui backend nesta base | sugestão de responsabilidade (G-C0) | defer to integration phase |
-| Portal do Cliente | fora do escopo desta tarefa | toda exposição ao cliente final | defer to Portal |
-| Frontend final / UI de ação | fora do escopo desta tarefa | rotas de ação para pendências/divergências/reaberturas | defer to frontend |
-| Provedor de tracking (ETA) | contrato atual não fornece | antecipação de chegada | impossible without an external source |
-| Texto integral do Blueprint Cap. 31 | arquivo não commitado | toda a reconstrução da §2 | bloqueante — decisão D-1 |
-
-Nenhum comportamento desses módulos foi inferido ou fabricado; onde o código
-atual já antecipa um campo (ex.: `mismatchCarrier`, `custo_real_confirmado_ref`)
-isso foi citado como estrutura existente, não como comportamento do sistema
-externo.
-
-## 11. Escopo proposto para D15 (pendente aprovação)
-
-Proposta de escopo, estritamente dentro do domínio Demurrage standalone,
-condicionada às decisões da §18:
-
-1. **Núcleo de integridade pós-FINAL** (D-8, D-2): sinalizar e/ou bloquear
-   mudança material pós-FINAL em vez de NO-OP silencioso; registrar evento
-   de minuta divergente mesmo quando a ação final é `exige_reabertura`.
-2. **Transacionalidade de fechamento/reabertura** (D-4, D-5, D-10, D-18):
-   unificar `validarMinuta`, `finalizarProcesso`, `autorizarReabertura` em
-   transações únicas com advisory lock e `UPDATE ... WHERE status = 'OPEN'`
-   condicional; unicidade de reabertura aberta por processo.
-3. **Resolução de papel por membership** em `closingService` (D-32) em vez
-   de aceitar `papel` do chamador.
-4. **Órfãos de pendência** (D-19, D-20): decidir e implementar caminho de
-   resolução para `atracacao_ambigua` e `tipo_selecao_sem_observacao`, ou
-   justificar formalmente por que permanecem sem resolução automática.
-5. **Validação cronológica no motor** (E-2), se aprovada (D-12).
-6. **Persistência de conflitos hoje descartados**: `conflitoMesmaFonte`
-   (E-6) e `mismatchCarrier` (E-4).
-7. **Pendência para condição comercial ausente** (E-5), se aprovada (D-15).
-8. **Correções de concorrência pontuais**: `applyObservation` sem lock
-   (D-31), outbox pós-commit sem teto (D-25), alertas de tracking sem claim
-   (D-26), linhas presas em `PROCESSING` na última tentativa (D-24).
-9. **Correções de tarifa** (D-22 overlap, D-23 moeda mista) — comportamento
-   determinístico sem exigir decisão de versionamento (D-21 pode ficar para
-   decisão separada/fase futura).
-
-Explicitamente **fora** mesmo que relacionado: rotas HTTP de ação (D-28),
-versionamento/imutabilidade de tabela tarifária (D-21, decisão maior, pode
-virar uma fase própria "D15-tarifas" se o usuário preferir separar), tudo
-listado em §10.
-
-## 12. Arquivos que seriam alterados (estimativa, não executada)
-
-| Arquivo | Motivo |
+| Classificação | Quantidade |
 |---|---|
-| `src/demurrage-engine/apuracao/recalcularApuracao.ts` | tratar FINAL não mais como NO-OP silencioso (item 1) |
-| `src/demurrage-engine/closing/closingService.ts` | transações únicas, locks, resolução de papel por membership (itens 2–3) |
-| `src/demurrage-engine/closing/minutaValidation.ts` ou novo módulo de evento | registrar divergência de minuta pós-FINAL (item 1) |
-| `src/demurrage-engine/registro/registrarProcessoDemurrage.ts` | persistir `conflitoMesmaFonte` (item 6) |
-| `src/demurrage-engine/tracking/vesselCallSync.ts` + `persistence/vesselCallRepository.ts` | resolução de `atracacao_ambigua`, persistência de `mismatchCarrier`, checagem de recência (itens 4, 6) |
-| `src/demurrage-engine/persistence/containerRepository.ts` | lock em `applyObservation` (item 8) |
-| `src/demurrage-engine/tracking/eventIngestion.ts` | validação cronológica (item 5), se aprovada |
-| `src/demurrage-engine/tariffs/bracketEngine.ts` | overlap determinístico, moeda mista sem abortar transação inteira (item 9) |
-| `src/demurrage-engine/scheduler/*` (outbox pós-commit, alertas) | teto de tentativas, claim de alertas (item 8) |
-| `src/demurrage-engine/db/migrations/00XX_*.sql` (novas) | ver §13 |
-| Testes correspondentes em `src/demurrage-engine/__tests__/` | cobertura de cada item acima |
-| `docs/demurrage-fase-d15.md` (entrega futura, não esta) | relatório da implementação, quando aprovada |
+| Já corretamente coberto (COB) | **29** |
+| D15-A (integridade de estado final e reabertura) | **7** |
+| D15-B (integridade de dados e exceções) | **18** |
+| D15-C (integridade tarifária e recuperação) | **6** |
+| Subtotal D15 (A+B+C) | **31** |
+| Deferido à integração externa | **3** |
+| Deferido ao frontend | **1** |
+| Deferido ao Portal | **1** |
+| Impossível sem fonte externa | **1** |
+| Subtotal deferido/impossível | **6** |
+| **Total de casos revisados** | **66** |
 
-Nenhum desses arquivos foi tocado nesta entrega.
+29 + 31 + 6 = 66. Nenhuma decisão de negócio bloqueante resta associada a
+qualquer linha deste registro, exceto a lacuna isolada em §10 (que afeta
+R08/31.5 apenas no detalhe do mecanismo, não na classificação do caso).
 
-## 13. Migrations que seriam necessárias (estimativa, não executada)
+## 5. Bloco D15-A — Integridade de estado final e reabertura
 
-| Migration proposta | Justificativa |
-|---|---|
-| Adicionar coluna de resolução/autor em `vessel_call_pendencias` para permitir fechar `atracacao_ambigua` (ou novo tipo de estado) | hoje a tabela não tem campo para registrar quem/quando resolveu esse tipo específico |
-| Unicidade parcial em `reaberturas` (uma `SOLICITADA`/`AUTORIZADA` aberta por processo) | impedir duplicidade (D-18) |
-| Coluna de autor/justificativa obrigatória em `reaberturas` se ainda não suficiente para auditoria completa | reforço de auditoria (D-18) |
-| Coluna(s) para "fontes consultadas / última tentativa" em `demurrage_pendencias` (tipo FT ausente) ou tabela satélite pequena | E-1, se aprovado — **decisão explícita necessária antes de desenhar a coluna** (jsonb vs. tabela normalizada) |
-| Teto de tentativas em `demurrage_pos_commit_outbox` (coluna `tentativas`/`max_tentativas`) | D-25 |
-| Claim/coluna de status `PROCESSING`/token em `tracking_alert_deliveries` | D-26 |
-| Exclusion constraint ou trigger de validação para não sobrepor faixas em `tariff_brackets` | D-22, se a decisão (D-21) optar por impedir overlap no banco em vez de só no engine |
+**Casos cobertos por este bloco:** R11 (31.7b), R16 (31.12), R19 (31.14),
+R51, R52, R53, R54. **7 casos.**
 
-Nenhuma migration é proposta como "tabela de exceção universal" — a
-investigação não encontrou evidência de que os artefatos existentes
-precisem ser consolidados; cada tabela acima recebe apenas colunas pontuais
-ou constraints, preservando sua granularidade atual.
+**Objetivo:** nenhuma mudança material em processo FINAL é aceita ou
+rejeitada sem rastro; fechamento e reabertura passam a ser transacionais,
+travados e resolvidos por papel real de membership.
 
-## 14. Gates G1–G7 (propostos para a futura implementação de D15)
+**Trabalho proposto:**
+
+1. `recalcularApuracao.ts`: substituir o NO-OP silencioso em processo FINAL
+   por um caminho que registra o fato recebido (nova entrada de auditoria,
+   reaproveitando o padrão de `closing_events`) e devolve `exige_reabertura`
+   controlado — **sem mutar** relógio/valor/projeção FINAL.
+2. `closing/minutaValidation.ts` + `closingService.ts`: ao validar minuta com
+   data divergente da congelada em processo FINAL, registrar evento com
+   **ambas** as evidências (data da minuta e data do tracking) antes de
+   devolver `exige_reabertura`.
+3. `closingService.validarMinuta`: unificar em uma única transação
+   (`marcarValidada` + atualização de contêiner + eventos + enfileiramento de
+   recálculo).
+4. `closingService.finalizarProcesso`: `UPDATE ... WHERE apuracao_status =
+   'OPEN'` condicional dentro de transação com advisory lock por processo;
+   elimina double-finalize concorrente.
+5. `closingService.autorizarReabertura`/`solicitarReabertura`: transação
+   única, advisory lock por processo, verificação de reabertura já aberta
+   (impede duplicidade).
+6. RBAC: resolver papel por membership real (padrão já usado em
+   `decidirResponsabilidade.ts`) em vez de aceitar `papel` do chamador;
+   tornar ator (quem executa) obrigatório, não opcional.
+
+## 6. Bloco D15-B — Integridade de dados e exceções
+
+**Casos cobertos por este bloco:** R05, R07, R08, R09, R18, R26, R36, R37,
+R38, R39, R40, R41, R44, R45, R50, R55, R56, R61. **18 casos.**
+
+**Objetivo:** cada exceção de dado tem um caminho de resolução determinístico
+e nenhuma observação mais forte é descartada ou sobrescrita silenciosamente.
+
+**Trabalho proposto:**
+
+1. Histórico de tentativas de Free Time (31.4b): nova tabela satélite
+   append-only ligada a `demurrage_pendencias` (fonte, timestamp da
+   tentativa, resultado, evidência sanitizada); projeção expõe a última
+   tentativa por pendência.
+2. Promoção com fallback manual vigente (31.4d): ao promover uma nova
+   observação sobre um valor atualmente `manual_fallback`, não substituir
+   diretamente — abrir divergência (mecanismo generalizado do item 5) e
+   notificar gestão, preservando o valor manual até decisão.
+3. Empty Return antes da descarga (31.5): registrar inconsistência nomeada
+   (novo tipo em `demurrage_pendencias`), bloquear fechamento
+   explicitamente (não só via `INDETERMINADA` indireto) e rotear à gestão —
+   o mecanismo de "verificação de tracking" fica isolado como item de
+   decisão residual (§10).
+4. Empty Return retroativo válido (31.6): caminho positivo distinto da
+   pendência de cronologia — recalcula, preserva histórico, aceita
+   prevalência posterior de minuta (reaproveita item 1 de D15-A quando
+   aplicável a processo FINAL).
+5. Generalização do mecanismo de divergência (`ft_divergencias` →
+   divergência por campo/fonte): permite modelar conflito House-only,
+   conflito de mesma fonte (`conflitoMesmaFonte`) e `mismatchCarrier` sem
+   criar artefatos novos por tipo.
+6. Pendência de cronologia (Gate Out < descarga; ER < Gate Out): novo tipo
+   em `demurrage_pendencias`; preserva evidência bruta; bloqueia a promoção
+   downstream afetada; nunca cria incidente técnico a menos que o
+   processamento em si tenha falhado.
+7. Recência de observação de mesma autoridade: `applyObservation`/
+   `applyObservationComClient` passam a comparar `observado_em` como
+   critério de desempate dentro da mesma prioridade — observação mais
+   antiga da mesma fonte chegando depois não substitui a mais nova já
+   selecionada (permanece no ledger).
+8. Pendência para condição comercial ausente (31.4 contexto de tarifa):
+   novo tipo em `demurrage_pendencias`.
+9. Rollback por evento tardio de VesselCall anterior: checagem de recência
+   em `vesselCallRepository.associarContainer` antes de rolar associação.
+10. Resolução de `atracacao_ambigua` e `tipo_selecao_sem_observacao`: definir
+    e implementar caminho de resolução (hoje ambas são excluídas de
+    `resolverPendencias` ou nunca alcançadas por nenhum chamador).
+11. `applyObservation` (variante sem client/lock): adicionar transação e
+    lock equivalentes à variante `ComClient`.
+12. Atualização manual de tracking por gestor (31.13b): expor
+    `podeAtualizarManual` como função de serviço chamável (sem rota
+    pública).
+13. RBAC/motivo obrigatório em `divergenciaAvisos.ts`
+    (`reconhecerDivergencia`/`resolverDivergencia`): resolver `usuario` por
+    membership real; tornar motivo obrigatório na resolução.
+14. Normalização leve de vocabulário de status entre artefatos de pendência
+    (sem criar tabela universal) — apenas documentação/mapeamento de
+    leitura, para eliminar a inconsistência G-A8 vs. fila (D14).
+
+## 7. Bloco D15-C — Integridade tarifária e recuperação
+
+**Casos cobertos por este bloco:** R28, R29, R30, R57, R58, R59. **6 casos.**
+
+**Objetivo:** tabela tarifária imutável e versionada conforme o escopo de
+versionamento tarifário exigido pelo usuário (abaixo), e filas/outboxes sem
+linhas presas indefinidamente.
+
+**Escopo de versionamento tarifário (obrigatório, conforme determinado):**
+
+- versões de tabela ativadas/usadas não podem ser editadas ou apagadas;
+- o conteúdo das faixas (`tariff_brackets`) participa do hash de input do
+  cálculo (hoje `calcularInputHashValor` o exclui — correção necessária);
+- correções criam nova versão de tabela, nunca edição in-loco;
+- cálculos históricos retêm tabela e versão usadas no momento;
+- faixas sobrepostas são rejeitadas (constraint/validação, não apenas
+  "primeiro match" silencioso);
+- lacunas de faixa continuam `UNAVAILABLE` ou provisórias conforme a
+  qualidade da fonte (comportamento já correto, preservado);
+- uma nova versão nunca recalcula automaticamente processos FINAL
+  históricos.
+
+**Demais correções deste bloco:**
+
+- `bracketEngine.ts`: moeda mista produz falha localizada (`UNAVAILABLE` ou
+  erro por linha) em vez de abortar a transação de apuração inteira do
+  processo.
+- `recalculo_outbox`, `demurrage_fallback_manual_avisos`,
+  `ft_divergencia_entregas`: reclaim cobre também a linha presa em
+  `PROCESSING` após crash na última tentativa (hoje só reclama enquanto
+  `tentativas < max`).
+- `demurrage_pos_commit_outbox`: adicionar teto de tentativas com estado
+  terminal visível.
+- `tracking_alert_deliveries`: adicionar claim/token de posse para impedir
+  envio duplicado por instâncias concorrentes do scheduler.
+
+## 8. Migrations por bloco (estimativa, nenhuma executada)
+
+| Bloco | Migration proposta | Justificativa |
+|---|---|---|
+| D15-A | nenhuma migration de schema nova identificada — o trabalho é de transação/lock/RBAC em código de serviço | os estados (`fechamentos`, `reaberturas`, `closing_events`) já existem; falta unicidade em `reaberturas` (abaixo) |
+| D15-A | unicidade parcial em `reaberturas` (uma `SOLICITADA`/`AUTORIZADA` aberta por processo) + coluna de ator obrigatória | impedir reabertura duplicada (item 5 de D15-A) |
+| D15-B | nova tabela satélite append-only para tentativas de fonte de Free Time (fonte, tentativa_em, resultado, evidência sanitizada, pendência_id) | decisão fixada: "append-only satellite table", nunca JSONB sobrescrito |
+| D15-B | novos tipos em `demurrage_pendencias`: inconsistência de Empty Return pré-descarga, pendência de cronologia (Gate Out/ER), condição comercial ausente, `mismatchCarrier` | decisões fixadas (§2); evita tabela de exceção universal, reaproveita o artefato existente |
+| D15-B | generalizar `ft_divergencias` (ou colunas que hoje assumem Master×SI) para registrar o par de fontes/campo em conflito genericamente | suporta conflito House-only e `conflitoMesmaFonte` sem novo artefato |
+| D15-B | coluna de recência (`observado_em`) já existe em `field_observations` — **sem migration**, apenas lógica de comparação no código de promoção | nenhuma mudança de schema necessária para o item 7 de D15-B |
+| D15-B | coluna de resolução/autor para `atracacao_ambigua`/`tipo_selecao_sem_observacao` (ou reaproveitar colunas já existentes em `vessel_call_pendencias`/`demurrage_pendencias`) | permitir fechamento auditável desses tipos órfãos |
+| D15-C | remover/substituir a unicidade ineficaz de `tariff_tables` (hoje `UNIQUE(organization_id, tipo, armador_id, termo_comercial, versao)` não funciona com colunas NULL) por `NULLS NOT DISTINCT` ou constraint equivalente, mais trigger de imutabilidade pós-ativação | base para versionamento obrigatório |
+| D15-C | exclusion constraint (ou trigger de validação) em `tariff_brackets` para rejeitar faixas sobrepostas por tabela/equipamento | item do escopo de versionamento tarifário |
+| D15-C | coluna(s) de teto de tentativas em `demurrage_pos_commit_outbox` | estado terminal visível em vez de retry infinito |
+| D15-C | coluna(s) de claim/token em `tracking_alert_deliveries` | impedir envio duplicado |
+
+Nenhuma migration consolida os artefatos existentes em uma tabela de
+exceção universal — cada uma estende um artefato já existente com colunas ou
+constraints pontuais, preservando a granularidade atual (confirmado
+necessário caso a caso, não por padrão).
+
+## 9. Gates e testes de aceitação por bloco
+
+### D15-A
 
 | Gate | Critério |
 |---|---|
-| G1 | Nenhuma mudança pós-FINAL em descarga/FT/tipo/tracking é aceita silenciosamente: toda mudança material gera evento auditável e, no mínimo, bloqueia novo fechamento até reabertura (ou reabre automaticamente, conforme decisão D-30). |
-| G2 | `validarMinuta`, `finalizarProcesso`, `autorizarReabertura` executam em transação única com lock/condição atômica; nenhum teste de concorrência (dupla chamada simultânea) produz duplicidade. |
-| G3 | Nenhuma pendência de tipo conhecido permanece estruturalmente irresolvível — cada tipo tem um caminho de resolução ou uma justificativa formal documentada de por que não tem. |
-| G4 | RBAC de fechamento/reabertura resolvido por membership real, nunca por valor informado pelo chamador. |
-| G5 | Nenhum outbox/fila de reprocessamento tem linha presa permanentemente em `PROCESSING`/`PENDING` sem visibilidade no read-model de pendências. |
-| G6 | Zero regressão nas 24 exceções já corretamente cobertas (lista completa em §4/§5) — suíte completa da engine + gestão + UI continua 100% verde. |
-| G7 | Nenhum valor financeiro pendente/indisponível é convertido a zero em nenhum novo caminho de código introduzido por D15 (checagem explícita de regressão sobre `bracketEngine.ts`/`valorApuradoRepository.ts`). |
+| GA1 | Nenhuma mudança material pós-FINAL muta relógio/valor/projeção FINAL sem reabertura autorizada; toda tentativa gera registro auditável. |
+| GA2 | `validarMinuta`, `finalizarProcesso`, `autorizarReabertura` executam em transação única com lock/condição atômica. |
+| GA3 | RBAC de fechamento/reabertura resolvido por membership real; nenhum teste consegue elevar papel via payload. |
+| GA4 | Nenhuma reabertura duplicada é possível para o mesmo processo simultaneamente. |
 
-## 15. Testes de aceitação obrigatórios (quando D15 for implementada)
+**Testes obrigatórios:** (1) correção de descarga/FT/tipo/tracking em
+processo FINAL gera evento auditável e nunca muta a projeção FINAL; (2)
+minuta validada com data diferente da congelada em processo FINAL registra
+evento com ambas evidências antes de `exige_reabertura`; (3) duas chamadas
+concorrentes a `finalizarProcesso` produzem exatamente um fechamento; (4)
+duas chamadas concorrentes a `autorizarReabertura` não duplicam reabertura
+aberta; (5) crash simulado entre `marcarValidada` e atualização de contêiner
+não deixa `effective_return_date` desalinhada sem reparo; (6) ANALYST não
+consegue finalizar/reabrir informando `papel: 'MANAGER'` no payload.
 
-1. Correção de descarga em processo FINAL gera evento auditável e bloqueia/reabre conforme decisão D-30 (não mais NO-OP).
-2. Minuta validada com data diferente da congelada em processo FINAL registra evento de divergência antes de retornar `exige_reabertura`.
-3. Duas chamadas concorrentes a `finalizarProcesso` no mesmo processo produzem exatamente um `fechamentos` e um conjunto de eventos.
-4. Duas chamadas concorrentes a `autorizarReabertura` no mesmo processo não duplicam `reaberturas` abertas.
-5. Crash simulado entre `marcarValidada` e atualização de contêiner não deixa `effective_return_date` setada com relógio desatualizado sem reparo pelo próximo tick.
-6. ANALYST sem papel de MANAGER não consegue finalizar/autorizar reabertura mesmo informando `papel: 'MANAGER'` no payload.
-7. `atracacao_ambigua` e `tipo_selecao_sem_observacao` sintéticas são resolvidas (ou documentadamente rejeitadas) por um fluxo testável.
-8. Evento retroativo de Gate Out anterior à descarga é tratado conforme a regra aprovada em D-12 (pendência/incidente/bloqueio — não silenciosamente aceito).
-9. `conflitoMesmaFonte` detectado na mesma ingestão é persistido e aparece em leitura de pendências.
-10. Linha de `recalculo_outbox`/aviso de fallback presa em `PROCESSING` após crash simulado na última tentativa é reclamada e reprocessada ou move para `FAILED` visível.
-11. `demurrage_pos_commit_outbox` com teto de tentativas move para estado terminal visível em vez de retry infinito.
-12. Dois alertas de tracking enviados por instâncias concorrentes do scheduler não duplicam entrega (claim).
-13. Zero-regressão: fingerprint de todas as tabelas tocadas por D10–D14 antes/depois de cada rota GET permanece idêntico.
-14. Suíte completa (engine 812, gestão 88, UI 66, V1 25) permanece 100% verde.
+### D15-B
 
-## 16. Riscos de regressão
+| Gate | Critério |
+|---|---|
+| GB1 | 31.5 atende aos quatro efeitos exigidos (bloqueio, inconsistência registrada, gestão notificada, tracking roteado — mecanismo de roteamento conforme §10). |
+| GB2 | 31.6 e 31.7(a) são tratados por caminho distinto de pendência de cronologia — nenhum Empty Return tardio válido é rejeitado como violação. |
+| GB3 | Nenhuma observação mais forte ou mais nova é descartada silenciosamente; toda substituição de fallback manual gera divergência visível. |
+| GB4 | Nenhum tipo de pendência conhecido permanece estruturalmente irresolvível sem justificativa documentada. |
 
-- Qualquer mudança em `recalcularApuracao.ts` (núcleo pós-FINAL) toca o
-  pipeline usado por **todos** os fluxos de recálculo (ingestão, outbox,
-  calendário, fechamento) — risco alto de regressão silenciosa; exige
-  suíte completa + benchmark antes/depois.
-- Transacionalizar `closingService` pode mudar tempos de lock e expor
-  deadlocks não vistos hoje (advisory locks por contêiner já usados em
-  outros caminhos) — exige teste de concorrência real, não só unitário.
-- Resolver `atracacao_ambigua` pode interagir com o fluxo de tracking
-  compartilhado (`vesselCallRepository`) e a regra de tracking individual
-  pós-descarga — qualquer implementação precisa reconfirmar essa regra em
-  teste de regressão dedicado.
-- Adicionar validação cronológica no motor de ingestão (E-2) tem risco de
-  rejeitar dados reais que hoje são aceitos — precisa de decisão explícita
-  sobre o que fazer com a violação (não é zero-risco mesmo sendo
-  "correto").
-- Mudar o teto de tentativas de outboxes pode alterar comportamento
-  observável em produção (itens que hoje ficam presos silenciosamente
-  passam a aparecer como falha) — mudança de visibilidade, não só de
-  código; times operacionais devem ser avisados antes do deploy.
+**Testes obrigatórios:** (7) Empty Return antes da descarga bloqueia
+fechamento, registra inconsistência nomeada e aparece em leitura de
+pendência de gestão; (8) Empty Return retroativo válido recalcula e não é
+classificado como violação de cronologia; (9) Gate Out antes da descarga
+cria pendência de cronologia e bloqueia a promoção afetada sem criar
+incidente técnico; (10) observação antiga da mesma fonte chegando depois de
+uma mais nova já selecionada não a substitui; (11) nova fonte mais forte
+chegando sobre valor `manual_fallback` não substitui diretamente — gera
+divergência; (12) `atracacao_ambigua` e `tipo_selecao_sem_observacao`
+sintéticas são resolvidas (ou documentadamente mantidas abertas por regra
+explícita) por um fluxo testável; (13) `conflitoMesmaFonte` e
+`mismatchCarrier` são persistidos e aparecem em leitura de pendências.
 
-## 17. Áreas congeladas explicitamente preservadas
+### D15-C
 
-Nada foi alterado nestas áreas nesta entrega, e a proposta de D15 (§11) não
-pretende alterá-las:
+| Gate | Critério |
+|---|---|
+| GC1 | Nenhuma versão de tabela tarifária ativada/usada é editável; correção sempre gera nova versão. |
+| GC2 | Hash de input do cálculo muda quando o conteúdo da faixa muda. |
+| GC3 | Faixas sobrepostas são rejeitadas na escrita, não silenciosamente resolvidas na leitura. |
+| GC4 | Nenhuma linha de outbox/fila fica presa em `PROCESSING`/`PENDING` indefinidamente sem visibilidade terminal. |
+| GC5 | Nenhum alerta de tracking é entregue duas vezes por concorrência de instâncias. |
 
-- Regras de criação de decisão de responsabilidade (D11).
-- Motor de tracking compartilhado e suas regras de cobertura/fencing (D-exceto correções pontuais listadas).
-- Cálculo de tarifa Rocket por data de descarga, termo embarque/único (D9/D10).
-- Contrato de leitura de Gestão e Indicadores D14 v1.3 (`eficiencia.ts`, `responsabilidade.ts`, rotas de gestão).
+**Testes obrigatórios:** (14) editar/apagar uma versão de tabela tarifária
+ativada é rejeitado; (15) correção de faixa gera nova versão e novo hash de
+input, recalculando apenas processos ainda OPEN; (16) processo FINAL
+histórico permanece com os valores da versão original após nova versão ser
+criada; (17) faixas sobrepostas são rejeitadas na criação; (18) moeda mista
+produz falha localizada sem abortar a apuração completa do processo; (19)
+linha de `recalculo_outbox`/aviso presa em `PROCESSING` após crash simulado
+na última tentativa é reclamada; (20) outbox pós-commit com teto de
+tentativas atinge estado terminal visível; (21) dois alertas concorrentes
+não duplicam entrega.
+
+### Comum a todos os blocos
+
+- Zero-regressão: fingerprint de todas as tabelas tocadas por D10–D14
+  idêntico antes/depois de cada rota de leitura.
+- Suíte completa (engine, gestão, UI, V1) 100% verde ao final de cada
+  bloco, antes de iniciar o próximo.
+- Nenhum valor financeiro pendente/indisponível é convertido a zero em
+  nenhum código introduzido por qualquer bloco.
+
+## 10. Comportamento exato: observação bruta vs. fato selecionado/promovido
+
+Esta distinção atravessa várias seções do Blueprint (31.4d, 31.5, 31.6,
+31.7, 31.14) e precisa de uma regra única e consistente:
+
+1. **Toda observação recebida é preservada** em `field_observations`
+   (append-only, já existente) — isso vale mesmo para a observação que
+   causa uma violação de cronologia (31.6/31.7) ou que é inválida por
+   definição (Empty Return antes da descarga, 31.5). **Nenhum bloco de D15
+   altera essa garantia; todos os blocos dependem dela.**
+2. **O fato selecionado/promovido** (o que vira `relogios`, `container_type_id`,
+   `armador_id` etc.) só é atualizado quando a observação vence a promoção
+   por prioridade **e**, a partir de D15-B, pelo critério de recência
+   (`observado_em`) dentro da mesma prioridade, **e** não estiver sujeita a
+   uma das exceções fixadas: (i) processo FINAL (bloqueia qualquer promoção
+   de fato material — D15-A); (ii) valor atual vindo de `manual_fallback`
+   sendo superado por fonte mais forte (abre divergência em vez de
+   substituir — D15-B); (iii) violação de cronologia não resolvida
+   (D15-B) — a observação fica registrada, mas não promovida, até a
+   pendência de cronologia ou a inconsistência de Empty Return ser
+   resolvida.
+3. **Nenhuma observação bruta é apagada ou editada** em nenhum cenário —
+   correções e reaberturas sempre produzem uma nova observação/decisão,
+   nunca uma edição da anterior. Isso já é garantido estruturalmente hoje
+   (ledgers append-only) e nenhum bloco de D15 o altera.
+4. **A minuta é um caso especial de fato selecionado**: quando válida, sua
+   data se torna `effective_return_date` (31.14), mas a evidência de
+   tracking que ela eventualmente contradiz permanece preservada e
+   consultável — nunca é substituída ou ocultada pela promoção da minuta.
+
+## 11. Grafo de recálculo e invalidação (atualizado)
+
+Idêntico em estrutura ao grafo da revisão anterior (relógios, valores,
+responsabilidade, snapshot, elegibilidade de fechamento, lifecycle,
+indicadores, timeline), com duas correções de comportamento agora fixadas:
+
+- **Mudança em descarga/FT/tipo/retorno em processo FINAL:** antes
+  "recalculado silenciosamente (NO-OP)"; agora, por decisão fixada,
+  **bloqueado e registrado** — nenhum dos artefatos downstream (relógio,
+  valor, snapshot, elegibilidade) é tocado até reabertura autorizada
+  (D15-A).
+- **Correção de tarifa/versão:** antes "sem gatilho dedicado para correção
+  in-loco"; agora, por decisão fixada, **correção sempre cria nova versão**
+  — processos FINAL existentes nunca recalculam automaticamente; processos
+  OPEN recalculam normalmente na próxima passagem do pipeline, usando a
+  nova versão (D15-C).
+
+O restante do grafo (mudança de House/Master FT, tipo de contêiner,
+decisão de responsabilidade, valor financeiro selecionado) permanece como
+descrito na revisão anterior — nenhuma dessas trilhas foi alterada pelo
+texto exato do Capítulo 31 ou pelas decisões fixadas nesta rodada.
+Confirma-se, como antes, que o outbox/scheduler repara corretamente o que
+foi de fato enfileirado, mas não repara a janela entre leitura e escrita que
+antecede o enfileiramento em fluxos não-transacionais — essa janela é
+exatamente o que D15-A fecha.
+
+## 12. Matriz de concorrência, permissões e auditoria
+
+Mantida em relação à revisão anterior nos pontos não afetados pelo
+Capítulo 31 exato (registro de processo, ingestão de SI, rodada de
+VesselCall, decisão de responsabilidade, outbox pós-commit — ver `84ccb34`
+§8–§9 para o detalhe linha a linha). As linhas alteradas pela revisão são:
+
+- `applyObservation`/promoção de observação: ganha critério de recência
+  (R41/D15-B) e exceção de fallback manual (R07/D15-B) — ver §10.
+- Fechamento/reabertura: RBAC passa a ser resolvido por membership real,
+  não por payload (R54/D15-A).
+- Divergência de FT: RBAC e motivo passam a ser obrigatórios na resolução
+  (R55/D15-B).
+- Confirmação da regra de exposição ao CLIENT (R60) permanece congelada e
+  verificada: nenhuma rota V2 de Demurrage/Gestão expõe dados internos a
+  CLIENT (403 confirmado); nenhuma correção de D15 altera essa garantia.
+
+## 13. Áreas congeladas (explícitas)
+
+Sem alteração nesta entrega, e sem alteração planejada em nenhum bloco de
+D15:
+
+- Regras de criação de decisão de responsabilidade (D11), incluindo a
+  invalidação por trigger já existente.
+- Cálculo de tarifa Rocket por data de descarga, termo embarque/único
+  (D9/D10) — D15-C versiona a tabela, não a regra de seleção de termo.
+- Contrato de leitura de Gestão e Indicadores D14 v1.3.
 - Toda a UI (D13).
-- Todas as 34 migrations existentes (nenhuma foi alterada; apenas propostas novas em §13).
-- RBAC de leitura (D11/D12) — CLIENT 403 confirmado, não tocado.
+- Todas as 34 migrations existentes (nenhuma alterada; apenas novas
+  propostas em §8).
+- RBAC de leitura (D11/D12) — CLIENT 403 confirmado.
+- Mecanismo de fencing de rodada compartilhada de VesselCall (`epoca`).
+- Tracking individual obrigatório pós-descarga de destino.
 
-## 18. Decisões que requerem aprovação do usuário
+## 14. Dependências externas deferidas (atualizado)
 
-| ID | Decisão | Recomendação |
+| Dependência | Casos afetados | Classificação |
 |---|---|---|
-| D-1 | Texto integral do Capítulo 31 do Blueprint não está no repositório. Aprovar a reconstrução da §2 como base de trabalho, ou fornecer o texto original? | Fornecer o texto original se disponível; caso contrário, aprovar a reconstrução com a ressalva explícita de que é indireta. |
-| D-30 | Política para mudança material pós-FINAL (descarga/FT/tipo/tracking): bloquear a escrita até reabertura explícita, ou aceitar e reabrir automaticamente registrando evento? | Bloquear a escrita (erro controlado `exige_reabertura`) em vez de reabrir automaticamente — preserva a garantia de que FINAL só muda por ação humana explícita, consistente com o padrão já usado em responsabilidade/valor. |
-| D-12 | Violação de cronologia (Gate Out antes de descarga, ER antes de Gate Out): rejeitar o evento, aceitar e abrir pendência, ou aceitar e abrir incidente técnico? | Aceitar e abrir pendência (não é erro do sistema, é dado de origem suspeito) — rejeitar perderia o evento; incidente técnico é desproporcional para algo que pode ser legítimo (ex.: fuso horário/granularidade de data). |
-| D-17 | Divergência apenas entre fontes House (sem envolver Master) merece artefato próprio ou deve ser tratada dentro de `ft_divergencias` generalizando o modelo? | Generalizar `ft_divergencias` para qualquer par de fontes em conflito em vez de criar artefato novo — evita duplicar o mecanismo já maduro de aberta/reconhecida/resolvida/reaberta. |
-| D-21 | Tabela tarifária: tornar imutável com versionamento obrigatório para qualquer correção (nova versão + hash de input passa a incluir conteúdo da faixa), ou manter mutável com trigger de recálculo obrigatório ao salvar? | Imutabilidade com versionamento — é o padrão já usado em todo o resto do sistema (relógios, valores, responsabilidade) e evita o problema atual de correção silenciosa. Este item é grande o suficiente para considerar como fase própria, separada do restante de D15. |
-| D-11 | Estrutura para "fontes consultadas / última tentativa" (E-1): coluna jsonb em `demurrage_pendencias`, ou tabela satélite normalizada? | jsonb na própria pendência — é informação de diagnóstico, não transacional, não precisa de tabela própria. |
-| D-14 / D-15 | Persistir `mismatchCarrier` e criar pendência para condição comercial ausente: usar `demurrage_pendencias` (novo `tipo`) para ambos, ou criar pendência dedicada? | Usar `demurrage_pendencias` com novo `tipo` em cada caso — mantém um único inventário de pendência de registro em vez de fragmentar. |
-| D-27 | Permitir entrada manual de data de descarga (hoje não aceita via registro, só via tracking)? | Não permitir nesta fase — risco de inconsistência com a regra "tracking é a fonte de verdade para descarga"; se necessário operacionalmente, tratar como fallback manual com a mesma governança de FT, em decisão separada. |
-| D-28 | D15 deve expor rotas HTTP mínimas para as ações de serviço (resolver pendência, reconhecer divergência, solicitar reabertura), ou permanecer em nível de serviço até a fase de frontend? | Permanecer em nível de serviço — a tarefa explicitamente exclui frontend/Portal; abrir rotas sem UI de consumo aumenta superfície sem necessidade imediata. Revisitar quando o frontend for escopado. |
-| D-9 | Promoção por prioridade sem comparar `observado_em`: adicionar comparação de recência como critério de desempate (mesma prioridade, data mais nova vence), ou manter "última promovida sempre vence" dentro da mesma prioridade? | Adicionar `observado_em` como critério de desempate dentro da mesma prioridade — hoje uma observação mais antiga da mesma fonte pode sobrescrever uma mais nova por chegar depois na ingestão, o que contradiz o princípio de "nunca sobrescrever evidência mais forte silenciosamente". |
+| HeadCargo | 31.11 (R15) — o próprio Blueprint determina o deferimento | DEFER integração |
+| Fonte financeira de custo real confirmado | R32 | DEFER integração |
+| Módulo Liberação | R63 (sugestão de responsabilidade) | DEFER integração |
+| Portal do Cliente | R66 | DEFER Portal |
+| Frontend / rotas de ação | R65 — decisão fixada: D15 permanece em nível de serviço | DEFER frontend |
+| Provedor de tracking (ETA) | R64 | Impossível sem fonte externa |
 
-## 19. Contagem final
+Nenhum comportamento desses módulos foi inferido ou fabricado.
 
-- **Casos de exceção revisados** (áreas mandatórias 1–8, consolidados em §4 e §5): **47**.
-- **Já corretamente cobertos:** **24**.
-- **Exigem trabalho de D15** (implementação nova, pendente de aprovação): **14**.
-- **Defeito existente a corrigir** (classificados dentro do próprio código já tocado, não exigem nova decisão de negócio para a correção técnica em si — já contados dentro dos 14 quando a correção é proposta no escopo de D15, listados separadamente por rastreabilidade em §5 com a etiqueta "correct existing defect"): **9** destes 14 são defeitos; os demais 5 são lacunas genuínas sem código prévio.
-- **Deferidos** (integração/frontend/Portal/impossível sem fonte externa): **9**.
-- **Decisões bloqueantes que requerem aprovação do usuário:** **10** (D-1, D-30, D-12, D-17, D-21, D-11, D-14/D-15, D-27, D-28, D-9).
+## 15. Decisões eliminadas pelo Blueprint / fixadas pelo usuário
 
----
+As dez decisões bloqueantes da revisão anterior (`84ccb34`, §18: D-1, D-9,
+D-11, D-12, D-14, D-15, D-17, D-21, D-27, D-28, D-30) foram **todas**
+resolvidas — nove pelo texto exato do Capítulo 31 e pela lista de "Decisions
+fixed for D15" fornecida pelo usuário nesta rodada (ver §2 para a resolução
+aplicada de cada uma). Nenhuma delas é reaberta nesta revisão.
 
-**Nenhum código de produção, migration, rota ou teste foi alterado nesta
-entrega.** Esta entrega é exclusivamente este documento.
+## 16. Decisão genuinamente indeterminada remanescente
+
+Apenas **uma** lacuna de projeto permanece sem determinação suficiente no
+texto do Blueprint ou nas decisões fixadas:
+
+**D-R1 — Mecanismo de "encaminhar o caso para verificação de tracking"
+(31.5).** O Blueprint exige que um Empty Return antes da descarga seja
+"enviado para verificação de tracking", mas não especifica se isso significa
+(a) disparar automaticamente uma nova tentativa de busca de tracking para o
+alvo afetado na próxima janela do scheduler, (b) apenas deixar a pendência
+visível para um ANALYST verificar manualmente o tracking, ou (c) ambos.
+Isso tem consequência de implementação real: (a) exigiria um gatilho novo no
+scheduler reaproveitando o mecanismo de busca já existente; (b) não exigiria
+nenhum código de scheduler, apenas a pendência nomeada (já proposta em
+D15-B item 3).
+
+**Recomendação:** adotar (c) — a pendência nomeada (visível e resolvível por
+ANALYST/MANAGER) **e**, adicionalmente, uma tentativa automática de
+reconciliação de tracking na próxima janela do scheduler, reaproveitando o
+mecanismo de busca já existente (sem criar um caminho de busca novo). A
+pendência permanece aberta até resolução humana mesmo que a tentativa
+automática não produza uma data consistente — a verificação automática é
+um auxílio, não uma resolução por si só. Esta recomendação não foi
+implementada; aguarda confirmação antes de entrar no detalhamento de D15-B.
+
+## 17. Status final
+
+- **Nenhum código de produção, migration, rota ou teste foi alterado nesta
+  entrega.** Apenas este documento foi revisado.
+- **D15-A não foi implementada.** A implementação não começa até aprovação
+  explícita desta revisão.
+- **D16 não foi iniciada.**
