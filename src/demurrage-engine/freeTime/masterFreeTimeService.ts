@@ -54,6 +54,8 @@ export interface PromoverMasterFreeTimeInput {
   _testeFalhaAposObservacao?: () => void | Promise<void>;
   /** SÓ TESTE (D15-A v1.1) — ver `ApplyObservationInput` em `containerRepository.ts`. */
   _testeAntesDaDecisaoFinal?: () => void | Promise<void>;
+  /** SÓ TESTE (D15-A v1.3) — ver `ApplyObservationInput` em `containerRepository.ts`. */
+  _testeAguardarAntesDoCommit?: () => void | Promise<void>;
 }
 
 export interface DivergenciaAvaliada {
@@ -237,6 +239,10 @@ export async function promoverMasterFreeTimeComClient(
   const divergencia = await avaliarDivergenciaComClient(client, {
     organizationId: input.organizationId, containerId: input.containerId, processoId: c.processo_id, autor: input.autor,
   });
+
+  // SÓ TESTE: pausa imediatamente antes do commit do chamador (ver
+  // `ApplyObservationInput._testeAguardarAntesDoCommit` em `containerRepository.ts`).
+  if (input._testeAguardarAntesDoCommit) await input._testeAguardarAntesDoCommit();
 
   return {
     observationId: observacao.id, criada, outcome, exigeReabertura: bloqueadoPorFinal, bloqueadoPorFinal,

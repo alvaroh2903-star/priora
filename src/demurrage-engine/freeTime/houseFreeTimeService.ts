@@ -10,6 +10,8 @@ export interface PromoverHouseFreeTimeInput {
   _testeFalhaAposObservacao?: () => void | Promise<void>;
   /** SÓ TESTE (D15-A v1.1) — ver `ApplyObservationInput` em `containerRepository.ts`. */
   _testeAntesDaDecisaoFinal?: () => void | Promise<void>;
+  /** SÓ TESTE (D15-A v1.3) — ver `ApplyObservationInput` em `containerRepository.ts`. */
+  _testeAguardarAntesDoCommit?: () => void | Promise<void>;
 }
 
 /**
@@ -54,6 +56,8 @@ export async function promoverHouseFreeTimeComClient(
     );
     recalculoEnfileirado = (rowCount ?? 0) > 0;
   }
+  // SÓ TESTE: pausa imediatamente antes do commit do chamador (D15-A v1.3).
+  if (input._testeAguardarAntesDoCommit) await input._testeAguardarAntesDoCommit();
   return {
     observationId: r.observationId, criada: r.criada, outcome: r.outcome, exigeReabertura: r.exigeReabertura,
     valorMudou, recalculoEnfileirado, conflitoMesmaFonte: r.conflitoMesmaFonte,

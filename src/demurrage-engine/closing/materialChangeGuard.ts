@@ -77,9 +77,28 @@ import { Pool, PoolClient } from 'pg';
  * NENHUMA verificação em runtime pode corrigir é o chamador ter tomado a
  * linha ANTES do consultivo — por isso toda chamada de produção está
  * auditada em `CHAMADORES_AUDITADOS_COM_CLIENT` abaixo, com um teste que
- * confere que a lista está completa (`closingD15AV12.test.ts`), e todo
- * chamador novo deve ser auditado e adicionado à lista antes de chamar
- * qualquer uma destas quatro funções.
+ * confere que a lista está completa, e todo chamador novo deve ser auditado
+ * e adicionado à lista antes de chamar qualquer uma destas funções.
+ *
+ * Fase D15-A v1.3 (corretiva) — achado bloqueante do audit sobre `368a986`:
+ * `recalcularApuracaoContainerComClient` carregava TODO o insumo de cálculo
+ * (descarga, Free Time, retorno, equipamento, armador, condição comercial)
+ * numa única consulta ANTES do lock consultivo — só `apuracao_status` era
+ * relido depois. Um escritor material concorrente que mudasse qualquer um
+ * desses fatos e comitasse ENQUANTO o recálculo esperava o lock fazia o
+ * recálculo prosseguir com o instantâneo VELHO, persistindo relógios/valores/
+ * lifecycle a partir de fatos que já não eram mais os vigentes. Corrigido:
+ * a função agora segue o MESMO protocolo universal de ponta a ponta — passo
+ * 1 (identidade, sem lock) → passo 2 (`lockProcesso`) → passo 3 (`FOR
+ * UPDATE` em `processos`, decide FINAL já sob o lock) → passo 4 (`FOR
+ * UPDATE` em `containers` + condição comercial) — e usa EXCLUSIVAMENTE o
+ * instantâneo relido nos passos 3-4 para relógios/valores/lifecycle; nenhum
+ * campo de cálculo sobrevive do instante anterior ao lock (ver
+ * docs/demurrage-fase-d15-a-v1-3.md). Por isso
+ * `recalcularApuracaoContainerComClient` e `recalcularApuracaoProcessoComClient`
+ * entraram em `CHAMADORES_AUDITADOS_COM_CLIENT` nesta versão — elas também
+ * adquirem o lock compartilhado e têm a MESMA precondição de ordem de
+ * chamador que as demais.
  */
 
 export type ExecutorSql = Pool | PoolClient;
@@ -232,20 +251,25 @@ export interface ChamadorAuditadoComClient {
 }
 
 /**
- * Fase D15-A v1.2 (achado #1) — auditoria ESTÁTICA, EXAUSTIVA, de todo
- * chamador de produção das quatro funções cuja segurança depende da ordem
- * universal de lock: `ContainerRepository.applyObservationComClient`,
- * `promoverHouseFreeTimeComClient`, `promoverMasterFreeTimeComClient` e
- * `fatoMaterialBloqueadoPorFinal`. `closingD15AV12.test.ts` varre
+ * Fase D15-A v1.2/v1.3 — auditoria ESTÁTICA, EXAUSTIVA, de todo chamador de
+ * produção das funções cuja segurança depende da ordem universal de lock:
+ * `ContainerRepository.applyObservationComClient`,
+ * `promoverHouseFreeTimeComClient`, `promoverMasterFreeTimeComClient`,
+ * `fatoMaterialBloqueadoPorFinal` e, desde a v1.3,
+ * `recalcularApuracaoContainerComClient`/`recalcularApuracaoProcessoComClient`.
+ * Um teste de auditoria estática (travessia de AST do TypeScript, não um
+ * scanner linha a linha — ver docs/demurrage-fase-d15-a-v1-3.md) varre
  * `src/demurrage-engine` (fora de `__tests__`) procurando cada nome de
  * função e confere que o conjunto de arquivos encontrado é EXATAMENTE este,
  * por função — um chamador novo adicionado sem atualizar esta lista faz o
- * teste falhar, em vez de ficar sem cobertura silenciosamente. Cada entrada
- * documenta a razão estrutural (não só "parece certo hoje") pela qual a
- * precondição do achado #1 vale nesse ponto.
+ * teste falhar, em vez de ficar sem cobertura silenciosamente; uma entrada
+ * que já não corresponde a nenhum chamador real também falha o teste. Cada
+ * entrada documenta a razão estrutural (não só "parece certo hoje") pela
+ * qual a precondição de ordem de lock vale nesse ponto.
  */
 export const CHAMADORES_AUDITADOS_COM_CLIENT: Readonly<Record<
-  'applyObservationComClient' | 'promoverHouseFreeTimeComClient' | 'promoverMasterFreeTimeComClient' | 'fatoMaterialBloqueadoPorFinal',
+  | 'applyObservationComClient' | 'promoverHouseFreeTimeComClient' | 'promoverMasterFreeTimeComClient' | 'fatoMaterialBloqueadoPorFinal'
+  | 'recalcularApuracaoContainerComClient' | 'recalcularApuracaoProcessoComClient',
   readonly ChamadorAuditadoComClient[]
 >> = {
   applyObservationComClient: [
@@ -294,6 +318,22 @@ export const CHAMADORES_AUDITADOS_COM_CLIENT: Readonly<Record<
     {
       arquivo: 'src/demurrage-engine/registro/registrarProcessoDemurrage.ts',
       descricao: 'aplicar(), bloco de tipo de equipamento (passo 5a, dentro do laço de contêineres) — D15-A v1.2 (achado #1): lockProcesso adquirido no passo 3, antes do laço inteiro onde este bloco roda.',
+    },
+  ],
+  recalcularApuracaoContainerComClient: [
+    {
+      arquivo: 'src/demurrage-engine/apuracao/recalcularApuracao.ts',
+      descricao: 'recalcularApuracaoContainer (wrapper autônomo) e recalcularApuracaoProcessoComClient (laço), mesmo arquivo — o wrapper abre BEGIN/COMMIT próprios (nenhum lock pré-existente); o laço roda dentro da transação do SEU próprio chamador (autorizarReabertura), que já adquiriu o consultivo antes de chamá-lo.',
+    },
+    {
+      arquivo: 'src/demurrage-engine/closing/closingService.ts',
+      descricao: 'finalizarProcesso e validarMinuta — lockProcesso já adquirido no passo 2 de cada uma, antes do FOR UPDATE em processos/containers e antes desta chamada.',
+    },
+  ],
+  recalcularApuracaoProcessoComClient: [
+    {
+      arquivo: 'src/demurrage-engine/closing/closingService.ts',
+      descricao: 'autorizarReabertura — lockProcesso já adquirido no passo 2, antes do FOR UPDATE em reaberturas/processos e antes desta chamada.',
     },
   ],
 };

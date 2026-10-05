@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import ts from 'typescript';
 import { Pool } from 'pg';
 import { runMigrations } from '../db/migrate';
 import { testPool, testDatabaseUrl, truncateAll } from './testDb';
@@ -141,36 +142,60 @@ function listarArquivosTs(dir: string): string[] {
   return out;
 }
 
-function linhaEhComentario(linha: string): boolean {
-  const t = linha.trim();
-  return t.startsWith('//') || t.startsWith('*') || t.startsWith('/*');
+/**
+ * D15-A v1.3 — scanner FORTALECIDO: travessia de AST do compilador
+ * TypeScript, não mais um regex linha a linha. O scanner anterior (v1.2)
+ * exigia o nome da função e o `(` na MESMA linha — uma chamada quebrada
+ * entre linhas (ex.: `promoverMasterFreeTimeComClient\n  (client, input)`)
+ * não seria detectada, deixando um chamador real sem auditoria passar
+ * silenciosamente. Uma `CallExpression` na AST é a MESMA chamada
+ * independentemente de quebras de linha/espaços — a análise sintática
+ * (sem resolução de tipos — não precisamos saber a QUEM o método pertence,
+ * só o NOME escrito) é suficiente e já resolve isso.
+ *
+ * Por construção, uma declaração (`function nome(...) {}`,
+ * `static async nome(...) {}`, um método de classe, um `import { nome }`)
+ * NUNCA é uma `CallExpression` — nunca precisa de uma exclusão explícita
+ * como no scanner anterior. Detecta chamada QUALIFICADA
+ * (`Algo.nomeFuncao(...)`, via `PropertyAccessExpression`) e NÃO
+ * QUALIFICADA (`nomeFuncao(...)`, via `Identifier`) na mesma passada.
+ */
+function arquivoChamaFuncao(caminho: string, codigo: string, nomeFuncao: string): boolean {
+  const sourceFile = ts.createSourceFile(caminho, codigo, ts.ScriptTarget.Latest, true);
+  let chama = false;
+  const visitar = (node: ts.Node): void => {
+    if (chama) return;
+    if (ts.isCallExpression(node)) {
+      const alvo = node.expression;
+      const nome = ts.isIdentifier(alvo) ? alvo.text
+        : (ts.isPropertyAccessExpression(alvo) && ts.isIdentifier(alvo.name)) ? alvo.name.text
+        : undefined;
+      if (nome === nomeFuncao) { chama = true; return; }
+    }
+    ts.forEachChild(node, visitar);
+  };
+  visitar(sourceFile);
+  return chama;
 }
 
 /** Arquivos (caminho relativo à raiz do repo, com `/`) que CHAMAM `nomeFuncao`
- * — exclui a própria linha de declaração (`function NOME(`/`static ... NOME(`)
- * e qualquer linha de comentário (onde o nome pode aparecer em prosa). */
+ * — por construção da AST, nunca a própria declaração/importação. */
 function arquivosQueChamam(nomeFuncao: string): Set<string> {
-  const reChamada = new RegExp(`\\b${nomeFuncao}\\s*\\(`);
-  const reDeclaracao = new RegExp(`\\bfunction\\s+${nomeFuncao}\\s*\\(|\\bstatic\\s+(async\\s+)?${nomeFuncao}\\s*\\(`);
   const achados = new Set<string>();
   for (const arquivo of listarArquivosTs(RAIZ_ENGINE)) {
-    const linhas = fs.readFileSync(arquivo, 'utf8').split('\n');
-    for (const linha of linhas) {
-      if (linhaEhComentario(linha)) continue;
-      if (reChamada.test(linha) && !reDeclaracao.test(linha)) {
-        achados.add(path.relative(REPO_ROOT, arquivo).split(path.sep).join('/'));
-        break;
-      }
+    const codigo = fs.readFileSync(arquivo, 'utf8');
+    if (arquivoChamaFuncao(arquivo, codigo, nomeFuncao)) {
+      achados.add(path.relative(REPO_ROOT, arquivo).split(path.sep).join('/'));
     }
   }
   return achados;
 }
 
-test('D15-A v1.2 #1: auditoria estática — todo chamador de produção de applyObservationComClient/promoverHouseFreeTimeComClient/promoverMasterFreeTimeComClient/fatoMaterialBloqueadoPorFinal está documentado em materialChangeGuard.ts', () => {
+test('D15-A v1.2/v1.3 #1: auditoria estática (AST) — todo chamador de produção de applyObservationComClient/promoverHouseFreeTimeComClient/promoverMasterFreeTimeComClient/fatoMaterialBloqueadoPorFinal/recalcularApuracaoContainerComClient/recalcularApuracaoProcessoComClient está documentado em materialChangeGuard.ts', () => {
   for (const nomeFuncao of Object.keys(CHAMADORES_AUDITADOS_COM_CLIENT) as Array<keyof typeof CHAMADORES_AUDITADOS_COM_CLIENT>) {
     const encontrados = [...arquivosQueChamam(nomeFuncao)].sort();
     const documentados = CHAMADORES_AUDITADOS_COM_CLIENT[nomeFuncao].map((c) => c.arquivo).slice().sort();
-    assert.deepEqual(encontrados, documentados, `chamadores de ${nomeFuncao} encontrados no código divergem da auditoria documentada`);
+    assert.deepEqual(encontrados, documentados, `chamadores de ${nomeFuncao} encontrados no código (AST) divergem da auditoria documentada`);
   }
 });
 

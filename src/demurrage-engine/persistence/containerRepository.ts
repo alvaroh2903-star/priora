@@ -72,6 +72,17 @@ export interface ApplyObservationInput {
    * consultivo do processo adquirido. Usado pelos testes de corrida.
    */
   _testeAntesDaDecisaoFinal?: () => void | Promise<void>;
+  /**
+   * SÓ TESTE (D15-A v1.3) — dispara em `applyObservation` (wrapper
+   * autônomo) IMEDIATAMENTE ANTES do `COMMIT`, com o fato já persistido/
+   * promovido e o lock consultivo do processo ainda retido. Usado pelos
+   * testes de corrida "escritor material vence" contra o recálculo
+   * (`recalcularApuracaoContainerComClient`): enquanto pausado aqui, o
+   * recálculo concorrente fica bloqueado no próprio `lockProcesso`, nunca
+   * lendo o instantâneo antigo. Nunca usado em produção; nenhuma rota o
+   * expõe.
+   */
+  _testeAguardarAntesDoCommit?: () => void | Promise<void>;
 }
 
 export interface ApplyObservationResultado {
@@ -152,6 +163,7 @@ export class ContainerRepository {
         autor: `applyObservation:${input.fonte}`,
         _testeFalhaAposObservacao: input._testeFalhaAposObservacao,
         _testeAntesDaDecisaoFinal: input._testeAntesDaDecisaoFinal,
+        _testeAguardarAntesDoCommit: input._testeAguardarAntesDoCommit,
       });
       return { outcome: r.outcome, observationId: r.observationId, exigeReabertura: r.exigeReabertura };
     }
@@ -160,6 +172,7 @@ export class ContainerRepository {
     try {
       await client.query('BEGIN');
       const r = await ContainerRepository.applyObservationComClient(client, input);
+      if (input._testeAguardarAntesDoCommit) await input._testeAguardarAntesDoCommit();
       await client.query('COMMIT');
       return { outcome: r.outcome, observationId: r.observationId, exigeReabertura: r.exigeReabertura };
     } catch (erro) {
