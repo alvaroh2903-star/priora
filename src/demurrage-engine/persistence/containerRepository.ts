@@ -185,10 +185,29 @@ export class ContainerRepository {
    *   7. verifica o status relido no passo 3 (nunca uma leitura anterior ao
    *      lock) e promove OU bloqueia+registra `FATO_MATERIAL_POS_FINAL`;
    *   8. devolve — o chamador comita.
-   * Só um fato NOVO altera a seleção — reprocessar uma observação existente
-   * nunca muda o estado. `conflitoMesmaFonte` = a mesma fonte já registrou o
-   * campo no mesmo instante com OUTRO valor (nada muda). Master Free Time
-   * tem serviço próprio (divergência/recálculo) e é recusado aqui.
+   * Só um fato NOVO altera a seleção — reprocessar uma observação JÁ
+   * selecionada é NO-OP estrito (D15-A v1.2, achado #2): nenhum `UPDATE`,
+   * `atualizado_em` intocado, nenhum evento/outbox/recálculo — ver passo 6
+   * abaixo. `conflitoMesmaFonte` = a mesma fonte já registrou o campo no
+   * mesmo instante com OUTRO valor (nada muda, nunca promove). Master Free
+   * Time tem serviço próprio (divergência/recálculo) e é recusado aqui.
+   *
+   * PRECONDIÇÃO (D15-A v1.2, achado #1) — este método estabelece o protocolo
+   * universal de lock INTEIRO (passos 1-4) sozinho, sempre, nesta ordem; não
+   * assume nem depende de o chamador já ter feito nada disso. O que ele NÃO
+   * PODE detectar nem corrigir é o chamador ter adquirido, ANTES desta
+   * chamada, um `FOR UPDATE` em `processos`/`containers`/`minutas`/
+   * `reaberturas` deste MESMO processo sem primeiro ter chamado `lockProcesso`
+   * — isso inverteria a ordem (linha antes do consultivo) e reabriria o
+   * deadlock do achado #1 contra `finalizarProcesso`/`autorizarReabertura`/
+   * etc. Se o seu chamador PRECISA orquestrar múltiplas operações sob UMA
+   * transação (como `registrarProcessoDemurrage.aplicar`), descubra o
+   * `processoId` sem lock, chame `lockProcesso` você mesmo PRIMEIRO, e só
+   * então tome qualquer `FOR UPDATE` (inclusive o seu) — a chamada a este
+   * método depois disso é segura (o lock consultivo já detido torna o passo 2
+   * daqui um no-op; o `FOR UPDATE` dos passos 3-4 é idempotente dentro da
+   * MESMA transação). Todos os chamadores de produção estão auditados em
+   * `materialChangeGuard.ts` (`CHAMADORES_AUDITADOS_COM_CLIENT`).
    */
   static async applyObservationComClient(
     client: PoolClient,
@@ -236,11 +255,29 @@ export class ContainerRepository {
     // observação/evento/projeção parcial sobrevive).
     if (input._testeFalhaAposObservacao) await input._testeFalhaAposObservacao();
 
+    // D15-A v1.2 (achado #2) — replay de uma observação JÁ selecionada
+    // (criada=false, não é conflito, e é EXATAMENTE a observação apontada
+    // pela coluna de proveniência hoje) é um NO-OP ESTRITO: nada mudou, então
+    // nada escreve — sem `UPDATE`, sem tocar `atualizado_em`, sem decisão de
+    // prioridade/FINAL, sem outbox, sem evento, sem recálculo. Antes desta
+    // correção, `promover = !conflito` (v1.1) entrava no passo 7 mesmo aqui e
+    // reescrevia a linha com o MESMO valor (só por reprocessar). Isto é
+    // disjunto do caminho "bloqueada por FINAL, reprocessada" (achado #1 da
+    // v1.1): aquele é identificado por `c.obs_id !== observacao.id` (nunca
+    // foi promovida) — este exige `c.obs_id === observacao.id`.
+    if (!criada && !conflito && c.obs_id === observacao.id) {
+      return {
+        outcome: 'promovida', exigeReabertura: false, observationId: observacao.id, criada,
+        valorAnterior: c.valor, valorSelecionado: c.valor, conflitoMesmaFonte: false,
+      };
+    }
+
     // Passo 6 — prioridade de fonte contra a seleção relida no passo 4.
-    // Reprocessar um fato IDÊNTICO ao já registrado (criada=false, sem
-    // conflito de valor) precisa refazer a mesma decisão, não pulá-la —
-    // senão um reenvio idempotente de um fato já bloqueado por FINAL
-    // relataria 'registrada_sem_promover' em vez de 'bloqueada_final'.
+    // Reprocessar um fato IDÊNTICO ao já registrado mas NÃO selecionado
+    // (bloqueado por FINAL anteriormente, ou perdedor de prioridade) precisa
+    // refazer a mesma decisão, não pulá-la — senão um reenvio idempotente de
+    // um fato já bloqueado por FINAL relataria 'registrada_sem_promover' em
+    // vez de 'bloqueada_final' (v1.1, achado #1).
     let promover = !conflito;
     if (promover && c.obs_id) {
       const { rows: atual } = await client.query(`SELECT fonte FROM field_observations WHERE id = $1`, [c.obs_id]);
@@ -266,9 +303,12 @@ export class ContainerRepository {
         );
       }
     }
-    const selecionadaAgora = promover || (!criada && c.obs_id === observacao.id);
+    // Chegar aqui com `!criada` só acontece quando NÃO é o caso "já
+    // selecionada" (tratado acima, retorna antes) — ou é um fato novo
+    // (`criada`), ou é um conflito de mesma fonte (nunca promove
+    // silenciosamente — `promover` já é `false` desde o passo 6).
     return {
-      outcome: bloqueadoPorFinal ? 'bloqueada_final' : selecionadaAgora ? 'promovida' : 'registrada_sem_promover',
+      outcome: bloqueadoPorFinal ? 'bloqueada_final' : promover ? 'promovida' : 'registrada_sem_promover',
       exigeReabertura: bloqueadoPorFinal,
       observationId: observacao.id, criada,
       valorAnterior: c.valor, valorSelecionado: promover ? input.valor : c.valor, conflitoMesmaFonte: conflito,

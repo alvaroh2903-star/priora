@@ -101,6 +101,21 @@ function numero(v: unknown): number | null {
  * `materialChangeGuard.ts`): identidade sem lock → lock consultivo do
  * processo → relê/trava processo → relê/trava contêiner → persiste →
  * decide → promove ou bloqueia+registra.
+ *
+ * Fase D15-A v1.2 (achado #2): reprocessar uma observação JÁ selecionada é
+ * NO-OP estrito — sem `UPDATE`, sem `atualizado_em`, sem outbox, sem evento
+ * (ver corpo da função).
+ *
+ * PRECONDIÇÃO (D15-A v1.2, achado #1) — mesma de
+ * `ContainerRepository.applyObservationComClient`: esta função estabelece o
+ * protocolo universal de lock sozinha, sempre; o que ela não detecta é o
+ * chamador ter tomado `FOR UPDATE` em `processos`/`containers` deste
+ * processo ANTES de chamá-la sem primeiro ter chamado `lockProcesso` — isso
+ * inverteria a ordem e reabriria o deadlock do achado #1. Chamadores que
+ * orquestram múltiplas operações numa transação (ex.:
+ * `registrarProcessoDemurrage.aplicar`) devem adquirir `lockProcesso` ANTES
+ * de qualquer `FOR UPDATE`, inclusive o próprio. Chamadores de produção
+ * auditados em `materialChangeGuard.ts` (`CHAMADORES_AUDITADOS_COM_CLIENT`).
  */
 export async function promoverMasterFreeTimeComClient(
   client: PoolClient,
@@ -147,14 +162,33 @@ export async function promoverMasterFreeTimeComClient(
   // qualquer decisão.
   if (input._testeFalhaAposObservacao) await input._testeFalhaAposObservacao();
 
+  // D15-A v1.2 (achado #2) — replay de uma observação JÁ selecionada
+  // (criada=false, não é conflito, e é EXATAMENTE a observação apontada por
+  // `master_free_time_observation_id` hoje) é um NO-OP ESTRITO: sem `UPDATE`,
+  // sem `atualizado_em`, sem outbox, sem evento. A divergência SI×Master É
+  // reavaliada (leitura idempotente — nunca escreve quando as observações
+  // subjacentes não mudaram, ver `avaliarDivergenciaComClient`) para que o
+  // campo `divergencia` sempre reflita o estado atual ao chamador.
+  if (!criada && !conflito && c.master_free_time_observation_id === observacao.id) {
+    const divergencia = await avaliarDivergenciaComClient(client, {
+      organizationId: input.organizationId, containerId: input.containerId, processoId: c.processo_id, autor: input.autor,
+    });
+    return {
+      observationId: observacao.id, criada, outcome: 'promovida', exigeReabertura: false, bloqueadoPorFinal: false,
+      valorSelecionadoAnterior: anterior, valorSelecionado: anterior,
+      valorMudou: false, recalculoEnfileirado: false, divergencia, conflitoMesmaFonte: false,
+    };
+  }
+
   let outcome: 'promovida' | 'registrada_sem_promover' | 'bloqueada_final' = 'registrada_sem_promover';
   let selecionado = anterior;
   let bloqueadoPorFinal = false;
   // Passo 6 — prioridade de fonte contra a seleção relida no passo 4.
-  // Reprocessar um fato IDÊNTICO ao já registrado (criada=false, sem
-  // conflito de valor) precisa refazer a mesma decisão, não pulá-la —
-  // senão um reenvio idempotente de um fato já bloqueado por FINAL
-  // relataria 'registrada_sem_promover' em vez de 'bloqueada_final'.
+  // Reprocessar um fato IDÊNTICO ao já registrado mas NÃO selecionado
+  // (bloqueado por FINAL anteriormente, ou perdedor de prioridade) precisa
+  // refazer a mesma decisão, não pulá-la — senão um reenvio idempotente de
+  // um fato já bloqueado por FINAL relataria 'registrada_sem_promover' em
+  // vez de 'bloqueada_final' (v1.1, achado #1).
   let promover = !conflito;
   if (promover && c.master_free_time_observation_id) {
     const { rows: atual } = await client.query(`SELECT fonte FROM field_observations WHERE id = $1`, [c.master_free_time_observation_id]);
@@ -182,9 +216,10 @@ export async function promoverMasterFreeTimeComClient(
       outcome = 'promovida';
       selecionado = input.valor;
     }
-  } else if (!criada && c.master_free_time_observation_id === observacao.id) {
-    outcome = 'promovida';
   }
+  // Chegar aqui com `!criada` e `promover === false` só acontece num
+  // conflito de mesma fonte — nunca promove silenciosamente (o "já
+  // selecionada, sem conflito" foi tratado acima, antes do passo 6).
 
   const valorMudou = selecionado !== anterior;
   let recalculoEnfileirado = false;

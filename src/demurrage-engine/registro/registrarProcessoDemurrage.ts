@@ -11,7 +11,7 @@ import { TrackingTargetRepository } from '../persistence/trackingTargetRepositor
 import { promoverMasterFreeTimeComClient } from '../freeTime/masterFreeTimeService';
 import { promoverHouseFreeTimeComClient } from '../freeTime/houseFreeTimeService';
 import { recalcularApuracaoContainer } from '../apuracao/recalcularApuracao';
-import { fatoMaterialBloqueadoPorFinal } from '../closing/materialChangeGuard';
+import { fatoMaterialBloqueadoPorFinal, lockProcesso } from '../closing/materialChangeGuard';
 import { atualizarFotografia } from './fotografia';
 import {
   ErroContratoDemurrage, ManualFallbackGovernanca, Observado, RegistroNormalizado, RegistroProcessoDemurrageV1, validarRegistro,
@@ -49,6 +49,25 @@ import {
  * outbox (recálculo + fotografia) roda SEMPRE — 'registrado' ou 'ja_registrado'
  * — e é durável: uma falha no reparo nunca perde a linha pendente (v1.1,
  * `repararPosCommitOutbox`); a próxima chamada idempotente a repara.
+ *
+ * Fase D15-A v1.2 (corretiva, achado #1 — ordem universal de lock): esta
+ * função é chamadora de `promoverHouseFreeTimeComClient`/
+ * `promoverMasterFreeTimeComClient`/`fatoMaterialBloqueadoPorFinal` — a MESMA
+ * ordem universal usada por `closingService.ts` e pelos escritores materiais
+ * (ver cabeçalho de `materialChangeGuard.ts`) precisa valer na transação
+ * INTEIRA desta função, não só dentro dessas chamadas. Antes da v1.2, o
+ * `SELECT ... FOR UPDATE` em `processos` (passo 3) rodava ANTES de
+ * `lockProcesso` ser adquirido (só adquirido, de forma implícita, dentro das
+ * próprias chamadas de Free Time mais abaixo) — a ordem inversa de
+ * `finalizarProcesso` (lock consultivo primeiro, linha depois), permitindo
+ * deadlock real entre as duas. A partir da v1.2, o passo 3 adquire
+ * `lockProcesso(db, processoId)` ANTES de qualquer `FOR UPDATE` em
+ * `processos`/`containers` — ver o comentário do passo 3 abaixo para o
+ * protocolo de descoberta do `processoId` quando o processo ainda não existe.
+ * O lock de REGISTRO (passo 1, namespace `demurrage:processo:<org>:<numero>`)
+ * continua sempre ANTES do lock consultivo de fechamento — nenhum outro
+ * código do sistema usa esse namespace, então essa ordem nunca participa de
+ * um ciclo (ver docs/demurrage-fase-d15-a-v1-2.md §2).
  */
 
 export interface ResultadoRegistroDemurrage {
@@ -76,6 +95,16 @@ export interface OpcoesRegistro {
    * Nunca usado em produção; nenhuma rota ou integração expõe este parâmetro.
    */
   _testeFalhaPosCommit?: (containerId: string) => void | Promise<void>;
+  /**
+   * SÓ TESTE (D15-A v1.2) — dispara DENTRO da transação principal, depois do
+   * lock consultivo de fechamento E do `FOR UPDATE` em `processos` (passo 3),
+   * e ANTES de qualquer promoção de House/Master Free Time (passo 5b) ou
+   * checagem de `fatoMaterialBloqueadoPorFinal` do tipo de equipamento (passo
+   * 5a). Usado pelo teste de corrida determinística que reproduz o ciclo do
+   * achado #1 (registro × `finalizarProcesso`). Nunca usado em produção;
+   * nenhuma rota ou integração expõe este parâmetro.
+   */
+  _testeAntesDoFreeTime?: () => void | Promise<void>;
 }
 
 /** Pós-commit incompleto: o registro principal (processo/contêineres/ledger)
@@ -253,7 +282,7 @@ export async function registrarProcessoDemurrage(
   let resultado: ResultadoRegistroDemurrage;
   try {
     await client.query('BEGIN');
-    resultado = await aplicar(client, reg);
+    resultado = await aplicar(client, reg, opcoes);
     await client.query('COMMIT');
   } catch (erro) {
     await client.query('ROLLBACK');
@@ -418,14 +447,21 @@ export async function processarPosCommitOutboxPendentes(
   return { ...total, restantes: rest[0].n };
 }
 
-async function aplicar(db: Db, reg: RegistroNormalizado): Promise<ResultadoRegistroDemurrage> {
+async function aplicar(db: Db, reg: RegistroNormalizado, opcoes: OpcoesRegistro = {}): Promise<ResultadoRegistroDemurrage> {
   const e = reg.entrada;
   const org = e.organizationId;
 
   const { rows: orgRows } = await db.query(`SELECT 1 FROM organizations WHERE id = $1`, [org]);
   if (!orgRows.length) throw new ErroContratoDemurrage('ORGANIZACAO_INEXISTENTE', { organizationId: org });
 
-  // 1) Serialização: processo, depois contêineres em ordem fixa.
+  // 1) Serialização do REGISTRO: processo, depois contêineres em ordem fixa —
+  // namespace PRÓPRIO (`demurrage:processo:<org>:<numero>`/`demurrage:container:
+  // <org>:<numero>`), que nenhum outro código do sistema usa. Por isso esta
+  // ordem (registro → consultivo de fechamento, adquirido no passo 3) nunca
+  // participa de um ciclo: só esta função toma o lock de registro, e só
+  // depois de o ter tomado é que ela tenta o consultivo — uma segunda chamada
+  // de registro concorrente para o MESMO processo já fica bloqueada AQUI,
+  // antes mesmo de disputar o consultivo (D15-A v1.2, achado #1).
   await lock(db, `demurrage:processo:${org}:${reg.numeroProcesso}`);
   for (const n of reg.containers.map((c) => c.numeroNormalizado).sort()) await lock(db, `demurrage:container:${org}:${n}`);
 
@@ -439,18 +475,58 @@ async function aplicar(db: Db, reg: RegistroNormalizado): Promise<ResultadoRegis
     return { ...(prev[0].resultado as ResultadoRegistroDemurrage), status: 'ja_registrado', registroId: prev[0].id };
   }
 
-  // 3) Processo por (organização, número integral).
-  const ins = await db.query(
-    `INSERT INTO processos (organization_id, numero_processo, cliente_id) VALUES ($1, $2, NULL)
-     ON CONFLICT (organization_id, numero_processo) DO NOTHING RETURNING id`,
-    [org, reg.numeroProcesso],
-  );
-  const processoCriado = ins.rows.length > 0;
+  // 3) Processo por (organização, número integral) — D15-A v1.2 (achado #1):
+  // o lock consultivo de fechamento (`demurrage:closing:<processoId>`, a
+  // MESMA implementação usada por `closingService`/escritores materiais) tem
+  // de vir ANTES de qualquer `FOR UPDATE` em `processos`/`containers`. Mas
+  // descobrir o `processoId` de um registro NOVO exige o próprio INSERT —
+  // não existe um recurso para travar "antes" de ele existir. Protocolo:
+  //   a) descobre SEM lock de linha mutável se o processo já existe;
+  //   b) existe → lock consultivo AGORA, antes de qualquer `FOR UPDATE`;
+  //   c) não existe → tenta criar via `INSERT ... ON CONFLICT DO NOTHING`:
+  //      - criou (RETURNING devolveu a linha): processo GENUINAMENTE NOVO —
+  //        a linha não está comitada, logo é invisível a QUALQUER outra
+  //        transação por MVCC; nenhuma operação de fechamento pode referenciar
+  //        um `processoId` que nenhuma outra transação além desta já viu, então
+  //        nenhuma reabertura/finalização concorrente é possível para ele
+  //        ainda. O lock é adquirido aqui mesmo assim, só por uniformidade do
+  //        protocolo (barato — nunca disputado neste ramo);
+  //      - não criou (0 linhas): perdemos a corrida de criação — outra
+  //        transação já tinha o MESMO (organização, número) comitado ANTES de
+  //        o nosso `INSERT` devolver (o próprio `INSERT` bloqueia no índice
+  //        único enquanto a outra transação está em aberto; só devolve "0
+  //        linhas" depois que ela já comitou ou abortou) — uma releitura sem
+  //        lock agora sempre a vê.
+  let processoId: string;
+  let processoCriado: boolean;
+  const existente = await db.query(`SELECT id FROM processos WHERE organization_id = $1 AND numero_processo = $2`, [org, reg.numeroProcesso]);
+  if (existente.rows.length) {
+    processoId = existente.rows[0].id;
+    processoCriado = false;
+    await lockProcesso(db, processoId);
+  } else {
+    const ins = await db.query(
+      `INSERT INTO processos (organization_id, numero_processo, cliente_id) VALUES ($1, $2, NULL)
+       ON CONFLICT (organization_id, numero_processo) DO NOTHING RETURNING id`,
+      [org, reg.numeroProcesso],
+    );
+    if (ins.rows.length) {
+      processoId = ins.rows[0].id;
+      processoCriado = true;
+    } else {
+      const reler = await db.query(`SELECT id FROM processos WHERE organization_id = $1 AND numero_processo = $2`, [org, reg.numeroProcesso]);
+      processoId = reler.rows[0].id;
+      processoCriado = false;
+    }
+    await lockProcesso(db, processoId);
+  }
+
+  // Passo 3b — relê e trava (`FOR UPDATE`) a linha do PROCESSO, agora com o
+  // lock consultivo já adquirido (status fresco, nunca uma leitura anterior).
   const { rows: pr } = await db.query(
-    `SELECT id, apuracao_status, condicao_comercial_id FROM processos WHERE organization_id = $1 AND numero_processo = $2 FOR UPDATE`,
-    [org, reg.numeroProcesso],
+    `SELECT id, apuracao_status, condicao_comercial_id FROM processos WHERE id = $1 FOR UPDATE`,
+    [processoId],
   );
-  const processoId: string = pr[0].id;
   if (pr[0].apuracao_status === 'FINAL') throw new ErroContratoDemurrage('PROCESSO_FINAL', { numeroProcesso: reg.numeroProcesso });
 
   const conflitos: ResultadoRegistroDemurrage['conflitosMesmaFonte'] = [];
@@ -489,6 +565,10 @@ async function aplicar(db: Db, reg: RegistroNormalizado): Promise<ResultadoRegis
     return rows[0].id;
   });
   await campo('responsavelOperacional', e.responsavelOperacionalMembershipId, async () => e.responsavelOperacionalMembershipId!.valor);
+
+  // SÓ TESTE (D15-A v1.2): lock consultivo e `FOR UPDATE` do processo já
+  // adquiridos (passo 3); nada de House/Master Free Time ainda tocado.
+  if (opcoes._testeAntesDoFreeTime) await opcoes._testeAntesDoFreeTime();
 
   // 5) Contêineres dentro do processo.
   const mapeamento = await carregarMapeamentos(db);

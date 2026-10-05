@@ -50,6 +50,36 @@ import { Pool, PoolClient } from 'pg';
  * comitar/abortar, antes de tocar qualquer linha. Isso elimina tanto a
  * corrida do achado #1 (promoção depois de FINAL) quanto o deadlock do
  * achado #2 (ordens de lock inconsistentes).
+ *
+ * Fase D15-A v1.2 (corretiva) — achado #1 do audit sobre `bbb4d0a`: a ordem
+ * universal acima precisa valer na TRANSAÇÃO INTEIRA de todo chamador, não
+ * só dentro das funções que a implementam. `registrarProcessoDemurrage.
+ * aplicar` tomava `FOR UPDATE` em `processos` (passo 3 de ANTES) ANTES de
+ * chamar os escritores de Free Time — que só então tentavam o consultivo —
+ * a ordem inversa de `finalizarProcesso`, permitindo deadlock real. Corrigido
+ * adquirindo `lockProcesso` no PRÓPRIO `aplicar`, antes do `FOR UPDATE`,
+ * antes de qualquer chamada a `fatoMaterialBloqueadoPorFinal`/
+ * `promoverHouse…`/`promoverMaster…` (ver cabeçalho do arquivo e
+ * docs/demurrage-fase-d15-a-v1-2.md §1-2).
+ *
+ * `fatoMaterialBloqueadoPorFinal` e as três funções `*ComClient` (
+ * `ContainerRepository.applyObservationComClient`,
+ * `promoverHouseFreeTimeComClient`, `promoverMasterFreeTimeComClient`) têm
+ * uma PRECONDIÇÃO que nenhuma delas pode verificar sozinha em runtime: o
+ * chamador não pode ter tomado `FOR UPDATE` em `processos`/`containers`/
+ * `minutas`/`reaberturas` deste processo ANTES de chamá-las sem primeiro ter
+ * chamado `lockProcesso`. As três `*ComClient` estabelecem o protocolo
+ * completo (passos 1-4) toda vez que são chamadas — não assumem que o lock
+ * já está retido —, então são seguras quando chamadas "a frio" (nenhum lock
+ * prévio do chamador) e seguras quando chamadas DEPOIS de o próprio chamador
+ * já ter adquirido o consultivo (o passo 2 interno vira um no-op, o `FOR
+ * UPDATE` dos passos 3-4 é idempotente na MESMA transação). O único caso que
+ * NENHUMA verificação em runtime pode corrigir é o chamador ter tomado a
+ * linha ANTES do consultivo — por isso toda chamada de produção está
+ * auditada em `CHAMADORES_AUDITADOS_COM_CLIENT` abaixo, com um teste que
+ * confere que a lista está completa (`closingD15AV12.test.ts`), e todo
+ * chamador novo deve ser auditado e adicionado à lista antes de chamar
+ * qualquer uma destas quatro funções.
  */
 
 export type ExecutorSql = Pool | PoolClient;
@@ -160,6 +190,13 @@ export interface FatoMaterialBloqueadoInput {
  *  - valores iguais → nunca bloqueia (reconfirmação idempotente, sem evento);
  *  - processo não é FINAL → nunca bloqueia (comportamento normal, D15-B decide o resto);
  *  - processo FINAL e valores diferentes → registra o evento e bloqueia.
+ *
+ * PRECONDIÇÃO (D15-A v1.2, achado #1) — esta função NUNCA adquire
+ * `lockProcesso` ela mesma: assume que o chamador já o adquiriu ANTES de
+ * qualquer `FOR UPDATE` em `processos`/`containers` (passos 1-4 do protocolo
+ * universal, cabeçalho do arquivo). Ela não tem como detectar em runtime se
+ * essa ordem foi respeitada — todo chamador de produção está auditado em
+ * `CHAMADORES_AUDITADOS_COM_CLIENT` abaixo.
  */
 export async function fatoMaterialBloqueadoPorFinal(
   db: ExecutorSql,
@@ -186,3 +223,77 @@ export async function fatoMaterialBloqueadoPorFinal(
   });
   return true;
 }
+
+export interface ChamadorAuditadoComClient {
+  /** Caminho relativo à raiz do repositório. */
+  arquivo: string;
+  /** Por que esta chamada é segura sob a ordem universal de lock. */
+  descricao: string;
+}
+
+/**
+ * Fase D15-A v1.2 (achado #1) — auditoria ESTÁTICA, EXAUSTIVA, de todo
+ * chamador de produção das quatro funções cuja segurança depende da ordem
+ * universal de lock: `ContainerRepository.applyObservationComClient`,
+ * `promoverHouseFreeTimeComClient`, `promoverMasterFreeTimeComClient` e
+ * `fatoMaterialBloqueadoPorFinal`. `closingD15AV12.test.ts` varre
+ * `src/demurrage-engine` (fora de `__tests__`) procurando cada nome de
+ * função e confere que o conjunto de arquivos encontrado é EXATAMENTE este,
+ * por função — um chamador novo adicionado sem atualizar esta lista faz o
+ * teste falhar, em vez de ficar sem cobertura silenciosamente. Cada entrada
+ * documenta a razão estrutural (não só "parece certo hoje") pela qual a
+ * precondição do achado #1 vale nesse ponto.
+ */
+export const CHAMADORES_AUDITADOS_COM_CLIENT: Readonly<Record<
+  'applyObservationComClient' | 'promoverHouseFreeTimeComClient' | 'promoverMasterFreeTimeComClient' | 'fatoMaterialBloqueadoPorFinal',
+  readonly ChamadorAuditadoComClient[]
+>> = {
+  applyObservationComClient: [
+    {
+      arquivo: 'src/demurrage-engine/persistence/containerRepository.ts',
+      descricao: 'ContainerRepository.applyObservation (wrapper autônomo, mesmo arquivo) abre BEGIN/COMMIT próprios — nenhum lock de linha pré-existente antes de delegar.',
+    },
+    {
+      arquivo: 'src/demurrage-engine/freeTime/houseFreeTimeService.ts',
+      descricao: 'promoverHouseFreeTimeComClient delega inteiramente — nunca toma FOR UPDATE em processos/containers antes de delegar.',
+    },
+  ],
+  promoverHouseFreeTimeComClient: [
+    {
+      arquivo: 'src/demurrage-engine/registro/registrarProcessoDemurrage.ts',
+      descricao: 'aplicar() — D15-A v1.2 (achado #1): lockProcesso é adquirido no passo 3, antes do FOR UPDATE em processos e antes desta chamada (passo 5b, dentro do laço de contêineres).',
+    },
+    {
+      arquivo: 'src/demurrage-engine/shippingInstructions/ingestaoShippingInstructions.ts',
+      descricao: 'aplicarIntencoes() nunca toma FOR UPDATE em processos/containers antes desta chamada — o único FOR UPDATE da transação, antes deste ponto, é em si_versoes (tabela e namespace não relacionados).',
+    },
+  ],
+  promoverMasterFreeTimeComClient: [
+    {
+      arquivo: 'src/demurrage-engine/freeTime/masterFreeTimeService.ts',
+      descricao: 'promoverMasterFreeTime (wrapper autônomo, mesmo arquivo) abre BEGIN/COMMIT próprios.',
+    },
+    {
+      arquivo: 'src/demurrage-engine/registro/registrarProcessoDemurrage.ts',
+      descricao: 'aplicar() — mesma correção do achado #1 descrita para promoverHouseFreeTimeComClient acima.',
+    },
+    {
+      arquivo: 'src/demurrage-engine/shippingInstructions/ingestaoShippingInstructions.ts',
+      descricao: 'aplicarIntencoes() — mesma razão de promoverHouseFreeTimeComClient acima.',
+    },
+  ],
+  fatoMaterialBloqueadoPorFinal: [
+    {
+      arquivo: 'src/demurrage-engine/persistence/containerRepository.ts',
+      descricao: 'applyObservationComClient, passo 7 — lockProcesso já foi adquirido no passo 2 da MESMA função, antes desta chamada.',
+    },
+    {
+      arquivo: 'src/demurrage-engine/freeTime/masterFreeTimeService.ts',
+      descricao: 'promoverMasterFreeTimeComClient, passo 7 — mesma razão.',
+    },
+    {
+      arquivo: 'src/demurrage-engine/registro/registrarProcessoDemurrage.ts',
+      descricao: 'aplicar(), bloco de tipo de equipamento (passo 5a, dentro do laço de contêineres) — D15-A v1.2 (achado #1): lockProcesso adquirido no passo 3, antes do laço inteiro onde este bloco roda.',
+    },
+  ],
+};

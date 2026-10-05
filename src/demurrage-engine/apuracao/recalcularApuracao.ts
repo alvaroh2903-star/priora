@@ -11,6 +11,7 @@ import { calcularTermoPorEmbarque } from '../tariffs/engines/termoPorEmbarqueEng
 import { calcularTermoUnico } from '../tariffs/engines/termoUnicoEngine';
 import { calcularExposicaoRocket } from '../tariffs/engines/exposicaoRocketEngine';
 import { MotorComercial, MotorResult, RelogioTipo } from '../tariffs/types';
+import { lockProcesso } from '../closing/materialChangeGuard';
 
 /**
  * Fase 8 v1.1 — ORQUESTRADOR central da apuração de um contêiner. Pipeline ÚNICO
@@ -83,10 +84,36 @@ export async function recalcularApuracaoContainerComClient(
     if (!cr.length) throw new Error(`recalcularApuracao: contêiner ${containerId} não encontrado`);
     const c = cr[0];
 
-    // Guard de FINAL (defesa em profundidade — o banco também barra). Não há
-    // COMMIT aqui: esta função não controla a transação (ver nota acima); o
-    // chamador decide quando comitar (nada foi escrito até este ponto).
-    if (c.apuracao_status === 'FINAL') {
+    // D15-A v1.2 (achado #1) — lock consultivo ANTES de qualquer linha
+    // mutável: esta função grava `relogios`/`valores_apurados` e, via
+    // `LifecycleRepository.derivarContainerEConsolidar`, também `containers`
+    // e `processos` (consolidação de prioridade) — na ORDEM INVERSA de
+    // `finalizarProcesso` (que trava `processos` primeiro, depois
+    // `containers`). Chamada SEM este lock pelo caminho autônomo
+    // (`recalcularApuracaoContainer`, usado por `eventIngestion` e pelo
+    // reparo pós-commit de `registrarProcessoDemurrage`), isso permitia um
+    // deadlock real contra `finalizarProcesso` — exatamente o ciclo
+    // reproduzido pelo teste de corrida determinística (ver
+    // docs/demurrage-fase-d15-a-v1-2.md §1). Chamada por quem JÁ segura o
+    // lock (`finalizarProcesso`, `validarMinuta`, `autorizarReabertura` — via
+    // `recalcularApuracaoContainerComClient`/`recalcularApuracaoProcessoComClient`)
+    // este é um no-op seguro na MESMA sessão.
+    await lockProcesso(client, c.processo_id);
+
+    // Guard de FINAL (defesa em profundidade — o banco também barra). RELÊ
+    // `apuracao_status` AGORA, depois do lock (D15-A v1.2, achado #1): a
+    // leitura original (acima) é de ANTES do lock — se esta chamada ficou
+    // esperando o lock enquanto `finalizarProcesso` corria e comitava
+    // concorrentemente, aquele valor está obsoleto. Usar o valor obsoleto
+    // aqui faria esta função tentar escrever `relogios`/`valores_apurados`
+    // de um processo que JÁ é FINAL — rejeitado pelo trigger do banco
+    // (migrations 0017/0018), mas só depois de já ter gastado o round-trip;
+    // relendo fresco, o skip é limpo e silencioso, como sempre foi para
+    // quem já não corria essa corrida. Não há COMMIT aqui: esta função não
+    // controla a transação (ver nota de cabeçalho); o chamador decide
+    // quando comitar (nada foi escrito até este ponto).
+    const { rows: statusFresco } = await client.query(`SELECT apuracao_status FROM processos WHERE id = $1`, [c.processo_id]);
+    if (statusFresco[0]?.apuracao_status === 'FINAL') {
       return { skipped: 'FINAL', containerId };
     }
 

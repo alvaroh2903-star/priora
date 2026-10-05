@@ -24,6 +24,16 @@ export interface PromoverHouseFreeTimeInput {
  * protocolo universal de lock (identidade → lock consultivo do processo →
  * relê/trava processo+contêiner → persiste → decide → promove ou
  * bloqueia+registra) — nenhuma lógica duplicada aqui.
+ *
+ * Fase D15-A v1.2 (achado #2): o NO-OP estrito de uma observação já
+ * selecionada é herdado de `applyObservationComClient` sem código adicional
+ * — `valorAnterior === valorSelecionado` nesse caso, então `valorMudou`
+ * abaixo já é `false` e nenhum outbox é enfileirado.
+ *
+ * PRECONDIÇÃO (D15-A v1.2, achado #1) — mesma de
+ * `ContainerRepository.applyObservationComClient` (ver seu cabeçalho):
+ * o chamador não pode ter tomado `FOR UPDATE` em `processos`/`containers`
+ * deste processo antes desta chamada sem primeiro ter chamado `lockProcesso`.
  */
 export async function promoverHouseFreeTimeComClient(
   client: PoolClient,
