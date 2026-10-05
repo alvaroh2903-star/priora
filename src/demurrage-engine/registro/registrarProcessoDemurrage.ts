@@ -11,6 +11,7 @@ import { TrackingTargetRepository } from '../persistence/trackingTargetRepositor
 import { promoverMasterFreeTimeComClient } from '../freeTime/masterFreeTimeService';
 import { promoverHouseFreeTimeComClient } from '../freeTime/houseFreeTimeService';
 import { recalcularApuracaoContainer } from '../apuracao/recalcularApuracao';
+import { fatoMaterialBloqueadoPorFinal } from '../closing/materialChangeGuard';
 import { atualizarFotografia } from './fotografia';
 import {
   ErroContratoDemurrage, ManualFallbackGovernanca, Observado, RegistroNormalizado, RegistroProcessoDemurrageV1, validarRegistro,
@@ -555,6 +556,22 @@ async function aplicar(db: Db, reg: RegistroNormalizado): Promise<ResultadoRegis
              observation_id = EXCLUDED.observation_id, atualizado_em = now()`,
           [containerId, org, bruto, t.fonte, dataObs(t), t.evidenciaRef ?? null, norm.codigoNormalizado, norm.regraAplicada, obsTipo.id],
         );
+        // Fase D15-A (31.7b): o tipo normalizado é um fato material do
+        // contêiner (afeta a seleção de tarifa). Em processo FINAL, qualquer
+        // mudança MATERIAL (incluindo zerar para NULL) é bloqueada: a
+        // observação acima já preserva a evidência; só a promoção é recusada.
+        // NOTA: este caminho (registro/reenvio do contrato) já é inalcançável
+        // em FINAL — `aplicar()` lança `PROCESSO_FINAL` mais acima (linha
+        // ~454, regra congelada de D10, com teste de regressão próprio) antes
+        // de chegar aqui. A guarda abaixo é defensiva (nunca fica
+        // desatualizada se essa rejeição de alto nível mudar) e documenta a
+        // mesma regra; o caso exigido "correção de tipo de equipamento após
+        // FINAL" é exercido de fato pelo caminho genérico e compartilhado
+        // `ContainerRepository.applyObservation`/`applyObservationComClient`
+        // (campo `containerType`), que outros chamadores (ex.: backfill)
+        // também usam e que esta função NÃO chama para este campo.
+        const { rows: tipoAntesRows } = await db.query(`SELECT container_type_id FROM containers WHERE id = $1`, [containerId]);
+        const tipoAntes: string | null = tipoAntesRows[0]?.container_type_id ?? null;
         if (norm.codigoNormalizado) {
           // O normalizado segue a MESMA decisão de vitória — não uma promoção
           // independente (por isso grava direto, em vez de reconsultar a
@@ -565,22 +582,34 @@ async function aplicar(db: Db, reg: RegistroNormalizado): Promise<ResultadoRegis
             organizationId: org, entidadeTipo: 'container', entidadeId: containerId, campo: 'containerType',
             valor: tipoId, fonte: t.fonte as FieldObservationSource, observadoEm: dataObs(t), evidenciaRef: t.evidenciaRef ?? null,
           });
-          await db.query(
-            `UPDATE containers SET container_type_id = $2, container_type_source_observation_id = $3, atualizado_em = now() WHERE id = $1`,
-            [containerId, tipoId, obsNormalizado.id],
-          );
-          await resolverPendencias(db, processoId, containerId, ['tipo_ausente', 'tipo_nao_reconhecido']);
+          const bloqueado = await fatoMaterialBloqueadoPorFinal(db, {
+            containerId, campo: 'containerType', valorAnterior: tipoAntes, valorNovo: tipoId,
+            origem: 'automatico', extra: { fonte: t.fonte, observationId: obsNormalizado.id },
+          });
+          if (!bloqueado) {
+            await db.query(
+              `UPDATE containers SET container_type_id = $2, container_type_source_observation_id = $3, atualizado_em = now() WHERE id = $1`,
+              [containerId, tipoId, obsNormalizado.id],
+            );
+            await resolverPendencias(db, processoId, containerId, ['tipo_ausente', 'tipo_nao_reconhecido']);
+          }
         } else {
-          // A observação vencedora não normaliza: o normalizado ACOMPANHA (nunca
-          // fica um código normalizado "órfão" de uma fonte agora superada) —
-          // é exatamente o que impedia a fotografia de mostrar tipo original de
-          // uma fonte e tipo normalizado de outra.
-          await db.query(
-            `UPDATE containers SET container_type_id = NULL, container_type_source_observation_id = NULL, atualizado_em = now() WHERE id = $1`,
-            [containerId],
-          );
-          await resolverPendencias(db, processoId, containerId, ['tipo_ausente']);
-          await abrirPendencia(db, org, processoId, containerId, 'tipo_nao_reconhecido', { tipoOriginal: bruto, fonte: t.fonte });
+          const bloqueado = await fatoMaterialBloqueadoPorFinal(db, {
+            containerId, campo: 'containerType', valorAnterior: tipoAntes, valorNovo: null,
+            origem: 'automatico', extra: { fonte: t.fonte, observationId: obsTipo.id, motivo: 'tipo_nao_normalizado' },
+          });
+          if (!bloqueado) {
+            // A observação vencedora não normaliza: o normalizado ACOMPANHA (nunca
+            // fica um código normalizado "órfão" de uma fonte agora superada) —
+            // é exatamente o que impedia a fotografia de mostrar tipo original de
+            // uma fonte e tipo normalizado de outra.
+            await db.query(
+              `UPDATE containers SET container_type_id = NULL, container_type_source_observation_id = NULL, atualizado_em = now() WHERE id = $1`,
+              [containerId],
+            );
+            await resolverPendencias(db, processoId, containerId, ['tipo_ausente']);
+            await abrirPendencia(db, org, processoId, containerId, 'tipo_nao_reconhecido', { tipoOriginal: bruto, fonte: t.fonte });
+          }
         }
       }
       // Não venceu: a observação já está no ledger (acima) — preservada, auditável

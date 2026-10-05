@@ -13,7 +13,7 @@ import { ClosingService } from '../closing/closingService';
 import { recalcularApuracaoContainer } from '../apuracao/recalcularApuracao';
 import { passagemDoCalendario } from '../apuracao/passagemCalendario';
 import { seedRocketTermoPorEmbarque, seedRocketTermoUnico } from '../tariffs/seed/rocketTermoPorEmbarque';
-import { confirmarResponsabilidadeClienteIntegral } from './responsabilidadeTestHelper';
+import { confirmarResponsabilidadeClienteIntegral, novoGestor } from './responsabilidadeTestHelper';
 
 /**
  * Fase 8 v1.1 — GABARITO da apuração monetária orquestrada. Pipeline ÚNICO e
@@ -218,9 +218,10 @@ test('gate: DEMURRAGE_CONFIRMADA bloqueia FINAL sem responsabilidade decidida (E
   const pool = testPool();
   try {
     await setupBanco(pool);
-    const { processoId, containerId } = await cenarioDemurrageConfirmada(pool, 'RESP1');
+    const { orgId, processoId, containerId } = await cenarioDemurrageConfirmada(pool, 'RESP1');
     await minutaValidada(pool, containerId, 'RESP1', '2026-09-10');
-    const r = await new ClosingService(pool).finalizarProcesso({ processoId, papel: 'MANAGER', config: cfg });
+    const gestorId = await novoGestor(pool, orgId);
+    const r = await new ClosingService(pool).finalizarProcesso({ processoId, membershipId: gestorId, config: cfg });
     assert.deepEqual(r, { ok: false, motivo: 'responsabilidade_em_analise' });
   } finally { await pool.end(); }
 });
@@ -229,9 +230,10 @@ test('gate: DEMURRAGE_CONFIRMADA bloqueia FINAL sem comprovação (minuta VALIDA
   const pool = testPool();
   try {
     await setupBanco(pool);
-    const { processoId, containerId } = await cenarioDemurrageConfirmada(pool, 'COMP1');
+    const { orgId, processoId, containerId } = await cenarioDemurrageConfirmada(pool, 'COMP1');
     await setResp(pool, containerId, 'CONFIRMADA_CLIENTE');
-    const r = await new ClosingService(pool).finalizarProcesso({ processoId, papel: 'MANAGER', config: cfg });
+    const gestorId = await novoGestor(pool, orgId);
+    const r = await new ClosingService(pool).finalizarProcesso({ processoId, membershipId: gestorId, config: cfg });
     assert.deepEqual(r, { ok: false, motivo: 'comprovacao_pendente' });
   } finally { await pool.end(); }
 });
@@ -261,7 +263,8 @@ test('gate: UNAVAILABLE (equipamento sem tarifa) bloqueia FINAL — dias existem
     assert.equal((await relogio(pool, c, 'cliente')).dias_demurrage, 5, 'os dias continuam existindo');
     await setResp(pool, c, 'CONFIRMADA_CLIENTE');
     await minutaValidada(pool, c, 'UNAV1', '2026-09-10');
-    const r = await new ClosingService(pool).finalizarProcesso({ processoId: p.id, papel: 'MANAGER', config: cfg });
+    const gestorUnav = await novoGestor(pool, org.id);
+    const r = await new ClosingService(pool).finalizarProcesso({ processoId: p.id, membershipId: gestorUnav, config: cfg });
     assert.deepEqual(r, { ok: false, motivo: 'valor_cliente_nao_confirmado' });
   } finally { await pool.end(); }
 });
@@ -275,7 +278,8 @@ test('gate: ESTIMATED_PROVISIONAL bloqueia FINAL; ESTIMATED permite', { skip: !u
     assert.equal((await clienteAtivo(pool, prov.containerId)).confirmation_status, 'ESTIMATED_PROVISIONAL');
     await setResp(pool, prov.containerId, 'CONFIRMADA_CLIENTE');
     await minutaValidada(pool, prov.containerId, 'PROV1', '2026-09-10');
-    const rp = await new ClosingService(pool).finalizarProcesso({ processoId: prov.processoId, papel: 'MANAGER', config: cfg });
+    const gestorProv = await novoGestor(pool, prov.orgId);
+    const rp = await new ClosingService(pool).finalizarProcesso({ processoId: prov.processoId, membershipId: gestorProv, config: cfg });
     assert.deepEqual(rp, { ok: false, motivo: 'valor_cliente_nao_confirmado' });
 
     // ESTIMATED → permite (gate passa).
@@ -283,7 +287,8 @@ test('gate: ESTIMATED_PROVISIONAL bloqueia FINAL; ESTIMATED permite', { skip: !u
     assert.equal((await clienteAtivo(pool, ok.containerId)).confirmation_status, 'ESTIMATED');
     await setResp(pool, ok.containerId, 'CONFIRMADA_CLIENTE');
     await minutaValidada(pool, ok.containerId, 'ESTOK', '2026-09-10');
-    const ro = await new ClosingService(pool).finalizarProcesso({ processoId: ok.processoId, papel: 'MANAGER', config: cfg });
+    const gestorEstok = await novoGestor(pool, ok.orgId);
+    const ro = await new ClosingService(pool).finalizarProcesso({ processoId: ok.processoId, membershipId: gestorEstok, config: cfg });
     assert.deepEqual(ro, { ok: true });
     // Valores ATIVOS transitaram OPEN → FINAL.
     assert.equal((await clienteAtivo(pool, ok.containerId)).calculation_status, 'FINAL');
@@ -306,7 +311,8 @@ test('gate: INDETERMINADA bloqueia FINAL; ZERO_CONFIRMADO fecha sem tarifa e sem
     // House free time AUSENTE → cliente PENDING; tracking devolve para permitir o gate de devolução.
     await containers.applyObservation({ containerId: ci.id, organizationId: org.id, campo: 'trackingReturnDate', valor: '2026-09-10', fonte: 'tracking_service', observadoEm: new Date('2026-09-10T00:00:00Z') });
     await recalcularApuracaoContainer(pool, ci.id, { dataReferencia: cfg.hoje });
-    const rind = await new ClosingService(pool).finalizarProcesso({ processoId: pi.id, papel: 'MANAGER', config: cfg });
+    const gestorInd = await novoGestor(pool, org.id);
+    const rind = await new ClosingService(pool).finalizarProcesso({ processoId: pi.id, membershipId: gestorInd, config: cfg });
     assert.deepEqual(rind, { ok: false, motivo: 'apuracao_indeterminada' });
 
     // ZERO_CONFIRMADO: devolvido dentro do free time nos dois relógios → fecha sem tarifa/minuta.
@@ -314,7 +320,8 @@ test('gate: INDETERMINADA bloqueia FINAL; ZERO_CONFIRMADO fecha sem tarifa e sem
     const cz = await novoContainer(pool, org.id, pz.id, 'ZERO1', { discharge: '2026-09-01', houseFT: 20, masterFT: 20 });
     await setEffective(pool, cz, '2026-09-05'); // dentro do free time → 0 dias nos dois.
     await recalcularApuracaoContainer(pool, cz, { dataReferencia: cfg.hoje });
-    const rz = await new ClosingService(pool).finalizarProcesso({ processoId: pz.id, papel: 'MANAGER', config: cfg });
+    const gestorZero = await novoGestor(pool, org.id);
+    const rz = await new ClosingService(pool).finalizarProcesso({ processoId: pz.id, membershipId: gestorZero, config: cfg });
     assert.deepEqual(rz, { ok: true }, 'zero confirmado fecha sem tarifa e sem minuta');
   } finally { await pool.end(); }
 });
@@ -330,7 +337,8 @@ test('FINAL impede recálculo: orquestrador é NO-OP (app) e o banco barra a esc
     const ok = await cenarioDemurrageConfirmada(pool, 'FROZEN');
     await setResp(pool, ok.containerId, 'CONFIRMADA_CLIENTE');
     await minutaValidada(pool, ok.containerId, 'FROZEN', '2026-09-10');
-    assert.deepEqual(await new ClosingService(pool).finalizarProcesso({ processoId: ok.processoId, papel: 'MANAGER', config: cfg }), { ok: true });
+    const gestorFrozen = await novoGestor(pool, ok.orgId);
+    assert.deepEqual(await new ClosingService(pool).finalizarProcesso({ processoId: ok.processoId, membershipId: gestorFrozen, config: cfg }), { ok: true });
 
     const antes = await clienteAtivo(pool, ok.containerId);
     // App-guard: orquestrador NO-OP.
@@ -359,22 +367,23 @@ test('reabertura: input igual → idempotente (nenhuma cópia); input alterado �
     await setResp(pool, ok.containerId, 'CONFIRMADA_CLIENTE');
     await minutaValidada(pool, ok.containerId, 'REAB', '2026-09-10');
     const svc = new ClosingService(pool);
-    assert.deepEqual(await svc.finalizarProcesso({ processoId: ok.processoId, papel: 'MANAGER', config: cfg }), { ok: true });
+    const gestorReab = await novoGestor(pool, ok.orgId);
+    assert.deepEqual(await svc.finalizarProcesso({ processoId: ok.processoId, membershipId: gestorReab, config: cfg }), { ok: true });
     const vFinal = await clienteAtivo(pool, ok.containerId);
     assert.equal(vFinal.calculation_status, 'FINAL');
 
     // Reabertura SEM mudança de input → idempotente (mesmo input_hash, sem nova linha).
-    const sol1 = await svc.solicitarReabertura({ processoId: ok.processoId, justificativa: 'sem mudança' });
+    const sol1 = await svc.solicitarReabertura({ processoId: ok.processoId, membershipId: gestorReab, justificativa: 'sem mudança' });
     assert.ok(sol1.ok);
-    await svc.autorizarReabertura({ reaberturaId: (sol1 as any).reaberturaId, papel: 'MANAGER', config: cfg });
+    await svc.autorizarReabertura({ reaberturaId: (sol1 as any).reaberturaId, membershipId: gestorReab, config: cfg });
     const { rows: apos1 } = await pool.query(`SELECT id, calculation_status FROM valores_apurados WHERE container_id=$1 AND relogio_tipo='cliente'`, [ok.containerId]);
     assert.equal(apos1.length, 1, 'sem input alterado, reabertura não cria cópia monetária idêntica');
     assert.equal(apos1[0].id, vFinal.id);
 
     // Refecha e reabre com MUDANÇA de fato (effective +2 dias) → nova versão OPEN, anterior preservada.
-    assert.deepEqual(await svc.finalizarProcesso({ processoId: ok.processoId, papel: 'MANAGER', config: cfg }), { ok: true });
-    const sol2 = await svc.solicitarReabertura({ processoId: ok.processoId, justificativa: 'nova data' });
-    await svc.autorizarReabertura({ reaberturaId: (sol2 as any).reaberturaId, papel: 'MANAGER', config: cfg });
+    assert.deepEqual(await svc.finalizarProcesso({ processoId: ok.processoId, membershipId: gestorReab, config: cfg }), { ok: true });
+    const sol2 = await svc.solicitarReabertura({ processoId: ok.processoId, membershipId: gestorReab, justificativa: 'nova data' });
+    await svc.autorizarReabertura({ reaberturaId: (sol2 as any).reaberturaId, membershipId: gestorReab, config: cfg });
     await setEffective(pool, ok.containerId, '2026-09-12'); // 7 dias agora
     await recalcularApuracaoContainer(pool, ok.containerId, { dataReferencia: cfg.hoje });
     const ativo = await clienteAtivo(pool, ok.containerId);

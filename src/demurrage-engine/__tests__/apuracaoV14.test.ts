@@ -8,6 +8,7 @@ import { ProcessoRepository } from '../persistence/processoRepository';
 import { ContainerRepository } from '../persistence/containerRepository';
 import { MinutaRepository } from '../persistence/minutaRepository';
 import { ClosingService } from '../closing/closingService';
+import { novoGestor } from './responsabilidadeTestHelper';
 import { seedRocketTermoPorEmbarque } from '../tariffs/seed/rocketTermoPorEmbarque';
 import { executarTickDemurrage } from '../../demurrage/schedulerBootstrap';
 import { ArmadorTrackingPort } from '../sources/armadorTrackingSource';
@@ -62,8 +63,9 @@ test('v1.4-1a: ZERO + sem minuta → FINAL permitido', { skip: !url }, async () 
   const pool = testPool();
   try {
     await setupBanco(pool);
-    const { processoId } = await processoZero(pool, 'z-a', 'ZA00000001');
-    assert.deepEqual(await new ClosingService(pool).finalizarProcesso({ processoId, papel: 'MANAGER', config: cfg }), { ok: true });
+    const { orgId, processoId } = await processoZero(pool, 'z-a', 'ZA00000001');
+    const gestorId = await novoGestor(pool, orgId);
+    assert.deepEqual(await new ClosingService(pool).finalizarProcesso({ processoId, membershipId: gestorId, config: cfg }), { ok: true });
   } finally { await pool.end(); }
 });
 
@@ -71,10 +73,11 @@ test('v1.4-1b: ZERO + minuta coerente (não divergente) → FINAL permitido', { 
   const pool = testPool();
   try {
     await setupBanco(pool);
-    const { processoId, containerId } = await processoZero(pool, 'z-b', 'ZB00000001');
+    const { orgId, processoId, containerId } = await processoZero(pool, 'z-b', 'ZB00000001');
     const m = await new MinutaRepository(pool).criarRecebida({ containerId, numeroInformado: null, dataInformada: '2026-09-10' });
     await new MinutaRepository(pool).marcarValidada(m.id, '2026-09-10', false, null);
-    assert.deepEqual(await new ClosingService(pool).finalizarProcesso({ processoId, papel: 'MANAGER', config: cfg }), { ok: true });
+    const gestorId = await novoGestor(pool, orgId);
+    assert.deepEqual(await new ClosingService(pool).finalizarProcesso({ processoId, membershipId: gestorId, config: cfg }), { ok: true });
   } finally { await pool.end(); }
 });
 
@@ -82,11 +85,12 @@ test('v1.4-1c: ZERO + divergência conhecida pendente → FINAL bloqueado (diver
   const pool = testPool();
   try {
     await setupBanco(pool);
-    const { processoId, containerId } = await processoZero(pool, 'z-c', 'ZC00000001');
+    const { orgId, processoId, containerId } = await processoZero(pool, 'z-c', 'ZC00000001');
     const nova = await new MinutaRepository(pool).criarRecebida({ containerId, numeroInformado: null, dataInformada: '2026-09-16' });
     await pool.query(`UPDATE minutas SET divergente_do_tracking = true WHERE id = $1`, [nova.id]);
+    const gestorId = await novoGestor(pool, orgId);
     assert.deepEqual(
-      await new ClosingService(pool).finalizarProcesso({ processoId, papel: 'MANAGER', config: cfg }),
+      await new ClosingService(pool).finalizarProcesso({ processoId, membershipId: gestorId, config: cfg }),
       { ok: false, motivo: 'divergencia_pendente' },
     );
   } finally { await pool.end(); }
@@ -96,15 +100,16 @@ test('v1.4-1d: após o Gestor rejeitar a divergência, ZERO volta a ser elegíve
   const pool = testPool();
   try {
     await setupBanco(pool);
-    const { processoId, containerId } = await processoZero(pool, 'z-d', 'ZD00000001');
+    const { orgId, processoId, containerId } = await processoZero(pool, 'z-d', 'ZD00000001');
     const minutas = new MinutaRepository(pool);
     const nova = await minutas.criarRecebida({ containerId, numeroInformado: null, dataInformada: '2026-09-16' });
     await pool.query(`UPDATE minutas SET divergente_do_tracking = true WHERE id = $1`, [nova.id]);
     const svc = new ClosingService(pool);
-    assert.deepEqual(await svc.finalizarProcesso({ processoId, papel: 'MANAGER', config: cfg }), { ok: false, motivo: 'divergencia_pendente' });
+    const gestorId = await novoGestor(pool, orgId);
+    assert.deepEqual(await svc.finalizarProcesso({ processoId, membershipId: gestorId, config: cfg }), { ok: false, motivo: 'divergencia_pendente' });
     // Gestor decide: rejeita a minuta divergente → deixa de estar pendente.
     await minutas.marcarRejeitada(nova.id, 'NUMERO_DIVERGENTE', null);
-    assert.deepEqual(await svc.finalizarProcesso({ processoId, papel: 'MANAGER', config: cfg }), { ok: true });
+    assert.deepEqual(await svc.finalizarProcesso({ processoId, membershipId: gestorId, config: cfg }), { ok: true });
   } finally { await pool.end(); }
 });
 

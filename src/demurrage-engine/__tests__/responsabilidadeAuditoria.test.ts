@@ -171,7 +171,7 @@ test('auditoria read-only: herança da 0033 → lista as decisões que violam o 
     await recalcularApuracaoContainer(pool, d.containerId, { dataReferencia: hoje });
 
     const r = await runMigrations(pool);
-    assert.deepEqual(r.applied, ['0034_responsabilidade_v1_2_agregado.sql']);
+    assert.deepEqual(r.applied, ['0034_responsabilidade_v1_2_agregado.sql', '0035_d15a_integridade_final_reabertura.sql']);
 
     const antes = (await pool.query(IMPRESSAO)).rows[0].h;
     const avisos = await executarAuditoria(pool);

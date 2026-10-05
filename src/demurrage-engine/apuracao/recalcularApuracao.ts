@@ -1,4 +1,4 @@
-import { Pool } from 'pg';
+import { Pool, PoolClient } from 'pg';
 import { getPool } from '../db/pool';
 import { CivilDate } from '../temporal/civilDate';
 import { calcularDoisRelogios } from '../temporal/dualClockCalculator';
@@ -53,15 +53,19 @@ function unavailable(motor: MotorComercial, motivo: string): MotorResult {
   };
 }
 
-export async function recalcularApuracaoContainer(
-  poolOrClient: Pool,
+/**
+ * Fase D15-A — núcleo do pipeline SEM BEGIN/COMMIT próprios: roda dentro da
+ * transação do `client` do CHAMADOR. Usado por `recalcularApuracaoContainer`
+ * (abre sua própria transação) e, a partir de D15-A, pelo `closingService`
+ * quando o recálculo precisa ser atômico junto com a validação de minuta, o
+ * fechamento ou a reabertura (uma falha em qualquer etapa reverte tudo).
+ * Mesma lógica exata da versão anterior — só a fronteira transacional mudou.
+ */
+export async function recalcularApuracaoContainerComClient(
+  client: PoolClient,
   containerId: string,
   config: RecalcularConfig,
 ): Promise<RecalcularResultado> {
-  const pool = poolOrClient ?? getPool();
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
     await client.query(`SET LOCAL demurrage.relogio_writer = 'dualClockCalculator'`);
 
     const { rows: cr } = await client.query(
@@ -79,9 +83,10 @@ export async function recalcularApuracaoContainer(
     if (!cr.length) throw new Error(`recalcularApuracao: contêiner ${containerId} não encontrado`);
     const c = cr[0];
 
-    // Guard de FINAL (defesa em profundidade — o banco também barra).
+    // Guard de FINAL (defesa em profundidade — o banco também barra). Não há
+    // COMMIT aqui: esta função não controla a transação (ver nota acima); o
+    // chamador decide quando comitar (nada foi escrito até este ponto).
     if (c.apuracao_status === 'FINAL') {
-      await client.query('COMMIT');
       return { skipped: 'FINAL', containerId };
     }
 
@@ -94,10 +99,10 @@ export async function recalcularApuracaoContainer(
     });
 
     // 1) Relógios (cache) — sob a mesma transação/data final.
-    await new RelogioRepository(pool).recalcularComClient(client, containerId, finalDate);
+    await new RelogioRepository(client as unknown as Pool).recalcularComClient(client, containerId, finalDate);
 
     // 2) Valores.
-    const valores = new ValorApuradoRepository(pool);
+    const valores = new ValorApuradoRepository(client as unknown as Pool);
     const tariffs = new TariffTableRepository(client as unknown as Pool);
     const equipamento: string | null = c.equipamento ?? null;
 
@@ -169,8 +174,26 @@ export async function recalcularApuracaoContainer(
       containerId, c.processo_id, { hoje: config.dataReferencia },
     );
 
-    await client.query('COMMIT');
     return { skipped: null, containerId };
+}
+
+/**
+ * Wrapper que abre e fecha sua PRÓPRIA transação — comportamento idêntico ao
+ * da função original (pré-D15-A). Usado por todo caminho que não precisa
+ * compartilhar atomicidade com outra operação (ingestão, outbox, tick diário).
+ */
+export async function recalcularApuracaoContainer(
+  poolOrClient: Pool,
+  containerId: string,
+  config: RecalcularConfig,
+): Promise<RecalcularResultado> {
+  const pool = poolOrClient ?? getPool();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const resultado = await recalcularApuracaoContainerComClient(client, containerId, config);
+    await client.query('COMMIT');
+    return resultado;
   } catch (erro) {
     await client.query('ROLLBACK');
     throw erro;
@@ -195,4 +218,15 @@ async function persistir(
 export async function recalcularApuracaoProcesso(pool: Pool, processoId: string, config: RecalcularConfig): Promise<void> {
   const { rows } = await pool.query(`SELECT id FROM containers WHERE processo_id = $1 ORDER BY id`, [processoId]);
   for (const r of rows) await recalcularApuracaoContainer(pool, r.id, config);
+}
+
+/**
+ * Fase D15-A — mesma coisa que `recalcularApuracaoProcesso`, mas DENTRO da
+ * transação do `client` do chamador (usado pelo `closingService` para que a
+ * reabertura — snapshot + volta a OPEN + recálculo de todos os contêineres —
+ * seja uma única operação atômica).
+ */
+export async function recalcularApuracaoProcessoComClient(client: PoolClient, processoId: string, config: RecalcularConfig): Promise<void> {
+  const { rows } = await client.query(`SELECT id FROM containers WHERE processo_id = $1 ORDER BY id`, [processoId]);
+  for (const r of rows) await recalcularApuracaoContainerComClient(client, r.id, config);
 }

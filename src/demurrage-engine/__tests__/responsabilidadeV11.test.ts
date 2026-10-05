@@ -430,8 +430,9 @@ test('v1.1 #3 casos 1-6: nova versão da tabela muda as diárias sem mudar os di
 
     // Caso 4: fechamento volta a ser bloqueado.
     await minutaValidadaDireta(pool, c.containerId, 'VALV', '2026-02-11');
+    const gestorFinalizar = await novoGestor(pool, c.orgId);
     assert.deepEqual(
-      await new ClosingService(pool).finalizarProcesso({ processoId: c.processoId, papel: 'MANAGER', config: cfg }),
+      await new ClosingService(pool).finalizarProcesso({ processoId: c.processoId, membershipId: gestorFinalizar, config: cfg }),
       { ok: false, motivo: 'responsabilidade_em_analise' },
     );
 
@@ -451,7 +452,7 @@ test('v1.1 #3 casos 1-6: nova versão da tabela muda as diárias sem mudar os di
 
     // Com a divisão novamente coerente, o fechamento é liberado.
     assert.deepEqual(
-      await new ClosingService(pool).finalizarProcesso({ processoId: c.processoId, papel: 'MANAGER', config: cfg }),
+      await new ClosingService(pool).finalizarProcesso({ processoId: c.processoId, membershipId: gestorFinalizar, config: cfg }),
       { ok: true },
     );
   } finally { await pool.end(); }
@@ -659,7 +660,7 @@ test('v1.1 migração 0032 → 0033: decisões existentes preservadas; a nova re
     // E a decisão de antes da 0033 continua passando pelo gate de fechamento.
     await minutaValidadaDireta(pool, cli.containerId, 'MIGCLI', '2026-01-10');
     assert.deepEqual(
-      await new ClosingService(pool).finalizarProcesso({ processoId: cli.processoId, papel: 'MANAGER', config: cfg }),
+      await new ClosingService(pool).finalizarProcesso({ processoId: cli.processoId, membershipId: gestorCli, config: cfg }),
       { ok: true },
     );
   } finally {

@@ -103,8 +103,8 @@ test('D14 G4 — os 8 indicadores de conclusão + integridade + total, construí
     });
     const closingA = new ClosingService(pool);
     const minutaA = await closingA.registrarMinuta({ containerId: containerA, numeroInformado: 'EFAA0000001', dataInformada: '2026-01-10' as any });
-    await closingA.validarMinuta({ minutaId: minutaA.id, papel: 'MANAGER', config: { hoje: '2026-01-11' as any } });
-    const finA = await closingA.finalizarProcesso({ processoId: procA.id, papel: 'MANAGER', config: { hoje: '2026-01-11' as any } });
+    await closingA.validarMinuta({ minutaId: minutaA.id, membershipId: await novoGestor(pool, org.id), config: { hoje: '2026-01-11' as any } });
+    const finA = await closingA.finalizarProcesso({ processoId: procA.id, membershipId: await novoGestor(pool, org.id), config: { hoje: '2026-01-11' as any } });
     assert.deepEqual(finA, { ok: true });
 
     // B — exposição só da Rocket (Master FT pequeno, House FT enorme): CONFIRMADA_ROCKET.
@@ -124,8 +124,8 @@ test('D14 G4 — os 8 indicadores de conclusão + integridade + total, construí
     });
     const closingB = new ClosingService(pool);
     const minutaB = await closingB.registrarMinuta({ containerId: containerB, numeroInformado: 'EFBB0000001', dataInformada: '2026-02-10' as any });
-    await closingB.validarMinuta({ minutaId: minutaB.id, papel: 'MANAGER', config: { hoje: '2026-02-11' as any } });
-    const finB = await closingB.finalizarProcesso({ processoId: procB.id, papel: 'MANAGER', config: { hoje: '2026-02-11' as any } });
+    await closingB.validarMinuta({ minutaId: minutaB.id, membershipId: await novoGestor(pool, org.id), config: { hoje: '2026-02-11' as any } });
+    const finB = await closingB.finalizarProcesso({ processoId: procB.id, membershipId: await novoGestor(pool, org.id), config: { hoje: '2026-02-11' as any } });
     assert.deepEqual(finB, { ok: true });
 
     // C — zero custo nos dois lados (FTs enormes, devolução dentro do Free Time): ZERO_CONFIRMADO, sem decisão, sem minuta.
@@ -135,7 +135,7 @@ test('D14 G4 — os 8 indicadores de conclusão + integridade + total, construí
     await setEffective(pool, containerC, '2026-03-05');
     await recalcularApuracaoContainer(pool, containerC, { dataReferencia: '2026-03-05' as any });
     const closingC = new ClosingService(pool);
-    const finC = await closingC.finalizarProcesso({ processoId: procC.id, papel: 'MANAGER', config: { hoje: '2026-03-05' as any } });
+    const finC = await closingC.finalizarProcesso({ processoId: procC.id, membershipId: await novoGestor(pool, org.id), config: { hoje: '2026-03-05' as any } });
     assert.deepEqual(finC, { ok: true });
 
     // D — responsabilidade DIVIDIDA sobre os 5 dias de demurrage do cliente (3 Rocket + 2 cliente).
@@ -164,8 +164,8 @@ test('D14 G4 — os 8 indicadores de conclusão + integridade + total, construí
     assert.equal(rD.ok, true, `decisão DIVIDIDA falhou: ${JSON.stringify(rD)}`);
     const closingD = new ClosingService(pool);
     const minutaD = await closingD.registrarMinuta({ containerId: containerD, numeroInformado: 'EFDD0000001', dataInformada: '2026-04-10' as any });
-    await closingD.validarMinuta({ minutaId: minutaD.id, papel: 'MANAGER', config: { hoje: '2026-04-11' as any } });
-    const finD = await closingD.finalizarProcesso({ processoId: procD.id, papel: 'MANAGER', config: { hoje: '2026-04-11' as any } });
+    await closingD.validarMinuta({ minutaId: minutaD.id, membershipId: await novoGestor(pool, org.id), config: { hoje: '2026-04-11' as any } });
+    const finD = await closingD.finalizarProcesso({ processoId: procD.id, membershipId: await novoGestor(pool, org.id), config: { hoje: '2026-04-11' as any } });
     assert.deepEqual(finD, { ok: true });
 
     const resp = await montarGestaoEficiencia(pool, org.id, { inicio: '2000-01-01' as any, fim: '2100-12-31' as any }, '2026-04-11' as any);
@@ -216,16 +216,16 @@ test('D14 G4 — reabertura e refechamento contam o contêiner UMA VEZ nos totai
     await setEffective(pool, containerId, '2026-06-05');
     await recalcularApuracaoContainer(pool, containerId, { dataReferencia: '2026-06-05' as any });
     const closing = new ClosingService(pool);
-    const fin1 = await closing.finalizarProcesso({ processoId: proc.id, papel: 'MANAGER', config: { hoje: '2026-06-05' as any } });
+    const fin1 = await closing.finalizarProcesso({ processoId: proc.id, membershipId: await novoGestor(pool, org.id), config: { hoje: '2026-06-05' as any } });
     assert.deepEqual(fin1, { ok: true });
 
     const resp1 = await montarGestaoEficiencia(pool, org.id, { inicio: '2000-01-01' as any, fim: '2100-12-31' as any }, '2026-06-05' as any);
     assert.equal(resp1.concluidos.totalContaineresFinal, 1);
 
-    const sol = await closing.solicitarReabertura({ processoId: proc.id, justificativa: 'Teste D14 G4: reabertura/refechamento.' });
+    const sol = await closing.solicitarReabertura({ processoId: proc.id, membershipId: await novoGestor(pool, org.id), justificativa: 'Teste D14 G4: reabertura/refechamento.' });
     assert.equal(sol.ok, true);
     if (!sol.ok) return;
-    const auth = await closing.autorizarReabertura({ reaberturaId: sol.reaberturaId, papel: 'ADMIN', config: { hoje: '2026-06-06' as any } });
+    const auth = await closing.autorizarReabertura({ reaberturaId: sol.reaberturaId, membershipId: await novoGestor(pool, org.id), config: { hoje: '2026-06-06' as any } });
     assert.equal(auth.ok, true);
 
     const procAberto = (await pool.query(`SELECT apuracao_status FROM processos WHERE id = $1`, [proc.id])).rows[0];
@@ -233,7 +233,7 @@ test('D14 G4 — reabertura e refechamento contam o contêiner UMA VEZ nos totai
     const respAberto = await montarGestaoEficiencia(pool, org.id, { inicio: '2000-01-01' as any, fim: '2100-12-31' as any }, '2026-06-06' as any);
     assert.equal(respAberto.concluidos.totalContaineresFinal, 0, 'reaberto: sai dos totais FINAL enquanto está em revisão');
 
-    const fin2 = await closing.finalizarProcesso({ processoId: proc.id, papel: 'MANAGER', config: { hoje: '2026-06-06' as any } });
+    const fin2 = await closing.finalizarProcesso({ processoId: proc.id, membershipId: await novoGestor(pool, org.id), config: { hoje: '2026-06-06' as any } });
     assert.deepEqual(fin2, { ok: true });
     const resp2 = await montarGestaoEficiencia(pool, org.id, { inicio: '2000-01-01' as any, fim: '2100-12-31' as any }, '2026-06-06' as any);
     assert.equal(resp2.concluidos.totalContaineresFinal, 1, 'refechado: conta UMA VEZ — a mesma linha de processos, nunca duplicada pelo ciclo anterior');
@@ -254,7 +254,7 @@ test('D14 G4 — datas naturais por família: o período de G-D1/D2/D3 usa a dat
     await setEffective(pool, containerId, '2026-03-05');
     await recalcularApuracaoContainer(pool, containerId, { dataReferencia: '2026-03-05' as any });
     const closing = new ClosingService(pool);
-    const fin = await closing.finalizarProcesso({ processoId: proc.id, papel: 'MANAGER', config: { hoje: '2026-03-05' as any } });
+    const fin = await closing.finalizarProcesso({ processoId: proc.id, membershipId: await novoGestor(pool, org.id), config: { hoje: '2026-03-05' as any } });
     assert.deepEqual(fin, { ok: true });
 
     // Período casando com a devolução simulada (G-D1/D2/D3: COALESCE(effective_return_date,...)).
@@ -335,8 +335,8 @@ test('D14 v1.1 #2 — G-D4: DOIS motores comerciais ATIVOS/FINAL no mesmo lado c
     });
     const closing = new ClosingService(pool);
     const minuta = await closing.registrarMinuta({ containerId, numeroInformado: 'DMAA0000001', dataInformada: '2026-05-10' as any });
-    await closing.validarMinuta({ minutaId: minuta.id, papel: 'MANAGER', config: { hoje: '2026-05-11' as any } });
-    const fin = await closing.finalizarProcesso({ processoId: proc.id, papel: 'MANAGER', config: { hoje: '2026-05-11' as any } });
+    await closing.validarMinuta({ minutaId: minuta.id, membershipId: await novoGestor(pool, org.id), config: { hoje: '2026-05-11' as any } });
+    const fin = await closing.finalizarProcesso({ processoId: proc.id, membershipId: await novoGestor(pool, org.id), config: { hoje: '2026-05-11' as any } });
     assert.deepEqual(fin, { ok: true });
 
     const resp = await montarGestaoEficiencia(pool, org.id, { inicio: '2000-01-01' as any, fim: '2100-12-31' as any }, '2026-05-11' as any);

@@ -11,7 +11,7 @@ import { ClosingService } from '../closing/closingService';
 import { passagemDoCalendario } from '../apuracao/passagemCalendario';
 import { seedArmadorTables } from '../tariffs/seed/armadorTables';
 import { seedRocketTermoPorEmbarque } from '../tariffs/seed/rocketTermoPorEmbarque';
-import { confirmarResponsabilidadeClienteIntegral } from './responsabilidadeTestHelper';
+import { confirmarResponsabilidadeClienteIntegral, novoGestor } from './responsabilidadeTestHelper';
 import {
   containerContrato, contratoRegistro, ingerirTrackingDoContainer, numeroContainer, o, resultadoTracking,
 } from './registroDemurrageHelpers';
@@ -223,7 +223,8 @@ test('D10 gate5: cenário A — registro → Aguardando descarga → descarga �
 
     // 9) finalizar SEM minuta (regra congelada: zero confirmado fecha sem comprovação).
     const closing = new ClosingService(pool);
-    const fin = await closing.finalizarProcesso({ processoId: r1.processoId, papel: 'MANAGER', config: { hoje: '2026-10-04' } });
+    const gestorA = await novoGestor(pool, org.id);
+    const fin = await closing.finalizarProcesso({ processoId: r1.processoId, membershipId: gestorA, config: { hoje: '2026-10-04' } });
     assert.deepEqual(fin, { ok: true });
 
     // 10) FINAL.
@@ -317,8 +318,9 @@ test('D10 gate6: cenário B — descarga → estoura os dois Free Times → valo
     assert.equal(cDevolvido.estado, 'DEVOLVIDO_AGUARDANDO_TRATAMENTO');
 
     const closing = new ClosingService(pool);
+    const gestorB = await novoGestor(pool, org.id);
     // Gate congelado: sem responsabilidade decidida, finalizar bloqueia.
-    const tentativa1 = await closing.finalizarProcesso({ processoId: r1.processoId, papel: 'MANAGER', config: { hoje: '2026-10-05' } });
+    const tentativa1 = await closing.finalizarProcesso({ processoId: r1.processoId, membershipId: gestorB, config: { hoje: '2026-10-05' } });
     assert.deepEqual(tentativa1, { ok: false, motivo: 'responsabilidade_em_analise' });
 
     // Responsabilidade (Fase D11): decisão real pelo serviço — todos os dias
@@ -326,16 +328,16 @@ test('D10 gate6: cenário B — descarga → estoura os dois Free Times → valo
     await confirmarResponsabilidadeClienteIntegral(pool, { containerId, hoje: '2026-10-05' });
 
     // Gate congelado: com responsabilidade decidida mas SEM minuta, ainda bloqueia (comprovação).
-    const tentativa2 = await closing.finalizarProcesso({ processoId: r1.processoId, papel: 'MANAGER', config: { hoje: '2026-10-05' } });
+    const tentativa2 = await closing.finalizarProcesso({ processoId: r1.processoId, membershipId: gestorB, config: { hoje: '2026-10-05' } });
     assert.deepEqual(tentativa2, { ok: false, motivo: 'comprovacao_pendente' });
 
     // Minuta + validação (serviços já existentes — nenhuma regra de fechamento alterada).
     const minuta = await closing.registrarMinuta({ containerId, numeroInformado: numero, dataInformada: '2026-10-04' });
-    const validacao = await closing.validarMinuta({ minutaId: minuta.id, papel: 'MANAGER', config: { hoje: '2026-10-05' } });
+    const validacao = await closing.validarMinuta({ minutaId: minuta.id, membershipId: gestorB, config: { hoje: '2026-10-05' } });
     assert.equal((validacao as any).resultado, 'validada');
 
     // Agora finaliza.
-    const finB = await closing.finalizarProcesso({ processoId: r1.processoId, papel: 'MANAGER', config: { hoje: '2026-10-05' } });
+    const finB = await closing.finalizarProcesso({ processoId: r1.processoId, membershipId: gestorB, config: { hoje: '2026-10-05' } });
     assert.deepEqual(finB, { ok: true });
     const procB = (await pool.query(`SELECT apuracao_status FROM processos WHERE id=$1`, [r1.processoId])).rows[0];
     assert.equal(procB.apuracao_status, 'FINAL');
@@ -456,9 +458,10 @@ test('D10 integridade — LIMITAÇÃO EXTERNA REAL: tabelas do Blueprint (vocabu
 
     await confirmarResponsabilidadeClienteIntegral(pool, { containerId, hoje: '2026-10-01' });
     const closing = new ClosingService(pool);
+    const gestorLim = await novoGestor(pool, org.id);
     const minuta = await closing.registrarMinuta({ containerId, numeroInformado: numero, dataInformada: '2026-09-30' });
-    await closing.validarMinuta({ minutaId: minuta.id, papel: 'MANAGER', config: { hoje: '2026-10-01' } });
-    const fin = await closing.finalizarProcesso({ processoId: r.processoId, papel: 'MANAGER', config: { hoje: '2026-10-01' } });
+    await closing.validarMinuta({ minutaId: minuta.id, membershipId: gestorLim, config: { hoje: '2026-10-01' } });
+    const fin = await closing.finalizarProcesso({ processoId: r.processoId, membershipId: gestorLim, config: { hoje: '2026-10-01' } });
     assert.deepEqual(fin, { ok: false, motivo: 'valor_rocket_nao_confirmado' }, 'UNAVAILABLE bloqueia o FINAL — regra congelada preservada, nada é forçado a fechar');
   } finally { await pool.end(); }
 });
@@ -488,7 +491,8 @@ test('D10: ausência do HeadCargo não é fabricada nem bloqueia o fechamento se
     const { rows: hc } = await pool.query(`SELECT to_regclass('headcargo_faturas') AS t`);
     assert.equal(hc[0].t, null, 'nenhuma tabela/estado de HeadCargo foi criado nesta fase');
     const closing = new ClosingService(pool);
-    const fin = await closing.finalizarProcesso({ processoId: r.processoId, papel: 'MANAGER', config: { hoje: '2026-09-29' } });
+    const gestorHc = await novoGestor(pool, org.id);
+    const fin = await closing.finalizarProcesso({ processoId: r.processoId, membershipId: gestorHc, config: { hoje: '2026-09-29' } });
     assert.deepEqual(fin, { ok: true }, 'zero-custo fecha sem depender de qualquer estado do HeadCargo');
   } finally { await pool.end(); }
 });

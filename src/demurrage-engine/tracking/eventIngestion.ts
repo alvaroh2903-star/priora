@@ -73,7 +73,8 @@ export interface PromocaoAplicada {
   containerId: string;
   campo: string;
   valor: unknown;
-  outcome: 'promovida' | 'registrada_sem_promover' | 'evidencia' | 'ignorada';
+  /** Fase D15-A: 'bloqueada_final' = fato material recebido para processo FINAL (preservado, não promovido, exige reabertura). */
+  outcome: 'promovida' | 'registrada_sem_promover' | 'evidencia' | 'ignorada' | 'bloqueada_final';
 }
 
 export interface IngestResult {

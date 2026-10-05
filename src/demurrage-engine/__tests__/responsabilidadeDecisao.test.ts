@@ -471,9 +471,10 @@ test('caso 13: fechamento permanece bloqueado sem decisão válida (EM_ANALISE)'
   const pool = testPool();
   try {
     await setupBanco(pool);
-    const { processoId, containerId } = await cenarioClienteComDias(pool, 'CASO13', { houseFT: 5, masterFT: 100, discharge: '2026-01-01', effective: '2026-01-10' });
+    const { orgId, processoId, containerId } = await cenarioClienteComDias(pool, 'CASO13', { houseFT: 5, masterFT: 100, discharge: '2026-01-01', effective: '2026-01-10' });
     await minutaValidadaDireta(pool, containerId, 'CASO13', '2026-01-10');
-    const r = await new ClosingService(pool).finalizarProcesso({ processoId, papel: 'MANAGER', config: cfg });
+    const gestorId = await novoGestor(pool, orgId);
+    const r = await new ClosingService(pool).finalizarProcesso({ processoId, membershipId: gestorId, config: cfg });
     assert.deepEqual(r, { ok: false, motivo: 'responsabilidade_em_analise' });
   } finally { await pool.end(); }
 });
@@ -485,7 +486,8 @@ test('caso 14: fechamento é liberado com decisão válida', { skip: !url }, asy
     const { orgId, processoId, containerId } = await cenarioClienteComDias(pool, 'CASO14', { houseFT: 5, masterFT: 100, discharge: '2026-01-01', effective: '2026-01-10' });
     await confirmarResponsabilidadeClienteIntegral(pool, { containerId, hoje: cfg.hoje, organizationId: orgId });
     await minutaValidadaDireta(pool, containerId, 'CASO14', '2026-01-10');
-    const r = await new ClosingService(pool).finalizarProcesso({ processoId, papel: 'MANAGER', config: cfg });
+    const gestorId14 = await novoGestor(pool, orgId);
+    const r = await new ClosingService(pool).finalizarProcesso({ processoId, membershipId: gestorId14, config: cfg });
     assert.deepEqual(r, { ok: true });
     assert.equal((await pool.query(`SELECT apuracao_status FROM processos WHERE id=$1`, [processoId])).rows[0].apuracao_status, 'FINAL');
   } finally { await pool.end(); }
@@ -588,7 +590,8 @@ test('G_final: correção em processo FINAL exige reabertura (EXIGE_REABERTURA)'
     const { orgId, processoId, containerId } = await cenarioClienteComDias(pool, 'FINALX', { houseFT: 5, masterFT: 100, discharge: '2026-01-01', effective: '2026-01-10' });
     const v1 = await confirmarResponsabilidadeClienteIntegral(pool, { containerId, hoje: cfg.hoje, organizationId: orgId });
     await minutaValidadaDireta(pool, containerId, 'FINALX', '2026-01-10');
-    assert.deepEqual(await new ClosingService(pool).finalizarProcesso({ processoId, papel: 'MANAGER', config: cfg }), { ok: true });
+    const gestorIdFinalX = await novoGestor(pool, orgId);
+    assert.deepEqual(await new ClosingService(pool).finalizarProcesso({ processoId, membershipId: gestorIdFinalX, config: cfg }), { ok: true });
 
     const rel = await relogio(pool, containerId, 'cliente');
     const autorMembershipId = await novoGestor(pool, orgId);

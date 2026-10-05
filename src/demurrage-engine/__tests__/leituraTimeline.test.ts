@@ -9,6 +9,7 @@ import { seedArmadorTables } from '../tariffs/seed/armadorTables';
 import { ClosingService } from '../closing/closingService';
 import { buscarTimelineProcesso } from '../leitura/timeline';
 import { containerContrato, contratoRegistro, ingerirTrackingDoContainer, numeroContainer, o, resultadoTracking } from './registroDemurrageHelpers';
+import { novoGestor } from './responsabilidadeTestHelper';
 
 /**
  * Fase D12 (Gate G4) — timeline unificada. Cenário pelo pipeline oficial
@@ -75,7 +76,8 @@ test('D12 G4 — nenhum campo proibido aparece no payload (payload bruto, raw_re
     const org = await setup(pool);
     const { processoId } = await processoComEventos(pool, org.id, 'IM-D12-TL-B', 'TLBB');
     // Fecha o processo (sem minuta, zero confirmado) para gerar um closing_event humano/automático.
-    await new ClosingService(pool).finalizarProcesso({ processoId, papel: 'MANAGER', config: { hoje: '2026-09-20' } }).catch(() => null);
+    const gestorId = await novoGestor(pool, org.id);
+    await new ClosingService(pool).finalizarProcesso({ processoId, membershipId: gestorId, config: { hoje: '2026-09-20' } }).catch(() => null);
 
     const resp = await buscarTimelineProcesso(pool, { organizationId: org.id, processoId });
     assert.ok(resp);

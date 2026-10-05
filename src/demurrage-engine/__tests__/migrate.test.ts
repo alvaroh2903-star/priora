@@ -45,6 +45,7 @@ test('migrations: aplica todas as migrations pendentes em um banco novo e é ide
       '0032_responsabilidade_projecao_guard.sql',
       '0033_responsabilidade_v1_1_corretiva.sql',
       '0034_responsabilidade_v1_2_agregado.sql',
+      '0035_d15a_integridade_final_reabertura.sql',
     ];
 
     const first = await runMigrations(pool);

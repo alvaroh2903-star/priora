@@ -3,6 +3,7 @@ import { getPool } from '../db/pool';
 import { Container, ContainerObservableField, FIELD_OBSERVATION_SOURCE_PRIORITY, FieldObservationSource } from '../domain/types';
 import { FieldObservationRepository, InsertFieldObservationInput, assertFonteAutorizada } from './fieldObservationRepository';
 import { promoverMasterFreeTime } from '../freeTime/masterFreeTimeService';
+import { fatoMaterialBloqueadoPorFinal } from '../closing/materialChangeGuard';
 
 function mapRow(row: any): Container {
   return {
@@ -38,7 +39,15 @@ const FIELD_COLUMNS: Record<ContainerObservableField, { valueColumn: string; obs
   trackingReturnDate: { valueColumn: 'tracking_return_date', obsColumn: 'tracking_return_observation_id' },
 };
 
-export type ApplyObservationOutcome = 'promovida' | 'registrada_sem_promover';
+/**
+ * Fase D15-A (31.7b) — `bloqueada_final`: a observação VENCERIA a promoção
+ * pela hierarquia de fontes, mas o processo do contêiner está FINAL e o
+ * valor é MATERIALMENTE diferente do selecionado. A observação bruta já foi
+ * preservada no ledger (sempre, acima); só a promoção foi recusada. Um
+ * evento `FATO_MATERIAL_POS_FINAL` fica registrado e `exigeReabertura` é
+ * devolvido para o chamador propagar/sinalizar.
+ */
+export type ApplyObservationOutcome = 'promovida' | 'registrada_sem_promover' | 'bloqueada_final';
 
 export interface ApplyObservationInput {
   containerId: string;
@@ -131,10 +140,11 @@ export class ContainerRepository {
     } satisfies InsertFieldObservationInput);
 
     const { rows } = await this.pool.query(
-      `SELECT ${columns.obsColumn} AS obs_id FROM containers WHERE id = $1`,
+      `SELECT ${columns.obsColumn} AS obs_id, ${columns.valueColumn} AS valor_atual FROM containers WHERE id = $1`,
       [input.containerId],
     );
     const currentObsId: string | null = rows[0]?.obs_id ?? null;
+    const valorAtual: unknown = rows[0]?.valor_atual ?? null;
 
     let shouldPromote = true;
     if (currentObsId) {
@@ -146,7 +156,18 @@ export class ContainerRepository {
       }
     }
 
+    // Fase D15-A (31.7b): a promoção venceria pela hierarquia de fontes, mas
+    // o processo está FINAL e o valor é materialmente diferente do
+    // selecionado — bloqueia a promoção, preserva a observação (acima) e
+    // registra o fato material recebido.
     if (shouldPromote) {
+      const bloqueado = await fatoMaterialBloqueadoPorFinal(this.pool, {
+        containerId: input.containerId, campo: input.campo, valorAnterior: valorAtual, valorNovo: input.valor,
+        origem: 'automatico', extra: { fonte: input.fonte, observationId: observation.id },
+      });
+      if (bloqueado) {
+        return { outcome: 'bloqueada_final', observationId: observation.id };
+      }
       await this.pool.query(
         `UPDATE containers SET ${columns.valueColumn} = $2, ${columns.obsColumn} = $3, atualizado_em = now() WHERE id = $1`,
         [input.containerId, input.valor, observation.id],
@@ -196,15 +217,28 @@ export class ContainerRepository {
         if (fonteAtual) promover = FIELD_OBSERVATION_SOURCE_PRIORITY[input.fonte] >= FIELD_OBSERVATION_SOURCE_PRIORITY[fonteAtual];
       }
     }
+    // Fase D15-A (31.7b): mesma guarda de `applyObservation` — promoção
+    // venceria pela hierarquia de fontes, mas o processo está FINAL e o
+    // valor é materialmente diferente do selecionado.
+    let bloqueadoPorFinal = false;
     if (promover) {
-      await client.query(
-        `UPDATE containers SET ${columns.valueColumn} = $2, ${columns.obsColumn} = $3, atualizado_em = now() WHERE id = $1`,
-        [input.containerId, input.valor, observacao.id],
-      );
+      bloqueadoPorFinal = await fatoMaterialBloqueadoPorFinal(client, {
+        containerId: input.containerId, campo: input.campo, valorAnterior: c.valor, valorNovo: input.valor,
+        origem: 'automatico', extra: { fonte: input.fonte, observationId: observacao.id },
+      });
+      if (bloqueadoPorFinal) {
+        promover = false;
+      } else {
+        await client.query(
+          `UPDATE containers SET ${columns.valueColumn} = $2, ${columns.obsColumn} = $3, atualizado_em = now() WHERE id = $1`,
+          [input.containerId, input.valor, observacao.id],
+        );
+      }
     }
     const selecionadaAgora = promover || (!criada && c.obs_id === observacao.id);
     return {
-      outcome: selecionadaAgora ? 'promovida' : 'registrada_sem_promover', observationId: observacao.id, criada,
+      outcome: bloqueadoPorFinal ? 'bloqueada_final' : selecionadaAgora ? 'promovida' : 'registrada_sem_promover',
+      observationId: observacao.id, criada,
       valorAnterior: c.valor, valorSelecionado: promover ? input.valor : c.valor, conflitoMesmaFonte: conflito,
     };
   }

@@ -13,7 +13,7 @@ import { ValorFreeTimeInvalidoError, valorFreeTimeValido } from './masterFreeTim
 export async function promoverHouseFreeTimeComClient(
   client: PoolClient,
   input: { organizationId: string; containerId: string; valor: number; fonte: FieldObservationSource; observadoEm: Date; evidenciaRef?: string | null; criadoPor?: string | null },
-): Promise<{ observationId: string; criada: boolean; outcome: 'promovida' | 'registrada_sem_promover'; valorMudou: boolean; recalculoEnfileirado: boolean; conflitoMesmaFonte: boolean }> {
+): Promise<{ observationId: string; criada: boolean; outcome: 'promovida' | 'registrada_sem_promover' | 'bloqueada_final'; valorMudou: boolean; recalculoEnfileirado: boolean; conflitoMesmaFonte: boolean }> {
   if (!valorFreeTimeValido(input.valor)) throw new ValorFreeTimeInvalidoError(input.valor);
   const r = await ContainerRepository.applyObservationComClient(client, { ...input, campo: 'houseFreeTimeDays' });
   const anterior = r.valorAnterior === null || r.valorAnterior === undefined ? null : Number(r.valorAnterior);

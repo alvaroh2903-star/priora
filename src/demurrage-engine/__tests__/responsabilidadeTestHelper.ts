@@ -3,6 +3,7 @@ import { Pool } from 'pg';
 import { CivilDate } from '../temporal/civilDate';
 import { UsuarioRepository } from '../persistence/usuarioRepository';
 import { OrganizationMembershipRepository } from '../persistence/organizationMembershipRepository';
+import { OrganizationRole } from '../domain/types';
 import { decidirResponsabilidade, DecidirResponsabilidadeResultado } from '../responsabilidade/decidirResponsabilidade';
 import { DecidirResponsabilidadeInput } from '../responsabilidade/contrato';
 
@@ -16,8 +17,17 @@ import { DecidirResponsabilidadeInput } from '../responsabilidade/contrato';
  */
 
 export async function novoGestor(pool: Pool, organizationId: string): Promise<string> {
-  const usuario = await new UsuarioRepository(pool).create(`Gestor ${randomUUID()}`, `gestor-${randomUUID()}@rocket.example`);
-  const membership = await new OrganizationMembershipRepository(pool).create(organizationId, usuario.id, 'MANAGER');
+  return novoMembro(pool, organizationId, 'MANAGER');
+}
+
+/**
+ * Fase D15-A — membership real de QUALQUER papel, para os testes de RBAC do
+ * `closingService` (que agora resolve o ator por `membershipId`, nunca por
+ * `papel` informado pelo chamador).
+ */
+export async function novoMembro(pool: Pool, organizationId: string, papel: OrganizationRole): Promise<string> {
+  const usuario = await new UsuarioRepository(pool).create(`${papel} ${randomUUID()}`, `${papel.toLowerCase()}-${randomUUID()}@rocket.example`);
+  const membership = await new OrganizationMembershipRepository(pool).create(organizationId, usuario.id, papel);
   return membership.id;
 }
 

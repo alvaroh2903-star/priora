@@ -14,7 +14,7 @@ import { TrackingEnrichResult } from '../sources/armadorTrackingSource';
 import { recalcularApuracaoContainer } from '../apuracao/recalcularApuracao';
 import { seedRocketTermoPorEmbarque } from '../tariffs/seed/rocketTermoPorEmbarque';
 import { hojeOperacional } from '../time/operationalDate';
-import { confirmarResponsabilidadeClienteIntegral } from './responsabilidadeTestHelper';
+import { confirmarResponsabilidadeClienteIntegral, novoGestor } from './responsabilidadeTestHelper';
 
 /**
  * Fase 8 v1.3 corretiva:
@@ -123,7 +123,8 @@ test('v1.3-2: em FINAL, minuta só confirma sem reabertura se casar com a data C
     const c = await novoContainer(pool, o.id, p.id, 'HDMUCONG001', { discharge: '2026-09-01', houseFT: 20, masterFT: 20 });
     await setTracking(pool, c, '2026-09-10');
     const svc = new ClosingService(pool);
-    assert.deepEqual(await svc.finalizarProcesso({ processoId: p.id, papel: 'MANAGER', config: cfg }), { ok: true });
+    const gestorId = await novoGestor(pool, o.id);
+    assert.deepEqual(await svc.finalizarProcesso({ processoId: p.id, membershipId: gestorId, config: cfg }), { ok: true });
     assert.equal((await relogio(pool, c, 'cliente')).data_final_apuracao, '2026-09-10', 'data final congelada = 09-10');
 
     // Tracking POSTERIOR move a evidência para 09-16 (preservada; não barrada em FINAL).
@@ -132,11 +133,11 @@ test('v1.3-2: em FINAL, minuta só confirma sem reabertura se casar com a data C
     // Minuta confirmando a data POSTERIOR (09-16) ≠ congelada (09-10) → exige reabertura,
     // MESMO que o tracking atual já seja 09-16 (não serve como prova).
     const mY = await svc.registrarMinuta({ containerId: c, numeroInformado: 'HDMUCONG001', dataInformada: '2026-09-16' });
-    assert.deepEqual(await svc.validarMinuta({ minutaId: mY.id, papel: 'MANAGER', config: cfg }), { ok: false, motivo: 'exige_reabertura' });
+    assert.deepEqual(await svc.validarMinuta({ minutaId: mY.id, membershipId: gestorId, config: cfg }), { ok: false, motivo: 'exige_reabertura' });
 
     // Minuta confirmando exatamente a data congelada (09-10) → validação documental (segue FINAL).
     const mX = await svc.registrarMinuta({ containerId: c, numeroInformado: 'HDMUCONG001', dataInformada: '2026-09-10' });
-    const r = await svc.validarMinuta({ minutaId: mX.id, papel: 'MANAGER', config: cfg });
+    const r = await svc.validarMinuta({ minutaId: mX.id, membershipId: gestorId, config: cfg });
     assert.equal((r as any).resultado, 'validada');
     assert.equal((await pool.query(`SELECT apuracao_status FROM processos WHERE id=$1`, [p.id])).rows[0].apuracao_status, 'FINAL');
     assert.equal((await pool.query(`SELECT effective_return_date FROM containers WHERE id=$1`, [c])).rows[0].effective_return_date, '2026-09-10');
@@ -156,7 +157,8 @@ async function cenarioConfirmada(pool: Pool, numero: string) {
   // o intervalo de apuração fechado — o serviço lê `relogios`).
   await recalcularApuracaoContainer(pool, c, { dataReferencia: cfg.hoje });
   await setResp(pool, c, 'CONFIRMADA_CLIENTE');
-  return { processoId: p.id, containerId: c, svc: new ClosingService(pool) };
+  const gestorId = await novoGestor(pool, o.id);
+  return { processoId: p.id, containerId: c, svc: new ClosingService(pool), gestorId };
 }
 async function minutaValidadaDireta(pool: Pool, containerId: string, data: string) {
   const m = await new MinutaRepository(pool).criarRecebida({ containerId, numeroInformado: null, dataInformada: data });
@@ -168,9 +170,9 @@ test('v1.3-3a: comprovação correspondente + sem divergência → FINAL permiti
   const pool = testPool();
   try {
     await setupBanco(pool);
-    const { processoId, containerId, svc } = await cenarioConfirmada(pool, 'CMPA01');
+    const { processoId, containerId, svc, gestorId } = await cenarioConfirmada(pool, 'CMPA01');
     await minutaValidadaDireta(pool, containerId, '2026-09-10'); // == effective/evidência efetiva
-    assert.deepEqual(await svc.finalizarProcesso({ processoId, papel: 'MANAGER', config: cfg }), { ok: true });
+    assert.deepEqual(await svc.finalizarProcesso({ processoId, membershipId: gestorId, config: cfg }), { ok: true });
   } finally { await pool.end(); }
 });
 
@@ -178,9 +180,9 @@ test('v1.3-3b: minuta VALIDADA de OUTRA data (não correspondente) não comprova
   const pool = testPool();
   try {
     await setupBanco(pool);
-    const { processoId, containerId, svc } = await cenarioConfirmada(pool, 'CMPB01');
+    const { processoId, containerId, svc, gestorId } = await cenarioConfirmada(pool, 'CMPB01');
     await minutaValidadaDireta(pool, containerId, '2026-09-08'); // ≠ evidência efetiva (09-10)
-    assert.deepEqual(await svc.finalizarProcesso({ processoId, papel: 'MANAGER', config: cfg }), { ok: false, motivo: 'comprovacao_pendente' });
+    assert.deepEqual(await svc.finalizarProcesso({ processoId, membershipId: gestorId, config: cfg }), { ok: false, motivo: 'comprovacao_pendente' });
   } finally { await pool.end(); }
 });
 
@@ -188,11 +190,11 @@ test('v1.3-3c: minuta VALIDADA antiga + nova divergência de devolução PENDENT
   const pool = testPool();
   try {
     await setupBanco(pool);
-    const { processoId, containerId, svc } = await cenarioConfirmada(pool, 'CMPC01');
+    const { processoId, containerId, svc, gestorId } = await cenarioConfirmada(pool, 'CMPC01');
     await minutaValidadaDireta(pool, containerId, '2026-09-10'); // correspondente
     // Nova minuta divergente aguardando revisão (RECEBIDA + divergente_do_tracking).
     const nova = await new MinutaRepository(pool).criarRecebida({ containerId, numeroInformado: null, dataInformada: '2026-09-16' });
     await pool.query(`UPDATE minutas SET divergente_do_tracking = true WHERE id = $1`, [nova.id]);
-    assert.deepEqual(await svc.finalizarProcesso({ processoId, papel: 'MANAGER', config: cfg }), { ok: false, motivo: 'divergencia_pendente' });
+    assert.deepEqual(await svc.finalizarProcesso({ processoId, membershipId: gestorId, config: cfg }), { ok: false, motivo: 'divergencia_pendente' });
   } finally { await pool.end(); }
 });
