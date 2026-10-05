@@ -3,17 +3,32 @@ import { FieldObservationSource } from '../domain/types';
 import { ContainerRepository } from '../persistence/containerRepository';
 import { ValorFreeTimeInvalidoError, valorFreeTimeValido } from './masterFreeTimeService';
 
+export interface PromoverHouseFreeTimeInput {
+  organizationId: string; containerId: string; valor: number; fonte: FieldObservationSource;
+  observadoEm: Date; evidenciaRef?: string | null; criadoPor?: string | null;
+  /** SÓ TESTE (D15-A v1.1) — ver `ApplyObservationInput` em `containerRepository.ts`. */
+  _testeFalhaAposObservacao?: () => void | Promise<void>;
+  /** SÓ TESTE (D15-A v1.1) — ver `ApplyObservationInput` em `containerRepository.ts`. */
+  _testeAntesDaDecisaoFinal?: () => void | Promise<void>;
+}
+
 /**
  * Promoção do House Free Time DENTRO da transação do chamador, pelo writer
  * transacional do contêiner (mesma hierarquia de fontes; tracking recusado).
  * Quando o valor efetivamente selecionado muda, enfileira o recálculo na mesma
  * transação — é o que autoriza o relógio do cliente a mudar (nova observação
  * válida de House Free Time). House × Master diferentes NÃO são divergência.
+ *
+ * Fase D15-A v1.1 (achado #1): delega inteiramente a
+ * `ContainerRepository.applyObservationComClient`, que já implementa o
+ * protocolo universal de lock (identidade → lock consultivo do processo →
+ * relê/trava processo+contêiner → persiste → decide → promove ou
+ * bloqueia+registra) — nenhuma lógica duplicada aqui.
  */
 export async function promoverHouseFreeTimeComClient(
   client: PoolClient,
-  input: { organizationId: string; containerId: string; valor: number; fonte: FieldObservationSource; observadoEm: Date; evidenciaRef?: string | null; criadoPor?: string | null },
-): Promise<{ observationId: string; criada: boolean; outcome: 'promovida' | 'registrada_sem_promover' | 'bloqueada_final'; valorMudou: boolean; recalculoEnfileirado: boolean; conflitoMesmaFonte: boolean }> {
+  input: PromoverHouseFreeTimeInput,
+): Promise<{ observationId: string; criada: boolean; outcome: 'promovida' | 'registrada_sem_promover' | 'bloqueada_final'; exigeReabertura: boolean; valorMudou: boolean; recalculoEnfileirado: boolean; conflitoMesmaFonte: boolean }> {
   if (!valorFreeTimeValido(input.valor)) throw new ValorFreeTimeInvalidoError(input.valor);
   const r = await ContainerRepository.applyObservationComClient(client, { ...input, campo: 'houseFreeTimeDays' });
   const anterior = r.valorAnterior === null || r.valorAnterior === undefined ? null : Number(r.valorAnterior);
@@ -29,5 +44,8 @@ export async function promoverHouseFreeTimeComClient(
     );
     recalculoEnfileirado = (rowCount ?? 0) > 0;
   }
-  return { observationId: r.observationId, criada: r.criada, outcome: r.outcome, valorMudou, recalculoEnfileirado, conflitoMesmaFonte: r.conflitoMesmaFonte };
+  return {
+    observationId: r.observationId, criada: r.criada, outcome: r.outcome, exigeReabertura: r.exigeReabertura,
+    valorMudou, recalculoEnfileirado, conflitoMesmaFonte: r.conflitoMesmaFonte,
+  };
 }

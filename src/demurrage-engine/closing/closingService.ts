@@ -3,7 +3,7 @@ import { getPool } from '../db/pool';
 import { CivilDate } from '../temporal/civilDate';
 import { PapelRbac } from '../scheduler/failurePolicy';
 import { validarMinuta as validarCoerencia } from './minutaValidation';
-import { registrarFatoMaterialPosFinal } from './materialChangeGuard';
+import { registrarFatoMaterialPosFinal, lockProcesso } from './materialChangeGuard';
 import { MinutaRepository, Minuta } from '../persistence/minutaRepository';
 import { ClosingEventRepository } from '../persistence/closingEventRepository';
 import { ReaberturaRepository } from '../persistence/reaberturaRepository';
@@ -46,6 +46,23 @@ import {
  *    e nunca duplica uma reabertura já aberta (checagem + índice único
  *    parcial da migration 0035, defesa em profundidade).
  *
+ * Fase D15-A v1.1 (corretiva, achado #2 — ordem universal de lock): as
+ * QUATRO operações seguem, sem exceção, a MESMA sequência — identifica o
+ * recurso/processo SEM lock de linha mutável → `lockProcesso` (consultivo,
+ * de `materialChangeGuard.ts`, MESMA implementação usada por todo escritor
+ * material de D15-A) → relê/trava processo → relê/trava contêiner(es)/
+ * minuta/reabertura → gates/autorização relidos → escreve → comita. Como o
+ * lock consultivo é sempre o PRIMEIRO lock de qualquer operação D15-A
+ * (nunca um lock de linha antes dele), duas operações no mesmo processo
+ * nunca disputam uma linha em ordens opostas — elimina o deadlock entre
+ * `validarMinuta`/`finalizarProcesso`/`solicitarReabertura`/
+ * `autorizarReabertura` (ver docs/demurrage-fase-d15-a-v1-1.md §2).
+ * `validarMinuta` relê a minuta SOB lock depois do lock consultivo e
+ * confirma que ainda pertence ao contêiner/processo esperado antes de
+ * decidir. `autorizarReabertura` lê `processo_id` da reabertura SEM lock
+ * primeiro, só então adquire o lock consultivo, e só então relê e trava a
+ * reabertura e o processo.
+ *
  * Parâmetros `_teste*`: SÓ TESTE (mesmo padrão de
  * `registrarProcessoDemurrage.ts`/`decidirResponsabilidade.ts`) — nunca
  * usados em produção, nenhuma rota os expõe.
@@ -70,10 +87,6 @@ interface Ator {
   usuarioId: string;
   papel: PapelRbac;
 }
-
-/** Lock consultivo por PROCESSO (namespace próprio — não colide com locks de container/registro de outros serviços). */
-const lockProcesso = (db: Pool | PoolClient, processoId: string) =>
-  db.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [`demurrage:closing:${processoId}`]);
 
 export class ClosingService {
   private minutas: MinutaRepository;
@@ -160,26 +173,48 @@ export class ClosingService {
     try {
       await client.query('BEGIN');
 
-      const { rows: mrows } = await client.query(`SELECT * FROM minutas WHERE id = $1 FOR UPDATE`, [input.minutaId]);
-      if (!mrows.length) { await client.query('ROLLBACK'); return { ok: false, motivo: 'minuta_nao_encontrada' }; }
-      const mRow = mrows[0];
-      const m = {
-        id: mRow.id, containerId: mRow.container_id, estado: mRow.estado_minuta,
-        numeroInformado: mRow.numero_informado, dataInformada: mRow.data_informada,
-        divergenteDoTracking: mRow.divergente_do_tracking,
-      };
+      // Passo 1 — identidade do processo pela minuta, SEM lock de linha
+      // mutável (só para descobrir em qual processo adquirir o lock).
+      const { rows: idRows } = await client.query(
+        `SELECT m.container_id, c.processo_id FROM minutas m JOIN containers c ON c.id = m.container_id WHERE m.id = $1`,
+        [input.minutaId],
+      );
+      if (!idRows.length) { await client.query('ROLLBACK'); return { ok: false, motivo: 'minuta_nao_encontrada' }; }
+      const processoIdEsperado: string = idRows[0].processo_id;
+      const containerIdEsperado: string = idRows[0].container_id;
 
+      // Passo 2 — lock consultivo do processo, ANTES de qualquer linha mutável.
+      await lockProcesso(client, processoIdEsperado);
+
+      // Passo 3 — relê e trava o PROCESSO.
+      const { rows: procRows } = await client.query(`SELECT id FROM processos WHERE id = $1 FOR UPDATE`, [processoIdEsperado]);
+      if (!procRows.length) { await client.query('ROLLBACK'); return { ok: false, motivo: 'container_nao_encontrado' }; }
+
+      // Passo 4 — relê e trava o CONTÊINER.
       const { rows: cirows } = await client.query(
         `SELECT c.id, c.organization_id, c.numero, c.discharge_date, c.gate_out_date, c.tracking_return_date,
                 c.effective_return_date, c.processo_id, c.effective_return_minuta_id, p.apuracao_status
            FROM containers c JOIN processos p ON p.id = c.processo_id
           WHERE c.id = $1 FOR UPDATE OF c`,
-        [m.containerId],
+        [containerIdEsperado],
       );
       if (!cirows.length) { await client.query('ROLLBACK'); return { ok: false, motivo: 'container_nao_encontrado' }; }
       const ci = cirows[0];
 
-      await lockProcesso(client, ci.processo_id);
+      // Passo 4b — relê e trava a MINUTA; confirma que ainda pertence ao
+      // contêiner/processo esperado (defesa — ver achado #2).
+      const { rows: mrows } = await client.query(`SELECT * FROM minutas WHERE id = $1 FOR UPDATE`, [input.minutaId]);
+      if (!mrows.length) { await client.query('ROLLBACK'); return { ok: false, motivo: 'minuta_nao_encontrada' }; }
+      const mRow = mrows[0];
+      if (mRow.container_id !== containerIdEsperado || ci.processo_id !== processoIdEsperado) {
+        await client.query('ROLLBACK');
+        return { ok: false, motivo: 'minuta_nao_encontrada' };
+      }
+      const m = {
+        id: mRow.id, containerId: mRow.container_id, estado: mRow.estado_minuta,
+        numeroInformado: mRow.numero_informado, dataInformada: mRow.data_informada,
+        divergenteDoTracking: mRow.divergente_do_tracking,
+      };
 
       const ator = await this.resolverAtor(client, ci.organization_id, input.membershipId);
       if (!ator || !ehGestor(ator.papel)) { await client.query('ROLLBACK'); return { ok: false, motivo: 'apenas_manager_admin' }; }
@@ -319,6 +354,15 @@ export class ClosingService {
     processoId: string; membershipId: string; justificativa?: string | null; config: ClosingConfig;
     /** SÓ TESTE — ver nota de cabeçalho do arquivo. */
     _testeFalhaDuranteFinalizacao?: () => void | Promise<void>;
+    /**
+     * SÓ TESTE (D15-A v1.1) — dispara imediatamente ANTES do `COMMIT`, com
+     * todos os gates já passados e a transição para FINAL já escrita (ainda
+     * não visível a outras transações). Usado pelos testes de corrida
+     * "fechamento vence": enquanto pausado aqui, o lock consultivo do
+     * processo permanece retido, bloqueando qualquer escritor material
+     * concorrente — a liberação do gancho comita e libera o lock de uma vez.
+     */
+    _testeAguardarAntesDoCommit?: () => void | Promise<void>;
   }): Promise<{ ok: true } | Falha> {
     const client = await this.pool.connect();
     try {
@@ -409,6 +453,8 @@ export class ClosingService {
       });
       if (reab) await new ReaberturaRepository(client as unknown as Pool).marcarEstado(reab.id, 'REFECHADA');
 
+      if (input._testeAguardarAntesDoCommit) await input._testeAguardarAntesDoCommit();
+
       await client.query('COMMIT');
       return { ok: true };
     } catch (erro) {
@@ -489,13 +535,24 @@ export class ClosingService {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+
+      // Passo 1 — identidade do processo pela reabertura, SEM lock de linha
+      // mutável (só para descobrir em qual processo adquirir o lock —
+      // achado #2: o lock consultivo precisa vir ANTES de qualquer lock de
+      // linha, nunca depois).
+      const { rows: idRows } = await client.query(`SELECT processo_id FROM reaberturas WHERE id = $1`, [input.reaberturaId]);
+      if (!idRows.length) { await client.query('ROLLBACK'); return { ok: false, motivo: 'reabertura_nao_encontrada' }; }
+      const processoId: string = idRows[0].processo_id;
+
+      // Passo 2 — lock consultivo do processo, ANTES de qualquer linha mutável.
+      await lockProcesso(client, processoId);
+
+      // Passo 3 — relê e trava a REABERTURA.
       const { rows } = await client.query(`SELECT * FROM reaberturas WHERE id = $1 FOR UPDATE`, [input.reaberturaId]);
       if (!rows.length) { await client.query('ROLLBACK'); return { ok: false, motivo: 'reabertura_nao_encontrada' }; }
       const reabRow = rows[0];
-      const processoId: string = reabRow.processo_id;
 
-      await lockProcesso(client, processoId);
-
+      // Passo 4 — relê e trava o PROCESSO.
       const { rows: prows } = await client.query(
         `SELECT organization_id, apuracao_status, fechado_em, fechado_por FROM processos WHERE id = $1 FOR UPDATE`,
         [processoId],

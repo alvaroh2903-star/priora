@@ -2,7 +2,7 @@ import { Pool, PoolClient } from 'pg';
 import { getPool } from '../db/pool';
 import { FIELD_OBSERVATION_SOURCE_PRIORITY, FieldObservationSource } from '../domain/types';
 import { FieldObservationRepository, assertFonteAutorizada } from '../persistence/fieldObservationRepository';
-import { fatoMaterialBloqueadoPorFinal } from '../closing/materialChangeGuard';
+import { fatoMaterialBloqueadoPorFinal, lockProcesso } from '../closing/materialChangeGuard';
 
 /**
  * Serviço CENTRAL de promoção do Master Free Time.
@@ -50,6 +50,10 @@ export interface PromoverMasterFreeTimeInput {
   criadoPor?: string | null;
   /** Quem/qual processamento originou (auditoria dos eventos). */
   autor: string;
+  /** SÓ TESTE (D15-A v1.1) — ver `ApplyObservationInput` em `containerRepository.ts`. */
+  _testeFalhaAposObservacao?: () => void | Promise<void>;
+  /** SÓ TESTE (D15-A v1.1) — ver `ApplyObservationInput` em `containerRepository.ts`. */
+  _testeAntesDaDecisaoFinal?: () => void | Promise<void>;
 }
 
 export interface DivergenciaAvaliada {
@@ -64,7 +68,9 @@ export interface PromoverMasterFreeTimeResultado {
   /** false = a observação já existia (reprocessamento da mesma fonte/instante). */
   criada: boolean;
   outcome: 'promovida' | 'registrada_sem_promover' | 'bloqueada_final';
-  /** Fase D15-A (31.7b): true quando a promoção venceria mas o processo está FINAL e o valor muda materialmente. */
+  /** Campo canônico (D15-A v1.1, achado #3): true somente quando `outcome === 'bloqueada_final'`. */
+  exigeReabertura: boolean;
+  /** @deprecated Alias de `exigeReabertura`, mantido só por compatibilidade interna temporária — ver docs/demurrage-fase-d15-a-v1-1.md §4. */
   bloqueadoPorFinal: boolean;
   valorSelecionadoAnterior: number | null;
   valorSelecionado: number | null;
@@ -89,6 +95,12 @@ function numero(v: unknown): number | null {
  * Promove um Master Free Time DENTRO da transação do chamador. Não faz
  * BEGIN/COMMIT: quem chama agrupa observação, proveniência, pendências etc. na
  * mesma unidade atômica.
+ *
+ * Fase D15-A v1.1 (achado #1) — protocolo universal de lock, mesma ordem de
+ * `ContainerRepository.applyObservationComClient` (ver cabeçalho de
+ * `materialChangeGuard.ts`): identidade sem lock → lock consultivo do
+ * processo → relê/trava processo → relê/trava contêiner → persiste →
+ * decide → promove ou bloqueia+registra.
  */
 export async function promoverMasterFreeTimeComClient(
   client: PoolClient,
@@ -97,7 +109,19 @@ export async function promoverMasterFreeTimeComClient(
   if (!valorFreeTimeValido(input.valor)) throw new ValorFreeTimeInvalidoError(input.valor);
   assertFonteAutorizada(CAMPO_MASTER_FT, input.fonte);
 
-  // Serializa promoções concorrentes do mesmo contêiner.
+  // Passo 1 — identidade do processo, SEM lock de linha mutável.
+  const { rows: idRows } = await client.query(`SELECT processo_id FROM containers WHERE id = $1`, [input.containerId]);
+  if (!idRows.length) throw new Error(`Contêiner ${input.containerId} não encontrado.`);
+  const processoId: string = idRows[0].processo_id;
+
+  // Passo 2 — lock consultivo do processo, ANTES de qualquer linha mutável.
+  await lockProcesso(client, processoId);
+
+  // Passo 3 — relê e trava a linha do PROCESSO (status fresco, pós-lock).
+  const { rows: statusRows } = await client.query(`SELECT apuracao_status FROM processos WHERE id = $1 FOR UPDATE`, [processoId]);
+  const apuracaoStatus: string | undefined = statusRows[0]?.apuracao_status;
+
+  // Passo 4 — relê e trava a linha do CONTÊINER.
   const { rows: cr } = await client.query(
     `SELECT id, organization_id, processo_id, master_free_time_days, master_free_time_observation_id
        FROM containers WHERE id = $1 FOR UPDATE`,
@@ -109,6 +133,7 @@ export async function promoverMasterFreeTimeComClient(
     throw new Error(`Contêiner ${input.containerId} não pertence à organização ${input.organizationId}.`);
   }
 
+  // Passo 5 — observação bruta (ledger), sempre preservada.
   const { observacao, criada } = await FieldObservationRepository.insertComClient(client, {
     organizationId: input.organizationId, entidadeTipo: 'container', entidadeId: input.containerId,
     campo: CAMPO_MASTER_FT, valor: input.valor, fonte: input.fonte, observadoEm: input.observadoEm,
@@ -118,39 +143,46 @@ export async function promoverMasterFreeTimeComClient(
   const anterior = numero(c.master_free_time_days);
   const conflito = !criada && numero(observacao.valor) !== input.valor;
 
+  // SÓ TESTE: injeta falha depois da observação persistida, antes de
+  // qualquer decisão.
+  if (input._testeFalhaAposObservacao) await input._testeFalhaAposObservacao();
+
   let outcome: 'promovida' | 'registrada_sem_promover' | 'bloqueada_final' = 'registrada_sem_promover';
   let selecionado = anterior;
   let bloqueadoPorFinal = false;
-  // Só um fato NOVO altera a seleção: reprocessar uma observação existente
-  // nunca muda o estado (sua promoção já foi decidida na transação original).
-  if (criada) {
-    let promover = true;
-    if (c.master_free_time_observation_id) {
-      const { rows: atual } = await client.query(`SELECT fonte FROM field_observations WHERE id = $1`, [c.master_free_time_observation_id]);
-      const fonteAtual = atual[0]?.fonte as FieldObservationSource | undefined;
-      if (fonteAtual) promover = FIELD_OBSERVATION_SOURCE_PRIORITY[input.fonte] >= FIELD_OBSERVATION_SOURCE_PRIORITY[fonteAtual];
-    }
-    // Fase D15-A (31.7b): a promoção venceria pela hierarquia de fontes, mas
-    // o processo está FINAL e o valor é materialmente diferente do
-    // selecionado — bloqueia, preserva a observação (acima) e registra o
-    // fato material recebido.
-    if (promover) {
-      bloqueadoPorFinal = await fatoMaterialBloqueadoPorFinal(client, {
-        containerId: input.containerId, campo: CAMPO_MASTER_FT, valorAnterior: anterior, valorNovo: input.valor,
-        origem: 'automatico', extra: { fonte: input.fonte, observationId: observacao.id },
-      });
-    }
-    if (promover && !bloqueadoPorFinal) {
+  // Passo 6 — prioridade de fonte contra a seleção relida no passo 4.
+  // Reprocessar um fato IDÊNTICO ao já registrado (criada=false, sem
+  // conflito de valor) precisa refazer a mesma decisão, não pulá-la —
+  // senão um reenvio idempotente de um fato já bloqueado por FINAL
+  // relataria 'registrada_sem_promover' em vez de 'bloqueada_final'.
+  let promover = !conflito;
+  if (promover && c.master_free_time_observation_id) {
+    const { rows: atual } = await client.query(`SELECT fonte FROM field_observations WHERE id = $1`, [c.master_free_time_observation_id]);
+    const fonteAtual = atual[0]?.fonte as FieldObservationSource | undefined;
+    if (fonteAtual) promover = FIELD_OBSERVATION_SOURCE_PRIORITY[input.fonte] >= FIELD_OBSERVATION_SOURCE_PRIORITY[fonteAtual];
+  }
+  // Passo 7 — status já relido sob lock (passo 3): a promoção venceria
+  // pela hierarquia de fontes, mas o processo está FINAL e o valor é
+  // materialmente diferente do selecionado — bloqueia, preserva a
+  // observação (acima) e registra o fato material recebido.
+  if (promover) {
+    bloqueadoPorFinal = await fatoMaterialBloqueadoPorFinal(client, {
+      containerId: input.containerId, campo: CAMPO_MASTER_FT, valorAnterior: anterior, valorNovo: input.valor,
+      origem: 'automatico', extra: { fonte: input.fonte, observationId: observacao.id },
+      processoIdConhecido: processoId, apuracaoStatusConhecido: apuracaoStatus,
+      _testeAntesDaDecisaoFinal: input._testeAntesDaDecisaoFinal,
+    });
+    if (bloqueadoPorFinal) {
+      outcome = 'bloqueada_final';
+    } else {
       await client.query(
         `UPDATE containers SET master_free_time_days = $2, master_free_time_observation_id = $3, atualizado_em = now() WHERE id = $1`,
         [input.containerId, input.valor, observacao.id],
       );
       outcome = 'promovida';
       selecionado = input.valor;
-    } else if (bloqueadoPorFinal) {
-      outcome = 'bloqueada_final';
     }
-  } else if (c.master_free_time_observation_id === observacao.id) {
+  } else if (!criada && c.master_free_time_observation_id === observacao.id) {
     outcome = 'promovida';
   }
 
@@ -172,7 +204,8 @@ export async function promoverMasterFreeTimeComClient(
   });
 
   return {
-    observationId: observacao.id, criada, outcome, bloqueadoPorFinal, valorSelecionadoAnterior: anterior, valorSelecionado: selecionado,
+    observationId: observacao.id, criada, outcome, exigeReabertura: bloqueadoPorFinal, bloqueadoPorFinal,
+    valorSelecionadoAnterior: anterior, valorSelecionado: selecionado,
     valorMudou, recalculoEnfileirado, divergencia, conflitoMesmaFonte: conflito,
   };
 }

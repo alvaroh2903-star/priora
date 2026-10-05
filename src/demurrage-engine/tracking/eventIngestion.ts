@@ -75,6 +75,8 @@ export interface PromocaoAplicada {
   valor: unknown;
   /** Fase D15-A: 'bloqueada_final' = fato material recebido para processo FINAL (preservado, não promovido, exige reabertura). */
   outcome: 'promovida' | 'registrada_sem_promover' | 'evidencia' | 'ignorada' | 'bloqueada_final';
+  /** Campo canônico (D15-A v1.1, achado #3): true somente quando `outcome === 'bloqueada_final'`. */
+  exigeReabertura: boolean;
 }
 
 export interface IngestResult {
@@ -173,7 +175,7 @@ export async function ingestTrackingResult(input: IngestInput): Promise<IngestRe
           fonte: 'tracking_service', observadoEm: tsDaDataCivil(rc.dischargeDate)!,
         }),
       );
-      promocoes.push({ containerId, campo: 'dischargeDate', valor: rc.dischargeDate, outcome: out ? out.outcome : 'ignorada' });
+      promocoes.push({ containerId, campo: 'dischargeDate', valor: rc.dischargeDate, outcome: out ? out.outcome : 'ignorada', exigeReabertura: out?.exigeReabertura ?? false });
       if (out?.outcome === 'promovida') afetadosCalculo.add(containerId);
     }
     // Gate Out (retirada do cheio) → promove quando o evento é inequívoco (já filtrado ≥ descarga).
@@ -184,7 +186,7 @@ export async function ingestTrackingResult(input: IngestInput): Promise<IngestRe
           fonte: 'tracking_service', observadoEm: tsDaDataCivil(rc.gateOut)!,
         }),
       );
-      promocoes.push({ containerId, campo: 'gateOutDate', valor: rc.gateOut, outcome: out ? out.outcome : 'ignorada' });
+      promocoes.push({ containerId, campo: 'gateOutDate', valor: rc.gateOut, outcome: out ? out.outcome : 'ignorada', exigeReabertura: out?.exigeReabertura ?? false });
     }
     // Empty Return → promove tracking_return_date (effective/minuta/fechamento = Fase 8).
     if (rc.emptyReturn) {
@@ -194,7 +196,7 @@ export async function ingestTrackingResult(input: IngestInput): Promise<IngestRe
           fonte: 'tracking_service', observadoEm: tsDaDataCivil(rc.emptyReturn)!,
         }),
       );
-      promocoes.push({ containerId, campo: 'trackingReturnDate', valor: rc.emptyReturn, outcome: out ? out.outcome : 'ignorada' });
+      promocoes.push({ containerId, campo: 'trackingReturnDate', valor: rc.emptyReturn, outcome: out ? out.outcome : 'ignorada', exigeReabertura: out?.exigeReabertura ?? false });
       if (out?.outcome === 'promovida') afetadosCalculo.add(containerId);
     }
     // Tipo de equipamento → EVIDÊNCIA, nunca sobrescreve o Master/MBL.
@@ -206,7 +208,7 @@ export async function ingestTrackingResult(input: IngestInput): Promise<IngestRe
           campo: 'containerType', valor: rc.tipo, fonte: 'tracking_service', observadoEm: obsEm,
         }),
       );
-      promocoes.push({ containerId, campo: 'containerType', valor: rc.tipo, outcome: ok ? 'evidencia' : 'ignorada' });
+      promocoes.push({ containerId, campo: 'containerType', valor: rc.tipo, outcome: ok ? 'evidencia' : 'ignorada', exigeReabertura: false });
     }
     // availableDate: preservado só como tracking_event (available). Sem promoção,
     // sem equivalência funcional nova — até existir regra (fora da Fase 5).

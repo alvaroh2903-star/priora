@@ -3,7 +3,7 @@ import { getPool } from '../db/pool';
 import { Container, ContainerObservableField, FIELD_OBSERVATION_SOURCE_PRIORITY, FieldObservationSource } from '../domain/types';
 import { FieldObservationRepository, InsertFieldObservationInput, assertFonteAutorizada } from './fieldObservationRepository';
 import { promoverMasterFreeTime } from '../freeTime/masterFreeTimeService';
-import { fatoMaterialBloqueadoPorFinal } from '../closing/materialChangeGuard';
+import { fatoMaterialBloqueadoPorFinal, lockProcesso } from '../closing/materialChangeGuard';
 
 function mapRow(row: any): Container {
   return {
@@ -44,8 +44,8 @@ const FIELD_COLUMNS: Record<ContainerObservableField, { valueColumn: string; obs
  * pela hierarquia de fontes, mas o processo do contêiner está FINAL e o
  * valor é MATERIALMENTE diferente do selecionado. A observação bruta já foi
  * preservada no ledger (sempre, acima); só a promoção foi recusada. Um
- * evento `FATO_MATERIAL_POS_FINAL` fica registrado e `exigeReabertura` é
- * devolvido para o chamador propagar/sinalizar.
+ * evento `FATO_MATERIAL_POS_FINAL` fica registrado e `exigeReabertura: true`
+ * é devolvido (contrato canônico — D15-A v1.1, ver `materialChangeGuard.ts`).
  */
 export type ApplyObservationOutcome = 'promovida' | 'registrada_sem_promover' | 'bloqueada_final';
 
@@ -58,6 +58,34 @@ export interface ApplyObservationInput {
   observadoEm: Date;
   evidenciaRef?: string | null;
   criadoPor?: string | null;
+  /**
+   * SÓ TESTE (D15-A v1.1) — dispara logo depois de a observação bruta ser
+   * persistida (ledger) e ANTES de qualquer decisão de prioridade/promoção.
+   * Lançar aqui simula uma falha no meio da operação: a transação inteira
+   * (observação + decisão + evento + projeção) desfaz. Nunca usado em
+   * produção; nenhuma rota o expõe.
+   */
+  _testeFalhaAposObservacao?: () => void | Promise<void>;
+  /**
+   * SÓ TESTE (D15-A v1.1) — propagado para `fatoMaterialBloqueadoPorFinal`;
+   * pausa exatamente antes da decisão promover×bloquear, já com o lock
+   * consultivo do processo adquirido. Usado pelos testes de corrida.
+   */
+  _testeAntesDaDecisaoFinal?: () => void | Promise<void>;
+}
+
+export interface ApplyObservationResultado {
+  outcome: ApplyObservationOutcome;
+  observationId: string;
+  /** Campo canônico (D15-A v1.1): true somente quando `outcome === 'bloqueada_final'`. */
+  exigeReabertura: boolean;
+}
+
+export interface ApplyObservationComClientResultado extends ApplyObservationResultado {
+  criada: boolean;
+  valorAnterior: unknown;
+  valorSelecionado: unknown;
+  conflitoMesmaFonte: boolean;
 }
 
 export class ContainerRepository {
@@ -98,102 +126,94 @@ export class ContainerRepository {
   }
 
   /**
-   * Registra uma observação (sempre, no ledger append-only) e decide se ela
-   * deve se tornar o valor SELECIONADO do contêiner: só promove quando não
-   * existe observação atual para o campo, ou quando a nova fonte tem
-   * prioridade >= a da fonte que originou o valor atual (FIELD_OBSERVATION_
-   * SOURCE_PRIORITY). Uma fonte de prioridade menor nunca sobrescreve
-   * silenciosamente uma de prioridade maior (Cap. 4 do Blueprint) — a
-   * observação de prioridade menor fica registrada, só não vira o valor
-   * exibido/usado pelo motor de cálculo.
+   * Fase D15-A v1.1 (achado #1) — WRAPPER TRANSACIONAL fino. Antes da
+   * correção, cada etapa (observação, leitura do valor atual, checagem de
+   * FINAL, UPDATE) era uma transação `autocommit` separada: entre a checagem
+   * de FINAL e o UPDATE, `finalizarProcesso` podia correr por completo e
+   * comitar, e o UPDATE ainda assim escrevia por cima de um contêiner já
+   * FINAL (corrida real — ver docs/demurrage-fase-d15-a-v1-1.md §1). Agora
+   * TODA a operação roda numa única transação, delegada a
+   * `applyObservationComClient` (mesmo protocolo universal de lock —
+   * identidade sem lock → lock consultivo do processo → relê/trava
+   * processo+contêiner → persiste → decide → promove ou bloqueia+registra
+   * → comita tudo junto).
    */
-  async applyObservation(
-    input: ApplyObservationInput,
-  ): Promise<{ outcome: ApplyObservationOutcome; observationId: string }> {
-    // Guarda central: tracking nunca registra House/Master Free Time.
+  async applyObservation(input: ApplyObservationInput): Promise<ApplyObservationResultado> {
     assertFonteAutorizada(input.campo, input.fonte);
 
     // Master Free Time passa SEMPRE pelo serviço central (mesma regra de
     // promoção, + divergência SI × Master, eventos, avisos e outbox de
-    // recálculo numa única transação) — qualquer que seja a entrada.
+    // recálculo numa única transação) — qualquer que seja a entrada. O
+    // serviço central já implementa o MESMO protocolo universal de lock.
     if (input.campo === 'masterFreeTimeDays') {
       const r = await promoverMasterFreeTime(this.pool, {
         organizationId: input.organizationId, containerId: input.containerId, valor: input.valor as number,
         fonte: input.fonte, observadoEm: input.observadoEm, evidenciaRef: input.evidenciaRef, criadoPor: input.criadoPor,
         autor: `applyObservation:${input.fonte}`,
+        _testeFalhaAposObservacao: input._testeFalhaAposObservacao,
+        _testeAntesDaDecisaoFinal: input._testeAntesDaDecisaoFinal,
       });
-      return { outcome: r.outcome, observationId: r.observationId };
+      return { outcome: r.outcome, observationId: r.observationId, exigeReabertura: r.exigeReabertura };
     }
 
-    const columns = FIELD_COLUMNS[input.campo];
-
-    const observation = await this.fieldObservations.insert({
-      organizationId: input.organizationId,
-      entidadeTipo: 'container',
-      entidadeId: input.containerId,
-      campo: input.campo,
-      valor: input.valor,
-      fonte: input.fonte,
-      observadoEm: input.observadoEm,
-      evidenciaRef: input.evidenciaRef,
-      criadoPor: input.criadoPor,
-    } satisfies InsertFieldObservationInput);
-
-    const { rows } = await this.pool.query(
-      `SELECT ${columns.obsColumn} AS obs_id, ${columns.valueColumn} AS valor_atual FROM containers WHERE id = $1`,
-      [input.containerId],
-    );
-    const currentObsId: string | null = rows[0]?.obs_id ?? null;
-    const valorAtual: unknown = rows[0]?.valor_atual ?? null;
-
-    let shouldPromote = true;
-    if (currentObsId) {
-      const current = await this.fieldObservations.findById(currentObsId);
-      if (current) {
-        const currentPriority = FIELD_OBSERVATION_SOURCE_PRIORITY[current.fonte];
-        const newPriority = FIELD_OBSERVATION_SOURCE_PRIORITY[input.fonte];
-        shouldPromote = newPriority >= currentPriority;
-      }
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const r = await ContainerRepository.applyObservationComClient(client, input);
+      await client.query('COMMIT');
+      return { outcome: r.outcome, observationId: r.observationId, exigeReabertura: r.exigeReabertura };
+    } catch (erro) {
+      await client.query('ROLLBACK');
+      throw erro;
+    } finally {
+      client.release();
     }
-
-    // Fase D15-A (31.7b): a promoção venceria pela hierarquia de fontes, mas
-    // o processo está FINAL e o valor é materialmente diferente do
-    // selecionado — bloqueia a promoção, preserva a observação (acima) e
-    // registra o fato material recebido.
-    if (shouldPromote) {
-      const bloqueado = await fatoMaterialBloqueadoPorFinal(this.pool, {
-        containerId: input.containerId, campo: input.campo, valorAnterior: valorAtual, valorNovo: input.valor,
-        origem: 'automatico', extra: { fonte: input.fonte, observationId: observation.id },
-      });
-      if (bloqueado) {
-        return { outcome: 'bloqueada_final', observationId: observation.id };
-      }
-      await this.pool.query(
-        `UPDATE containers SET ${columns.valueColumn} = $2, ${columns.obsColumn} = $3, atualizado_em = now() WHERE id = $1`,
-        [input.containerId, input.valor, observation.id],
-      );
-    }
-
-    return { outcome: shouldPromote ? 'promovida' : 'registrada_sem_promover', observationId: observation.id };
   }
 
   /**
-   * Writer TRANSACIONAL (grava no `client` do chamador, sem BEGIN/COMMIT
-   * próprios): observação no ledger + promoção pela mesma hierarquia de
-   * `applyObservation`. Só um fato NOVO altera a seleção — reprocessar uma
-   * observação existente nunca muda o estado. `conflitoMesmaFonte` = a mesma
-   * fonte já registrou o campo no mesmo instante com OUTRO valor (nada muda).
-   * Master Free Time tem serviço próprio (divergência/recálculo) e é recusado aqui.
+   * Fase D15-A v1.1 (achado #1) — protocolo universal de lock, nesta ordem
+   * exata (ver `materialChangeGuard.ts`, cabeçalho, e
+   * docs/demurrage-fase-d15-a-v1-1.md §2):
+   *   1. identifica o processo pelo contêiner, SEM lock de linha mutável;
+   *   2. lock consultivo do processo (`lockProcesso`) — ANTES de qualquer
+   *      linha mutável;
+   *   3. relê e trava (`FOR UPDATE`) a linha do PROCESSO;
+   *   4. relê e trava (`FOR UPDATE`) a linha do CONTÊINER;
+   *   5. persiste a observação bruta (ledger, sempre — preservada mesmo
+   *      quando bloqueada abaixo);
+   *   6. decide prioridade de fonte contra a seleção relida no passo 4;
+   *   7. verifica o status relido no passo 3 (nunca uma leitura anterior ao
+   *      lock) e promove OU bloqueia+registra `FATO_MATERIAL_POS_FINAL`;
+   *   8. devolve — o chamador comita.
+   * Só um fato NOVO altera a seleção — reprocessar uma observação existente
+   * nunca muda o estado. `conflitoMesmaFonte` = a mesma fonte já registrou o
+   * campo no mesmo instante com OUTRO valor (nada muda). Master Free Time
+   * tem serviço próprio (divergência/recálculo) e é recusado aqui.
    */
   static async applyObservationComClient(
     client: PoolClient,
     input: ApplyObservationInput,
-  ): Promise<{ outcome: ApplyObservationOutcome; observationId: string; criada: boolean; valorAnterior: unknown; valorSelecionado: unknown; conflitoMesmaFonte: boolean }> {
+  ): Promise<ApplyObservationComClientResultado> {
     assertFonteAutorizada(input.campo, input.fonte);
     if (input.campo === 'masterFreeTimeDays') {
       throw new Error('masterFreeTimeDays deve ser promovido pelo serviço central (promoverMasterFreeTimeComClient).');
     }
     const columns = FIELD_COLUMNS[input.campo];
+
+    // Passo 1 — identidade do processo, SEM lock de linha mutável (a FK
+    // `processo_id` é estável, nunca reatribuída — ler sem lock é seguro).
+    const { rows: idRows } = await client.query(`SELECT processo_id FROM containers WHERE id = $1`, [input.containerId]);
+    if (!idRows.length) throw new Error(`Contêiner ${input.containerId} não encontrado.`);
+    const processoId: string = idRows[0].processo_id;
+
+    // Passo 2 — lock consultivo do processo, ANTES de qualquer linha mutável.
+    await lockProcesso(client, processoId);
+
+    // Passo 3 — relê e trava a linha do PROCESSO (status fresco, pós-lock).
+    const { rows: pr } = await client.query(`SELECT apuracao_status FROM processos WHERE id = $1 FOR UPDATE`, [processoId]);
+    const apuracaoStatus: string | undefined = pr[0]?.apuracao_status;
+
+    // Passo 4 — relê e trava a linha do CONTÊINER.
     const { rows: cr } = await client.query(
       `SELECT organization_id, ${columns.valueColumn} AS valor, ${columns.obsColumn} AS obs_id FROM containers WHERE id = $1 FOR UPDATE`,
       [input.containerId],
@@ -203,28 +223,39 @@ export class ContainerRepository {
     if (c.organization_id !== input.organizationId) {
       throw new Error(`Contêiner ${input.containerId} não pertence à organização ${input.organizationId}.`);
     }
+
+    // Passo 5 — observação bruta (ledger append-only), sempre preservada.
     const { observacao, criada } = await FieldObservationRepository.insertComClient(client, {
       organizationId: input.organizationId, entidadeTipo: 'container', entidadeId: input.containerId, campo: input.campo,
       valor: input.valor, fonte: input.fonte, observadoEm: input.observadoEm, evidenciaRef: input.evidenciaRef, criadoPor: input.criadoPor,
     });
     const conflito = !criada && JSON.stringify(observacao.valor) !== JSON.stringify(input.valor);
-    let promover = false;
-    if (criada) {
-      promover = true;
-      if (c.obs_id) {
-        const { rows: atual } = await client.query(`SELECT fonte FROM field_observations WHERE id = $1`, [c.obs_id]);
-        const fonteAtual = atual[0]?.fonte as FieldObservationSource | undefined;
-        if (fonteAtual) promover = FIELD_OBSERVATION_SOURCE_PRIORITY[input.fonte] >= FIELD_OBSERVATION_SOURCE_PRIORITY[fonteAtual];
-      }
+
+    // SÓ TESTE: injeta falha depois da observação persistida, antes de
+    // qualquer decisão — prova que a transação inteira desfaz (nenhuma
+    // observação/evento/projeção parcial sobrevive).
+    if (input._testeFalhaAposObservacao) await input._testeFalhaAposObservacao();
+
+    // Passo 6 — prioridade de fonte contra a seleção relida no passo 4.
+    // Reprocessar um fato IDÊNTICO ao já registrado (criada=false, sem
+    // conflito de valor) precisa refazer a mesma decisão, não pulá-la —
+    // senão um reenvio idempotente de um fato já bloqueado por FINAL
+    // relataria 'registrada_sem_promover' em vez de 'bloqueada_final'.
+    let promover = !conflito;
+    if (promover && c.obs_id) {
+      const { rows: atual } = await client.query(`SELECT fonte FROM field_observations WHERE id = $1`, [c.obs_id]);
+      const fonteAtual = atual[0]?.fonte as FieldObservationSource | undefined;
+      if (fonteAtual) promover = FIELD_OBSERVATION_SOURCE_PRIORITY[input.fonte] >= FIELD_OBSERVATION_SOURCE_PRIORITY[fonteAtual];
     }
-    // Fase D15-A (31.7b): mesma guarda de `applyObservation` — promoção
-    // venceria pela hierarquia de fontes, mas o processo está FINAL e o
-    // valor é materialmente diferente do selecionado.
+
+    // Passo 7 — status já relido sob lock (passo 3): promove OU bloqueia+registra.
     let bloqueadoPorFinal = false;
     if (promover) {
       bloqueadoPorFinal = await fatoMaterialBloqueadoPorFinal(client, {
         containerId: input.containerId, campo: input.campo, valorAnterior: c.valor, valorNovo: input.valor,
         origem: 'automatico', extra: { fonte: input.fonte, observationId: observacao.id },
+        processoIdConhecido: processoId, apuracaoStatusConhecido: apuracaoStatus,
+        _testeAntesDaDecisaoFinal: input._testeAntesDaDecisaoFinal,
       });
       if (bloqueadoPorFinal) {
         promover = false;
@@ -238,6 +269,7 @@ export class ContainerRepository {
     const selecionadaAgora = promover || (!criada && c.obs_id === observacao.id);
     return {
       outcome: bloqueadoPorFinal ? 'bloqueada_final' : selecionadaAgora ? 'promovida' : 'registrada_sem_promover',
+      exigeReabertura: bloqueadoPorFinal,
       observationId: observacao.id, criada,
       valorAnterior: c.valor, valorSelecionado: promover ? input.valor : c.valor, conflitoMesmaFonte: conflito,
     };

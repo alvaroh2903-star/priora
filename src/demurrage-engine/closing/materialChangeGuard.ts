@@ -16,16 +16,59 @@ import { Pool, PoolClient } from 'pg';
  *    falsa;
  *  - um valor DIFERENTE, com o processo FINAL, nunca é promovido: a função
  *    registra um evento auditável (`FATO_MATERIAL_POS_FINAL`) e devolve
- *    `bloqueadoPorFinal: true`; quem chama deve então pular o UPDATE que
- *    promoveria o fato;
+ *    `true` (o chamador traduz isso para `outcome: 'bloqueada_final'` e
+ *    `exigeReabertura: true` — contrato canônico da D15-A v1.1, §3);
  *  - reprocessar a MESMA tentativa bloqueada (mesmo contêiner + campo +
- *    valorAnterior + valorNovo) não duplica o evento — dedupe por conteúdo.
+ *    valorAnterior + valorNovo) não duplica o evento — dedupe por conteúdo,
+ *    e é seguro sob concorrência real porque todo chamador (v1.1) só chega
+ *    aqui depois de ter adquirido `lockProcesso` — nunca duas transações
+ *    material-writer do MESMO processo executam esta checagem
+ *    simultaneamente (ver `lockProcesso` abaixo e o documento de entrega).
  *
  * Não implementa aqui as regras gerais de D15-B (recência entre fontes,
  * cronologia, conflito de mesma fonte) — só a integridade de FINAL (D15-A).
+ *
+ * Fase D15-A v1.1 — ORDEM UNIVERSAL DE LOCK (corretiva, achados #1/#2):
+ * toda escrita capaz de promover um dos cinco campos materiais, e toda
+ * operação de fechamento/reabertura, segue a MESMA sequência, nesta ordem,
+ * dentro de uma única transação:
+ *   1. identifica o processo pelo contêiner/recurso, SEM lock de linha
+ *      mutável (a FK `processo_id` é estável — nunca reatribuída);
+ *   2. `lockProcesso` — `pg_advisory_xact_lock` por processo, ANTES de
+ *      qualquer linha mutável;
+ *   3. relê e trava (`FOR UPDATE`) a linha do processo;
+ *   4. relê e trava (`FOR UPDATE`) a(s) linha(s) de contêiner (ordenadas por
+ *      id quando mais de uma) e, quando aplicável, a linha de minuta/
+ *      reabertura;
+ *   5. persiste a observação bruta / executa a lógica de negócio;
+ *   6. decide prioridade/gates reavaliando o estado relido no passo 3-4
+ *      (nunca uma leitura anterior ao lock);
+ *   7. promove OU bloqueia+registra, e comita tudo junto.
+ * Como o lock consultivo (passo 2) é sempre o PRIMEIRO lock de qualquer
+ * operação D15-A, duas operações no MESMO processo nunca disputam uma linha
+ * em ordens opostas — a segunda fica bloqueada no passo 2 até a primeira
+ * comitar/abortar, antes de tocar qualquer linha. Isso elimina tanto a
+ * corrida do achado #1 (promoção depois de FINAL) quanto o deadlock do
+ * achado #2 (ordens de lock inconsistentes).
  */
 
 export type ExecutorSql = Pool | PoolClient;
+
+/** Namespace do lock consultivo por processo (D15-A) — ver `closingService.ts`. */
+export function chaveLockProcesso(processoId: string): string {
+  return `demurrage:closing:${processoId}`;
+}
+
+/**
+ * Lock consultivo por PROCESSO, escopo de transação (`pg_advisory_xact_lock`
+ * — liberado automaticamente no COMMIT/ROLLBACK). ÚNICA implementação
+ * reusada por `closingService.ts` e por todo escritor material (D15-A
+ * v1.1) — garante que todas as operações usem exatamente a MESMA chave de
+ * lock, nunca uma variante acidental que deixaria de serializar.
+ */
+export async function lockProcesso(db: ExecutorSql, processoId: string): Promise<void> {
+  await db.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [chaveLockProcesso(processoId)]);
+}
 
 function valoresIguais(a: unknown, b: unknown): boolean {
   const na = a === undefined ? null : a;
@@ -91,6 +134,24 @@ export interface FatoMaterialBloqueadoInput {
   atorUsuarioId?: string | null;
   evidenciaRef?: string | null;
   extra?: Record<string, unknown>;
+  /**
+   * Quando o chamador já relê `processo_id`/`apuracao_status` sob o lock
+   * (passo 3-4 do protocolo universal — ver cabeçalho do arquivo), informa
+   * aqui para evitar uma consulta redundante. Omitido → a função consulta
+   * por conta própria (ainda correto, já que quem chama já está dentro da
+   * mesma transação com os locks adquiridos — só uma consulta extra).
+   */
+  processoIdConhecido?: string;
+  apuracaoStatusConhecido?: string;
+  /**
+   * SÓ TESTE (D15-A v1.1) — ponto único de pausa reusado por TODO escritor
+   * material (contêiner, House/Master Free Time): dispara exatamente antes
+   * da decisão final (promover × bloquear), já com o lock consultivo do
+   * processo e as linhas relidas sob `FOR UPDATE` adquiridos pelo chamador.
+   * Usado pelos testes de corrida (§ "Observation ... pauses before the
+   * final decision"). Nunca usado em produção; nenhuma rota o expõe.
+   */
+  _testeAntesDaDecisaoFinal?: () => void | Promise<void>;
 }
 
 /**
@@ -105,13 +166,21 @@ export async function fatoMaterialBloqueadoPorFinal(
   input: FatoMaterialBloqueadoInput,
 ): Promise<boolean> {
   if (valoresIguais(input.valorAnterior, input.valorNovo)) return false;
-  const { rows } = await db.query(
-    `SELECT c.processo_id, p.apuracao_status FROM containers c JOIN processos p ON p.id = c.processo_id WHERE c.id = $1`,
-    [input.containerId],
-  );
-  if (!rows.length || rows[0].apuracao_status !== 'FINAL') return false;
+  if (input._testeAntesDaDecisaoFinal) await input._testeAntesDaDecisaoFinal();
+  let processoId = input.processoIdConhecido;
+  let status = input.apuracaoStatusConhecido;
+  if (!processoId || !status) {
+    const { rows } = await db.query(
+      `SELECT c.processo_id, p.apuracao_status FROM containers c JOIN processos p ON p.id = c.processo_id WHERE c.id = $1`,
+      [input.containerId],
+    );
+    if (!rows.length) return false;
+    processoId = rows[0].processo_id;
+    status = rows[0].apuracao_status;
+  }
+  if (status !== 'FINAL') return false;
   await registrarFatoMaterialPosFinal(db, {
-    processoId: rows[0].processo_id, containerId: input.containerId, campo: input.campo,
+    processoId: processoId!, containerId: input.containerId, campo: input.campo,
     valorAnterior: input.valorAnterior, valorNovo: input.valorNovo, origem: input.origem,
     atorUsuarioId: input.atorUsuarioId, evidenciaRef: input.evidenciaRef, extra: input.extra,
   });
