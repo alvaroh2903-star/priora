@@ -309,10 +309,87 @@ existentes (trigger `demurrage.relogio_writer`, migrations 0017/0018 para
 o congelamento de FINAL) continuam sendo a defesa em profundidade,
 inalterados.
 
-## 8. Totais de teste — regressão completa
+## 8. Totais de teste — regressão completa (revalidado)
 
-Executado sequencialmente contra PostgreSQL 16 real
-(`DEMURRAGE_TEST_DATABASE_URL` → `priora_demurrage_test`):
+> **Correção desta seção:** a entrega original deste documento reportava
+> `854/857` na suíte completa e classificava as 3 falhas restantes como um
+> "defeito pré-existente" de D12. Essa classificação era PREMATURA — a
+> causa real era uma variável de ambiente ausente na invocação dos testes,
+> não um defeito de D12 nem de D15-A. A seção abaixo substitui o relato
+> anterior pelo resultado revalidado sob o ambiente de teste COMPLETO (ver
+> §8.1). Nenhuma linha de código de produção mudou como consequência desta
+> revalidação — ver §8.2.
+
+### 8.1 Causa das 3 falhas — variável de ambiente ausente, não defeito de código
+
+Parte da pilha HTTP de D12 (o middleware `criarAutorizarInterno()`, usado
+pelas duas subtestes HTTP de `leituraAutorizacao.test.ts` que haviam
+falhado) usa o **pool global** da aplicação (`getPool()`, em
+`src/demurrage-engine/db/pool.ts`), que lê EXCLUSIVAMENTE
+`DEMURRAGE_DATABASE_URL`/`DATABASE_URL` — nunca
+`DEMURRAGE_TEST_DATABASE_URL`. O restante da suíte (inclusive as chamadas
+diretas a `resolverAutorizacao` no MESMO arquivo) usa o **pool explícito de
+teste** (`testPool()`, em `testDb.ts`), que lê
+`DEMURRAGE_TEST_DATABASE_URL` primeiro. A invocação original desta entrega
+exportava apenas `DEMURRAGE_TEST_DATABASE_URL` — suficiente para toda a
+suíte, EXCETO para o caminho HTTP de D12, cujo pool global lançava:
+
+```
+Error: DEMURRAGE_DATABASE_URL (ou DATABASE_URL) não definida. A Demurrage
+Engine V2 exige PostgreSQL — configure a connection string antes de rodar
+migrations, repositórios ou testes.
+    at buildConfig (src/demurrage-engine/db/pool.ts:23:11)
+    at getPool (src/demurrage-engine/db/pool.ts:33:21)
+    at pool (src/demurrage-engine/leitura/autorizacao.ts:97:44)
+    at autorizarInterno (src/demurrage-engine/leitura/autorizacao.ts:106:51)
+    ... (pilha completa do Express — Layer.handle, Route.dispatch, ...)
+```
+
+Capturado via reprodução isolada (script de diagnóstico descartável, nunca
+comitado), que instrumentou o middleware de erro do próprio teste para
+logar a exceção completa em vez de só a mensagem — exatamente o HTTP 500
+observado (`{ error: 'erro_interno', detalhe: '...não definida...' }`).
+Confirmado em DUAS comparações controladas, ambas sob banco limpo
+(`DROP DATABASE`/`CREATE DATABASE` + migrations 0001–0035 reaplicadas do
+zero) e as três variáveis apontando para a mesma `priora_demurrage_test`:
+
+| Comparação | `DATABASE_URL`/`DEMURRAGE_DATABASE_URL`/`DEMURRAGE_TEST_DATABASE_URL` | Resultado |
+|---|---|---|
+| Commit `91b3201` (esta entrega), só `DEMURRAGE_TEST_DATABASE_URL` | incompletas | HTTP 500 nas 2 subtestes HTTP (reproduzido; pilha completa acima) |
+| Commit `91b3201` (esta entrega), as três definidas | completas | **10/10** — ver §8.3 |
+| Commit `368a986` (base, sem nenhuma mudança de D15-A v1.3), as três definidas | completas | **10/10** — mesmo resultado, prova de que não é um defeito introduzido por D15-A nem de D12 |
+
+Isto fecha a árvore de decisão: não é um defeito de D12 (o próprio D12
+nunca foi tocado por esta entrega, e passa de forma idêntica no commit
+base com o ambiente correto); não é uma regressão de D15-A v1.3 (mesma
+causa, mesmo resultado, em ambos os commits); é exclusivamente uma lacuna
+de configuração do comando de teste usado na validação anterior.
+
+### 8.2 Nenhuma mudança de código ou de harness foi necessária
+
+O harness já funciona corretamente — `testPool()` e `getPool()` sempre
+leram as variáveis documentadas em seus próprios módulos
+(`src/demurrage-engine/__tests__/testDb.ts`,
+`src/demurrage-engine/db/pool.ts`); nenhuma delas tem um bug. O que faltou
+foi exportar as três variáveis no comando de validação. Nenhum arquivo de
+produção, de teste ou de harness foi alterado por esta revalidação — só
+este documento.
+
+### 8.3 Resultado revalidado — ambiente de teste completo
+
+Rebuild limpo do banco (`DROP DATABASE priora_demurrage_test` →
+`CREATE DATABASE` → `npm run db:migrate:demurrage`, aplicando as 35
+migrations do zero) e as três variáveis apontando para a mesma
+`priora_demurrage_test` durante toda a sequência:
+
+```
+DATABASE_URL=postgresql://priora_demurrage:***@127.0.0.1:5432/priora_demurrage_test
+DEMURRAGE_DATABASE_URL=postgresql://priora_demurrage:***@127.0.0.1:5432/priora_demurrage_test
+DEMURRAGE_TEST_DATABASE_URL=postgresql://priora_demurrage:***@127.0.0.1:5432/priora_demurrage_test
+```
+
+Executado sequencialmente (nenhuma suíte concorrente, nenhum benchmark
+compartilhando o banco), no commit `91b3201`:
 
 | Suíte | Resultado |
 |---|---|
@@ -320,32 +397,20 @@ Executado sequencialmente contra PostgreSQL 16 real
 | D15-A v1.1 (`closingD15AV11.test.ts`) | **14/14**, preservados sem alteração |
 | D15-A v1.2 (`closingD15AV12.test.ts`) | **7/7**, preservados; auditoria estática agora cobre 6 funções (§5) |
 | D15-A v1.3 (`closingD15AV13.test.ts`) | **8/8** — novos, §4 |
-| Suíte completa da Demurrage Engine (`npm run test:demurrage-engine` — inclui recálculo/relógios/lifecycle, registro D10, Shipping Instructions, closing/reabertura, D11, D12, D14 e todo o D15-A acima) | **854/857**, 0 pulados — ver achado pré-existente abaixo |
+| `leituraAutorizacao.test.ts` (D12 Gate G6, isolado) | **10/10** — as 2 subtestes HTTP que falhavam agora passam (§8.1) |
+| Suíte completa da Demurrage Engine (`npm run test:demurrage-engine`) | **857/857**, 0 falhas, 0 pulados, 0 cancelados |
 | V1 (`npm test`) | **25/25** |
 | D13 UI (`npm run test:demurrage-ui`) | **66/66** |
 | `tsc --noEmit` | limpo |
 | `npm run build` | limpo |
+
+**Zero falhas, zero pulados, zero cancelados em toda a sequência.**
 
 Os 5 testes A (§4) foram adicionalmente validados por **mutação**: com a
 leitura combinada pré-lock da v1.2 reintroduzida deliberadamente (patch
 temporário, nunca comitado nesta entrega), todos os 5 falham; restaurada a
 correção, todos os 5 voltam a passar — a prova de que detectam o achado
 bloqueante, não apenas documentam a correção.
-
-### Achado pré-existente, confirmado NÃO relacionado a esta correção
-
-As 3 falhas remanescentes na suíte completa são as mesmas, nos mesmos 2
-subtestes, do arquivo `leituraAutorizacao.test.ts` (D12 Gate G6 — RBAC e
-isolamento): `HTTP: fluxo feliz resolve a organização real` e `HTTP:
-CLIENT recebe 403` recebem HTTP 500 do servidor de teste em vez de 200/403
-(uma exceção não tratada dentro do middleware `criarAutorizarInterno()` —
-módulo D12, nunca tocado por esta entrega). Confirmado, via `git stash` das
-seis alterações de produção desta versão e reexecução isolada do mesmo
-arquivo, que a MESMA falha, com o MESMO erro, já ocorre no commit base
-`368a986` (antes de qualquer mudança desta entrega) — portanto não é uma
-regressão introduzida pela correção v1.3, é um defeito pré-existente e
-ortogonal (D12, Gate G6), fora do escopo desta entrega (D15-A). Fica
-registrado aqui para rastreabilidade; não foi corrigido por não ser D15-A.
 
 ## 9. O que esta entrega NÃO faz
 
@@ -354,8 +419,9 @@ registrado aqui para rastreabilidade; não foi corrigido por não ser D15-A.
 - Não adiciona rota, ação de frontend ou escopo de produto novo.
 - Não edita a migration `0035`. Não cria migration nova (justificado em §7).
 - Não altera nenhuma regra de negócio congelada de D10–D14.
-- Não corrige o achado pré-existente de `leituraAutorizacao.test.ts`
-  (D12 Gate G6) — confirmado fora do escopo e não introduzido por esta
-  correção (§8).
+- Não altera `leituraAutorizacao.test.ts` nem nenhum código de D12 — a
+  revalidação (§8) mostrou que nenhuma mudança ali era necessária; a causa
+  das 3 falhas da entrega anterior deste documento era a invocação de
+  teste (variáveis de ambiente incompletas), não o código de D12.
 
 Entrega para nova auditoria.
