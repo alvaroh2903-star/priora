@@ -7,16 +7,41 @@ import { Page, Frame } from 'playwright';
 
 const COOKIE_ACCEPT_SELECTORS = [
   '#onetrust-accept-btn-handler', // OneTrust (Hapag e muitos outros)
-  'button#truste-consent-button',
+  '#coiConsentBannerAcceptAllButton', // Cookie Information (Maersk)
+  '#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll', // Cookiebot
+  '#CybotCookiebotDialogBodyButtonAccept',
+  'button#truste-consent-button', // TrustArc
+  '[data-testid="cookie-accept-all"]',
+  'button[aria-label*="accept all" i]',
   'button[aria-label*="accept" i]',
+  'button:has-text("Accept All Cookies")',
   'button:has-text("Accept All")',
   'button:has-text("Accept all")',
-  'button:has-text("Accept All Cookies")',
+  'button:has-text("Allow all")', // Cookie Information (Maersk)
+  'button:has-text("Allow All")',
   'button:has-text("I Accept")',
   'button:has-text("I agree")',
-  'button:has-text("Aceitar")',
+  'button:has-text("Agree")',
   'button:has-text("Aceitar todos")',
+  'button:has-text("Aceitar")',
+  'button:has-text("Tout accepter")', // FR (CMA/MSC)
+  'button:has-text("Alle akzeptieren")', // DE
 ];
+
+/** Clica o PRIMEIRO botão de cookie VISÍVEL que casar. Retorna true se clicou. */
+async function clickFirstCookie(page: Page): Promise<boolean> {
+  for (const sel of COOKIE_ACCEPT_SELECTORS) {
+    const btn = page.locator(sel).first();
+    if (
+      (await btn.count().catch(() => 0)) > 0 &&
+      (await btn.isVisible().catch(() => false)) === true
+    ) {
+      await btn.click({ timeout: 3000 }).catch(() => undefined);
+      return true;
+    }
+  }
+  return false;
+}
 
 const CAPTCHA_HINTS = [
   'iframe[src*="recaptcha"]',
@@ -37,13 +62,24 @@ const LOGIN_TEXT_HINTS = [
 
 /** Aceita o banner de cookies e fecha camadas de idioma/região (best-effort). */
 export async function acceptCookies(page: Page): Promise<void> {
-  for (const sel of COOKIE_ACCEPT_SELECTORS) {
-    const btn = page.locator(sel).first();
-    if ((await btn.count().catch(() => 0)) > 0) {
-      await btn.click({ timeout: 3000 }).catch(() => undefined);
-      break;
-    }
+  // Banners costumam aparecer um instante DEPOIS do load — tenta já, espera, tenta
+  // de novo. Cobre OneTrust, Cookie Information (Maersk), Cookiebot, TrustArc.
+  let clicked = await clickFirstCookie(page);
+  if (!clicked) {
+    await page.waitForTimeout(1500);
+    clicked = await clickFirstCookie(page);
   }
+  // Fallback por JS: API dos CMPs mais comuns (no-op se não existir na página).
+  // Resolve casos em que o botão está num shadow DOM/iframe que o locator não pega.
+  await page
+    .evaluate(() => {
+      const w = window as unknown as Record<string, any>;
+      try { w.CookieInformation?.submitAllCategories?.(); } catch { /* no-op */ }
+      try { w.Cookiebot?.submit?.(); } catch { /* no-op */ }
+      try { w.Cookiebot?.dialog?.submit?.(); } catch { /* no-op */ }
+      try { w.OneTrust?.AllowAll?.(); } catch { /* no-op */ }
+    })
+    .catch(() => undefined);
   // Camada de idioma/região (ex.: ShipmentLink "Would you use language: Español?"
   // sobre um IP hispânico) — força inglês; a página recarrega em inglês, sem a
   // camada bloqueando o formulário. Também esconde a camada por JS como reforço.
