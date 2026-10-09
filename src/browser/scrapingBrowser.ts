@@ -309,10 +309,30 @@ export async function collectFramesHtml(page: Page): Promise<string> {
   return parts.filter(Boolean).join('\n<!--priora-frame-boundary-->\n');
 }
 
-/** Texto do body de TODOS os frames, concatenado (p/ detectar resultados/ref). */
+/**
+ * Texto do body de TODOS os frames, concatenado (p/ detectar resultados/ref E
+ * alimentar a camada de IA). Usa `innerText` = só o texto VISÍVEL, igual um humano
+ * lê: exclui o conteúdo de `<style>`/`<script>` e elementos ocultos. Isso é crucial:
+ * `textContent` trazia o CSS inteiro dos banners de cookie (ex.: Cookie Information
+ * da Maersk injeta MILHARES de linhas de `.coi-banner{...}` no DOM) — enchia a
+ * janela da IA de lixo e escondia os dados reais. Fallback: textContent sem
+ * style/script, caso innerText venha vazio nalgum frame.
+ */
 export async function collectFramesText(page: Page): Promise<string> {
   const parts = await Promise.all(
-    page.frames().map((f) => f.textContent('body').catch(() => '')),
+    page.frames().map(async (f) => {
+      const it = await f.innerText('body').catch(() => '');
+      if (it && it.trim()) return it;
+      // Fallback: clona o body, remove style/script/noscript e pega o texto.
+      return f
+        .evaluate(() => {
+          const b = document.body ? (document.body.cloneNode(true) as HTMLElement) : null;
+          if (!b) return '';
+          b.querySelectorAll('style, script, noscript, template').forEach((el) => el.remove());
+          return b.textContent || '';
+        })
+        .catch(() => '');
+    }),
   );
   return parts
     .filter(Boolean)
