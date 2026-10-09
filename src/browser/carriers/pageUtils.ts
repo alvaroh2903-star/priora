@@ -356,11 +356,25 @@ export async function driveMscForm(
       await searchBtn.click({ timeout: 5000 }).catch(() => undefined);
     }
     await input.press('Enter').catch(() => undefined);
-    // Espera a XHR de tracking chegar e a SPA assentar. Em sessão RESIDENCIAL a MSC
-    // pode levar >1min pra responder — por isso o poll vai até ~45s (sai no 1º
-    // sucesso, então sessão rápida não espera à toa). Fechar o listener cedo demais
-    // (12s antigos) perdia o JSON em sessão lenta → 0 eventos mesmo com dado na tela.
-    for (let i = 0; i < 90 && !apiJson; i++) await page.waitForTimeout(500);
+    // 1) Dá tempo do resultado (resumo dos contêineres) aparecer. O JSON interno da
+    //    MSC quase não vem mais (o dado agora é renderizado no DOM) — poll curto só
+    //    por garantia; a extração real sai do DOM EXPANDIDO (passo 2) + parser/IA.
+    for (let i = 0; i < 30 && !apiJson; i++) await page.waitForTimeout(500);
+    // 2) EXPANDE cada contêiner: a MSC colapsa o histórico de cada um num "bar"
+    //    clicável (.msc-flow-tracking__bar → more()). Sem expandir, só vem o RESUMO
+    //    (contêiner + último movimento + ETA) — SEM descarga/retirada/devolução. Clicar
+    //    abre o timeline no DOM. Só clica os que NÃO estão abertos (classe 'open'),
+    //    pra não COLAPSAR um que já veio expandido (BL de 1 contêiner).
+    const bars = page.locator('.msc-flow-tracking__bar');
+    const nBars = await bars.count().catch(() => 0);
+    for (let i = 0; i < Math.min(nBars, 25); i++) {
+      const bar = bars.nth(i);
+      const cls = (await bar.getAttribute('class').catch(() => '')) || '';
+      if (/\bopen\b/.test(cls)) continue; // já expandido → não mexe
+      await bar.click({ timeout: 2000 }).catch(() => undefined);
+      await page.waitForTimeout(350);
+    }
+    if (nBars > 0) await page.waitForTimeout(1500);
     await page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => undefined);
   } finally {
     page.off('response', onResp);
