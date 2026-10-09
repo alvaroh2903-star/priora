@@ -2,6 +2,7 @@ import { chromium, Browser, Page } from 'playwright';
 import { acceptCookies, tryFillSearch } from './carriers/pageUtils';
 import { findCarrierDriver } from './carriers/drivers';
 import { solveCaptchaIfPresent } from './antiCaptcha';
+import { PoolMode } from './carriers/types';
 
 /**
  * Priora — Cliente do Bright Data Scraping Browser (CDP remoto).
@@ -46,9 +47,9 @@ function getGenericWss(): string {
  * URL wss:// DEDICADA aos armadores com anti-bot PESADO (CMA/OOCL/ZIM). Monte no
  * API Player da Scrapfly com "Unblock Mode" LIGADO + Proxy Pool RESIDENCIAL e cole
  * aqui. É mais cara (residencial ~52 créditos/MB vs 7 do datacenter), por isso só
- * os armadores marcados `heavyAntibot` a usam — os outros 9 seguem no datacenter
- * (SCRAPE_BROWSER_WSS). Vazia = fallback: reescreve só o `proxy_pool` da URL
- * genérica p/ residencial (NÃO liga o Unblock Mode — pra isso, use esta variável).
+ * os armadores com pool='residential_unblock' a usam. Vazia = fallback: reescreve
+ * só o `proxy_pool` da URL genérica p/ residencial (NÃO liga o Unblock Mode — pra
+ * isso, use esta variável).
  */
 function getGenericWssHeavy(): string {
   return (process.env.SCRAPE_BROWSER_WSS_HEAVY || '').trim();
@@ -93,21 +94,23 @@ export function scrapeBrowserProvider(): string {
 }
 
 /**
- * Monta o endpoint CDP. `heavy=true` (armador anti-bot PESADO) usa a URL dedicada
- * residencial+Unblock (SCRAPE_BROWSER_WSS_HEAVY); sem ela, reescreve o pool da URL
- * genérica p/ residencial. `heavy=false` (padrão — os 9 armadores normais) usa a
- * URL genérica como está (datacenter, barato) ou o Bright Data como fallback.
+ * Monta o endpoint CDP conforme o POOL pedido (3 níveis — ver PoolMode):
+ * - 'residential_unblock': URL dedicada residencial+Unblock (SCRAPE_BROWSER_WSS_HEAVY);
+ *   sem ela, reescreve o pool da genérica p/ residencial (sem Unblock, best-effort).
+ * - 'residential': reescreve o `proxy_pool` da URL genérica p/ residencial (sem Unblock).
+ * - 'datacenter' (padrão do builder): URL genérica como está (barato), ou Bright Data.
  */
-function buildWSEndpoint(heavy = false): string {
-  if (heavy) {
+function buildWSEndpoint(pool: PoolMode = 'datacenter'): string {
+  const generic = getGenericWss();
+  if (pool === 'residential_unblock') {
     const dedicated = getGenericWssHeavy();
     if (dedicated) return dedicated;
-    const generic = getGenericWss();
+    if (generic) return withResidentialPool(generic); // fallback: residencial sem Unblock
+  } else if (pool === 'residential') {
     if (generic) return withResidentialPool(generic);
     // sem URL genérica: segue p/ o Bright Data abaixo (sem reescrita de pool).
   }
-  // Caminho normal (datacenter): URL genérica como está — tem prioridade.
-  const generic = getGenericWss();
+  // datacenter (ou fallback): URL genérica como está — tem prioridade.
   if (generic) return generic;
   // Bright Data: URL completa OU "usuário:senha" (montamos o host/porta padrão).
   const auth = getSBAuth();
@@ -118,24 +121,24 @@ function buildWSEndpoint(heavy = false): string {
 /** Opções de conexão ao navegador remoto. */
 export interface ConnectOptions {
   /**
-   * Armador com anti-bot PESADO (CMA/OOCL/ZIM): abre a sessão RESIDENCIAL+Unblock
-   * (mais cara, melhor p/ furar anti-bot). Os demais ficam no datacenter (barato).
-   * Default: false.
+   * Pool de saída da sessão remota (ver PoolMode). Default: 'datacenter' (barato).
+   * 'residential' p/ portais que bloqueiam datacenter (Maersk/MSC/…);
+   * 'residential_unblock' p/ anti-bot pesado (CMA/OOCL/ZIM).
    */
-  heavy?: boolean;
+  pool?: PoolMode;
 }
 
 /**
  * Conecta ao Scraping Browser (Chromium remoto) via CDP e devolve o Browser. Quem
  * chama é responsável por fechar. Usado pelo `withRemotePage` (browser.ts) para
  * rodar QUALQUER scraper de armador contra o navegador remoto — furando Cloudflare/
- * SPA sem trocar a lógica de cada portal. `opts.heavy` escolhe o pool (ver acima).
+ * SPA sem trocar a lógica de cada portal. `opts.pool` escolhe o pool (ver acima).
  */
 export async function connectSB(opts: ConnectOptions = {}): Promise<Browser> {
   if (!isSBConfigured()) {
     throw new Error('Cloud browser não configurado (defina SCRAPE_BROWSER_WSS ou BRIGHTDATA_SB_AUTH).');
   }
-  return chromium.connectOverCDP(buildWSEndpoint(opts.heavy), { timeout: 30_000 });
+  return chromium.connectOverCDP(buildWSEndpoint(opts.pool), { timeout: 30_000 });
 }
 
 export interface SBScrapeOptions {
@@ -154,10 +157,9 @@ export interface SBScrapeOptions {
    */
   inventory?: boolean;
   /**
-   * Armador com anti-bot PESADO → sessão residencial + Unblock (ver
-   * ConnectOptions.heavy). Default: false (datacenter, barato).
+   * Pool de saída da sessão remota (ver ConnectOptions.pool). Default: 'datacenter'.
    */
-  heavy?: boolean;
+  pool?: PoolMode;
 }
 
 /** Descrição de um elemento interativo para diagnóstico de formulário. */
@@ -571,7 +573,7 @@ async function scrapeViaSBOnce(opts: SBScrapeOptions): Promise<SBScrapeResult> {
   const startedAt = Date.now();
   let browser: Browser | null = null;
   try {
-    browser = await connectSB({ heavy: opts.heavy });
+    browser = await connectSB({ pool: opts.pool });
     // Reusa o contexto E a página que o provedor já entrega (Scrapfly gerencia o
     // fingerprint na sessão) — criar contexto/página novos pode perdê-lo.
     const context = browser.contexts()[0] || (await browser.newContext());

@@ -8,6 +8,7 @@ import {
 import { anonymizeProxy, closeAnonymizedProxy } from 'proxy-chain';
 import { config, hasProxy } from '../config';
 import { connectSB } from './scrapingBrowser';
+import { PoolMode } from './carriers/types';
 
 /**
  * Priora — Módulo Demurrage / Camada de automação de navegador (Playwright)
@@ -169,10 +170,10 @@ export async function withPage<T>(
  */
 export async function withRemotePage<T>(
   fn: (page: Page, ctx: BrowserContext) => Promise<T>,
-  opts: { heavy?: boolean } = {},
+  opts: { pool?: PoolMode } = {},
 ): Promise<T> {
-  // `opts.heavy` escolhe o pool da sessão remota: residencial+Unblock (CMA/OOCL/
-  // ZIM) vs datacenter (os demais). Ver connectSB/ConnectOptions.
+  // `opts.pool` escolhe o pool da sessão remota (datacenter/residential/
+  // residential_unblock). Ver connectSB/ConnectOptions.
   const browser = await connectSB(opts);
   try {
     // Reusa o contexto E a página que o provedor já entrega (Scrapfly/Bright Data

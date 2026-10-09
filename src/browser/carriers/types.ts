@@ -7,6 +7,16 @@
 /** Tipo da referência informada pelo operador. */
 export type ReferenceType = 'container' | 'bl' | 'booking' | 'unknown';
 
+/**
+ * Pool de saída do navegador remoto (Scrapfly). Três níveis de custo × robustez:
+ * - 'datacenter': barato (~7 créditos/MB), mas vários portais bloqueiam o IP.
+ * - 'residential': IP residencial (~52 créditos/MB) — o PADRÃO seguro (o que
+ *   historicamente funcionou pra todos).
+ * - 'residential_unblock': residential + Unblock Mode (fura DataDome/Cloudflare/
+ *   slider). Só pros portais com anti-bot pesado (gasta mais ainda).
+ */
+export type PoolMode = 'datacenter' | 'residential' | 'residential_unblock';
+
 /** Tipo de evento normalizado (blueprint §7). */
 export type NormalizedEventType =
   | 'berth' // atracação
@@ -139,14 +149,14 @@ export interface CarrierMeta {
    */
   scrapeBlocked?: boolean;
   /**
-   * Anti-bot PESADO (DataDome/Cloudflare+slider/hCaptcha): quando abre sessão no
-   * navegador remoto, usa o pool RESIDENCIAL + Unblock Mode (mais caro, melhor p/
-   * furar anti-bot) em vez do DATACENTER. Só CMA/OOCL/ZIM. Os outros 9 armadores
-   * ficam no datacenter (barato). Independe de `scrapeBlocked`: o flag só escolhe o
-   * POOL — o diagnóstico (/health/scrape-sb, que ignora scrapeBlocked) já herda o
-   * pool residencial por este flag.
+   * Pool do navegador remoto para ESTE armador (custo × robustez). Ausente =
+   * 'residential' (PADRÃO seguro: é o que funcionava pra todos, sem regressão).
+   * 'datacenter' (barato) só para armadores que PROVARAM aguentar ao vivo (ex.:
+   * COSCO, Evergreen). 'residential_unblock' pros de anti-bot pesado (CMA/OOCL/ZIM).
+   * O diagnóstico (/health/scrape-sb) herda este pool do armador detectado e aceita
+   * override por ?pool=.
    */
-  heavyAntibot?: boolean;
+  pool?: PoolMode;
   /** Observações de implementação (o que está confirmado x a verificar). */
   notes?: string;
 }

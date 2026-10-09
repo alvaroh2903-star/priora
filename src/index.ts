@@ -19,6 +19,7 @@ import { auditoriaRouter } from './routes/auditoriaRoutes';
 import { chromium } from 'playwright';
 import { withPage } from './browser/browser';
 import { trackShipment, detect, detectCarrier, resolveSearchRef } from './browser/carriers';
+import type { PoolMode } from './browser/carriers/types';
 import { mapLimit } from './browser/carriers/concurrency';
 import type { TrackingResult } from './browser/carriers';
 import { tryFillSearch } from './browser/carriers/pageUtils';
@@ -554,21 +555,25 @@ app.get('/health/scrape-sb', async (req, res) => {
   if (!url) return res.status(400).json({ error: 'Informe ?url=<URL> ou ?ref=<BL|contêiner>.' });
 
   // Ref a DIGITAR no form pode diferir da original (ex.: Evergreen tira o EGLV).
-  // E já decide o POOL: armador heavyAntibot (CMA/OOCL/ZIM) → residencial+Unblock.
+  // E já herda o POOL do armador detectado (datacenter/residential/+unblock).
   let searchReference = ref || rawUrl;
-  let heavy = false;
+  let pool: PoolMode = 'datacenter';
   if (ref) {
     const d = detectCarrier(ref);
     if (d.carrier) {
       searchReference = resolveSearchRef(d.carrier, ref, d.referenceType);
-      heavy = d.carrier.heavyAntibot === true;
+      pool = d.carrier.pool ?? 'residential';
     }
   }
-  // Override manual no diagnóstico: ?pool=residential|datacenter (ou ?heavy=1|0).
+  // Override manual no diagnóstico: ?pool=datacenter|residential|residential_unblock
+  // (atalhos: dc|res|unblock; legado: ?heavy=1 → +unblock, ?heavy=0 → datacenter).
   const poolQ = String(req.query.pool || '').trim().toLowerCase();
   const heavyQ = String(req.query.heavy || '').trim();
-  if (poolQ === 'residential' || heavyQ === '1') heavy = true;
-  if (poolQ === 'datacenter' || heavyQ === '0') heavy = false;
+  if (poolQ === 'datacenter' || poolQ === 'dc') pool = 'datacenter';
+  else if (poolQ === 'residential' || poolQ === 'res') pool = 'residential';
+  else if (poolQ === 'residential_unblock' || poolQ === 'unblock' || poolQ === 'resu') pool = 'residential_unblock';
+  if (heavyQ === '1') pool = 'residential_unblock';
+  if (heavyQ === '0') pool = 'datacenter';
 
   // ?probe=1 coleta o inventário de inputs/selects/botões da página (revela os
   // seletores REAIS do form — COSCO/HMM — sem chutar num teste ao vivo só).
@@ -578,7 +583,7 @@ app.get('/health/scrape-sb', async (req, res) => {
     const sb =
       engine === 'local'
         ? { ...(await withPage((page) => driveTrackingPage(page, { url: url!, reference: searchReference, inventory: probe }))), ms: Date.now() - startedAt }
-        : await scrapeViaSB({ url, reference: searchReference, inventory: probe, heavy });
+        : await scrapeViaSB({ url, reference: searchReference, inventory: probe, pool });
     // Extrai eventos do HTML renderizado.
     let events: unknown[] = [];
     let containers: unknown[] = [];
@@ -608,8 +613,8 @@ app.get('/health/scrape-sb', async (req, res) => {
     res.json({
       ok: sb.ok,
       via: engine,
-      // Pool usado na sessão remota (residencial p/ heavyAntibot, senão datacenter).
-      pool: engine === 'sb' ? (heavy ? 'residential' : 'datacenter') : 'local',
+      // Pool usado na sessão remota (datacenter/residential/residential_unblock).
+      pool: engine === 'sb' ? pool : 'local',
       url,
       ms: sb.ms,
       result: {

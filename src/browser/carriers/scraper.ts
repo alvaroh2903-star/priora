@@ -144,12 +144,12 @@ export async function scrapeCarrier(
   // Portais difíceis (Cloudflare/SPA) rodam no navegador remoto do Bright Data;
   // simples, no Chromium local. O corpo do scraper é o MESMO nos dois casos.
   const useRemote = shouldUseScrapingBrowser(carrier);
-  // EFICIÊNCIA (crédito Scrapfly): só os armadores com anti-bot PESADO
-  // (heavyAntibot: CMA/OOCL/ZIM) abrem a sessão RESIDENCIAL+Unblock (cara). Os
-  // demais 9 ficam no DATACENTER (barato). O pool é escolhido POR ARMADOR aqui.
-  const heavy = carrier.heavyAntibot === true;
+  // POOL por armador (custo × robustez): default 'residential' (seguro — o que
+  // funcionava pra todos). 'datacenter' (barato) só p/ quem PROVOU aguentar
+  // (COSCO/Evergreen); 'residential_unblock' p/ anti-bot pesado (CMA/OOCL/ZIM).
+  const pool = carrier.pool ?? 'residential';
   const runner = <T>(fn: (page: Page, ctx: BrowserContext) => Promise<T>): Promise<T> =>
-    useRemote ? withRemotePage(fn, { heavy }) : withPage(fn);
+    useRemote ? withRemotePage(fn, { pool }) : withPage(fn);
   const specific = SCRAPERS[carrier.id];
 
   try {
