@@ -73,14 +73,15 @@ const BL_PREFIX_MAP: Array<{ prefixes: string[]; carrierId: string }> = [
     prefixes: ['SGNM', 'SZPM', 'TSNM', 'HKGM', 'SHAZ', 'KULM', 'SHAM', 'NBOZ', 'NKGZ', 'TAOM'],
     carrierId: 'hmm',
   },
-  // PIL: prefixos de escritório/porto
+  // PIL: prefixos de escritório/porto (4 letras — ampliado com BLs reais do operador)
   {
-    prefixes: ['SHAU', 'SHPL', 'NGPN', 'SZDC', 'NNPL'],
+    prefixes: ['SHAU', 'SHPL', 'NGPN', 'SZDC', 'NNPL', 'CKXC', 'TXAL', 'XMMX', 'SHTM', 'XMCX', 'TAOG'],
     carrierId: 'pil',
   },
-  // CMA CGM: prefixos de escritório/porto
+  // CMA CGM: prefixos de porto (3 letras + 1 dígito — ampliado com BLs reais do operador:
+  // Tianjin/Shenzhen/Xiamen/Hamburg). Se surgir outro dígito (ex.: TJN1), adicionar aqui.
   {
-    prefixes: ['CHN3', 'DLN0', 'QGD3', 'QGD2', 'NGP3'],
+    prefixes: ['CHN3', 'DLN0', 'QGD3', 'QGD2', 'NGP3', 'TJN0', 'SHZ8', 'XIA1', 'HBG2'],
     carrierId: 'cmacgm',
   },
   // Evergreen: EVGL é variante de EGLV (às vezes invertido nos BLs)
