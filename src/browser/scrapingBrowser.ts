@@ -395,17 +395,35 @@ async function waitOutChallenge(page: Page, ms = 45_000): Promise<void> {
 async function waitForResults(
   page: Page,
   reference: string | undefined,
-  deadlineMs = 20_000,
+  deadlineMs = 45_000,
 ): Promise<boolean> {
   const deadline = Date.now() + deadlineMs;
   const refUpper = reference ? reference.toUpperCase() : null;
+  // Conteúdo mínimo p/ considerar "renderizou de verdade" (não casca/menu só).
+  const MIN_SUBSTANTIAL = 1500;
+  let lastLen = -1;
+  let stable = 0;
   for (;;) {
     const txt = await collectFramesText(page).catch(() => '');
     const refSeen = refUpper ? txt.toUpperCase().includes(refUpper) : false;
     const containerSeen = /\b[A-Z]{4}\d{7}\b/.test(txt);
-    if (refSeen || containerSeen) return true;
-    if (Date.now() >= deadline) return false;
-    await page.waitForTimeout(1000);
+    const substantial = txt.length >= MIN_SUBSTANTIAL;
+    // "Pronto" exige SINAL de resultado (ref ou contêiner) + conteúdo substancial.
+    // Isso evita capturar no primeiro container de exemplo do form, ou com a casca
+    // ainda vazia (o render "magro" que derrubava armadores lentos).
+    if ((refSeen || containerSeen) && substantial) {
+      // ESTABILIZAÇÃO: a SPA renderiza a tabela por partes. Só captura quando o
+      // tamanho do texto PARA de crescer (2 leituras iguais ~3s) — garante a tabela
+      // inteira, não um pedaço. É o que mata o "puxou magro".
+      if (txt.length === lastLen) {
+        if (++stable >= 2) return true;
+      } else {
+        stable = 0;
+      }
+      lastLen = txt.length;
+    }
+    if (Date.now() >= deadline) return refSeen || containerSeen;
+    await page.waitForTimeout(1500);
   }
 }
 
