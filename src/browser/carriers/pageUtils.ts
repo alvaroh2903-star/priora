@@ -7,7 +7,8 @@ import { Page, Frame } from 'playwright';
 
 const COOKIE_ACCEPT_SELECTORS = [
   '#onetrust-accept-btn-handler', // OneTrust (Hapag e muitos outros)
-  '#coiConsentBannerAcceptAllButton', // Cookie Information (Maersk)
+  'button.coi-banner__accept', // Cookie Information (Maersk) — botão "Allow all"
+  '#coiConsentBannerAcceptAllButton', // Cookie Information (variação por id)
   '#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll', // Cookiebot
   '#CybotCookiebotDialogBodyButtonAccept',
   'button#truste-consent-button', // TrustArc
@@ -62,12 +63,14 @@ const LOGIN_TEXT_HINTS = [
 
 /** Aceita o banner de cookies e fecha camadas de idioma/região (best-effort). */
 export async function acceptCookies(page: Page): Promise<void> {
-  // Banners costumam aparecer um instante DEPOIS do load — tenta já, espera, tenta
-  // de novo. Cobre OneTrust, Cookie Information (Maersk), Cookiebot, TrustArc.
-  let clicked = await clickFirstCookie(page);
-  if (!clicked) {
-    await page.waitForTimeout(1500);
+  // O banner pode surgir alguns SEGUNDOS após o load (ex.: Cookie Information da
+  // Maersk injeta o "Allow all" tarde). Tenta clicar várias vezes com 1s de
+  // intervalo, saindo no 1º sucesso (até ~7s). Páginas sem cookie varrem rápido e,
+  // como o clique falha, seguem — o custo extra só existe quando há banner tardio.
+  let clicked = false;
+  for (let i = 0; i < 7 && !clicked; i++) {
     clicked = await clickFirstCookie(page);
+    if (!clicked) await page.waitForTimeout(1000);
   }
   // Fallback por JS: API dos CMPs mais comuns (no-op se não existir na página).
   // Resolve casos em que o botão está num shadow DOM/iframe que o locator não pega.
@@ -353,8 +356,11 @@ export async function driveMscForm(
       await searchBtn.click({ timeout: 5000 }).catch(() => undefined);
     }
     await input.press('Enter').catch(() => undefined);
-    // Espera a XHR de tracking chegar (poll até ~12s) e a SPA assentar.
-    for (let i = 0; i < 24 && !apiJson; i++) await page.waitForTimeout(500);
+    // Espera a XHR de tracking chegar e a SPA assentar. Em sessão RESIDENCIAL a MSC
+    // pode levar >1min pra responder — por isso o poll vai até ~45s (sai no 1º
+    // sucesso, então sessão rápida não espera à toa). Fechar o listener cedo demais
+    // (12s antigos) perdia o JSON em sessão lenta → 0 eventos mesmo com dado na tela.
+    for (let i = 0; i < 90 && !apiJson; i++) await page.waitForTimeout(500);
     await page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => undefined);
   } finally {
     page.off('response', onResp);
