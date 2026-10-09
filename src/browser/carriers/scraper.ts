@@ -70,8 +70,11 @@ async function genericScrape(
     };
   }
 
-  // Sem estrutura reconhecida ainda: texto cru p/ a Clara + diagnóstico honesto.
-  const raw = driven.textContent.slice(0, 4000);
+  // Sem estrutura reconhecida ainda: texto cru p/ a Clara (camada de resiliência) +
+  // diagnóstico honesto. Janela GENEROSA (30k): o rastreio costuma vir DEPOIS do
+  // menu/nav no texto — cortar em 4k deixava a IA sem o dado. Só é preenchido na
+  // FALHA do parser (em regime normal, raw fica vazio → sem custo de cache).
+  const raw = driven.textContent.slice(0, 30000);
   const mentionsRef = raw.toUpperCase().includes(ctx.reference.toUpperCase());
   // Resposta do portal que NÃO é defeito nosso: referência inválida/expirada, sem
   // resultado, ou manutenção (ex.: Hapag "The value ... is invalid" / "Online

@@ -11,7 +11,6 @@ import {
   getAllBotResults,
 } from '../demurrage/demurrageBotStore';
 import { trackingToDemurrageContainers } from '../demurrage/trackingMapper';
-import { organizeScrapedTracking } from '../demurrage/trackingOrganizer';
 import { calculateDemurrage } from '../demurrage/calculator';
 import { getDefaultTariff } from '../demurrage/tariffs';
 import { config, hasProxy, isAntiCaptchaConfigured } from '../config';
@@ -163,24 +162,17 @@ async function enrichOne(
     }
   }
 
+  // A CAMADA DE RESILIÊNCIA (IA/Clara) já roda DENTRO do trackShipment quando o
+  // parser dedicado não reconhece o layout — então aqui não re-organiza (evita
+  // gastar IA em dobro). `result.organizedByAI` diz se os dados vieram da IA.
   const result = await trackShipment(ref, { carrierId });
-
-  // Se o scraper específico já trouxe datas, usamos direto. Se veio só texto
-  // cru (portal sem scraper próprio), a Clara organiza em datas/status.
-  const hasDates = result.containers.some(
-    (c) => c.gateOut || c.emptyReturn || c.lastFreeDay,
-  );
-  let organizedByAI = false;
-  if (!hasDates && result.raw) {
-    const organized = await organizeScrapedTracking(result.carrierName, ref, result.raw);
-    if (organized && organized.length) {
-      result.containers = organized;
-      organizedByAI = true;
-    }
-  }
-
   const rec = saveBotResult(ref, result);
-  return { ...shapeEnrich(result), cached: false, at: rec.at, organizedByAI };
+  return {
+    ...shapeEnrich(result),
+    cached: false,
+    at: rec.at,
+    organizedByAI: result.organizedByAI === true,
+  };
 }
 
 /** GET /api/demurrage/bot/enrich?ref=...[&carrier=][&refresh=1] — um BL. */

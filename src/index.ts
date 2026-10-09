@@ -135,6 +135,9 @@ app.get('/health', (_req, res) =>
       proxy: hasProxy(),
       unblocker: isUnblockerConfigured(),
       antiCaptcha: isAntiCaptchaConfigured(),
+      // Camada de resiliência (IA/Clara): precisa do Gemini configurado p/ salvar
+      // armador que mudou de layout. false = a resiliência NÃO funciona (setar GEMINI_API_KEY).
+      ai: isAiConfigured(),
       supabase: isSupabaseConfigured(),
     },
   }),
@@ -656,6 +659,7 @@ function trackSummary(ref: string, result: TrackingResult, ms: number) {
     ok: result.ok,
     ms,
     eventsCount: result.events?.length || 0,
+    organizedByAI: result.organizedByAI === true, // veio da camada de resiliência (IA)?
     needsCaptcha: result.needsCaptcha,
     containers: (result.containers || []).map((c) => ({
       numero: c.numero,
@@ -674,6 +678,9 @@ app.get('/health/track', async (req, res) => {
   if (!token) return res.status(404).json({ error: 'Desativado (defina DIAG_TOKEN).' });
   if (String(req.query.token || '') !== token) return res.status(401).json({ error: 'token inválido.' });
   const carrierId = req.query.carrier ? String(req.query.carrier).trim() : undefined;
+  // Camada de resiliência (IA): LIGADA por padrão (= produção). ?ai=0 desliga p/
+  // ver só o parser dedicado cru.
+  const aiFallback = String(req.query.ai ?? '1') !== '0';
 
   // Modo LOTE: ?refs=a,b,c — roda o trackShipment REAL em vários e resume. Cada
   // raspagem leva ~30-90s; com concorrência 2, 4 refs ≈ 2-3 min (pode ajustar &c=).
@@ -688,7 +695,7 @@ app.get('/health/track', async (req, res) => {
     const results = await mapLimit(refs, c, async (r) => {
       const t0 = Date.now();
       try {
-        return trackSummary(r, await trackShipment(r, { carrierId }), Date.now() - t0);
+        return trackSummary(r, await trackShipment(r, { carrierId, aiFallback }), Date.now() - t0);
       } catch (e) {
         return { ref: r, ok: false, ms: Date.now() - t0, error: (e as Error).message };
       }
@@ -701,7 +708,7 @@ app.get('/health/track', async (req, res) => {
   if (!ref) return res.status(400).json({ error: 'Informe ?ref=<BL|contêiner|booking> ou ?refs=a,b,c.' });
   const startedAt = Date.now();
   try {
-    const result = await trackShipment(ref, { carrierId });
+    const result = await trackShipment(ref, { carrierId, aiFallback });
     res.json({ ok: result.ok, ms: Date.now() - startedAt, result });
   } catch (e) {
     res.status(502).json({ ok: false, ms: Date.now() - startedAt, error: (e as Error).message });

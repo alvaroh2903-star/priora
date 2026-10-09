@@ -90,6 +90,12 @@ export interface TrackingResult {
   raw?: string;
   /** Mensagem legível (erro/aviso), quando houver. */
   message?: string;
+  /**
+   * Os eventos vieram da CAMADA DE RESILIÊNCIA (IA/Clara) em vez do parser
+   * dedicado — acontece quando o portal mudou de layout e o parser não reconheceu.
+   * A API continua entregando (não quebra); serve de sinal p/ reafinar o parser.
+   */
+  organizedByAI?: boolean;
   fetchedAt: string;
 }
 

@@ -3,6 +3,8 @@ import { detectCarrier, classifyReference, normalizeRef, isValidContainer } from
 import { scrapeCarrier } from './scraper';
 import { hasApiSource, fetchViaApi } from './apiSources';
 import { CarrierMeta, ReferenceType, TrackingResult } from './types';
+import { extractEventsViaAI } from './aiExtract';
+import { deriveContainers } from './scrapers/hapag';
 
 /**
  * Priora — Fachada do bot de armadores (usada pelas rotas).
@@ -31,6 +33,12 @@ export interface TrackOptions {
   carrierId?: string;
   /** Informa o tipo da referência (senão é inferido). */
   referenceType?: ReferenceType;
+  /**
+   * CAMADA DE RESILIÊNCIA (IA): quando o parser dedicado não reconhece o layout,
+   * a Clara lê o texto cru e extrai os eventos. Default LIGADO (produção não quebra
+   * se o portal mudar). `false` desliga (ex.: diagnóstico do parser puro, `&ai=0`).
+   */
+  aiFallback?: boolean;
 }
 
 /**
@@ -70,8 +78,31 @@ export async function trackShipment(
   }
   // 2) Caminho primário: scraping (cobertura/tração).
   const scraped = await scrapeCarrier(carrier, reference, referenceType);
+  if (scraped.ok && scraped.events.length > 0) return scraped;
+
+  // 2b) CAMADA DE RESILIÊNCIA (IA): o parser dedicado não reconheceu o layout
+  // (portal mudou, ou armador sem parser). A Clara lê o TEXTO CRU já raspado e
+  // extrai os eventos — adapta-se a QUALQUER layout sem mexer no código. Roda AQUI
+  // (navegador JÁ FECHADO → não gasta crédito Scrapfly) e passa pelo MESMO pipeline
+  // validado (deriveContainers) dos parsers dedicados. É o que evita "API em
+  // manutenção" quando um armador troca o site.
+  if (opts.aiFallback !== false && scraped.events.length === 0 && scraped.raw) {
+    const aiEvents = await extractEventsViaAI(carrier.name, reference, scraped.raw).catch(() => []);
+    if (aiEvents.length > 0) {
+      const containerHint = referenceType === 'container' ? reference : null;
+      return {
+        ...scraped,
+        ok: true,
+        organizedByAI: true,
+        events: aiEvents,
+        containers: deriveContainers(aiEvents, containerHint),
+        message: `${aiEvents.length} evento(s) recuperado(s) pela IA (o layout do portal não bateu com o parser dedicado — camada de resiliência). Reafinar o parser quando der.`,
+      };
+    }
+  }
+
+  // 3) Fallback: se nada trouxe dados e há API oficial, tenta a API.
   if (scraped.ok) return scraped;
-  // 3) Fallback: se o scraping não trouxe nada e há API, tenta a API oficial.
   if (!carrier.apiFirst && hasApiSource(carrier.id)) {
     const viaApi = await fetchViaApi(carrier, reference, referenceType).catch(() => null);
     if (viaApi && viaApi.ok) return viaApi;
