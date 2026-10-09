@@ -169,8 +169,11 @@ export async function withPage<T>(
  */
 export async function withRemotePage<T>(
   fn: (page: Page, ctx: BrowserContext) => Promise<T>,
+  opts: { heavy?: boolean } = {},
 ): Promise<T> {
-  const browser = await connectSB();
+  // `opts.heavy` escolhe o pool da sessão remota: residencial+Unblock (CMA/OOCL/
+  // ZIM) vs datacenter (os demais). Ver connectSB/ConnectOptions.
+  const browser = await connectSB(opts);
   try {
     // Reusa o contexto E a página que o provedor já entrega (Scrapfly/Bright Data
     // gerenciam o fingerprint na sessão) — criar novos pode perdê-lo.

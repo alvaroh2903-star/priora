@@ -116,6 +116,7 @@ export const CARRIERS: CarrierMeta[] = [
     needsLoginForDemurrage: true,
     needsScrapingBrowser: true, // SPA React → render real; protegido por DataDome.
     scrapeBlocked: true, // DataDome comportamental — não vencemos por código; economiza crédito.
+    heavyAntibot: true, // se/quando abrir sessão: pool RESIDENCIAL + Unblock (DataDome).
     // Parser DEDICADO scrapers/cma.ts (Date|Moves|Location|Vessel) PRONTO e
     // testado offline. PORÉM o portal é protegido por DataDome (anti-bot
     // comportamental) — o acesso automatizado é bloqueado de forma intermitente.
@@ -137,6 +138,7 @@ export const CARRIERS: CarrierMeta[] = [
     needsScrapingBrowser: true,
     scrapeBlocked: true, // busca gated por hCaptcha em React (ZimCaptcha) — token resolve mas a
     // injeção não registra no React; volume ZERO. Produção não abre sessão (economia).
+    heavyAntibot: true, // se/quando abrir sessão: pool RESIDENCIAL + Unblock (hCaptcha).
     notes: 'SPA React; busca gated por hCaptcha (ZimCaptcha, 2 sitekeys). Anti-captcha RESOLVE o token (validado, hcaptchaSolved:true) mas o React ignora a injeção via DOM. scrapeBlocked (produção não abre sessão). Volume zero.',
   },
   {
@@ -201,6 +203,7 @@ export const CARRIERS: CarrierMeta[] = [
     needsLoginForDemurrage: true,
     needsScrapingBrowser: true, // SPA SCCT + captcha slider → navegador remoto (Scrapfly).
     scrapeBlocked: true, // Cloudflare + captcha de slider (CargoSmart/AJ-Captcha) comportamental — economiza crédito.
+    heavyAntibot: true, // se/quando abrir sessão: pool RESIDENCIAL + Unblock (Cloudflare+slider).
     notes: 'SCCT em pbcontroltower.digital.oocl.com. Parser DEDICADO scrapers/oocl.ts (Event|Time|Location|Stage|Transport). BLOQUEIO: Cloudflare + slider CargoSmart (comportamental) — scrapeBlocked (produção não abre sessão). API oficial recomendada.',
   },
 ];

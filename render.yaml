@@ -63,7 +63,9 @@ services:
       - key: BRIGHTDATA_SB_AUTH
         sync: false                  # Bright Data Scraping Browser (CDP): "user:senha" (brd-customer-<id>-zone-<zona>:<senha>)
       - key: SCRAPE_BROWSER_WSS
-        sync: false                  # Cloud browser CDP agnóstico (wss:// completa): Browserbase/Steel/Browserless/Oxylabs. Prioridade sobre Bright Data
+        sync: false                  # Cloud browser CDP agnóstico (wss:// completa): Browserbase/Steel/Browserless/Oxylabs. Prioridade sobre Bright Data. URL BARATA (datacenter) dos 9 armadores normais
+      - key: SCRAPE_BROWSER_WSS_HEAVY
+        sync: false                  # wss:// dedicada aos anti-bot PESADOS (CMA/OOCL/ZIM): Scrapfly com Unblock Mode + Residential. Vazio = fallback (reescreve só o proxy_pool p/ residencial)
       - key: DIAG_TOKEN
         sync: false                  # opcional: liga /health/scrape p/ testar raspagem sem login
       - key: ANTICAPTCHA_PROVIDER

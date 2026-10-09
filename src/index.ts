@@ -25,7 +25,7 @@ import { tryFillSearch } from './browser/carriers/pageUtils';
 import { getAntiCaptchaBalance, solveRecaptchaV2 } from './browser/antiCaptcha';
 import { fetchViaUnblocker, isUnblockerConfigured } from './browser/webUnblocker';
 import { fetchViaBrightData, isBrightDataConfigured } from './browser/brightData';
-import { scrapeViaSB, driveTrackingPage, isSBConfigured, scrapeBrowserProvider } from './browser/scrapingBrowser';
+import { scrapeViaSB, driveTrackingPage, isSBConfigured, scrapeBrowserProvider, isHeavyScrapeConfigured } from './browser/scrapingBrowser';
 import { deriveContainers, firstContainerNo } from './browser/carriers/scrapers/hapag';
 import { extractCarrierEvents } from './browser/carriers/scrapers/dispatch';
 import { isAntiCaptchaConfigured } from './config';
@@ -129,6 +129,8 @@ app.get('/health', (_req, res) =>
       brightDataZone: config.brightData.zone || null,
       scrapingBrowser: isSBConfigured(),
       scrapeProvider: scrapeBrowserProvider(),
+      // Há URL dedicada residencial+Unblock (SCRAPE_BROWSER_WSS_HEAVY) p/ CMA/OOCL/ZIM?
+      scrapeHeavy: isHeavyScrapeConfigured(),
       proxy: hasProxy(),
       unblocker: isUnblockerConfigured(),
       antiCaptcha: isAntiCaptchaConfigured(),
@@ -552,11 +554,21 @@ app.get('/health/scrape-sb', async (req, res) => {
   if (!url) return res.status(400).json({ error: 'Informe ?url=<URL> ou ?ref=<BL|contêiner>.' });
 
   // Ref a DIGITAR no form pode diferir da original (ex.: Evergreen tira o EGLV).
+  // E já decide o POOL: armador heavyAntibot (CMA/OOCL/ZIM) → residencial+Unblock.
   let searchReference = ref || rawUrl;
+  let heavy = false;
   if (ref) {
     const d = detectCarrier(ref);
-    if (d.carrier) searchReference = resolveSearchRef(d.carrier, ref, d.referenceType);
+    if (d.carrier) {
+      searchReference = resolveSearchRef(d.carrier, ref, d.referenceType);
+      heavy = d.carrier.heavyAntibot === true;
+    }
   }
+  // Override manual no diagnóstico: ?pool=residential|datacenter (ou ?heavy=1|0).
+  const poolQ = String(req.query.pool || '').trim().toLowerCase();
+  const heavyQ = String(req.query.heavy || '').trim();
+  if (poolQ === 'residential' || heavyQ === '1') heavy = true;
+  if (poolQ === 'datacenter' || heavyQ === '0') heavy = false;
 
   // ?probe=1 coleta o inventário de inputs/selects/botões da página (revela os
   // seletores REAIS do form — COSCO/HMM — sem chutar num teste ao vivo só).
@@ -566,7 +578,7 @@ app.get('/health/scrape-sb', async (req, res) => {
     const sb =
       engine === 'local'
         ? { ...(await withPage((page) => driveTrackingPage(page, { url: url!, reference: searchReference, inventory: probe }))), ms: Date.now() - startedAt }
-        : await scrapeViaSB({ url, reference: searchReference, inventory: probe });
+        : await scrapeViaSB({ url, reference: searchReference, inventory: probe, heavy });
     // Extrai eventos do HTML renderizado.
     let events: unknown[] = [];
     let containers: unknown[] = [];
@@ -596,6 +608,8 @@ app.get('/health/scrape-sb', async (req, res) => {
     res.json({
       ok: sb.ok,
       via: engine,
+      // Pool usado na sessão remota (residencial p/ heavyAntibot, senão datacenter).
+      pool: engine === 'sb' ? (heavy ? 'residential' : 'datacenter') : 'local',
       url,
       ms: sb.ms,
       result: {

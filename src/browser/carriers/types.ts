@@ -138,6 +138,15 @@ export interface CarrierMeta {
    * este flag — continua livre para testar/retestar o portal.
    */
   scrapeBlocked?: boolean;
+  /**
+   * Anti-bot PESADO (DataDome/Cloudflare+slider/hCaptcha): quando abre sessão no
+   * navegador remoto, usa o pool RESIDENCIAL + Unblock Mode (mais caro, melhor p/
+   * furar anti-bot) em vez do DATACENTER. Só CMA/OOCL/ZIM. Os outros 9 armadores
+   * ficam no datacenter (barato). Independe de `scrapeBlocked`: o flag só escolhe o
+   * POOL — o diagnóstico (/health/scrape-sb, que ignora scrapeBlocked) já herda o
+   * pool residencial por este flag.
+   */
+  heavyAntibot?: boolean;
   /** Observações de implementação (o que está confirmado x a verificar). */
   notes?: string;
 }

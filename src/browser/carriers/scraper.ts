@@ -1,4 +1,4 @@
-import { Page } from 'playwright';
+import { Page, BrowserContext } from 'playwright';
 import { CarrierMeta, ReferenceType, TrackingResult } from './types';
 import { PortalScraper, ScrapeContext } from './scraperTypes';
 import { resolveTrackingUrl, resolveSearchRef } from './registry';
@@ -144,7 +144,12 @@ export async function scrapeCarrier(
   // Portais difíceis (Cloudflare/SPA) rodam no navegador remoto do Bright Data;
   // simples, no Chromium local. O corpo do scraper é o MESMO nos dois casos.
   const useRemote = shouldUseScrapingBrowser(carrier);
-  const runner = useRemote ? withRemotePage : withPage;
+  // EFICIÊNCIA (crédito Scrapfly): só os armadores com anti-bot PESADO
+  // (heavyAntibot: CMA/OOCL/ZIM) abrem a sessão RESIDENCIAL+Unblock (cara). Os
+  // demais 9 ficam no DATACENTER (barato). O pool é escolhido POR ARMADOR aqui.
+  const heavy = carrier.heavyAntibot === true;
+  const runner = <T>(fn: (page: Page, ctx: BrowserContext) => Promise<T>): Promise<T> =>
+    useRemote ? withRemotePage(fn, { heavy }) : withPage(fn);
   const specific = SCRAPERS[carrier.id];
 
   try {
