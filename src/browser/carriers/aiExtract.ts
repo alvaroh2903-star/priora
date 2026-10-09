@@ -72,33 +72,30 @@ export async function extractEventsViaAI(
   reference: string,
   text: string,
 ): Promise<TrackingEvent[]> {
+  // "Sem IA / sem texto" não é erro — só não há o que fazer. Erro REAL da chamada
+  // (schema/quota/timeout do Gemini) PROPAGA, p/ o trackShipment registrar no aiDiag.
   if (!isAiConfigured() || !text || !text.trim()) return [];
-  try {
-    const out = await generateStructured(
-      Schema,
-      SYSTEM_PROMPT,
-      `Armador: ${carrierName}\nReferência consultada: ${reference}\n\n` +
-        // Janela generosa: o rastreio costuma vir DEPOIS do menu/nav no texto.
-        `Texto da página de rastreio:\n${text.slice(0, 30000)}`,
-    );
-    if (!Array.isArray(out?.events)) return [];
-    return out.events
-      .filter((e) => e && typeof e.status === 'string' && e.status.trim())
-      .map((e) => {
-        const status = e.status.trim();
-        return {
-          date: normalizeAiDate(e.date),
-          status,
-          location: e.location ? e.location.trim() || null : null,
-          vessel: e.vessel ? e.vessel.trim() || null : null,
-          voyage: e.voyage ? e.voyage.trim() || null : null,
-          type: classifyEvent(status),
-          container: e.container ? e.container.trim().toUpperCase() || null : null,
-          tipo: null,
-        } as TrackingEvent;
-      });
-  } catch (err) {
-    console.error('[aiExtract] falha ao extrair eventos via IA:', (err as Error).message);
-    return [];
-  }
+  const out = await generateStructured(
+    Schema,
+    SYSTEM_PROMPT,
+    `Armador: ${carrierName}\nReferência consultada: ${reference}\n\n` +
+      // Janela generosa: o rastreio costuma vir DEPOIS do menu/nav no texto.
+      `Texto da página de rastreio:\n${text.slice(0, 30000)}`,
+  );
+  if (!Array.isArray(out?.events)) return [];
+  return out.events
+    .filter((e) => e && typeof e.status === 'string' && e.status.trim())
+    .map((e) => {
+      const status = e.status.trim();
+      return {
+        date: normalizeAiDate(e.date),
+        status,
+        location: e.location ? e.location.trim() || null : null,
+        vessel: e.vessel ? e.vessel.trim() || null : null,
+        voyage: e.voyage ? e.voyage.trim() || null : null,
+        type: classifyEvent(status),
+        container: e.container ? e.container.trim().toUpperCase() || null : null,
+        tipo: null,
+      } as TrackingEvent;
+    });
 }

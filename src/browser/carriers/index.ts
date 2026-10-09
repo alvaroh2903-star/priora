@@ -87,18 +87,33 @@ export async function trackShipment(
   // validado (deriveContainers) dos parsers dedicados. É o que evita "API em
   // manutenção" quando um armador troca o site.
   if (opts.aiFallback !== false && scraped.events.length === 0 && scraped.raw) {
-    const aiEvents = await extractEventsViaAI(carrier.name, reference, scraped.raw).catch(() => []);
+    let aiEvents: TrackingResult['events'] = [];
+    let aiError: string | null = null;
+    try {
+      aiEvents = await extractEventsViaAI(carrier.name, reference, scraped.raw);
+    } catch (err) {
+      aiError = (err as Error).message; // schema/quota/timeout do Gemini — fica visível no aiDiag
+    }
+    const aiDiag = {
+      tried: true,
+      rawLen: scraped.raw.length,
+      events: aiEvents.length,
+      error: aiError,
+    };
     if (aiEvents.length > 0) {
       const containerHint = referenceType === 'container' ? reference : null;
       return {
         ...scraped,
         ok: true,
         organizedByAI: true,
+        aiDiag,
         events: aiEvents,
         containers: deriveContainers(aiEvents, containerHint),
         message: `${aiEvents.length} evento(s) recuperado(s) pela IA (o layout do portal não bateu com o parser dedicado — camada de resiliência). Reafinar o parser quando der.`,
       };
     }
+    // Tentou e não achou (ou erro): carimba o diagnóstico p/ depuração e segue.
+    scraped.aiDiag = aiDiag;
   }
 
   // 3) Fallback: se nada trouxe dados e há API oficial, tenta a API.

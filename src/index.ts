@@ -660,6 +660,7 @@ function trackSummary(ref: string, result: TrackingResult, ms: number) {
     ms,
     eventsCount: result.events?.length || 0,
     organizedByAI: result.organizedByAI === true, // veio da camada de resiliência (IA)?
+    aiDiag: result.aiDiag, // tentou IA? texto cru? quantos eventos? erro? (depuração)
     needsCaptcha: result.needsCaptcha,
     containers: (result.containers || []).map((c) => ({
       numero: c.numero,

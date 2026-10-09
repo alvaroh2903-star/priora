@@ -96,6 +96,11 @@ export interface TrackingResult {
    * A API continua entregando (não quebra); serve de sinal p/ reafinar o parser.
    */
   organizedByAI?: boolean;
+  /**
+   * Diagnóstico da camada de IA (quando acionada): tentou? tamanho do texto cru
+   * que recebeu? quantos eventos extraiu? erro? Só p/ depuração (ex.: /health/track).
+   */
+  aiDiag?: { tried: boolean; rawLen: number; events: number; error: string | null };
   fetchedAt: string;
 }
 
