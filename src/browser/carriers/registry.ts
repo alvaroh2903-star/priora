@@ -89,7 +89,7 @@ export const CARRIERS: CarrierMeta[] = [
     // O Quick Tracking da ShipmentLink aceita o B/L SÓ com a parte numérica
     // (o exemplo do site é "012345678900"). "EGLV010600577145" dá "B/L not valid";
     // "010600577145" funciona. Tiramos o prefixo EGLV/EVGL antes de buscar.
-    searchRef: (ref) => ref.replace(/^(EGLV|EVGL)/i, ''),
+    searchRef: (ref) => ref.replace(/^(EGLV|EVGL|EGVL)/i, ''),
     needsLoginForDemurrage: true,
     needsScrapingBrowser: true, // servlet + JS; render real (sem captcha, validado ao vivo).
     pool: 'datacenter', // PROVOU aguentar datacenter ao vivo (5 eventos) — barato.
