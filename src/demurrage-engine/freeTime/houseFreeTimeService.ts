@@ -1,6 +1,6 @@
 import { PoolClient } from 'pg';
 import { FieldObservationSource } from '../domain/types';
-import { ContainerRepository } from '../persistence/containerRepository';
+import { ApplyObservationOutcome, ContainerRepository } from '../persistence/containerRepository';
 import { ValorFreeTimeInvalidoError, valorFreeTimeValido } from './masterFreeTimeService';
 
 export interface PromoverHouseFreeTimeInput {
@@ -40,7 +40,7 @@ export interface PromoverHouseFreeTimeInput {
 export async function promoverHouseFreeTimeComClient(
   client: PoolClient,
   input: PromoverHouseFreeTimeInput,
-): Promise<{ observationId: string; criada: boolean; outcome: 'promovida' | 'registrada_sem_promover' | 'bloqueada_final'; exigeReabertura: boolean; valorMudou: boolean; recalculoEnfileirado: boolean; conflitoMesmaFonte: boolean }> {
+): Promise<{ observationId: string; criada: boolean; outcome: ApplyObservationOutcome; exigeReabertura: boolean; valorMudou: boolean; recalculoEnfileirado: boolean; conflitoMesmaFonte: boolean }> {
   if (!valorFreeTimeValido(input.valor)) throw new ValorFreeTimeInvalidoError(input.valor);
   const r = await ContainerRepository.applyObservationComClient(client, { ...input, campo: 'houseFreeTimeDays' });
   const anterior = r.valorAnterior === null || r.valorAnterior === undefined ? null : Number(r.valorAnterior);

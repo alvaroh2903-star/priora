@@ -4,6 +4,8 @@ import { Pool } from 'pg';
 import { runMigrations } from '../db/migrate';
 import { testPool, testDatabaseUrl, truncateAll } from './testDb';
 import { OrganizationRepository } from '../persistence/organizationRepository';
+import { UsuarioRepository } from '../persistence/usuarioRepository';
+import { OrganizationMembershipRepository } from '../persistence/organizationMembershipRepository';
 import { ProcessoRepository } from '../persistence/processoRepository';
 import { ContainerRepository } from '../persistence/containerRepository';
 import { TrackingTargetRepository } from '../persistence/trackingTargetRepository';
@@ -124,7 +126,9 @@ async function setup(pool: Pool) {
   await truncateAll(pool);
   const org = await new OrganizationRepository(pool).create('Rocket', 'rocket');
   const processo = await new ProcessoRepository(pool).create({ organizationId: org.id, numeroProcesso: 'IM13', clienteId: null });
-  return { orgId: org.id, processoId: processo.id };
+  const usuario = await new UsuarioRepository(pool).create('Gestor', 'gestor@rocket.x', 'home-gestor-rocket');
+  const mGestor = await new OrganizationMembershipRepository(pool).create(org.id, usuario.id, 'MANAGER');
+  return { orgId: org.id, processoId: processo.id, mGestor: mGestor.id };
 }
 
 /** Semeia os fatos de cadência de um contêiner (descarga + free times House/Master). */
@@ -409,7 +413,7 @@ test('concorrência: dois workers no mesmo tick → UMA execução real (claim e
 test('30 dias sem Empty Return → worker NÃO consulta; processo/relógios seguem; manual ainda funciona e um Empty Return manual encerra', { skip: !url }, async () => {
   const pool = testPool();
   try {
-    const { orgId, processoId } = await setup(pool);
+    const { orgId, processoId, mGestor } = await setup(pool);
     const containers = new ContainerRepository(pool);
     const targets = new TrackingTargetRepository(pool);
     const c = await containers.create(orgId, processoId, 'HDMUS000001');
@@ -439,7 +443,7 @@ test('30 dias sem Empty Return → worker NÃO consulta; processo/relógios segu
     assert.equal(antes?.trackingReturnDate, null, 'nada foi presumido: sem devolução');
 
     // Atualização MANUAL (MANAGER) continua possível mesmo suspenso — e um Empty Return encerra normalmente.
-    const manual = await solicitarAtualizacaoManual({ pool, port, trackingTargetId: mbl.id, papel: 'MANAGER', agora: new Date('2026-09-24T12:00:00Z') });
+    const manual = await solicitarAtualizacaoManual({ pool, port, trackingTargetId: mbl.id, organizationId: orgId, membershipId: mGestor, agora: new Date('2026-09-24T12:00:00Z') });
     assert.equal(manual.executada, true, 'manual funciona apesar da suspensão automática');
     assert.equal(chamadas, 1, 'a consulta manual foi ao armador');
     assert.equal(await contarFetches(pool, mbl.id), 1);

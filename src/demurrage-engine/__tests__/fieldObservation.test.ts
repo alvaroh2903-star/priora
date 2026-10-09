@@ -105,7 +105,7 @@ test('FieldObservation: append-only, múltiplas fontes concorrentes, isolamento 
     },
   );
 
-  await t.test('hierarquia de fontes: tracking_service (maior prioridade) sobrescreve manual_fallback', async () => {
+  await t.test('hierarquia de fontes: tracking_service (maior prioridade) sobre manual_fallback vigente NÃO sobrescreve direto — D15-B/R07 abre divergência e preserva o valor manual', async () => {
     const container = await containers.create(orgA.id, processoA.id, 'TCLU1112223');
     await containers.applyObservation({
       containerId: container.id, organizationId: orgA.id, campo: 'dischargeDate',
@@ -115,9 +115,12 @@ test('FieldObservation: append-only, múltiplas fontes concorrentes, isolamento 
       containerId: container.id, organizationId: orgA.id, campo: 'dischargeDate',
       valor: '2026-03-02', fonte: 'tracking_service', observadoEm: new Date('2026-03-03T00:00:00Z'),
     });
-    assert.equal(promoted.outcome, 'promovida');
+    assert.equal(promoted.outcome, 'bloqueada_fallback_manual');
     const updated = await containers.findById(container.id);
-    assert.equal(updated?.dischargeDate, '2026-03-02');
+    assert.equal(updated?.dischargeDate, '2026-03-01', 'valor manual preservado até decisão humana');
+    // A observação mais forte fica preservada no ledger — nunca descartada.
+    const allObs = await observations.listForEntity('container', container.id, 'dischargeDate');
+    assert.deepEqual(allObs.map((o) => o.valor).sort(), ['2026-03-01', '2026-03-02']);
   });
 
   await pool.end();

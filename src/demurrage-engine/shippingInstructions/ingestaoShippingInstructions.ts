@@ -3,6 +3,7 @@ import { Pool, PoolClient } from 'pg';
 import { getPool } from '../db/pool';
 import { promoverMasterFreeTimeComClient } from '../freeTime/masterFreeTimeService';
 import { promoverHouseFreeTimeComClient } from '../freeTime/houseFreeTimeService';
+import { registrarTentativaNaoEncontrada } from '../freeTime/freeTimeTentativas';
 import {
   AnexoMetaSI, MensagemSI, OcrResultadoSI, OcorrenciaFreeTime, ProblemaExtracao,
   CAMPOS_FREE_TIME_SI, CampoFreeTime, anexoDocumental, avaliarOcr, consolidarOcorrencias, extrairFreeTimeDoCorpo, normalizarProcesso,
@@ -276,6 +277,17 @@ async function aplicarIntencoes(
   client: PoolClient,
   ctx: ContextoVersao,
   intencoes: IntencaoRow[],
+  /**
+   * D15-B (R05) — true quando ESTA leitura não trouxe Master Free Time
+   * explícito (ver `pendenciasDaLeitura`/`temMaster` no chamador). Além da
+   * pendência de leitura já existente (`si_pendencias.free_time_nao_encontrado`,
+   * nível processo — vale mesmo sem contêiner cadastrado), registra a
+   * TENTATIVA por contêiner JÁ CONHECIDO neste processo (histórico append-only
+   * de `free_time_tentativas`, compartilhado com House/Master de outras
+   * fontes). Sem contêiner conhecido ainda, nada é gravado aqui — a pendência
+   * de leitura é o único registro possível até existir um contêiner.
+   */
+  masterNaoEncontrado = false,
 ): Promise<{ pendencias: PendenciaSI[]; promovidos: number }> {
   if (!intencoes.length) return { pendencias: [], promovidos: 0 };
   const refs = { processos: intencoes[0].processos_ref, mbls: intencoes[0].mbls_ref, containers: intencoes[0].containers_ref };
@@ -290,6 +302,16 @@ async function aplicarIntencoes(
   );
   const doProcesso = new Map<string, string>();
   for (const c of cs) { const n = normalizarContainer(c.numero); if (n) doProcesso.set(n, c.id); }
+
+  if (masterNaoEncontrado) {
+    for (const containerId of doProcesso.values()) {
+      await registrarTentativaNaoEncontrada(client, {
+        organizationId: ctx.organizationId, processoId: P.id, containerId, campo: 'masterFreeTimeDays',
+        fonteTentada: 'shipping_instructions', motivo: 'master_free_time_ausente',
+        evidenciaRef: `si_versao:${ctx.versaoId}`,
+      });
+    }
+  }
 
   // Contêineres citados que não estão no processo: de outro processo → alcance
   // incerto; inexistentes → aguardam criação (nunca criados pela SI).
@@ -513,8 +535,8 @@ export async function ingerirShippingInstructions(input: IngerirInput): Promise<
       for (const [n, o] of cc.porContainer) await registrar(o, 'container', n);
     }
 
-    const aplicado = await aplicarIntencoes(client, ctx, intencoes);
     const temMaster = intencoes.some((i) => i.campo === 'masterFreeTimeDays');
+    const aplicado = await aplicarIntencoes(client, ctx, intencoes, !temMaster);
     const pendencias = [...pendenciasDaLeitura(leitura, temMaster), ...extras, ...aplicado.pendencias];
     const abertas = await sincronizarPendencias(client, ctx, pendencias, [...TIPOS_EXTRACAO, ...TIPOS_ASSOCIACAO]);
     const estado = abertas === 0 ? 'DONE' : 'PENDENTE';

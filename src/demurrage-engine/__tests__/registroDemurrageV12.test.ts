@@ -317,6 +317,7 @@ test('v1.2 §3: 0028 → 0029 → 0030 com seleção legada — vínculo correto
       '0029_demurrage_registro_v1_1.sql', '0030_demurrage_registro_v1_2.sql',
       '0031_responsabilidade_decisoes.sql', '0032_responsabilidade_projecao_guard.sql', '0033_responsabilidade_v1_1_corretiva.sql',
       '0034_responsabilidade_v1_2_agregado.sql', '0035_d15a_integridade_final_reabertura.sql',
+      '0036_d15b_integridade_dados_excecoes.sql',
     ]);
 
     // 4) C1 ligado à observação CORRETA (não às iscas).
@@ -375,7 +376,7 @@ test('v1.2 §3: banco novo 0001 → 0030 — registro pelo contrato grava a sele
     await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
     const r = await runMigrations(pool);
     assert.equal(r.applied[0], '0001_organizations_and_users.sql');
-    assert.equal(r.applied[r.applied.length - 1], '0035_d15a_integridade_final_reabertura.sql');
+    assert.equal(r.applied[r.applied.length - 1], '0036_d15b_integridade_dados_excecoes.sql');
     const org = await new OrganizationRepository(pool).create('Rocket', 'rocket');
     const reg = await registrarProcessoDemurrage(contratoRegistro({
       organizationId: org.id, numeroProcesso: 'IM-NOVO',

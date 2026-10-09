@@ -461,8 +461,8 @@ test('Divergência: resolver e reabrir gera nova ocorrência e novos avisos; rep
     // Reprocessar a mesma fonte/instante: nada novo.
     await svc(10, 'master_bl', '2026-09-01');
     assert.equal(await count(pool, `SELECT count(*) n FROM ft_divergencia_entregas`), 2);
-    await reconhecerDivergencia(pool, { divergenciaId: d.id, usuario: 'gestor' });
-    assert.equal(await resolverDivergencia(pool, { divergenciaId: d.id, usuario: 'gestor', motivo: 'ok' }), true);
+    await reconhecerDivergencia(pool, { divergenciaId: d.id, organizationId: s.orgId, autorMembershipId: s.mGestor });
+    assert.equal(await resolverDivergencia(pool, { divergenciaId: d.id, organizationId: s.orgId, autorMembershipId: s.mGestor, motivo: 'ok' }), true);
     // Mesmo par após resolução manual → continua resolvida.
     await svc(10, 'master_bl', '2026-09-01');
     assert.equal((await pool.query(`SELECT estado FROM ft_divergencias`)).rows[0].estado, 'resolvida');
@@ -558,7 +558,7 @@ test('Avisos: envio fora de transação, dois processadores não enviam a mesma 
 
     // Falha externa → FAILED + evento; retry → SENT.
     const d = (await pool.query(`SELECT id FROM ft_divergencias`)).rows[0];
-    await resolverDivergencia(pool, { divergenciaId: d.id, usuario: 'g' });
+    await resolverDivergencia(pool, { divergenciaId: d.id, organizationId: s.orgId, autorMembershipId: s.mGestor, motivo: 'ok' });
     await promoverMasterFreeTime(pool, { organizationId: s.orgId, containerId: c, valor: 11, fonte: 'master_bl', observadoEm: new Date('2026-09-03T00:00:00Z'), autor: 'm' });
     const falha = await processarAvisosDivergenciaPendentes({ pool, workerId: 'A', transport: { async enviar() { throw new Error('SMTP fora'); } } });
     assert.equal(falha.falhadas, 2);
@@ -701,10 +701,38 @@ test('Migration 0025: banco que já executou a 0024 ORIGINAL recebe só a 0025, 
     assert.ok(!(await colunas('ft_divergencia_entregas')).includes('claim_token'), '0024 original não tem claim');
 
     // Dados gravados sob o schema ORIGINAL: divergência com entregas, outbox e intenção.
+    // Inserção DIRETA (não via `promoverMasterFreeTime`): o serviço atual depende de
+    // tabelas de migrations POSTERIORES à 0025 (ex.: `demurrage_pendencias`, D15-B/R05)
+    // — chamá-lo aqui recriaria exatamente a situação que este teste existe para isolar
+    // (código atual rodando contra um schema travado em 0024). O que a 0025 precisa
+    // preservar é a FORMA dos dados sob aquele schema, não como eles chegaram lá.
     const s = await cenario(pool);
     const c = s.containers.MSCU1234567;
-    await promoverMasterFreeTime(pool, { organizationId: s.orgId, containerId: c, valor: 14, fonte: 'shipping_instructions', observadoEm: new Date('2026-08-20T00:00:00Z'), autor: 'si' });
-    await promoverMasterFreeTime(pool, { organizationId: s.orgId, containerId: c, valor: 10, fonte: 'master_bl', observadoEm: new Date('2026-09-01T00:00:00Z'), autor: 'm' });
+    const obsSi = (await pool.query(
+      `INSERT INTO field_observations (organization_id, entidade_tipo, entidade_id, campo, valor, fonte, observado_em)
+       VALUES ($1, 'container', $2, 'masterFreeTimeDays', '14', 'shipping_instructions', '2026-08-20T00:00:00Z') RETURNING id`,
+      [s.orgId, c],
+    )).rows[0];
+    const obsMaster = (await pool.query(
+      `INSERT INTO field_observations (organization_id, entidade_tipo, entidade_id, campo, valor, fonte, observado_em)
+       VALUES ($1, 'container', $2, 'masterFreeTimeDays', '10', 'master_bl', '2026-09-01T00:00:00Z') RETURNING id`,
+      [s.orgId, c],
+    )).rows[0];
+    await pool.query(`UPDATE containers SET master_free_time_days = 10, master_free_time_observation_id = $2 WHERE id = $1`, [c, obsMaster.id]);
+    const div = (await pool.query(
+      `INSERT INTO ft_divergencias (organization_id, processo_id, container_id, valor_si, obs_si_id, valor_master, obs_master_id, estado, ocorrencia_seq)
+       VALUES ($1, $2, $3, 14, $4, 10, $5, 'aberta', 1) RETURNING id`,
+      [s.orgId, s.processoId, c, obsSi.id, obsMaster.id],
+    )).rows[0];
+    await pool.query(
+      `INSERT INTO ft_divergencia_entregas (organization_id, divergencia_id, ocorrencia_seq, destinatario_tipo, destinatario_membership_id)
+       VALUES ($1, $2, 1, 'responsavel_operacional', $3), ($1, $2, 1, 'gestor', $4)`,
+      [s.orgId, div.id, s.mResp, s.mGestor],
+    );
+    await pool.query(
+      `INSERT INTO recalculo_outbox (organization_id, container_id, tipo, chave) VALUES ($1, $2, 'master_free_time', $3), ($1, $2, 'master_free_time', $4)`,
+      [s.orgId, c, obsSi.id, obsMaster.id],
+    );
     await pool.query(`UPDATE recalculo_outbox SET estado = 'PROCESSING', worker_id = 'w-antigo', expira_em = now() + interval '1 minute' WHERE ctid IN (SELECT ctid FROM recalculo_outbox LIMIT 1)`);
     const v = (await pool.query(
       `INSERT INTO si_versoes (organization_id, conversation_id, message_id, message_received_at, conteudo_hash, estado, expira_em)
@@ -777,7 +805,7 @@ test('Avisos: uma entrega por ciclo — duas instâncias concorrentes e transpor
 
     // `limite` interrompe o ciclo: nada fica reivindicado além do que foi processado.
     const d = (await pool.query(`SELECT id FROM ft_divergencias ORDER BY id LIMIT 1`)).rows[0];
-    await resolverDivergencia(pool, { divergenciaId: d.id, usuario: 'g' });
+    await resolverDivergencia(pool, { divergenciaId: d.id, organizationId: s.orgId, autorMembershipId: s.mGestor, motivo: 'ok' });
     const c0 = (await pool.query(`SELECT container_id FROM ft_divergencias WHERE id = $1`, [d.id])).rows[0].container_id;
     await promoverMasterFreeTime(pool, { organizationId: s.orgId, containerId: c0, valor: 11, fonte: 'master_bl', observadoEm: new Date('2026-09-03T00:00:00Z'), autor: 'm' });
     const parcial = await processarAvisosDivergenciaPendentes({ pool, transport: { async enviar() { return { ok: true }; } }, workerId: 'A', limite: 1 });
@@ -865,7 +893,7 @@ test('SI real: IM3126-26 sem MBL e sem contêiner é associada pelo código; con
   } finally { await pool.end(); }
 });
 
-test('SI real: House e Master diferentes não são divergência; House respeita a hierarquia (house_document prevalece)', { skip: !url }, async () => {
+test('SI real: House e Master diferentes não são divergência; House respeita a hierarquia (house_document prevalece), mas o conflito House-only (house_document × SI) agora abre divergência (D15-B/R36)', { skip: !url }, async () => {
   const pool = testPool();
   try {
     await setup(pool);
@@ -879,7 +907,14 @@ test('SI real: House e Master diferentes não são divergência; House respeita 
     assert.equal(await masterFt(pool, c1), 20);
     assert.equal(await houseFt(pool, c2), 10, 'house_document (90) prevalece sobre a SI (85)');
     assert.equal(await count(pool, `SELECT count(*) n FROM field_observations WHERE entidade_id = $1 AND campo = 'houseFreeTimeDays' AND fonte = 'shipping_instructions'`, [c2]), 1, 'SI fica no ledger');
-    assert.equal(await count(pool, `SELECT count(*) n FROM ft_divergencias`), 0);
+    // House = Master (mesma leitura da SI) em c1 não é divergência (COB, R35/pré-D15-B).
+    assert.equal(await count(pool, `SELECT count(*) n FROM ft_divergencias WHERE container_id = $1`, [c1]), 0);
+    // D15-B (R36): house_document × SI em c2, mesmo campo (houseFreeTimeDays), valores diferentes
+    // (10 × 14) — a hierarquia já decide a SELEÇÃO (house_document vence), mas o conflito em si
+    // agora é visível à gestão, mesmo mecanismo/tabela do conflito Master×SI (R35, já coberto).
+    const divHouse = (await pool.query(`SELECT campo, estado, valor_si, valor_master FROM ft_divergencias WHERE container_id = $1`, [c2])).rows;
+    assert.equal(divHouse.length, 1);
+    assert.deepEqual([divHouse[0].campo, divHouse[0].estado, divHouse[0].valor_si, divHouse[0].valor_master], ['houseFreeTimeDays', 'aberta', 14, 10]);
   } finally { await pool.end(); }
 });
 

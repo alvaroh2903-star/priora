@@ -12,6 +12,7 @@ import { calcularTermoUnico } from '../tariffs/engines/termoUnicoEngine';
 import { calcularExposicaoRocket } from '../tariffs/engines/exposicaoRocketEngine';
 import { MotorComercial, MotorResult, RelogioTipo } from '../tariffs/types';
 import { lockProcesso } from '../closing/materialChangeGuard';
+import { abrirPendenciaComClient, resolverPendenciasComClient } from '../registro/pendencias';
 
 /**
  * Fase 8 v1.1 — ORQUESTRADOR central da apuração de um contêiner. Pipeline ÚNICO
@@ -191,6 +192,26 @@ export async function recalcularApuracaoContainerComClient(
     const valores = new ValorApuradoRepository(client as unknown as Pool);
     const tariffs = new TariffTableRepository(client as unknown as Pool);
     const equipamento: string | null = c.equipamento ?? null;
+
+    // D15-B (R26) — sem `condicao_comercial_id`, `termoTipo` fica nulo e o
+    // lado cliente abaixo nunca produz valor nem UNAVAILABLE explícito —
+    // silenciosamente nada é persistido. Pendência nomeada (nível de
+    // PROCESSO — a condição comercial é do processo, não do contêiner, mesmo
+    // padrão de `mbl_ausente`/`armador_ausente`) só quando o relógio do
+    // cliente já está efetivamente em demurrage (antes disso a ausência
+    // ainda não tem consequência financeira a reportar). Resolvida
+    // automaticamente quando a condição passa a existir — o dado em si
+    // deixou de faltar, independentemente do estado do relógio.
+    if (!proc.condicao_comercial_id) {
+      const clocksClienteChk = clocks.cliente;
+      if (clocksClienteChk.status === 'OK' && clocksClienteChk.diasDemurrage >= 1) {
+        await abrirPendenciaComClient(client, c.organization_id, processoId, null, 'condicao_comercial_ausente', {
+          diasDemurrageCliente: clocksClienteChk.diasDemurrage,
+        });
+      }
+    } else {
+      await resolverPendenciasComClient(client, processoId, null, ['condicao_comercial_ausente']);
+    }
 
     // 2a) Cliente — modelo único conforme a condição comercial.
     const clocksCliente = clocks.cliente;

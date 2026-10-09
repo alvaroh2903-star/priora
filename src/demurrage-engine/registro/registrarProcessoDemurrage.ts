@@ -8,11 +8,13 @@ import { EquipmentMapping, normalizarEquipamento } from '../domain/containerType
 import { FieldObservationRepository } from '../persistence/fieldObservationRepository';
 import { ClienteRepository } from '../persistence/clienteRepository';
 import { TrackingTargetRepository } from '../persistence/trackingTargetRepository';
+import { VesselCallRepository } from '../persistence/vesselCallRepository';
 import { promoverMasterFreeTimeComClient } from '../freeTime/masterFreeTimeService';
 import { promoverHouseFreeTimeComClient } from '../freeTime/houseFreeTimeService';
 import { recalcularApuracaoContainer } from '../apuracao/recalcularApuracao';
 import { fatoMaterialBloqueadoPorFinal, lockProcesso } from '../closing/materialChangeGuard';
 import { atualizarFotografia } from './fotografia';
+import { abrirPendenciaComClient, resolverPendenciasComClient } from './pendencias';
 import {
   ErroContratoDemurrage, ManualFallbackGovernanca, Observado, RegistroNormalizado, RegistroProcessoDemurrageV1, validarRegistro,
 } from './contrato';
@@ -130,23 +132,12 @@ function dataObs(o: Observado<unknown>): Date {
 }
 
 /* ------------------------------ pendências ------------------------------ */
-
-async function abrirPendencia(db: Db, org: string, processoId: string, containerId: string | null, tipo: string, contexto: Record<string, unknown>): Promise<void> {
-  await db.query(
-    `INSERT INTO demurrage_pendencias (organization_id, processo_id, container_id, tipo, contexto)
-     VALUES ($1, $2, $3, $4, $5)
-     ON CONFLICT (processo_id, COALESCE(container_id, '00000000-0000-0000-0000-000000000000'::uuid), tipo) WHERE estado = 'aberta' DO NOTHING`,
-    [org, processoId, containerId, tipo, JSON.stringify(contexto)],
-  );
-}
-
-async function resolverPendencias(db: Db, processoId: string, containerId: string | null, tipos: string[]): Promise<void> {
-  await db.query(
-    `UPDATE demurrage_pendencias SET estado = 'resolvida', resolvido_em = now()
-      WHERE processo_id = $1 AND container_id IS NOT DISTINCT FROM $2 AND tipo = ANY($3::text[]) AND estado = 'aberta'`,
-    [processoId, containerId, tipos],
-  );
-}
+// Fase D15-B: extraídas para `./pendencias.ts` (mesmo SQL exato) — reaproveitadas
+// também por `containerRepository.ts`/`recalcularApuracao.ts`/`masterFreeTimeService.ts`.
+const abrirPendencia = (db: Db, org: string, processoId: string, containerId: string | null, tipo: string, contexto: Record<string, unknown>) =>
+  abrirPendenciaComClient(db, org, processoId, containerId, tipo, contexto);
+const resolverPendencias = (db: Db, processoId: string, containerId: string | null, tipos: string[]) =>
+  resolverPendenciasComClient(db, processoId, containerId, tipos);
 
 /* ------------------------------ campos do processo ------------------------------ */
 
@@ -753,10 +744,24 @@ async function aplicar(db: Db, reg: RegistroNormalizado, opcoes: OpcoesRegistro 
   }
   if (mbl && carrier) {
     const targets = new TrackingTargetRepository(db as unknown as Pool);
-    const { target } = await targets.upsert({ carrier, reference: mbl });
+    const { target, canon } = await targets.upsert({ carrier, reference: mbl });
     const { rows: todos } = await db.query(`SELECT id FROM containers WHERE processo_id = $1`, [processoId]);
     for (const t of todos) await targets.linkContainer(t.id, target.id, { referenceType: 'mbl', referenceRaw: mbl });
     Object.assign(tracking, { vinculado: todos.length > 0, targetId: target.id });
+
+    // D15-B (R38) — `canon.mismatchCarrier` era computado e descartado: a
+    // referência aparenta pertencer a OUTRO armador, mas o armador declarado
+    // nunca é trocado automaticamente (ver cabeçalho de `TrackingTargetRepository.upsert`).
+    // Pendência nomeada e auditável em vez de um sinal silenciosamente perdido.
+    const vesselCalls = new VesselCallRepository(db as unknown as Pool);
+    if (canon.mismatchCarrier) {
+      await vesselCalls.registrarPendencia({
+        organizationId: org, trackingTargetId: target.id, tipo: 'mismatch_carrier', contexto: mbl,
+        detalhe: { armadorDeclarado: carrier, armadorAparente: canon.mismatchCarrier, referencia: mbl },
+      });
+    } else {
+      await vesselCalls.resolverPendencias({ organizationId: org, trackingTargetId: target.id, tipos: ['mismatch_carrier'] });
+    }
   }
 
   const { rows: pend } = await db.query(

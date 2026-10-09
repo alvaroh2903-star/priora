@@ -197,21 +197,34 @@ export interface AtualizacaoManualResultado {
 }
 
 /**
- * Atualização manual (MANAGER/ADMIN, cooldown ~2h por target). Reutiliza o cache
- * central quando fresco (a própria camada central decide). Deve rodar em
- * background na aplicação — a interface nunca bloqueia esperando o armador.
+ * Fase D15-B (R18/31.13b) — `podeAtualizarManual` existia como função pura sem
+ * NENHUM caminho de chamada em produção (função órfã, só exercida em teste).
+ * Este serviço a expõe de forma chamável — sem rota pública própria, conforme
+ * decisão fixada — e resolve o papel do ator por MEMBERSHIP REAL (nunca o
+ * `papel` informado pelo chamador, mesma régua de D15-A/D15-B em todo o resto
+ * do sistema). Atualização manual (MANAGER/ADMIN, cooldown ~2h por target).
+ * Reutiliza o cache central quando fresco (a própria camada central decide).
+ * Deve rodar em background na aplicação — a interface nunca bloqueia esperando
+ * o armador.
  */
 export async function solicitarAtualizacaoManual(input: {
   pool: Pool;
   port: ArmadorTrackingPort;
   trackingTargetId: string;
-  papel: PapelRbac;
+  organizationId: string;
+  membershipId: string;
   agora?: Date;
 }): Promise<AtualizacaoManualResultado> {
+  const { rows: autor } = await input.pool.query(
+    `SELECT papel FROM organization_memberships WHERE id = $1 AND organization_id = $2`,
+    [input.membershipId, input.organizationId],
+  );
+  const papel: PapelRbac | null = autor[0]?.papel ?? null;
+  if (!papel) return { executada: false, motivo: 'apenas_manager_admin' };
   const targets = new TrackingTargetRepository(input.pool);
   const agora = input.agora ?? new Date();
   const ultima = await targets.ultimaConsultaManual(input.trackingTargetId);
-  const decisao = podeAtualizarManual(input.papel, ultima, agora);
+  const decisao = podeAtualizarManual(papel, ultima, agora);
   if (!decisao.permitido) return { executada: false, motivo: decisao.motivo };
 
   const target = await (async () => {

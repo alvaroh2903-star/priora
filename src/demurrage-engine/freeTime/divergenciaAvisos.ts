@@ -1,4 +1,5 @@
 import { Pool } from 'pg';
+import { PAPEIS_RESOLUCAO_PENDENCIA, PendenciaResolucaoError } from '../registro/pendencias';
 
 /**
  * Divergência SI × Master do Master Free Time — ações do gestor e entrega dos
@@ -9,6 +10,13 @@ import { Pool } from 'pg';
  * de tracking (`tracking_alert_deliveries` / `registrarEntregaOrg`) é atado a
  * `tracking_incidents` por FK e não é reutilizável aqui. O canal concreto é
  * injetado pela porta `AvisoDivergenciaTransport` (como `AlertTransport`).
+ *
+ * Fase D15-B (R55) — até aqui, `usuario` era um TEXT livre informado pelo
+ * CHAMADOR (nenhum RBAC real) e `motivo` era opcional mesmo na resolução.
+ * Agora `autorMembershipId` é resolvido contra `organization_memberships`
+ * DENTRO da mesma transação (mesma régua de `resolverPendenciaManualComClient`,
+ * `registro/pendencias.ts`) e `motivo` é OBRIGATÓRIO e não-vazio ao resolver
+ * (reconhecer, que não encerra a divergência, continua com motivo opcional).
  */
 
 export interface AvisoDivergencia {
@@ -37,32 +45,45 @@ export interface AvisoDivergenciaTransport {
 
 async function alterarEstado(
   pool: Pool,
-  input: { divergenciaId: string; usuario: string; motivo?: string },
+  input: { divergenciaId: string; organizationId: string; autorMembershipId: string; motivo?: string },
   alvo: 'reconhecida' | 'resolvida',
 ): Promise<boolean> {
+  if (alvo === 'resolvida' && !(input.motivo ?? '').trim()) {
+    throw new PendenciaResolucaoError('MOTIVO_OBRIGATORIO');
+  }
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const { rows } = await client.query(`SELECT * FROM ft_divergencias WHERE id = $1 FOR UPDATE`, [input.divergenciaId]);
+    const { rows: autor } = await client.query(
+      `SELECT papel FROM organization_memberships WHERE id = $1 AND organization_id = $2 FOR SHARE`,
+      [input.autorMembershipId, input.organizationId],
+    );
+    if (!autor.length || !PAPEIS_RESOLUCAO_PENDENCIA.includes(autor[0].papel)) {
+      throw new PendenciaResolucaoError('AUTOR_NAO_AUTORIZADO', { autorMembershipId: input.autorMembershipId });
+    }
+    const { rows } = await client.query(
+      `SELECT * FROM ft_divergencias WHERE id = $1 AND organization_id = $2 FOR UPDATE`,
+      [input.divergenciaId, input.organizationId],
+    );
     const d = rows[0];
     const permitido = d && (alvo === 'reconhecida' ? ['aberta', 'reaberta'].includes(d.estado) : d.estado !== 'resolvida');
     if (!permitido) { await client.query('ROLLBACK'); return false; }
     if (alvo === 'reconhecida') {
       await client.query(
         `UPDATE ft_divergencias SET estado = 'reconhecida', reconhecida_por = $2, reconhecida_em = now(), atualizado_em = now() WHERE id = $1`,
-        [d.id, input.usuario],
+        [d.id, input.autorMembershipId],
       );
     } else {
       await client.query(
         `UPDATE ft_divergencias SET estado = 'resolvida', resolvida_por = $2, resolvida_em = now(),
            resolvida_motivo = 'manual', atualizado_em = now() WHERE id = $1`,
-        [d.id, input.usuario],
+        [d.id, input.autorMembershipId],
       );
     }
     await client.query(
       `INSERT INTO ft_divergencia_eventos (organization_id, divergencia_id, ocorrencia_seq, tipo, autor, detalhe)
        VALUES ($1, $2, $3, $4, $5, $6)`,
-      [d.organization_id, d.id, d.ocorrencia_seq, alvo, input.usuario, JSON.stringify({ motivo: input.motivo ?? null, valorSi: d.valor_si, valorMaster: d.valor_master })],
+      [d.organization_id, d.id, d.ocorrencia_seq, alvo, input.autorMembershipId, JSON.stringify({ motivo: input.motivo ?? null, valorSi: d.valor_si, valorMaster: d.valor_master })],
     );
     await client.query('COMMIT');
     return true;
@@ -75,12 +96,12 @@ async function alterarEstado(
 }
 
 /** Gestor reconhece a divergência (continua visível; cálculo segue com o Master). */
-export function reconhecerDivergencia(pool: Pool, input: { divergenciaId: string; usuario: string; motivo?: string }): Promise<boolean> {
+export function reconhecerDivergencia(pool: Pool, input: { divergenciaId: string; organizationId: string; autorMembershipId: string; motivo?: string }): Promise<boolean> {
   return alterarEstado(pool, input, 'reconhecida');
 }
 
-/** Gestor resolve a divergência. Reprocessar o mesmo par de valores não reabre. */
-export function resolverDivergencia(pool: Pool, input: { divergenciaId: string; usuario: string; motivo?: string }): Promise<boolean> {
+/** Gestor resolve a divergência. Reprocessar o mesmo par de valores não reabre. Motivo OBRIGATÓRIO (R55). */
+export function resolverDivergencia(pool: Pool, input: { divergenciaId: string; organizationId: string; autorMembershipId: string; motivo: string }): Promise<boolean> {
   return alterarEstado(pool, input, 'resolvida');
 }
 

@@ -4,6 +4,8 @@ import { Pool } from 'pg';
 import { runMigrations } from '../db/migrate';
 import { testPool, testDatabaseUrl, truncateAll } from './testDb';
 import { OrganizationRepository } from '../persistence/organizationRepository';
+import { UsuarioRepository } from '../persistence/usuarioRepository';
+import { OrganizationMembershipRepository } from '../persistence/organizationMembershipRepository';
 import { ProcessoRepository } from '../persistence/processoRepository';
 import { ContainerRepository } from '../persistence/containerRepository';
 import { FieldObservationRepository } from '../persistence/fieldObservationRepository';
@@ -55,6 +57,8 @@ function fakePort(over: (ref: string) => Partial<TrackingEnrichResult> = () => (
 
 async function grupo(pool: Pool, n: number, opts: { slug?: string } = {}) {
   const o = await org(pool, opts.slug ?? 'rocket');
+  const usuario = await new UsuarioRepository(pool).create('Gestor', `gestor-${opts.slug ?? 'rocket'}@x.com`, `home-gestor-${opts.slug ?? 'rocket'}`);
+  const mGestor = await new OrganizationMembershipRepository(pool).create(o.id, usuario.id, 'MANAGER');
   const p = await new ProcessoRepository(pool).create({ organizationId: o.id, numeroProcesso: 'IM-G', clienteId: null });
   const vc = await new VesselCallRepository(pool).upsert({ organizationId: o.id, componentes: IDENT, podFonte: 'master_bl' });
   const sharing = new VesselSharingRepository(pool);
@@ -69,7 +73,7 @@ async function grupo(pool: Pool, n: number, opts: { slug?: string } = {}) {
     await sharing.confirmarEstruturado({ organizationId: o.id, vesselCallId: vc.id, containerId: c.id, trackingTargetId: target.id, processoId: p.id, etaPrevista: '2026-09-25', vinculoConfirmado: true, fonte: 'tracking_service', evidencia: 'loaded on board', observadoEm: new Date('2026-09-05T00:00:00Z'), statusPrevistoConfirmado: 'confirmado' });
     containers.push({ id: c.id, targetId: target.id, ref: target.referenceValueCanonical, numero });
   }
-  return { orgId: o.id, processoId: p.id, vesselCallId: vc.id, containers, port: fakePort() };
+  return { orgId: o.id, processoId: p.id, vesselCallId: vc.id, containers, port: fakePort(), mGestor: mGestor.id };
 }
 const fetchesDe = (pool: Pool, targetId: string) => pool.query(`SELECT count(*)::int n FROM tracking_fetches WHERE tracking_target_id=$1`, [targetId]).then((r) => r.rows[0].n);
 const idSet = (arr: { id: string }[]) => new Set(arr.map((c) => c.id));
@@ -259,9 +263,9 @@ test('#14 atualização manual ignora cobertura e respeita limite (2/dia)', { sk
     const coberto = g.containers.find((c) => c.id !== undefined)!; // qualquer coberto
     const { solicitarAtualizacaoManual } = await import('../scheduler/trackingScheduler');
     // Manual ignora cobertura: consulta mesmo o target coberto.
-    const m1 = await solicitarAtualizacaoManual({ pool, port: g.port, trackingTargetId: coberto.targetId, papel: 'MANAGER', agora: new Date('2026-09-20T08:00:00Z') });
+    const m1 = await solicitarAtualizacaoManual({ pool, port: g.port, trackingTargetId: coberto.targetId, organizationId: g.orgId, membershipId: g.mGestor, agora: new Date('2026-09-20T08:00:00Z') });
     assert.equal(m1.executada, true);
-    const m2 = await solicitarAtualizacaoManual({ pool, port: g.port, trackingTargetId: coberto.targetId, papel: 'MANAGER', agora: new Date('2026-09-20T08:30:00Z') });
+    const m2 = await solicitarAtualizacaoManual({ pool, port: g.port, trackingTargetId: coberto.targetId, organizationId: g.orgId, membershipId: g.mGestor, agora: new Date('2026-09-20T08:30:00Z') });
     // cooldown ~2h → segunda no mesmo curto intervalo é barrada (política existente preservada).
     assert.equal(m2.executada, false);
   } finally { await pool.end(); }

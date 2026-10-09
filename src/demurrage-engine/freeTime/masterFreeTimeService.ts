@@ -3,6 +3,9 @@ import { getPool } from '../db/pool';
 import { FIELD_OBSERVATION_SOURCE_PRIORITY, FieldObservationSource } from '../domain/types';
 import { FieldObservationRepository, assertFonteAutorizada } from '../persistence/fieldObservationRepository';
 import { fatoMaterialBloqueadoPorFinal, lockProcesso } from '../closing/materialChangeGuard';
+import { abrirPendenciaComClient } from '../registro/pendencias';
+import { enfileirarAvisoPendenciaComClient } from '../registro/notificacaoPendencia';
+import { registrarTentativaEncontrada } from './freeTimeTentativas';
 
 /**
  * Serviço CENTRAL de promoção do Master Free Time.
@@ -69,7 +72,7 @@ export interface PromoverMasterFreeTimeResultado {
   observationId: string;
   /** false = a observação já existia (reprocessamento da mesma fonte/instante). */
   criada: boolean;
-  outcome: 'promovida' | 'registrada_sem_promover' | 'bloqueada_final';
+  outcome: 'promovida' | 'registrada_sem_promover' | 'bloqueada_final' | 'bloqueada_fallback_manual';
   /** Campo canônico (D15-A v1.1, achado #3): true somente quando `outcome === 'bloqueada_final'`. */
   exigeReabertura: boolean;
   /** @deprecated Alias de `exigeReabertura`, mantido só por compatibilidade interna temporária — ver docs/demurrage-fase-d15-a-v1-1.md §4. */
@@ -160,6 +163,25 @@ export async function promoverMasterFreeTimeComClient(
   const anterior = numero(c.master_free_time_days);
   const conflito = !criada && numero(observacao.valor) !== input.valor;
 
+  // D15-B (R37) — mesmo tratamento de `ContainerRepository.applyObservationComClient`:
+  // conflito de MESMA fonte, MESMO instante, valor DIFERENTE fica só no
+  // retorno antes desta correção, nunca persistido/visível à gestão.
+  if (conflito) {
+    await abrirPendenciaComClient(client, input.organizationId, processoId, input.containerId, 'conflito_mesma_fonte', {
+      campo: CAMPO_MASTER_FT, fonte: input.fonte, valorRegistrado: observacao.valor, valorConflitante: input.valor, observationId: observacao.id,
+    });
+  }
+
+  // D15-B (R05) — toda observação NOVA de Master Free Time de uma fonte REAL
+  // (nunca `manual_fallback`) é uma tentativa — mesmo mecanismo de
+  // `free_time_tentativas` usado pelo House Free Time em `containerRepository.ts`.
+  if (criada && input.fonte !== 'manual_fallback') {
+    await registrarTentativaEncontrada(client, {
+      organizationId: input.organizationId, processoId, containerId: input.containerId, campo: 'masterFreeTimeDays',
+      fonte: input.fonte, valor: input.valor, observadoEm: input.observadoEm, evidenciaRef: input.evidenciaRef,
+    });
+  }
+
   // SÓ TESTE: injeta falha depois da observação persistida, antes de
   // qualquer decisão.
   if (input._testeFalhaAposObservacao) await input._testeFalhaAposObservacao();
@@ -182,20 +204,48 @@ export async function promoverMasterFreeTimeComClient(
     };
   }
 
-  let outcome: 'promovida' | 'registrada_sem_promover' | 'bloqueada_final' = 'registrada_sem_promover';
+  let outcome: 'promovida' | 'registrada_sem_promover' | 'bloqueada_final' | 'bloqueada_fallback_manual' = 'registrada_sem_promover';
   let selecionado = anterior;
   let bloqueadoPorFinal = false;
-  // Passo 6 — prioridade de fonte contra a seleção relida no passo 4.
-  // Reprocessar um fato IDÊNTICO ao já registrado mas NÃO selecionado
-  // (bloqueado por FINAL anteriormente, ou perdedor de prioridade) precisa
-  // refazer a mesma decisão, não pulá-la — senão um reenvio idempotente de
-  // um fato já bloqueado por FINAL relataria 'registrada_sem_promover' em
-  // vez de 'bloqueada_final' (v1.1, achado #1).
+  // Passo 6 — prioridade de fonte (e, D15-B/R41, recência DENTRO da mesma
+  // prioridade) contra a seleção relida no passo 4. Reprocessar um fato
+  // IDÊNTICO ao já registrado mas NÃO selecionado (bloqueado por FINAL
+  // anteriormente, ou perdedor de prioridade) precisa refazer a mesma
+  // decisão, não pulá-la — senão um reenvio idempotente de um fato já
+  // bloqueado por FINAL relataria 'registrada_sem_promover' em vez de
+  // 'bloqueada_final' (v1.1, achado #1).
   let promover = !conflito;
+  let fonteAtual: FieldObservationSource | undefined;
   if (promover && c.master_free_time_observation_id) {
-    const { rows: atual } = await client.query(`SELECT fonte FROM field_observations WHERE id = $1`, [c.master_free_time_observation_id]);
-    const fonteAtual = atual[0]?.fonte as FieldObservationSource | undefined;
-    if (fonteAtual) promover = FIELD_OBSERVATION_SOURCE_PRIORITY[input.fonte] >= FIELD_OBSERVATION_SOURCE_PRIORITY[fonteAtual];
+    const { rows: atual } = await client.query(`SELECT fonte, observado_em FROM field_observations WHERE id = $1`, [c.master_free_time_observation_id]);
+    fonteAtual = atual[0]?.fonte as FieldObservationSource | undefined;
+    if (fonteAtual) {
+      const prioridadeNova = FIELD_OBSERVATION_SOURCE_PRIORITY[input.fonte];
+      const prioridadeAtual = FIELD_OBSERVATION_SOURCE_PRIORITY[fonteAtual];
+      if (prioridadeNova < prioridadeAtual) {
+        promover = false;
+      } else if (prioridadeNova === prioridadeAtual) {
+        // D15-B (R41) — mesma autoridade: a mais NOVA (`observado_em`) vence;
+        // uma observação mais ANTIGA chegando depois permanece no ledger
+        // (passo 5, já gravada), mas não substitui a mais nova já selecionada.
+        const observadoEmAtual: Date = atual[0].observado_em;
+        promover = input.observadoEm >= observadoEmAtual;
+      }
+    }
+  }
+  // D15-B (R07/31.4d) — o valor VIGENTE veio de `manual_fallback` e uma
+  // fonte REAL venceria a promoção com um valor MATERIALMENTE diferente: não
+  // substitui diretamente — abre divergência nomeada e notifica a gestão,
+  // preservando o valor manual até decisão humana (mesmo tratamento de
+  // `ContainerRepository.applyObservationComClient` para House Free Time).
+  let bloqueadoPorFallbackManual = false;
+  if (promover && fonteAtual === 'manual_fallback' && input.fonte !== 'manual_fallback' && anterior !== input.valor) {
+    promover = false;
+    bloqueadoPorFallbackManual = true;
+    const pend = await abrirPendenciaComClient(client, input.organizationId, processoId, input.containerId, 'fallback_manual_superado', {
+      campo: CAMPO_MASTER_FT, valorManual: anterior, valorNovo: input.valor, fonteNova: input.fonte, observationId: observacao.id,
+    });
+    if (pend.id) await enfileirarAvisoPendenciaComClient(client, input.organizationId, pend.id);
   }
   // Passo 7 — status já relido sob lock (passo 3): a promoção venceria
   // pela hierarquia de fontes, mas o processo está FINAL e o valor é
@@ -218,10 +268,12 @@ export async function promoverMasterFreeTimeComClient(
       outcome = 'promovida';
       selecionado = input.valor;
     }
+  } else if (bloqueadoPorFallbackManual) {
+    outcome = 'bloqueada_fallback_manual';
   }
-  // Chegar aqui com `!criada` e `promover === false` só acontece num
-  // conflito de mesma fonte — nunca promove silenciosamente (o "já
-  // selecionada, sem conflito" foi tratado acima, antes do passo 6).
+  // Chegar aqui com `!criada` e `promover === false` sem bloqueio nomeado só
+  // acontece num conflito de mesma fonte — nunca promove silenciosamente (o
+  // "já selecionada, sem conflito" foi tratado acima, antes do passo 6).
 
   const valorMudou = selecionado !== anterior;
   let recalculoEnfileirado = false;
@@ -270,12 +322,12 @@ export async function promoverMasterFreeTime(
   }
 }
 
-async function ultimaObservacao(client: PoolClient, containerId: string, fonte: FieldObservationSource): Promise<{ id: string; valor: number } | null> {
+async function ultimaObservacao(client: PoolClient, containerId: string, campo: string, fonte: FieldObservationSource): Promise<{ id: string; valor: number } | null> {
   const { rows } = await client.query(
     `SELECT id, valor FROM field_observations
       WHERE entidade_tipo = 'container' AND entidade_id = $1 AND campo = $2 AND fonte = $3
       ORDER BY observado_em DESC, coletado_em DESC, id DESC LIMIT 1`,
-    [containerId, CAMPO_MASTER_FT, fonte],
+    [containerId, campo, fonte],
   );
   const v = rows[0] ? numero(rows[0].valor) : null;
   return rows[0] && v !== null ? { id: rows[0].id, valor: v } : null;
@@ -304,15 +356,25 @@ async function registrarEvento(
  * - valores iguais (ou uma das fontes ausente) e divergência ativa → resolvida
  *   por convergência.
  */
-export async function avaliarDivergenciaComClient(
+/**
+ * Fase D15-B (R36) — generalização: o par de fontes comparado (`fonteA`/
+ * `fonteB`) e o `campo` deixam de ser fixos em SI×Master do Master Free
+ * Time. As colunas `valor_si`/`obs_si_id`/`valor_master`/`obs_master_id` da
+ * MESMA `ft_divergencias` são reaproveitadas como "lado A"/"lado B" do
+ * conflito, qualquer que seja o campo — nenhum artefato novo (ver migration
+ * 0036 §3 e docs/demurrage-fase-d15-diagnostico.md §6, item 5/8).
+ * `avaliarDivergenciaComClient` (abaixo) é o caso MASTER×SI congelado,
+ * agora um wrapper fino sobre esta função.
+ */
+export async function avaliarDivergenciaCampoComClient(
   client: PoolClient,
-  input: { organizationId: string; containerId: string; processoId: string; autor: string },
+  input: { organizationId: string; containerId: string; processoId: string; autor: string; campo: string; fonteA: FieldObservationSource; fonteB: FieldObservationSource },
 ): Promise<DivergenciaAvaliada | null> {
-  const si = await ultimaObservacao(client, input.containerId, 'shipping_instructions');
-  const master = await ultimaObservacao(client, input.containerId, 'master_bl');
+  const si = await ultimaObservacao(client, input.containerId, input.campo, input.fonteA);
+  const master = await ultimaObservacao(client, input.containerId, input.campo, input.fonteB);
   const { rows } = await client.query(
     `SELECT * FROM ft_divergencias WHERE container_id = $1 AND campo = $2 FOR UPDATE`,
-    [input.containerId, CAMPO_MASTER_FT],
+    [input.containerId, input.campo],
   );
   const d = rows[0];
   const diverge = !!(si && master && si.valor !== master.valor);
@@ -320,11 +382,11 @@ export async function avaliarDivergenciaComClient(
   if (!d) {
     if (!diverge) return null;
     const { rows: nova } = await client.query(
-      `INSERT INTO ft_divergencias (organization_id, processo_id, container_id, valor_si, obs_si_id, valor_master, obs_master_id, estado, ocorrencia_seq)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'aberta', 1)
+      `INSERT INTO ft_divergencias (organization_id, processo_id, container_id, campo, valor_si, obs_si_id, valor_master, obs_master_id, estado, ocorrencia_seq)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'aberta', 1)
        ON CONFLICT (container_id, campo) DO NOTHING
        RETURNING id`,
-      [input.organizationId, input.processoId, input.containerId, si!.valor, si!.id, master!.valor, master!.id],
+      [input.organizationId, input.processoId, input.containerId, input.campo, si!.valor, si!.id, master!.valor, master!.id],
     );
     if (!nova[0]) return null; // corrida improvável (há FOR UPDATE no contêiner)
     await registrarEvento(client, {
@@ -381,6 +443,29 @@ export async function avaliarDivergenciaComClient(
     detalhe: { valorSiAnterior: d.valor_si, valorMasterAnterior: d.valor_master, valorSi: si!.valor, valorMaster: master!.valor },
   });
   return { id: d.id, estado: d.estado, ocorrenciaSeq: seq, evento: 'atualizada' };
+}
+
+/** Caso MASTER×SI do Master Free Time — comportamento INALTERADO (D15-A/D10-D14), agora delegado ao genérico acima. */
+export async function avaliarDivergenciaComClient(
+  client: PoolClient,
+  input: { organizationId: string; containerId: string; processoId: string; autor: string },
+): Promise<DivergenciaAvaliada | null> {
+  return avaliarDivergenciaCampoComClient(client, { ...input, campo: CAMPO_MASTER_FT, fonteA: 'shipping_instructions', fonteB: 'master_bl' });
+}
+
+/**
+ * Fase D15-B (R36) — conflito House-only: entre DUAS fontes REAIS (nunca
+ * `manual_fallback`, que é tratado separadamente pelo bloqueio R07) que
+ * forneceram valores DIFERENTES de House Free Time, sem envolver o Master.
+ * Chamado por `ContainerRepository.applyObservationComClient` sempre que uma
+ * observação nova de House é aceita e já existe uma fonte diferente,
+ * igualmente real, selecionada ou recém-observada.
+ */
+export function avaliarDivergenciaHouseComClient(
+  client: PoolClient,
+  input: { organizationId: string; containerId: string; processoId: string; autor: string; fonteA: FieldObservationSource; fonteB: FieldObservationSource },
+): Promise<DivergenciaAvaliada | null> {
+  return avaliarDivergenciaCampoComClient(client, { ...input, campo: 'houseFreeTimeDays' });
 }
 
 /**

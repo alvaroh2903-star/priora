@@ -403,6 +403,16 @@ export class ClosingService {
       const valores = new ValorApuradoRepository(client as unknown as Pool);
 
       for (const c of conts) {
+        // D15-B (R08/31.5) — Empty Return reportado ANTES da descarga: bloqueio
+        // EXPLÍCITO e nomeado, distinto do bloqueio indireto genérico via
+        // INDETERMINADA (abaixo) — a pendência já existe e é visível à gestão
+        // (ver `ContainerRepository.applyObservationComClient`/`abrirPendenciaCronologia`).
+        const { rows: pendRetornoVazio } = await client.query(
+          `SELECT id FROM demurrage_pendencias WHERE container_id = $1 AND tipo = 'retorno_vazio_antes_descarga' AND estado = 'aberta'`,
+          [c.id],
+        );
+        if (pendRetornoVazio.length) { await client.query('ROLLBACK'); return { ok: false, motivo: 'retorno_vazio_antes_descarga_pendente' }; }
+
         const { facts, responsabilidade } = await lifecycle.gateFechamento(c.id, input.config);
         if (facts.apuracaoDemurrageStatus === 'INDETERMINADA') { await client.query('ROLLBACK'); return { ok: false, motivo: 'apuracao_indeterminada' }; }
         const dataFinalEvidencia: CivilDate | null = c.effective_return_date ?? c.tracking_return_date ?? null;

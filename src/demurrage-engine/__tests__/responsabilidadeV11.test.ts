@@ -609,6 +609,27 @@ test('v1.1 migração 0032 → 0033: decisões existentes preservadas; a nova re
   try {
     await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
     await runMigrations(pool, { until: '0032_responsabilidade_projecao_guard.sql' });
+    // D15-B (R05, migration 0036, muito depois de 0032): `applyObservation` agora
+    // grava uma tentativa em `free_time_tentativas` sempre que House/Master Free
+    // Time é aceito de uma fonte real. Essa tabela é totalmente alheia ao que este
+    // teste verifica (a restrição de 0033 sobre responsabilidade_decisoes) — só
+    // precisa existir para `cenario`/`novoContainer` funcionarem neste schema
+    // deliberadamente congelado em 0032. DDL idêntico ao de 0036 (sem os índices/
+    // triggers, irrelevantes aqui).
+    await pool.query(`
+      CREATE TABLE free_time_tentativas (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        organization_id UUID NOT NULL REFERENCES organizations(id),
+        processo_id UUID NOT NULL,
+        container_id UUID NOT NULL,
+        pendencia_id UUID REFERENCES demurrage_pendencias(id),
+        campo TEXT NOT NULL CHECK (campo IN ('houseFreeTimeDays', 'masterFreeTimeDays')),
+        fonte_tentada TEXT NOT NULL,
+        resultado TEXT NOT NULL CHECK (resultado IN ('encontrado', 'nao_encontrado')),
+        evidencia_sanitizada TEXT,
+        detalhe JSONB NOT NULL DEFAULT '{}'::jsonb,
+        tentativa_em TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`);
 
     // Decisões criadas ANTES da 0033 (serviço vigente na 0032).
     const cli = await cenario(pool, 'MIGCLI', { discharge: '2026-01-01', houseFT: 5, masterFT: 100, effective: '2026-01-10', diaria: 150 });

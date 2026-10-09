@@ -4,6 +4,7 @@ import { getPool } from '../db/pool';
 import { CivilDate } from '../temporal/civilDate';
 import { IdentidadeComponentes } from '../tracking/vesselIdentity';
 import { FatosFaseTracking, TrackingPhase, derivarFaseTracking, FONTES_CHEGADA_VALIDAS, FONTES_ATRACACAO_VALIDAS } from '../tracking/vesselCallPhase';
+import { PAPEIS_RESOLUCAO_PENDENCIA, PendenciaResolucaoError } from '../registro/pendencias';
 
 /**
  * Persistência do VesselCall (Fase 9 — fundação). Sem tocar relógios/tarifas/
@@ -13,7 +14,7 @@ import { FatosFaseTracking, TrackingPhase, derivarFaseTracking, FONTES_CHEGADA_V
  */
 
 export type CampoCompartilhado = 'eta' | 'chegada' | 'atracacao';
-export type TipoPendencia = 'pod_nao_confirmado' | 'pod_divergente' | 'identidade_ambigua' | 'atracacao_ambigua';
+export type TipoPendencia = 'pod_nao_confirmado' | 'pod_divergente' | 'identidade_ambigua' | 'atracacao_ambigua' | 'mismatch_carrier';
 
 export interface EventoCompartilhado {
   campo: CampoCompartilhado;
@@ -155,7 +156,17 @@ export class VesselCallRepository {
     chave: string;
     origemDados: string;
     motivo?: string | null;
-  }): Promise<{ efeito: 'inalterado' | 'associado' | 'rolagem' }> {
+    /**
+     * Fase D15-B (R44) — data CIVIL do evento/evidência que motiva esta
+     * associação (não a data de escrita). Quando informada e a associação
+     * ATIVA também tem `observado_em`, uma rolagem para uma VesselCall cuja
+     * evidência é mais ANTIGA é RECUSADA (evento tardio ou fetch de cache
+     * reprocessado) — a associação ativa, mais recente, é preservada.
+     * `undefined`/`null` em qualquer um dos dois lados preserva o
+     * comportamento anterior (rola sempre) — nenhuma regressão em dados legados.
+     */
+    observadoEm?: CivilDate | null;
+  }): Promise<{ efeito: 'inalterado' | 'associado' | 'rolagem' | 'rejeitado_por_recencia' }> {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
@@ -176,13 +187,26 @@ export class VesselCallRepository {
         throw new Error('associarContainer: associação cruzada entre organizações não permitida');
       }
       const { rows: ativos } = await client.query(
-        `SELECT id, vessel_call_id FROM container_vessel_calls WHERE container_id = $1 AND ativo FOR UPDATE`,
+        `SELECT id, vessel_call_id, observado_em FROM container_vessel_calls WHERE container_id = $1 AND ativo FOR UPDATE`,
         [input.containerId],
       );
       const ativo = ativos[0];
       if (ativo && ativo.vessel_call_id === input.vesselCallId) {
         await client.query('COMMIT');
         return { efeito: 'inalterado' };
+      }
+      // D15-B (R44) — a rolagem só é recusada quando AMBOS os lados têm
+      // `observado_em` e o novo é estritamente mais antigo; sem essa prova de
+      // recência de um dos lados, rola normalmente (comportamento anterior).
+      if (ativo && ativo.observado_em && input.observadoEm && input.observadoEm < ativo.observado_em) {
+        await client.query(
+          `INSERT INTO container_vessel_call_eventos (container_id, vessel_call_id, tipo, chave, origem_dados, motivo)
+           VALUES ($1,$2,'rolagem_recusada_recencia',$3,$4,$5)`,
+          [input.containerId, input.vesselCallId, input.chave, input.origemDados,
+           `evidência ${input.observadoEm} mais antiga que a ativa (${ativo.observado_em})`],
+        );
+        await client.query('COMMIT');
+        return { efeito: 'rejeitado_por_recencia' };
       }
       const rolagem = Boolean(ativo);
       if (ativo) {
@@ -203,9 +227,9 @@ export class VesselCallRepository {
         );
       }
       await client.query(
-        `INSERT INTO container_vessel_calls (container_id, vessel_call_id, organization_id, motivo_chave, origem_dados)
-         VALUES ($1,$2,$3,$4,$5)`,
-        [input.containerId, input.vesselCallId, input.organizationId, input.chave, input.origemDados],
+        `INSERT INTO container_vessel_calls (container_id, vessel_call_id, organization_id, motivo_chave, origem_dados, observado_em)
+         VALUES ($1,$2,$3,$4,$5,$6)`,
+        [input.containerId, input.vesselCallId, input.organizationId, input.chave, input.origemDados, input.observadoEm ?? null],
       );
       await client.query(
         `INSERT INTO container_vessel_call_eventos (container_id, vessel_call_id, tipo, chave, origem_dados, motivo)
@@ -263,6 +287,53 @@ export class VesselCallRepository {
         WHERE contexto_hash = $1 AND estado = 'aberta'`,
       [contextoHash],
     );
+  }
+
+  /**
+   * Fase D15-B (R45) — resolução MANUAL auditável de `atracacao_ambigua`:
+   * nenhuma fonte de tracking adicional desambigua um evento `berth` sem
+   * distinção PREVISTO×CONFIRMADO no contrato atual (ver cabeçalho de
+   * `vesselCallSync.ts`) — só decisão humana resolve. Mesma régua de RBAC
+   * (membership real, nunca papel informado pelo chamador) e motivo
+   * obrigatório de `resolverPendenciaManualComClient` (`registro/pendencias.ts`),
+   * aplicada a `vessel_call_pendencias` (tabela irmã, mesmas colunas
+   * `resolvido_por`/`resolvido_motivo` — migration 0036). Preserva a linha;
+   * idempotente (resolver de novo é NO-OP silencioso).
+   */
+  async resolverPendenciaManual(input: {
+    pendenciaId: string; organizationId: string; autorMembershipId: string; motivo: string;
+  }): Promise<{ resolvida: boolean }> {
+    const motivo = (input.motivo ?? '').trim();
+    if (!motivo) throw new PendenciaResolucaoError('MOTIVO_OBRIGATORIO');
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const { rows: autor } = await client.query(
+        `SELECT papel FROM organization_memberships WHERE id = $1 AND organization_id = $2 FOR SHARE`,
+        [input.autorMembershipId, input.organizationId],
+      );
+      if (!autor.length || !PAPEIS_RESOLUCAO_PENDENCIA.includes(autor[0].papel)) {
+        throw new PendenciaResolucaoError('AUTOR_NAO_AUTORIZADO', { autorMembershipId: input.autorMembershipId });
+      }
+      const { rows: pend } = await client.query(
+        `SELECT id, estado FROM vessel_call_pendencias WHERE id = $1 AND organization_id = $2 FOR UPDATE`,
+        [input.pendenciaId, input.organizationId],
+      );
+      if (!pend.length) throw new PendenciaResolucaoError('PENDENCIA_NAO_ENCONTRADA', { pendenciaId: input.pendenciaId });
+      if (pend[0].estado === 'resolvida') { await client.query('COMMIT'); return { resolvida: false }; }
+      await client.query(
+        `UPDATE vessel_call_pendencias SET estado = 'resolvida', resolvido_em = now(), atualizado_em = now(),
+           resolvido_por = $2, resolvido_motivo = $3 WHERE id = $1`,
+        [input.pendenciaId, input.autorMembershipId, motivo],
+      );
+      await client.query('COMMIT');
+      return { resolvida: true };
+    } catch (erro) {
+      await client.query('ROLLBACK');
+      throw erro;
+    } finally {
+      client.release();
+    }
   }
 
   /**

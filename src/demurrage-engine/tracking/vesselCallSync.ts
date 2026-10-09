@@ -34,6 +34,8 @@ export interface VesselCallSyncResultado {
   resolvidas: number;
   ignoradosSemViagem: number;
   confirmados: number;
+  /** D15-B (R44) — rolagens recusadas por evidência mais antiga (evento tardio/cache). */
+  rolagensRecusadasPorRecencia: number;
 }
 
 function norm(s: string | null | undefined): string {
@@ -114,7 +116,9 @@ export async function sincronizarVesselCall(input: {
 }): Promise<VesselCallSyncResultado> {
   const { pool, target, result } = input;
   const repo = new VesselCallRepository(pool);
-  const out: VesselCallSyncResultado = { associados: 0, rolagens: 0, pendencias: 0, resolvidas: 0, ignoradosSemViagem: 0, confirmados: 0 };
+  const out: VesselCallSyncResultado = {
+    associados: 0, rolagens: 0, pendencias: 0, resolvidas: 0, ignoradosSemViagem: 0, confirmados: 0, rolagensRecusadasPorRecencia: 0,
+  };
   if (!result.ok) return out;
 
   for (const c of input.containers) {
@@ -174,10 +178,11 @@ export async function sincronizarVesselCall(input: {
     });
     const assoc = await repo.associarContainer({
       containerId: c.containerId, vesselCallId: vc.id, organizationId: c.organizationId,
-      chave: ident.chave, origemDados: 'tracking_service',
+      chave: ident.chave, origemDados: 'tracking_service', observadoEm: ev.date ?? null,
     });
     if (assoc.efeito === 'associado') out.associados++;
     if (assoc.efeito === 'rolagem') out.rolagens++;
+    if (assoc.efeito === 'rejeitado_por_recencia') out.rolagensRecusadasPorRecencia++;
 
     // Bloco 2: confirmação ESTRUTURADA de vínculo de viagem — só com evento
     // loaded/departed CONFIRMADO + ETA prevista estruturada. Presença de

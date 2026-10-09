@@ -483,6 +483,43 @@ test('v1.2 migração 0033 → 0034: decisões existentes preservadas; dias/per�
   try {
     await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
     await runMigrations(pool, { until: '0033_responsabilidade_v1_1_corretiva.sql' });
+    // D15-B (R05, migration 0036, muito depois de 0033): `applyObservation` agora
+    // grava uma tentativa em `free_time_tentativas` sempre que House/Master Free
+    // Time é aceito de uma fonte real. Essa tabela é alheia ao que este teste
+    // verifica (a revalidação de 0034 sobre responsabilidade_decisoes) — só
+    // precisa existir para `cenario`/`novoContainer` funcionarem neste schema
+    // deliberadamente congelado em 0033. DDL idêntico ao de 0036 (sem os índices/
+    // triggers, irrelevantes aqui).
+    await pool.query(`
+      CREATE TABLE free_time_tentativas (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        organization_id UUID NOT NULL REFERENCES organizations(id),
+        processo_id UUID NOT NULL,
+        container_id UUID NOT NULL,
+        pendencia_id UUID REFERENCES demurrage_pendencias(id),
+        campo TEXT NOT NULL CHECK (campo IN ('houseFreeTimeDays', 'masterFreeTimeDays')),
+        fonte_tentada TEXT NOT NULL,
+        resultado TEXT NOT NULL CHECK (resultado IN ('encontrado', 'nao_encontrado')),
+        evidencia_sanitizada TEXT,
+        detalhe JSONB NOT NULL DEFAULT '{}'::jsonb,
+        tentativa_em TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`);
+    // D15-B (R26, migration 0036): `recalcularApuracaoContainer` agora abre
+    // `demurrage_pendencias` do tipo `condicao_comercial_ausente` quando o
+    // processo não tem condição comercial e o relógio do cliente já está em
+    // demurrage — tipo alheio a este teste, mas exigido pelo CHECK constraint
+    // vigente em 0033. Scaffold idêntico ao `ALTER` de 0036; não precisa de
+    // "undo" antes do `runMigrations(pool)` mais abaixo, pois o `DROP
+    // CONSTRAINT` da própria 0036 sucede independente da expressão atual.
+    await pool.query(`
+      ALTER TABLE demurrage_pendencias DROP CONSTRAINT demurrage_pendencias_tipo_check;
+      ALTER TABLE demurrage_pendencias ADD CONSTRAINT demurrage_pendencias_tipo_check CHECK (tipo IN (
+        'armador_ausente', 'armador_nao_cadastrado', 'armador_sem_tracking',
+        'mbl_ausente', 'tipo_ausente', 'tipo_nao_reconhecido', 'tipo_selecao_sem_observacao',
+        'retorno_vazio_antes_descarga', 'cronologia_gate_out_antes_descarga',
+        'cronologia_retorno_antes_gate_out', 'condicao_comercial_ausente',
+        'conflito_mesma_fonte', 'fallback_manual_superado', 'free_time_ausente'
+      ))`);
 
     const rk = await cenario(pool, 'MIGRK', { discharge: '2026-03-01', houseFT: 10, masterFT: 3, effective: '2026-03-05' });
     const dRk = await decidir(pool, rk, { status: 'CONFIRMADA_ROCKET', base: 'RELOGIO_ROCKET', periodos: [{ lado: 'ROCKET', inicio: '2026-03-04', fim: '2026-03-04' }] });
@@ -511,8 +548,13 @@ test('v1.2 migração 0033 → 0034: decisões existentes preservadas; dias/per�
     });
     const antes = await snapshot();
 
+    // O scaffold local de `free_time_tentativas` (acima) existiu só para o
+    // trecho congelado em 0033; a migration 0036 real cria a tabela
+    // definitiva (com índice/triggers) — remove o scaffold antes para não
+    // colidir com o CREATE TABLE da própria migration.
+    await pool.query('DROP TABLE free_time_tentativas');
     const r = await runMigrations(pool);
-    assert.deepEqual(r.applied, ['0034_responsabilidade_v1_2_agregado.sql', '0035_d15a_integridade_final_reabertura.sql']);
+    assert.deepEqual(r.applied, ['0034_responsabilidade_v1_2_agregado.sql', '0035_d15a_integridade_final_reabertura.sql', '0036_d15b_integridade_dados_excecoes.sql']);
     // A migração não reescreve nem revalida retroativamente nada existente.
     assert.deepEqual(await snapshot(), antes);
 

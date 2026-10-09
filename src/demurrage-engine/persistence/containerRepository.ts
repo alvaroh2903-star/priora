@@ -2,8 +2,12 @@ import { Pool, PoolClient } from 'pg';
 import { getPool } from '../db/pool';
 import { Container, ContainerObservableField, FIELD_OBSERVATION_SOURCE_PRIORITY, FieldObservationSource } from '../domain/types';
 import { FieldObservationRepository, InsertFieldObservationInput, assertFonteAutorizada } from './fieldObservationRepository';
-import { promoverMasterFreeTime } from '../freeTime/masterFreeTimeService';
+import { promoverMasterFreeTime, avaliarDivergenciaHouseComClient } from '../freeTime/masterFreeTimeService';
 import { fatoMaterialBloqueadoPorFinal, lockProcesso } from '../closing/materialChangeGuard';
+import { abrirPendenciaComClient } from '../registro/pendencias';
+import { abrirPendenciaCronologia, FatosCronologia, resolverPendenciaCronologia, TipoCronologia, violacaoCronologia } from '../registro/cronologia';
+import { enfileirarAvisoPendenciaComClient } from '../registro/notificacaoPendencia';
+import { registrarTentativaEncontrada } from '../freeTime/freeTimeTentativas';
 
 function mapRow(row: any): Container {
   return {
@@ -47,7 +51,17 @@ const FIELD_COLUMNS: Record<ContainerObservableField, { valueColumn: string; obs
  * evento `FATO_MATERIAL_POS_FINAL` fica registrado e `exigeReabertura: true`
  * é devolvido (contrato canônico — D15-A v1.1, ver `materialChangeGuard.ts`).
  */
-export type ApplyObservationOutcome = 'promovida' | 'registrada_sem_promover' | 'bloqueada_final';
+/**
+ * Fase D15-B — dois novos desfechos, mesma forma de `bloqueada_final`
+ * (observação preservada no ledger, nunca promovida, até resolução):
+ *   `bloqueada_cronologia` (R08/R39/R40) — a data violaria a ordem de
+ *   eventos (Gate Out/Empty Return antes da descarga, ou Empty Return
+ *   antes do Gate Out) contra as datas JÁ selecionadas do contêiner;
+ *   `bloqueada_fallback_manual` (R07/31.4d) — uma fonte mais forte chegou
+ *   sobre um valor atualmente `manual_fallback`; abre divergência e notifica
+ *   a gestão em vez de substituir silenciosamente.
+ */
+export type ApplyObservationOutcome = 'promovida' | 'registrada_sem_promover' | 'bloqueada_final' | 'bloqueada_cronologia' | 'bloqueada_fallback_manual';
 
 export interface ApplyObservationInput {
   containerId: string;
@@ -245,9 +259,13 @@ export class ContainerRepository {
     const { rows: pr } = await client.query(`SELECT apuracao_status FROM processos WHERE id = $1 FOR UPDATE`, [processoId]);
     const apuracaoStatus: string | undefined = pr[0]?.apuracao_status;
 
-    // Passo 4 — relê e trava a linha do CONTÊINER.
+    // Passo 4 — relê e trava a linha do CONTÊINER. D15-B: lê TAMBÉM as três
+    // datas de cronologia (descarga, Gate Out, retorno de tracking) nesta
+    // MESMA consulta/lock — nenhuma consulta extra, nenhuma mudança de ordem.
     const { rows: cr } = await client.query(
-      `SELECT organization_id, ${columns.valueColumn} AS valor, ${columns.obsColumn} AS obs_id FROM containers WHERE id = $1 FOR UPDATE`,
+      `SELECT organization_id, ${columns.valueColumn} AS valor, ${columns.obsColumn} AS obs_id,
+              discharge_date, gate_out_date, tracking_return_date
+         FROM containers WHERE id = $1 FOR UPDATE`,
       [input.containerId],
     );
     const c = cr[0];
@@ -262,6 +280,29 @@ export class ContainerRepository {
       valor: input.valor, fonte: input.fonte, observadoEm: input.observadoEm, evidenciaRef: input.evidenciaRef, criadoPor: input.criadoPor,
     });
     const conflito = !criada && JSON.stringify(observacao.valor) !== JSON.stringify(input.valor);
+
+    // D15-B (R37) — conflito de MESMA fonte, MESMO instante, valor DIFERENTE:
+    // até aqui o fato ficava só no retorno (`conflitoMesmaFonte`), nunca
+    // persistido nem visível à gestão. Pendência nomeada, idempotente (uma
+    // aberta por processo/contêiner/tipo) — nunca resolvida automaticamente
+    // (exige revisão humana de qual das duas versões da fonte é a correta).
+    if (conflito) {
+      await abrirPendenciaComClient(client, input.organizationId, processoId, input.containerId, 'conflito_mesma_fonte', {
+        campo: input.campo, fonte: input.fonte, valorRegistrado: observacao.valor, valorConflitante: input.valor, observationId: observacao.id,
+      });
+    }
+
+    // D15-B (R05) — toda observação NOVA de House Free Time de uma fonte REAL
+    // (nunca `manual_fallback`, que é afirmação humana, não fonte consultada)
+    // é uma tentativa — registrada independentemente de vencer a promoção
+    // (uma fonte perdedora de prioridade ainda "foi consultada e tinha um
+    // valor"). Master Free Time tem o mesmo registro em `promoverMasterFreeTimeComClient`.
+    if (criada && input.campo === 'houseFreeTimeDays' && input.fonte !== 'manual_fallback') {
+      await registrarTentativaEncontrada(client, {
+        organizationId: input.organizationId, processoId, containerId: input.containerId, campo: 'houseFreeTimeDays',
+        fonte: input.fonte, valor: input.valor, observadoEm: input.observadoEm, evidenciaRef: input.evidenciaRef,
+      });
+    }
 
     // SÓ TESTE: injeta falha depois da observação persistida, antes de
     // qualquer decisão — prova que a transação inteira desfaz (nenhuma
@@ -285,17 +326,89 @@ export class ContainerRepository {
       };
     }
 
-    // Passo 6 — prioridade de fonte contra a seleção relida no passo 4.
-    // Reprocessar um fato IDÊNTICO ao já registrado mas NÃO selecionado
-    // (bloqueado por FINAL anteriormente, ou perdedor de prioridade) precisa
-    // refazer a mesma decisão, não pulá-la — senão um reenvio idempotente de
-    // um fato já bloqueado por FINAL relataria 'registrada_sem_promover' em
-    // vez de 'bloqueada_final' (v1.1, achado #1).
+    // Passo 6 — prioridade de fonte (e, D15-B/R41, recência DENTRO da mesma
+    // prioridade) contra a seleção relida no passo 4. Reprocessar um fato
+    // IDÊNTICO ao já registrado mas NÃO selecionado (bloqueado por FINAL
+    // anteriormente, ou perdedor de prioridade) precisa refazer a mesma
+    // decisão, não pulá-la — senão um reenvio idempotente de um fato já
+    // bloqueado por FINAL relataria 'registrada_sem_promover' em vez de
+    // 'bloqueada_final' (v1.1, achado #1).
     let promover = !conflito;
+    let fonteAtual: FieldObservationSource | undefined;
     if (promover && c.obs_id) {
-      const { rows: atual } = await client.query(`SELECT fonte FROM field_observations WHERE id = $1`, [c.obs_id]);
-      const fonteAtual = atual[0]?.fonte as FieldObservationSource | undefined;
-      if (fonteAtual) promover = FIELD_OBSERVATION_SOURCE_PRIORITY[input.fonte] >= FIELD_OBSERVATION_SOURCE_PRIORITY[fonteAtual];
+      const { rows: atual } = await client.query(`SELECT fonte, observado_em FROM field_observations WHERE id = $1`, [c.obs_id]);
+      fonteAtual = atual[0]?.fonte as FieldObservationSource | undefined;
+      if (fonteAtual) {
+        const prioridadeNova = FIELD_OBSERVATION_SOURCE_PRIORITY[input.fonte];
+        const prioridadeAtual = FIELD_OBSERVATION_SOURCE_PRIORITY[fonteAtual];
+        if (prioridadeNova < prioridadeAtual) {
+          promover = false;
+        } else if (prioridadeNova === prioridadeAtual) {
+          // D15-B (R41) — mesma autoridade: a mais NOVA (`observado_em`)
+          // vence. Uma observação mais ANTIGA chegando depois permanece no
+          // ledger (passo 5, já gravada), mas não substitui a mais nova já
+          // selecionada. Prioridade ESTRITAMENTE maior (ramo acima) sempre
+          // promove, recência aparte — regra inalterada.
+          const observadoEmAtual: Date = atual[0].observado_em;
+          promover = input.observadoEm >= observadoEmAtual;
+        }
+      }
+    }
+
+    // D15-B (R36) — conflito House-only: a fonte atualmente selecionada e a
+    // fonte da observação nova são AMBAS reais (nem uma é `manual_fallback`
+    // — isso é R07, bloco abaixo) e diferentes entre si. Informativo (nunca
+    // bloqueia a promoção decidida acima) — mesmo mecanismo de
+    // `ft_divergencias` do Master×SI, generalizado por campo/par de fontes
+    // (ver `avaliarDivergenciaHouseComClient`).
+    if (input.campo === 'houseFreeTimeDays' && fonteAtual && fonteAtual !== input.fonte && fonteAtual !== 'manual_fallback' && input.fonte !== 'manual_fallback') {
+      await avaliarDivergenciaHouseComClient(client, {
+        organizationId: input.organizationId, containerId: input.containerId, processoId, autor: `applyObservation:${input.fonte}`,
+        fonteA: input.fonte, fonteB: fonteAtual,
+      });
+    }
+
+    // D15-B (R08/R39/R40) — cronologia: só se aplica a Gate Out/retorno de
+    // tracking, e só quando a promoção venceria pela prioridade/recência
+    // acima. A observação bruta já está preservada (passo 5); aqui só se
+    // decide se ela pode se tornar o fato SELECIONADO.
+    let bloqueadoPorCronologia: TipoCronologia | null = null;
+    if (promover && (input.campo === 'gateOutDate' || input.campo === 'trackingReturnDate')) {
+      const fatos: FatosCronologia = { dischargeDate: c.discharge_date, gateOutDate: c.gate_out_date, trackingReturnDate: c.tracking_return_date };
+      const violacao = violacaoCronologia(input.campo, input.valor as string, fatos);
+      if (violacao) {
+        promover = false;
+        bloqueadoPorCronologia = violacao;
+        const pend = await abrirPendenciaCronologia(client, {
+          organizationId: input.organizationId, processoId, containerId: input.containerId, tipo: violacao,
+          campo: input.campo, valorNovo: input.valor as string, fatos, observationId: observacao.id,
+        });
+        // R08/31.5 — a mais grave das três: bloqueio explícito (ver
+        // `closingService.ts`) + notificação ATIVA à gestão. R39/R40 só
+        // bloqueiam a promoção (cronologia_pendencia já é visível à gestão
+        // via leitura de pendências — sem notificação ativa, conforme
+        // escopo fixado para estes dois).
+        if (violacao === 'retorno_vazio_antes_descarga' && pend.id) {
+          await enfileirarAvisoPendenciaComClient(client, input.organizationId, pend.id);
+        }
+      }
+    }
+
+    // D15-B (R07/31.4d) — o valor VIGENTE veio de `manual_fallback` e uma
+    // fonte REAL (não outro fallback manual) venceria a promoção com um
+    // valor MATERIALMENTE diferente: não substitui diretamente — abre
+    // divergência nomeada e notifica a gestão, preservando o valor manual
+    // até decisão humana. Avaliado DEPOIS da cronologia (uma violação de
+    // cronologia é sempre a razão de bloqueio mais específica quando ambas
+    // se aplicariam ao mesmo valor).
+    let bloqueadoPorFallbackManual = false;
+    if (promover && fonteAtual === 'manual_fallback' && input.fonte !== 'manual_fallback' && JSON.stringify(c.valor) !== JSON.stringify(input.valor)) {
+      promover = false;
+      bloqueadoPorFallbackManual = true;
+      const pend = await abrirPendenciaComClient(client, input.organizationId, processoId, input.containerId, 'fallback_manual_superado', {
+        campo: input.campo, valorManual: c.valor, valorNovo: input.valor, fonteNova: input.fonte, observationId: observacao.id,
+      });
+      if (pend.id) await enfileirarAvisoPendenciaComClient(client, input.organizationId, pend.id);
     }
 
     // Passo 7 — status já relido sob lock (passo 3): promove OU bloqueia+registra.
@@ -314,6 +427,14 @@ export class ContainerRepository {
           `UPDATE containers SET ${columns.valueColumn} = $2, ${columns.obsColumn} = $3, atualizado_em = now() WHERE id = $1`,
           [input.containerId, input.valor, observacao.id],
         );
+        // D15-B — a promoção de Gate Out/retorno passou pela cronologia:
+        // resolve a pendência correspondente deste contêiner, se havia uma
+        // aberta (o fato que a abriu deixou de se aplicar a este campo).
+        if (input.campo === 'gateOutDate') await resolverPendenciaCronologia(client, processoId, input.containerId, 'cronologia_gate_out_antes_descarga');
+        if (input.campo === 'trackingReturnDate') {
+          await resolverPendenciaCronologia(client, processoId, input.containerId, 'retorno_vazio_antes_descarga');
+          await resolverPendenciaCronologia(client, processoId, input.containerId, 'cronologia_retorno_antes_gate_out');
+        }
       }
     }
     // Chegar aqui com `!criada` só acontece quando NÃO é o caso "já
@@ -321,7 +442,10 @@ export class ContainerRepository {
     // (`criada`), ou é um conflito de mesma fonte (nunca promove
     // silenciosamente — `promover` já é `false` desde o passo 6).
     return {
-      outcome: bloqueadoPorFinal ? 'bloqueada_final' : promover ? 'promovida' : 'registrada_sem_promover',
+      outcome: bloqueadoPorFinal ? 'bloqueada_final'
+        : bloqueadoPorCronologia ? 'bloqueada_cronologia'
+        : bloqueadoPorFallbackManual ? 'bloqueada_fallback_manual'
+        : promover ? 'promovida' : 'registrada_sem_promover',
       exigeReabertura: bloqueadoPorFinal,
       observationId: observacao.id, criada,
       valorAnterior: c.valor, valorSelecionado: promover ? input.valor : c.valor, conflitoMesmaFonte: conflito,

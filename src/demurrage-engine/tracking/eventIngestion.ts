@@ -1,5 +1,5 @@
 import { Pool } from 'pg';
-import { ContainerRepository } from '../persistence/containerRepository';
+import { ApplyObservationOutcome, ContainerRepository } from '../persistence/containerRepository';
 import { FieldObservationRepository } from '../persistence/fieldObservationRepository';
 import { TrackingRepository, TipoEvento, FetchStatus } from '../persistence/trackingRepository';
 import { TrackingTargetRepository, TrackingTarget } from '../persistence/trackingTargetRepository';
@@ -73,8 +73,8 @@ export interface PromocaoAplicada {
   containerId: string;
   campo: string;
   valor: unknown;
-  /** Fase D15-A: 'bloqueada_final' = fato material recebido para processo FINAL (preservado, não promovido, exige reabertura). */
-  outcome: 'promovida' | 'registrada_sem_promover' | 'evidencia' | 'ignorada' | 'bloqueada_final';
+  /** Fase D15-A: 'bloqueada_final' = fato material recebido para processo FINAL (preservado, não promovido, exige reabertura). Fase D15-B: 'bloqueada_cronologia'/'bloqueada_fallback_manual' — ver `ApplyObservationOutcome`. */
+  outcome: ApplyObservationOutcome | 'evidencia' | 'ignorada';
   /** Campo canônico (D15-A v1.1, achado #3): true somente quando `outcome === 'bloqueada_final'`. */
   exigeReabertura: boolean;
 }
