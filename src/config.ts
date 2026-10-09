@@ -189,7 +189,11 @@ export const config = {
     // datas (o portal dá a data real quando raspamos). Encerrado = nunca mais raspa.
     transitTtlMs:
       parseInt(process.env.BOT_TRANSIT_TTL_HOURS || '72', 10) * 60 * 60 * 1000,
-    concurrency: Math.max(1, parseInt(process.env.BOT_CONCURRENCY || '2', 10)),
+    // Concorrência do lote. Default 1 (SEQUENCIAL): sessões residential lentas do
+    // Scrapfly, rodando em paralelo no plano Discovery, degradam e NÃO renderizam a
+    // SPA a tempo (render "magro"). Uma por vez = cada sessão com recurso total =
+    // confiável (como os testes single, que funcionaram). Subir só com plano maior.
+    concurrency: Math.max(1, parseInt(process.env.BOT_CONCURRENCY || '1', 10)),
     maxBatch: Math.max(1, parseInt(process.env.BOT_MAX_BATCH || '10', 10)),
   },
   /**

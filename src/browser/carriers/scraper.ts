@@ -183,22 +183,25 @@ export async function scrapeCarrier(
     }
 
     // Caminho GENÉRICO: até 2 tentativas, cada uma numa SESSÃO NOVA (IP/fingerprint
-    // novo do Scrapfly). Só REINTENTA quando o resultado parece TRANSITÓRIO (veio
-    // vazio, sem captcha) — bloqueio temporário/rate-limit costuma ceder com IP
-    // novo (foi o caso da Yang Ming). Sucesso OU parede de captcha param na hora,
-    // sem gastar sessão extra (economia de crédito).
+    // novo do Scrapfly). REINTENTA quando o resultado parece TRANSITÓRIO — sessão
+    // residential lenta que NÃO terminou de renderizar a SPA (render "magro"): a
+    // página volta quase vazia (uns poucos milhares de chars) e sem evento. Uma
+    // sessão nova costuma pegar um IP melhor e renderizar (foi o caso ONE/MSC/
+    // Evergreen no lote). Sucesso (ok=true) OU parede de captcha param na hora.
     const maxAttempts = 2;
+    // Abaixo deste tamanho de texto, SEM evento e SEM captcha, consideramos que a
+    // página não renderizou de verdade (um rastreio real rende >> isto). Uma página
+    // bem renderizada (com ou sem resultado) passa folgado de 3000 chars.
+    const THIN_RENDER_CHARS = 3000;
     let partial: Partial<TrackingResult> = {};
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       partial = await runner(async (page) => genericScrape(page, ctx, sourceUrl));
-      // Só reintenta em falha TRANSITÓRIA — quando a página nem carregou (bloqueio/
-      // IP, `raw` vazio/curto). Se a página CARREGOU mas o parser não extraiu
-      // (raw com conteúdo), reintentar NÃO resolve e gastaria outra sessão (cara,
-      // ~140 créditos) à toa — para na hora. Sucesso e captcha também param.
+      const rawLen = partial.raw ? partial.raw.trim().length : 0;
+      // Reintenta se: não deu certo, não é captcha, e o texto veio MAGRO (render
+      // degradado). Se a página renderizou cheia mas o parser não extraiu (raw
+      // grande), reintentar não ajuda — para (a IA cuida disso no trackShipment).
       const transitorio =
-        !partial.ok &&
-        !partial.needsCaptcha &&
-        (!partial.raw || partial.raw.trim().length < 200);
+        !partial.ok && !partial.needsCaptcha && rawLen < THIN_RENDER_CHARS;
       if (!transitorio) break;
     }
     return { ...base, ...partial };
