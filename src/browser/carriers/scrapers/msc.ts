@@ -1,5 +1,6 @@
 import { TrackingEvent } from '../types';
 import { classifyEvent } from '../eventTypes';
+import { stripTags } from './hapag';
 
 /**
  * Priora — Parser DEDICADO da MSC (msc.com/track-a-shipment).
@@ -97,4 +98,84 @@ export function extractMscEvents(apiJson: string): TrackingEvent[] {
     }
   }
   return out;
+}
+
+/**
+ * Assinatura do DOM da MSC: o componente Alpine `msc-flow-tracking` (exclusivo do
+ * portal). Usada pelo despachante — nunca a palavra "MSC" (aparece em navio de BL
+ * de outros armadores).
+ */
+export const MSC_DOM_RE = /msc-flow-tracking__/;
+
+/**
+ * Parser do DOM RENDERIZADO da MSC — reserva para quando o JSON da API não chega.
+ *
+ * Visto ao vivo (MEDUY6394819, 10/10): o JSON interno não foi capturado da rede e
+ * os eventos só vinham pela IA. Mas o Alpine deixa, em cada valor renderizado, o
+ * NOME do campo no atributo `x-text` — um contrato mais estável que classe CSS:
+ *   container.ContainerNumber / container.ContainerType  → contêiner e tipo
+ *   event.Date (DD/MM/AAAA) → abre um evento novo
+ *   …(event.Location) / event.Description / eventDetailsLabel(event.Detail)
+ * Os <template> (o Alpine os mantém no DOM, por isso a página tem ~800 KB) têm os
+ * mesmos atributos com texto VAZIO — só valores preenchidos contam. Ignora
+ * `container.PodEtaDate` (ETA = previsão).
+ */
+export function extractMscDomEvents(html: string): TrackingEvent[] {
+  const out: TrackingEvent[] = [];
+  if (!MSC_DOM_RE.test(html)) return out;
+
+  const tokenRe = /x-text="([^"]+)"[^>]*>([^<]*)</g;
+  let container: string | null = null;
+  let tipo: string | null = null;
+  let cur: { date: string | null; status: string; location: string | null; detail: string | null } | null = null;
+
+  const flush = () => {
+    if (cur && cur.date && cur.status) {
+      // "EMPTY"/"LADEN" é o estado do contêiner, não navio; o resto é navio/viagem.
+      const vessel = cur.detail && !/^(laden|empty)$/i.test(cur.detail) ? cur.detail : null;
+      out.push({
+        date: cur.date,
+        status: cur.status,
+        location: cur.location,
+        vessel,
+        voyage: null,
+        type: classifyEvent(cur.status),
+        container,
+        tipo,
+      });
+    }
+    cur = null;
+  };
+
+  let m: RegExpExecArray | null;
+  while ((m = tokenRe.exec(html))) {
+    const field = m[1];
+    const value = stripTags(m[2]);
+    if (!value) continue; // template (não renderizado)
+    if (field === 'container.ContainerNumber') {
+      flush();
+      container = value.toUpperCase();
+      tipo = null;
+    } else if (field === 'container.ContainerType') {
+      tipo = value;
+    } else if (field === 'event.Date') {
+      flush();
+      cur = { date: mscDateToISO(value), status: '', location: null, detail: null };
+    } else if (cur && /\bevent\.Location\b/.test(field)) {
+      cur.location = value;
+    } else if (cur && field === 'event.Description') {
+      cur.status = value;
+    } else if (cur && /eventDetailsLabel\(event\.Detail\)/.test(field)) {
+      cur.detail = value;
+    }
+  }
+  flush();
+  // Mesmo contêiner pode ser renderizado 2× (layout de impressão/responsivo).
+  const seen = new Set<string>();
+  return out.filter((e) => {
+    const k = `${e.container}|${e.date}|${e.status}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
 }

@@ -12,6 +12,8 @@ import { robustClick } from './pageUtils';
  *    histórico DCSA completo (descarga 25/09, retirada 29/09, devolução 30/09).
  *  - Evergreen: `javascript:frmCntrMoveDetail('EGSU8138081')` abre o popup
  *    "Container Move Detail" com 12 eventos, da origem à devolução.
+ *  - ONE (site novo): clique no nº do contêiner no resumo abre o histórico
+ *    (EventTable) na própria página.
  *
  * O coletor roda DEPOIS de o resumo ser capturado (o motor já guardou o HTML
  * dele), então pode navegar a própria aba. Teto de contêineres por BL para não
@@ -174,7 +176,97 @@ const shipmentlink: DetailCollector = {
   },
 };
 
-export const DETAIL_COLLECTORS: DetailCollector[] = [yangming, shipmentlink];
+/**
+ * Roda NA PÁGINA da ONE: devolve o HTML do bloco de histórico (EventTable) que
+ * pertence a `container`, ou null se ainda não abriu / se for ambíguo.
+ * Pertencer = o bloco vem DEPOIS da linha do contêiner e ANTES da linha seguinte
+ * (detalhe expandido abaixo da linha). Se a linha sumiu (o detalhe substituiu a
+ * tabela) e só há UM bloco na tela, é ele. Mais de um bloco sem posição clara →
+ * null: melhor ficar com o evento do resumo do que atribuir histórico errado.
+ */
+function grabOneDetail(container: string): string | null {
+  const rows = Array.from(document.querySelectorAll('[data-testid="tnt-cargo-tracking-table-row"]'));
+  let groups = Array.from(document.querySelectorAll('[class*="CargoTrackingDetail_event-group"]'));
+  if (groups.length === 0) groups = Array.from(document.querySelectorAll('#event-table-container-id'));
+  const withRows = groups.filter((g) => g.querySelector('tr[data-testid="tnt-cop-event-row"]'));
+  if (withRows.length === 0) return null;
+  const row = rows.find((r) => (r.textContent || '').includes(container));
+  if (row) {
+    const next = rows[rows.indexOf(row) + 1];
+    const between = withRows.filter(
+      (g) =>
+        Boolean(row.compareDocumentPosition(g) & Node.DOCUMENT_POSITION_FOLLOWING) &&
+        (!next || Boolean(g.compareDocumentPosition(next) & Node.DOCUMENT_POSITION_FOLLOWING)),
+    );
+    if (between.length) return between[0].outerHTML;
+  }
+  return withRows.length === 1 ? withRows[0].outerHTML : null;
+}
+
+const one: DetailCollector = {
+  id: 'one',
+  match: (u) => /one-line\.com/i.test(u),
+  /**
+   * Site novo da ONE (visto ao vivo em 10/10, BL NB6IAM548300 com 2 contêineres):
+   * a página abre no RESUMO (1 linha por contêiner, só o último evento). Clicar no
+   * nº do contêiner (span "TextUnderLine") abre o histórico completo — validado
+   * com clique por JS. Para cada contêiner: clica, espera o bloco dele aparecer e
+   * guarda SÓ esse bloco (os eventos herdam o nº). Se a tabela do resumo sumir
+   * depois do clique, tenta voltar; não voltando, os demais ficam com o resumo.
+   */
+  collect: async (page) => {
+    const ROW = '[data-testid="tnt-cargo-tracking-table-row"]';
+    const LINK = `${ROW} [class*="container-number-cell"] [class*="TextUnderLine"]`;
+    const containers: string[] = await page
+      .$$eval(LINK, (els) => els.map((e) => ((e.textContent || '').match(/[A-Z]{4}\d{7}/) || [''])[0]))
+      .then((xs) => Array.from(new Set(xs.filter(Boolean))).slice(0, MAX_DETAILS))
+      .catch(() => []);
+    const pages: DetailPage[] = [];
+    const log: string[] = [];
+    const t0 = Date.now();
+    for (const container of containers) {
+      if (!withinBudget(t0)) {
+        log.push(`${container}: orçamento de tempo esgotado`);
+        break;
+      }
+      let link = page.locator(LINK, { hasText: container });
+      if ((await link.count().catch(() => 0)) === 0) {
+        // O detalhe anterior pode ter substituído a tabela: tenta voltar ao resumo.
+        await page.goBack({ waitUntil: 'domcontentloaded', timeout: 20_000 }).catch(() => undefined);
+        await page.waitForSelector(ROW, { timeout: 15_000 }).catch(() => undefined);
+        link = page.locator(LINK, { hasText: container });
+        if ((await link.count().catch(() => 0)) === 0) {
+          log.push(`${container}: link não está na tela (resumo não voltou)`);
+          break;
+        }
+      }
+      const click = await robustClick(link, 8000);
+      if (!click.ok) {
+        log.push(`${container}: clique falhou`);
+        continue;
+      }
+      const opened = await page
+        .waitForFunction(grabOneDetail, container, { timeout: 20_000 })
+        .then(() => true)
+        .catch(() => false);
+      if (!opened) {
+        log.push(`${container}: histórico não abriu (clique ${click.method})`);
+        continue;
+      }
+      await page.waitForTimeout(1200); // folga p/ terminar de hidratar as linhas
+      const html = await page.evaluate(grabOneDetail, container).catch(() => null);
+      if (html) {
+        pages.push({ container, url: page.url(), html: `<html><body>${html}</body></html>` });
+        log.push(`${container}: ok (${click.method})`);
+      } else {
+        log.push(`${container}: bloco do histórico ambíguo — ficou o resumo`);
+      }
+    }
+    return { pages, log };
+  },
+};
+
+export const DETAIL_COLLECTORS: DetailCollector[] = [yangming, shipmentlink, one];
 
 /** Coletor de detalhe para a página de resultado, se o portal tiver um. */
 export function findDetailCollector(url: string): DetailCollector | undefined {

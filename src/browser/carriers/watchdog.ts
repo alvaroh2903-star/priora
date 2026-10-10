@@ -33,6 +33,7 @@ export type CarrierHealth =
   | 'healthy' // parser dedicado extraiu eventos — tudo certo
   | 'degraded_ai' // extraiu, mas via IA (parser dedicado não reconheceu) → cravar parser
   | 'stale_ref' // portal respondeu SEM dados p/ o canário (BL expirado) → renovar ref
+  | 'maintenance' // portal avisou MANUTENÇÃO programada → só esperar a volta
   | 'captcha' // parede de CAPTCHA
   | 'thin' // render "magro" (página voltou quase vazia) — transitório de infra
   | 'broken' // renderizou mas NEM parser NEM IA extraíram → INVESTIGAR layout
@@ -48,6 +49,7 @@ const SEVERITY_OF: Record<CarrierHealth, Severity> = {
   blocked_by_design: 'ok', // esperado e estável — não é regressão
   degraded_ai: 'warn',
   stale_ref: 'warn',
+  maintenance: 'warn',
   captcha: 'warn',
   thin: 'warn',
   no_ref: 'warn',
@@ -170,6 +172,14 @@ export function classifyHealth(
     return {
       health: 'captcha',
       action: 'Portal apresentou CAPTCHA. Se recorrente: avaliar Unblock/anti-captcha ou API oficial.',
+    };
+  }
+
+  if (result.portalMaintenance) {
+    const until = result.portalMaintenance.until;
+    return {
+      health: 'maintenance',
+      action: `Portal em MANUTENÇÃO programada${until ? ` (volta prevista: ${until})` : ''} — nada a corrigir; retestar depois.`,
     };
   }
 

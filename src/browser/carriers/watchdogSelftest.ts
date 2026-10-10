@@ -1,6 +1,7 @@
 import { classifyHealth, overallSeverity, parseSeedEnv, CarrierHealth } from './watchdog';
 import { getCarrier } from './registry';
 import { CarrierMeta, TrackingResult } from './types';
+import { detectMaintenance } from './maintenance';
 
 /**
  * Priora — Self-test OFFLINE da camada 3 (watchdog). Puro (sem navegador/rede):
@@ -133,6 +134,20 @@ check('vazio => {}', JSON.stringify(parseSeedEnv('')) === '{}');
 check('JSON inválido => {}', JSON.stringify(parseSeedEnv('{nope')) === '{}');
 check('array => {}', JSON.stringify(parseSeedEnv('["a"]')) === '{}');
 check('valor não-string ignorado', JSON.stringify(parseSeedEnv('{"maersk":1,"msc":"ok"}')) === JSON.stringify({ msc: 'ok' }));
+
+console.log('[selftest] manutenção do portal (texto REAL da Hapag, 10/10)');
+const HAPAG_FR =
+  "Passer au contenu principal Your cargo, our promise. D'accueil Services et informations Online Business Suite Track Traçage par conteneur En raison d’une courte maintenance, nos services Online Business ne sont pas disponibles pour le moment. Ils devraient être disponibles à 21:30 UTC (2026-10-10). En cliquant sur « Accepter tous les cookies »";
+const mFr = detectMaintenance(HAPAG_FR);
+check('Hapag em francês → manutenção', mFr !== null);
+check('volta prevista "21:30 UTC (2026-10-10)"', mFr?.until === '21:30 UTC (2026-10-10)', String(mFr?.until));
+const mEn = detectMaintenance('Due to a short maintenance, our Online Business services are currently not available. They should be available again at 21:30 UTC (2026-10-10).');
+check('mesma mensagem em inglês → manutenção', mEn?.until === '21:30 UTC (2026-10-10)', String(mEn?.until));
+check('menu "Container maintenance & repair" NÃO é aviso', detectMaintenance('Services Container maintenance & repair Reefer Schedules Tracking Contact') === null);
+check('português "em manutenção … indisponível"', detectMaintenance('Sistema em manutenção. O rastreio está indisponível no momento.') !== null);
+const hm = classifyHealth(getCarrier('hapag') as CarrierMeta, mkResult({ portalMaintenance: { until: '21:30 UTC (2026-10-10)' }, message: 'x' }));
+check('watchdog: portalMaintenance → maintenance (não "thin"/"broken")', hm.health === 'maintenance', hm.health);
+check('watchdog: ação cita a volta prevista', /21:30 UTC/.test(hm.action), hm.action);
 
 console.log('');
 if (fail === 0) {

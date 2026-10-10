@@ -1,4 +1,5 @@
-import { extractMscEvents, mscDateToISO } from './msc';
+import { extractMscEvents, extractMscDomEvents, mscDateToISO } from './msc';
+import { extractCarrierEvents } from './dispatch';
 import { deriveContainers } from './hapag';
 
 /**
@@ -67,6 +68,38 @@ function check(label: string, cond: boolean, got?: unknown) {
   }
 }
 
+// DOM RENDERIZADO real da MSC (BL MEDUY6394819, contêiner MSBU2100146, capturado
+// em 10/10/2026): o JSON não veio da rede. Valores e atributos x-text reais; os
+// <template> do Alpine (mesmos atributos, texto VAZIO) ficam entre os valores —
+// a página real tem ~800 KB disso. Eventos vêm do mais novo para o mais antigo.
+const tpl = (field: string) => `<template x-for="x in y"><span class="data-value" x-text="${field}"></span></template>`;
+const DOM_REAL = `<div class="msc-flow-tracking separator--bottom-medium " x-data="mscFlowTracking()" data-api-url="/api/feature/tools/TrackingInfo">
+${tpl('container.ContainerNumber')}${tpl('event.Date')}${tpl('event.Description')}
+<span class="msc-flow-tracking__details-value" x-text="getContainerNumber()">MSBU2100146</span>
+<span class="msc-flow-tracking__details-value" x-text="result.BillOfLadingNumber">MEDUY6394819</span>
+<span class="msc-flow-tracking__details-value" x-text="convertToSentenceCaseLocation(result.GeneralTrackingInfo.PortOfDischarge)">Manaus, BR</span>
+<div class="msc-flow-tracking__container" x-data="mscFlowTrackingContainer()">
+<div class="msc-flow-tracking__bar open complete"><span class="data-value" x-text="container.ContainerNumber">MSBU2100146</span>
+<span class="data-value" x-text="container.ContainerType">20' DRY VAN</span>
+<span class="data-value" x-text="container.LatestMove">MANAUS, BR</span>
+<span class="data-value" x-text="container.PodEtaDate"></span></div>
+<div class="msc-flow-tracking__steps">${tpl('event.Date')}${tpl('convertToSentenceCaseLocation(event.Location)')}
+<div class="msc-flow-tracking__port"><div class="msc-flow-tracking__step msc-flow-tracking__step--yellow">
+<span class="data-value" x-text="event.Date">29/09/2026</span>
+<span class="data-value text-capitalize" x-text="convertToSentenceCaseLocation(event.Location)">Manaus,  BR</span>
+<span class="data-value" x-text="event.Description">Empty received at CY</span>
+${tpl('eventDetailsLabel(event.Detail)')}<span x-text="eventDetailsLabel(event.Detail)">EMPTY</span>
+<span class="data-value text-capitalize" x-text="convertToSentenceCase(event.EquipmentHandling.Name)">Super terminais comercio e industria ltda - empty depot</span>
+<span class="data-tooltip-value" x-text="event.EquipmentHandling.Bic">BRMAOQSPX</span></div></div>
+<div class="msc-flow-tracking__port"><div class="msc-flow-tracking__step msc-flow-tracking__step--yellow">
+<span class="data-value" x-text="event.Date">24/09/2026</span>
+<span class="data-value text-capitalize" x-text="convertToSentenceCaseLocation(event.Location)">Manaus,  BR</span>
+<span class="data-value" x-text="event.Description">Import to consignee</span>
+<span x-text="eventDetailsLabel(event.Detail)">LADEN</span>
+<span class="data-value text-capitalize" x-text="convertToSentenceCase(event.EquipmentHandling.Name)">Super terminais</span>
+<span class="data-tooltip-value" x-text="event.EquipmentHandling.Smdg">SUPER</span></div></div>
+</div></div></div>`;
+
 function main(): void {
   console.log('[selftest] mscDateToISO — formato DD/MM/YYYY');
   check('06/09/2026 → 2026-09-06', mscDateToISO('06/09/2026') === '2026-09-06', mscDateToISO('06/09/2026'));
@@ -103,6 +136,19 @@ function main(): void {
   const delivered = cs.find((c) => c.numero === 'MEDU1234567');
   check('MEDU: dischargeDate 2026-08-12 (destino, não T/S)', delivered?.dischargeDate === '2026-08-12', delivered?.dischargeDate);
   check('MEDU: emptyReturn 2026-08-20', delivered?.emptyReturn === '2026-08-20', delivered?.emptyReturn);
+
+  console.log('[selftest] extractMscDomEvents — DOM renderizado (JSON não veio da rede)');
+  const dom = extractMscDomEvents(DOM_REAL);
+  console.log('    eventos:', JSON.stringify(dom.map((e) => `${e.container} ${e.date} ${e.type} ${e.status} @${e.location} [${e.tipo}] ${e.vessel}`)));
+  check('2 eventos (templates vazios ignorados)', dom.length === 2, dom.length);
+  check('amarrados ao contêiner MSBU2100146 / tipo 20\' DRY VAN', dom.every((e) => e.container === 'MSBU2100146' && e.tipo === "20' DRY VAN"));
+  check('"Import to consignee" 24/09 → gate_out', dom.some((e) => e.date === '2026-09-24' && e.type === 'gate_out'));
+  check('"Empty received at CY" 29/09 → empty_return', dom.some((e) => e.date === '2026-09-29' && e.type === 'empty_return'));
+  check('local limpo ("Manaus, BR")', dom.every((e) => e.location === 'Manaus, BR'), dom[0]?.location);
+  check('EMPTY/LADEN não viram navio', dom.every((e) => e.vessel === null));
+  check('despachante usa o DOM quando não há JSON', extractCarrierEvents(DOM_REAL).length === 2);
+  const [dc] = deriveContainers(dom, null);
+  check('retirada 24/09 e devolução 29/09', dc?.gateOut === '2026-09-24' && dc?.emptyReturn === '2026-09-29', dc);
 
   console.log('[selftest] guarda — JSON inválido / não-MSC → vazio');
   check('JSON inválido → 0 eventos', extractMscEvents('{nope').length === 0);

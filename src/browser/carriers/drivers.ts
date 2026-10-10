@@ -70,7 +70,12 @@ export const CARRIER_DRIVERS: CarrierDriver[] = [
         filled: r.filled,
         apiJson: r.apiJson,
         diag: r.filled
-          ? { driver: 'msc', apiJsonCaptured: Boolean(r.apiJson), apiJsonLen: r.apiJson?.length || 0 }
+          ? {
+              driver: 'msc',
+              apiJsonCaptured: Boolean(r.apiJson),
+              apiJsonLen: r.apiJson?.length || 0,
+              apiJsonSource: r.source ?? null,
+            }
           : undefined,
       };
     },

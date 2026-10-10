@@ -101,6 +101,12 @@ export interface TrackingResult {
    * que recebeu? quantos eventos extraiu? erro? Só p/ depuração (ex.: /health/track).
    */
   aiDiag?: { tried: boolean; rawLen: number; events: number; error: string | null };
+  /**
+   * O portal está em MANUTENÇÃO (aviso detectado na página — ver
+   * carriers/maintenance). Não é falha do scraper nem do número: não reintenta na
+   * hora nem chama a IA. `until` = volta prevista informada pelo portal.
+   */
+  portalMaintenance?: { until: string | null };
   fetchedAt: string;
 }
 

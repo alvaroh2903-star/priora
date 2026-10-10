@@ -1,4 +1,5 @@
 import { Page, BrowserContext } from 'playwright';
+import { detectMaintenance, maintenanceMessage } from './maintenance';
 import { CarrierMeta, ReferenceType, TrackingResult } from './types';
 import { PortalScraper, ScrapeContext } from './scraperTypes';
 import { resolveTrackingUrl, resolveSearchRef } from './registry';
@@ -76,6 +77,12 @@ async function genericScrape(
   // diagnóstico honesto. Janela GENEROSA (30k): o rastreio costuma vir DEPOIS do
   // menu/nav no texto — cortar em 4k deixava a IA sem o dado. Só é preenchido na
   // FALHA do parser (em regime normal, raw fica vazio → sem custo de cache).
+  // Manutenção anunciada pelo portal: não é layout novo nem BL inválido — sem
+  // texto cru (a IA não tem o que achar) e sem nova sessão agora.
+  const maint = detectMaintenance(driven.textContent);
+  if (maint) {
+    return { needsCaptcha, needsLogin, ok: false, portalMaintenance: maint, message: maintenanceMessage(maint) };
+  }
   const raw = driven.textContent.slice(0, 30000);
   const mentionsRef = raw.toUpperCase().includes(ctx.reference.toUpperCase());
   // Resposta do portal que NÃO é defeito nosso: referência inválida/expirada, sem
@@ -206,7 +213,7 @@ export async function scrapeCarrier(
       // degradado). Se a página renderizou cheia mas o parser não extraiu (raw
       // grande), reintentar não ajuda — para (a IA cuida disso no trackShipment).
       const transitorio =
-        !partial.ok && !partial.needsCaptcha && rawLen < THIN_RENDER_CHARS;
+        !partial.ok && !partial.needsCaptcha && !partial.portalMaintenance && rawLen < THIN_RENDER_CHARS;
       if (!transitorio) break;
     }
     return { ...base, ...partial };

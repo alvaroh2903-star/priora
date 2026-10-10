@@ -20,6 +20,8 @@ export interface ScrapeOutput {
   needsCaptcha?: boolean;
   ok?: boolean;
   message?: string;
+  /** Aviso de manutenção do portal (ver carriers/maintenance). */
+  portalMaintenance?: { until: string | null };
 }
 
 /**

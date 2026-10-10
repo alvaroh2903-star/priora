@@ -97,7 +97,7 @@ async function trackShipmentRaw(
   // (navegador JÁ FECHADO → não gasta crédito Scrapfly) e passa pelo MESMO pipeline
   // validado (deriveContainers) dos parsers dedicados. É o que evita "API em
   // manutenção" quando um armador troca o site.
-  if (opts.aiFallback !== false && scraped.events.length === 0 && scraped.raw) {
+  if (opts.aiFallback !== false && scraped.events.length === 0 && scraped.raw && !scraped.portalMaintenance) {
     let aiEvents: TrackingResult['events'] = [];
     let aiError: string | null = null;
     try {

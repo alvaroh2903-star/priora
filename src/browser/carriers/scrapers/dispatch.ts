@@ -2,14 +2,14 @@ import { TrackingEvent } from '../types';
 import { dropFutureEvents } from '../estimates';
 import { extractEventsFromHtml as extractHapagOrGeneric } from './hapag';
 import { extractMaerskEvents } from './maersk';
-import { extractOneEvents } from './one';
+import { extractOneEvents, extractOneSummaryEvents, ONE_SUMMARY_RE } from './one';
 import { extractCoscoEvents } from './cosco';
 import { extractPilEvents } from './pil';
 import { extractOoclEvents, OOCL_PORTAL_RE } from './oocl';
 import { extractCmaEvents } from './cma';
 import { extractHmmEvents } from './hmm';
 import { extractEvergreenEvents } from './evergreen';
-import { extractMscEvents } from './msc';
+import { extractMscEvents, extractMscDomEvents, MSC_DOM_RE } from './msc';
 import { extractYangMingEvents, extractYangMingDetailEvents, isYangMingDetailPage } from './yangming';
 
 /**
@@ -31,6 +31,11 @@ export function extractCarrierEvents(html: string, apiJson?: string): TrackingEv
     const m = extractMscEvents(apiJson);
     if (m.length) return m;
   }
+  // MSC sem o JSON (não veio da rede): DOM renderizado do componente Alpine.
+  if (MSC_DOM_RE.test(html)) {
+    const md = extractMscDomEvents(html);
+    if (md.length) return md;
+  }
   // Maersk — transport plan (<li class="transport-plan__list__item">).
   if (/transport-plan__list__item/i.test(html)) {
     const m = extractMaerskEvents(html);
@@ -40,6 +45,12 @@ export function extractCarrierEvents(html: string, apiJson?: string): TrackingEv
   if (/EventTable_table-row/i.test(html)) {
     const o = extractOneEvents(html);
     if (o.length) return o;
+  }
+  // ONE (site novo) — resumo: 1 linha por contêiner com o último evento. O
+  // histórico vem das páginas de detalhe (coletor `one`).
+  if (ONE_SUMMARY_RE.test(html)) {
+    const os = extractOneSummaryEvents(html);
+    if (os.length) return os;
   }
   // ORDEM: assinaturas de DOM/domínio EXCLUSIVAS do portal vêm ANTES de qualquer
   // teste por NOME de armador. Nome de armador aparece em página de OUTRO armador

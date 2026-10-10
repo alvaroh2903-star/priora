@@ -81,3 +81,48 @@ export function extractOneEvents(html: string): TrackingEvent[] {
   }
   return dedupe(out);
 }
+
+/** Assinatura do RESUMO da ONE (site novo): uma linha por contêiner. */
+export const ONE_SUMMARY_RE = /data-testid="tnt-cargo-tracking-table-row"/;
+
+/**
+ * RESUMO do site novo da ONE (www.one-line.com, visto ao vivo em 10/10 no BL
+ * NB6IAM548300): a página abre numa tabela com UMA linha por contêiner — Booking
+ * Ref | Container No. (+ tipo) | Latest Place | Latest Event Status/Time | POD/
+ * Vessel Arrival | Seal | PO. O histórico só aparece ao clicar no contêiner (ver
+ * detailCollectors: `one`). Sem este parser a ONE caía na IA ("degraded_ai").
+ *
+ * Emite o ÚLTIMO evento de cada contêiner (o "Latest Event"). A coluna "POD/
+ * Vessel Arrival" é a CHEGADA PREVISTA (ETA) — previsão, fica de fora.
+ */
+export function extractOneSummaryEvents(html: string): TrackingEvent[] {
+  const out: TrackingEvent[] = [];
+  const parts = html.split(/data-testid="tnt-cargo-tracking-table-row"/).slice(1);
+  for (const part of parts) {
+    // Células na ordem da tabela; a linha de detalhe (row-detail) que vem depois
+    // não tem role="cell", então não desloca as colunas.
+    const cells = part.split(/role="cell"/).slice(1);
+    if (cells.length < 4) continue;
+    const cm = cells[1].match(/TextUnderLine[^>]*>\s*([A-Z]{4}\d{7})\s*</);
+    if (!cm) continue;
+    const container = cm[1];
+    const tipoM = cells[1].match(/flex-shrink-0[^>]*>([^<]+)</);
+    const locM = cells[2].match(/tnt-place-location-name-\d+"[^>]*>([^<]+)</);
+    const statusM = cells[3].match(/<div[^>]*>([^<]+)<\/div>/);
+    const dateM = cells[3].match(/EventDate_event-date-container[^>]*>\s*<span>([^<]+)<\/span>/);
+    const status = statusM ? stripTags(statusM[1]) : '';
+    const date = dateM ? parseDateToISO(stripTags(dateM[1])) : null;
+    if (!status || !date) continue;
+    out.push({
+      date,
+      status,
+      location: locM ? stripTags(locM[1]) || null : null,
+      vessel: null,
+      voyage: null,
+      type: classifyEvent(status),
+      container,
+      tipo: tipoM ? stripTags(tipoM[1]).replace(/\.$/, '') || null : null,
+    });
+  }
+  return dedupe(out);
+}

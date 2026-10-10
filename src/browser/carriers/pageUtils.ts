@@ -447,7 +447,7 @@ export async function driveZimForm(page: Page, ref: string): Promise<boolean> {
 export async function driveMscForm(
   page: Page,
   ref: string,
-): Promise<{ filled: boolean; apiJson: string | null }> {
+): Promise<{ filled: boolean; apiJson: string | null; source?: 'network' | 'alpine' | null }> {
   const input = page.locator('#trackingNumber');
   if ((await input.count().catch(() => 0)) === 0) return { filled: false, apiJson: null };
 
@@ -504,5 +504,39 @@ export async function driveMscForm(
   } finally {
     page.off('response', onResp);
   }
-  return { filled: true, apiJson };
+  // 3) O JSON não veio pela rede (visto ao vivo: MEDUY6394819, 10/10) → lê o MESMO
+  //    dado do estado do componente Alpine (`results`, que o template percorre como
+  //    results.BillOfLadings). É a resposta da API já na memória da página — sem
+  //    depender de capturar a resposta HTTP. Formato devolvido = o da API
+  //    ({ Data: { BillOfLadings } }), que o extractMscEvents já lê.
+  let source: 'network' | 'alpine' | null = apiJson ? 'network' : null;
+  if (!apiJson) {
+    apiJson = await Promise.race([
+      page.evaluate(readMscAlpineResults).catch(() => null),
+      new Promise<null>((r) => setTimeout(() => r(null), 5000)),
+    ]);
+    if (apiJson) source = 'alpine';
+  }
+  return { filled: true, apiJson, source };
+}
+
+/**
+ * Roda NA PÁGINA da MSC: pega `results` do componente Alpine `mscFlowTracking()`.
+ * Alpine 3 expõe `Alpine.$data(el)`; o 2 guardava em `el.__x.$data`. Sem
+ * BillOfLadings, devolve null (nunca inventa).
+ */
+function readMscAlpineResults(): string | null {
+  const el = document.querySelector('.msc-flow-tracking[x-data]');
+  if (!el) return null;
+  const w = window as unknown as { Alpine?: { $data?: (e: Element) => unknown } };
+  const legacy = (el as unknown as { __x?: { $data?: unknown } }).__x?.$data;
+  const data = (w.Alpine?.$data ? w.Alpine.$data(el) : legacy) as { results?: unknown } | undefined;
+  const r = data?.results as { BillOfLadings?: unknown; Data?: { BillOfLadings?: unknown } } | undefined;
+  if (!r) return null;
+  const plain = JSON.parse(JSON.stringify(r)) as { BillOfLadings?: unknown; Data?: unknown };
+  if (Array.isArray(plain.BillOfLadings)) return JSON.stringify({ Data: plain });
+  if (plain.Data && Array.isArray((plain.Data as { BillOfLadings?: unknown }).BillOfLadings)) {
+    return JSON.stringify(plain);
+  }
+  return null;
 }

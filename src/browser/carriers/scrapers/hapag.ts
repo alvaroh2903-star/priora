@@ -3,6 +3,7 @@ import { ContainerInfo, NormalizedEventType, TrackingEvent } from '../types';
 import { classifyEvent } from '../eventTypes';
 import { isValidContainer } from '../detect';
 import { dropFutureEvents } from '../estimates';
+import { detectMaintenance, maintenanceMessage } from '../maintenance';
 import { ScrapeContext, ScrapeOutput } from '../scraperTypes';
 import {
   acceptCookies,
@@ -147,7 +148,10 @@ export function dedupe(events: TrackingEvent[]): TrackingEvent[] {
   const seen = new Set<string>();
   const out: TrackingEvent[] = [];
   for (const e of events) {
-    const key = `${e.date}|${e.status}|${e.location}`;
+    // O CONTÊINER faz parte da chave: num BL com vários contêineres no mesmo navio,
+    // todos têm o mesmo evento/data/local (visto na ONE: FCIU9747738 e ONEU4374427,
+    // "Departure from Transshipment Port" 04/10) — sem ele, só o 1º sobrevivia.
+    const key = `${e.container || ''}|${e.date}|${e.status}|${e.location}`;
     if (!seen.has(key)) {
       seen.add(key);
       out.push(e);
@@ -477,6 +481,12 @@ export async function scrapeHapag(page: Page, ctx: ScrapeContext): Promise<Scrap
   const containerHint =
     firstContainerNo(html) || (ctx.referenceType === 'container' ? ctx.reference : null);
   const containers = deriveContainers(events, containerHint);
+  // Sem evento: confere se é o aviso de MANUTENÇÃO do Online Business (visto ao
+  // vivo em 10/10 — parecia "site mudou", era manutenção até 21:30 UTC).
+  const maint = events.length === 0 ? detectMaintenance(await getBodyText(page)) : null;
+  if (maint) {
+    return { events, containers, needsLogin, needsCaptcha, ok: false, portalMaintenance: maint, message: maintenanceMessage(maint) };
+  }
 
   return {
     events,
