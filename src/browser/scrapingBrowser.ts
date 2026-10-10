@@ -704,13 +704,10 @@ export async function driveTrackingPage(
       captchaNet.push({ at: Date.now(), type: t, url: u.slice(0, 160), method: q.method(), failed: q.failure()?.errorText || 'falhou' });
     });
   }
-  // OOCL: o app tem largura mínima de 1366 px. Numa janela menor aparece rolagem
-  // e, ao arrastar o captcha, a página rola sozinha — o trajeto do mouse enviado
-  // ao servidor sai torto (visto ao vivo: botão "pulando" para −161 px e y
-  // escorregando 18 px no trajeto). Janela maior que o app = sem rolagem.
-  if (/oocl\.com/i.test(opts.url)) {
-    await page.setViewportSize({ width: 1600, height: 1000 }).catch(() => undefined);
-  }
+  // (Não forçamos o tamanho da janela na OOCL: emular 1600×1000 deixava a janela
+  // incoerente com a tela informada e o captcha — que manda a impressão digital do
+  // navegador — aprovava sem emitir o ticket. O "botão pulando" que motivou isso
+  // eram, na verdade, dois resolvedores arrastando ao mesmo tempo.)
   // OOCL: o resolvedor NATIVO do Cloud Browser da Scrapfly cobre exatamente o
   // captcha da CargoSmart ("cs_captcha_rotation", 5 créditos por solve — doc
   // cloud-browser-api/captcha-solver). Ele é ligado POR PÁGINA (Antibot.captchaEnable
