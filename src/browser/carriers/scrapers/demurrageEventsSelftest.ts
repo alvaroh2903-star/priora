@@ -62,6 +62,34 @@ function main(): void {
   check('"Gate out for delivery" → gate_out', classifyEvent('Gate out for delivery') === 'gate_out');
   check('"Unloaded from Vessel..." → discharge', classifyEvent('Unloaded from Vessel at Port of Discharging') === 'discharge');
 
+  // --- ZIM: termos REAIS capturados ao vivo (ZIMUTRT938698). Cada um destes já
+  // classificou ERRADO em produção e daria data de demurrage furada. ---
+  console.log('[selftest] classifyEvent — termos reais da ZIM');
+  const zim: Array<[string, string]> = [
+    // Tinha HÍFEN em "Gate-Out" e o regex só aceitava espaço → caía em `discharge`
+    // por causa de "Port of Discharge" (nome do PORTO, não o evento).
+    ['Import Gate-Out from Port of Discharge to Customer', 'gate_out'],
+    // A ZIM escreve a devolução na ORDEM INVERSA de "gate in empty".
+    ['Empty container gate in', 'empty_return'],
+    // "Release" sem o D — o regex exigia "released".
+    ['Carrier Release', 'available'],
+    // TYPO do próprio portal ("Transsihipment") escapava da guarda de transbordo
+    // e, por conter "Port of Discharge", virava DESCARGA.
+    ['Container was loaded at Transsihipment Port to Port of Discharge', 'other'],
+    ['Container was discharged at Port of Destination', 'discharge'],
+    ['Container is available to be released / delivered', 'available'],
+    ['Container was discharged at Transshipment Port', 'other'],
+    ['Vessel arrival to Transshipment Port', 'other'],
+    ['Vessel departure from Transshipment Port to Port of Discharge', 'other'],
+    ['Vessel arrival to Port of Discharge', 'berth'],
+  ];
+  for (const [status, esperado] of zim) {
+    check(`"${status}" → ${esperado}`, classifyEvent(status) === esperado, classifyEvent(status));
+  }
+  // Guarda do vazio na ORIGEM tem de continuar valendo COM hífen também.
+  check('"Gate-Out Empty" (origem, com hífen) → other', classifyEvent('Gate-Out Empty') === 'other', classifyEvent('Gate-Out Empty'));
+  check('"Empty Container Released to Shipper" → other', classifyEvent('Empty Container Released to Shipper') === 'other');
+
   console.log('[selftest] Maersk — retirada no destino, não na origem');
   const [m] = deriveContainers(MAERSK, null);
   console.log('    contêiner:', JSON.stringify(m));

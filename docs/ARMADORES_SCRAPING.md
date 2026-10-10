@@ -67,7 +67,7 @@ Legenda **Anti-bot**: 🔴 Cloudflare interativo · 🟠 aceite/anti-bot leve ·
 | `hmm` | HMM (Hyundai) | HDMU, HMMU, SGNM… | Formulário (srchBlNo1 + Retrieve) | form-based | 🟢 | ✅ (validado ao vivo; transbordo T/S ignorado) |
 | `yangming` | Yang Ming | YMLU, YMJA | Next.js (form genérico já busca) | 🟢 | ✅ (validado ao vivo, YMJAB237020139) |
 | `evergreen` | Evergreen (ShipmentLink) | EGLV, EVGL, EMCU | Servlet (driver dedicado: radio B/L + input#NO + Submit) | 🟠 | ✅ (validado ao vivo, EGLV010600577145 → 6 contêineres) |
-| `zim` | ZIM | ZIMU | SPA (form simples) + **hCaptcha** | 🔴 | ⬜ (gated por hCaptcha; solúvel via anti-captcha) |
+| `zim` | ZIM | ZIMU | SPA React (form `.chips-input`) | 🟢 | 🟡 dados OK via IA; parser DIV a escrever (validado ao vivo, ZIMUTRT938698) |
 | `pil` | Pacific Int. Lines | PABV, NNPL, PILU | Página + form | `?...&refNo=` | 🟢 | ✅ (histórico completo via Trace, validado ao vivo) |
 | `oocl` | OOCL | OOLU | ASPX com formulário | a confirmar | 🟠 | ⬜ |
 
@@ -76,13 +76,23 @@ Legenda **Anti-bot**: 🔴 Cloudflare interativo · 🟠 aceite/anti-bot leve ·
 
 ## 3.1 Validados + modo de operação (resumo executivo)
 
-**✅ Raspando ponta a ponta na PRODUÇÃO (validado ao vivo) — 9:**
-Hapag · Maersk · ONE · COSCO · PIL · HMM · Evergreen · MSC · Yang Ming
+**✅ Raspando ponta a ponta na PRODUÇÃO (validado ao vivo) — 10:**
+Hapag · Maersk · ONE · COSCO · PIL · HMM · Evergreen · MSC · Yang Ming · **ZIM**
 
-**🔒 `scrapeBlocked` (anti-bot comportamental → produção NÃO abre sessão Scrapfly; via API oficial) — 2:**
-CMA (DataDome) · OOCL (Cloudflare + slider CargoSmart)
+**🔓 Acesso VENCIDO com Scrapfly pago (residential + Unblock), produção a liberar — 2:**
+- **CMA (DataDome):** o DataDome **não apareceu** — portal renderizou inteiro (1 MB,
+  "CMA CGM | Shipment Tracking"). Driver do form escrito (`drivers.ts:cma`:
+  `#Reference` + `#btnTracking`). Falta uma rodada limpa p/ tirar o `scrapeBlocked`.
+- **OOCL (Cloudflare Turnstile):** **furado** com `target_url` + `solve_captcha`
+  (title virou "OOCL - Control Tower", 208 KB do app Vue). Falta validar a correção
+  de não-renavegar (o `page.goto()` extra invalidava a sessão → `/moc/error`).
 
-**⏸️ Parado por escolha (volume zero + hCaptcha em React) — 1:** ZIM
+> **A descoberta que destravou os dois** (lendo a fonte do `scrapfly-sdk`): `unblock=true`
+> sozinho é **no-op**. O bypass ASP é uma navegação que o PRÓPRIO Scrapfly faz no setup
+> da sessão, e ele só sabe o destino via **`target_url`**. E existe **`solve_captcha=true`**
+> (solver nativo: GeeTest, PerimeterX, *puzzle*/slider). Ver `withUnblockMode`.
+> Corolário: com Unblock, a aba chega JÁ navegada — um `page.goto()` nosso em cima
+> disso queima o estado (ver `alreadyOnTarget`).
 
 ### Como operar cada um (o caminho mais barato/estável)
 | Armador | Acesso | Driver | Fonte dos dados |
@@ -199,7 +209,29 @@ Logo, gastar menos = **menos sessões**, **sessões mais curtas** e **menos band
   `/en/esolution/tracking/cargo_tracking_detail?trackNo=<CNTR>&position=BL_CT&refNo=<BL sem prefixo YMJA>`
   — URL limpa/determinística, **a plugar** (navegar por contêiner e ler os eventos).
 
-**ZIM — recon (`ZIMUTRT938698`):**
+**ZIM — VALIDADA ao vivo (`ZIMUTRT938698`, Scrapfly residential + Unblock):**
+- **O captcha NÃO gateia o rastreio.** A página serve `<meta name="tracing-captcha"
+  content="0">`: o widget hCaptcha existe no DOM, mas a busca completa sem ele —
+  o resultado veio com `hcaptchaSolved:false` e `mentionsRef:true`. Toda a análise
+  antiga (abaixo) partia do pressuposto errado de que a busca era gated.
+- **Fluxo que funciona:** driver `drivers.ts:zim` preenche `#shipment-main-search-2`
+  (`.chips-input`) e clica `.chips-search-button`; a URL vira
+  `?consnumber=<ref>` e o resultado renderiza (2,1 MB).
+- **Exemplo validado:** B/L com 4 contêineres (`TEMU7287813;TCKU6162400;CAAU7777080;
+  BSIU9240479`). Para `TCNU7625335` (HC40), em SANTOS (SP): descarga no destino
+  **04-Sep-2026**, retirada (**Import Gate-Out ... to Customer**) **05-Sep-2026**,
+  disponível **16-Sep-2026**, devolução (**Empty container gate in**) **18-Sep-2026**
+  — ciclo de demurrage completo.
+- **Parser:** layout em **DIV** (`rowCount:0`, sem `<table>`) → o genérico não pega.
+  Hoje a **camada de IA** cobre (texto limpo e bem rotulado: `Date | Activity |
+  Location | Vessel / Voyage`). Parser dedicado `extractZimEvents` a escrever —
+  precisa de uma fatia do DOM em volta de um evento (`&find=Import Gate-Out`).
+- **Termos p/ o `classifyEvent`:** "Container was discharged at Port of Destination"
+  (destino) × "Container was discharged at Transshipment Port" (T/S, já coberto pela
+  guarda); "Import Gate-Out from Port of Discharge to Customer"; "Empty container
+  gate in"; "Container is available to be released / delivered".
+
+**ZIM — recon ANTIGO (superado pelo acima, mantido como histórico):**
 - **Anti-bot 🔴 = hCaptcha.** A página `zim.com/tools/track-a-shipment` carrega, mas a
   busca é gated por um **hCaptcha** (iframe `newassets.hcaptcha.com`, sitekey
   `40cd15d0-11fd-4fff-a866-17708fb25e7d`, botão "Verify Answers"). Sem resolver o

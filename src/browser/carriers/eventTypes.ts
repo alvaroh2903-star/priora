@@ -18,13 +18,22 @@ const RULES: Array<[NormalizedEventType, RegExp]> = [
     'empty_return',
     // "gate in empty" (CMA: "GATE IN EMPTY AT DEPOT") = vazio entrando no depósito
     // = devolução. NÃO confundir com "gate out empty" (origem), tratado à parte.
-    /empty.*return|return.*empty|empty container returned|empty received|returned.*depot|empty in\b|gate\s*in\s+empty|devolu/i,
+    // A ZIM escreve na ORDEM INVERSA ("Empty container gate in") — daí o
+    // `empty.*gate\s*in`, senão a devolução dela não era classificada.
+    /empty.*return|return.*empty|empty container returned|empty received|returned.*depot|empty in\b|gate\s*in\s+empty|empty.*gate[\s-]*in|devolu/i,
   ],
   [
     'gate_out',
-    /gated?\s*out|to consignee|delivered to|picked up|full.*out|out\s?gate|import.*deliver|entregue|sa[ií]da.*cheio/i,
+    // `gated?[\s-]*out` (e não `\s*`): a ZIM escreve com HÍFEN — "Import Gate-Out
+    // from Port of Discharge to Customer". Sem o hífen aqui, a RETIRADA escapava
+    // e caía em `discharge`, porque o texto contém "Port of Discharge" (nome do
+    // porto, não o evento) — datas de demurrage erradas.
+    /gated?[\s-]*out|to consignee|delivered to|picked up|full.*out|out\s?gate|import.*deliver|entregue|sa[ií]da.*cheio/i,
   ],
-  ['available', /available|disponib|released|liberad|ready for (delivery|pickup)/i],
+  // `releas` (e não `released`): a ZIM emite "Carrier Release", sem o D. A liberação
+  // de VAZIO na origem já é descartada pelo guard lá embaixo, então afrouxar aqui
+  // não traz o evento de origem de volta.
+  ['available', /available|disponib|releas|liberad|ready for (delivery|pickup)/i],
   ['berth', /berth|atrac|vessel\s+arriv|arriv.*(port|terminal|vessel)/i],
   ['discharge', /discharg|desembarq|unload/i],
 ];
@@ -38,11 +47,11 @@ export function classifyEvent(status: string): NormalizedEventType {
   //  - "Empty Container Release(d) to Shipper" (liberação p/ estufagem);
   //  - "Gate out Empty" (o vazio saindo do depósito na origem).
   if (/empty\s+(?:container\s+)?releas/.test(s)) return 'other';
-  if (/gate\s*out\s+empty/.test(s)) return 'other';
+  if (/gate[\s-]*out\s+empty/.test(s)) return 'other';
   // Descarga/descida em porto de TRANSBORDO (T/S) — ex.: HMM "Feeder Discharged
   // at T/S Port", ONE "Unloaded from Vessel at Transshipment Port". NÃO é a
   // descarga no DESTINO, então não pode iniciar a contagem de demurrage.
-  if (/discharg|unload/.test(s) && /\bt\/s\b|transship|tranship|transbordo|feeder/.test(s)) {
+  if (/discharg|unload/.test(s) && /\bt\/s\b|trans\w*hipment|transbordo|feeder/.test(s)) {
     return 'other';
   }
   // QUALQUER movimento em porto de TRANSBORDO é etapa INTERMEDIÁRIA (o demurrage
@@ -50,7 +59,13 @@ export function classifyEvent(status: string): NormalizedEventType {
   // "Full Transshipment Positioned Out LADEN" em Busan — o "full.*out" da regra
   // de gate_out marcava isso como RETIRADA e cravava um gateOut falso. Transbordo
   // = sempre `other`.
-  if (/transship|tranship|transbordo/.test(s)) return 'other';
+  //
+  // `trans\w*hipment` em vez de `transship|tranship` porque o portal da ZIM tem um
+  // TYPO no próprio texto: "Container was loaded at Transsihipment Port to Port of
+  // Discharge". A grafia errada escapava da guarda e, por conter "Port of
+  // Discharge", era classificada como DESCARGA — contaminando o início da contagem.
+  // O padrão tolerante cobre transshipment / transhipment / transsihipment.
+  if (/trans\w*hipment|transbordo/.test(s)) return 'other';
   // "Positioned Out/In" é reposicionamento de PÁTIO/ferrovia (empilhamento), não a
   // entrega ao consignatário. Jargão de terminal, nunca de retirada final.
   if (/position(?:ed)?\s+(?:out|in)\b/.test(s)) return 'other';

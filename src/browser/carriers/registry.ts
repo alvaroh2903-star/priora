@@ -137,10 +137,13 @@ export const CARRIERS: CarrierMeta[] = [
         : null,
     needsLoginForDemurrage: true,
     needsScrapingBrowser: true,
-    scrapeBlocked: true, // busca gated por hCaptcha em React (ZimCaptcha) — token resolve mas a
-    // injeção não registra no React; volume ZERO. Produção não abre sessão (economia).
-    pool: 'residential_unblock', // quando abre sessão (diagnóstico): residential + Unblock (hCaptcha).
-    notes: 'SPA React; busca gated por hCaptcha (ZimCaptcha, 2 sitekeys). Anti-captcha RESOLVE o token (validado, hcaptchaSolved:true) mas o React ignora a injeção via DOM. scrapeBlocked (produção não abre sessão). Volume zero.',
+    // DESBLOQUEADO (validado ao vivo com Scrapfly residential + Unblock): a página
+    // renderizou (2,1 MB), o form montou, a busca RODOU (URL virou ?consnumber=) e
+    // o histórico completo veio no texto — mesmo com hcaptchaSolved:false, porque
+    // a ZIM serve o rastreio com `tracing-captcha: 0` (captcha não gateia a busca).
+    pool: 'residential_unblock', // residential + Unblock (é o que fez a página vir inteira).
+    notes:
+      'SPA React validada ao vivo (ZIMUTRT938698): descarga 04-Sep, retirada 05-Sep, disponível 16-Sep, devolução 18-Sep em SANTOS. Busca via driver (drivers.ts:zim) → URL ?consnumber=. O hCaptcha existe na página mas NÃO gateia o rastreio (meta tracing-captcha:0). Layout em DIV (sem <table>) → parser dedicado a escrever; hoje a camada de IA cobre. BL costuma ter VÁRIOS contêineres.',
   },
   {
     id: 'hapag',
