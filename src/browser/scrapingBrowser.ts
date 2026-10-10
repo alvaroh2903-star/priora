@@ -707,6 +707,29 @@ export async function driveTrackingPage(
   if (/oocl\.com/i.test(opts.url)) {
     await page.setViewportSize({ width: 1600, height: 1000 }).catch(() => undefined);
   }
+  // OOCL: o resolvedor NATIVO do Cloud Browser da Scrapfly cobre exatamente o
+  // captcha da CargoSmart ("cs_captcha_rotation", 5 créditos por solve — doc
+  // cloud-browser-api/captcha-solver). Ele é ligado POR PÁGINA (Antibot.captchaEnable
+  // na mesma sessão CDP) e trabalha sozinho depois da navegação; o nosso
+  // resolvedor fica de reserva. Os eventos vão para o diag.
+  const antibot: { enabled: boolean; error?: string; events: Array<Record<string, unknown>> } = { enabled: false, events: [] };
+  if (/oocl\.com/i.test(opts.url)) {
+    try {
+      const cdp = (await page.context().newCDPSession(page)) as unknown as {
+        send: (m: string, p?: Record<string, unknown>) => Promise<unknown>;
+        on: (e: string, f: (p: Record<string, unknown>) => void) => void;
+      };
+      for (const ev of ['captchaDetected', 'captchaSolvingStarted', 'captchaSolved', 'captchaError']) {
+        cdp.on(`Antibot.${ev}`, (p) => {
+          antibot.events.push({ ev, t: Date.now(), ...Object.fromEntries(Object.entries(p || {}).map(([k, v]) => [k, typeof v === 'string' ? v.slice(0, 120) : v])) });
+        });
+      }
+      await cdp.send('Antibot.captchaEnable');
+      antibot.enabled = true;
+    } catch (e) {
+      antibot.error = String((e as Error).message).slice(0, 160);
+    }
+  }
   // Gravador DENTRO da página (OOCL): envolve fetch/XHR antes de o app carregar e
   // guarda cada chamada (endereço, envio, resposta) em window.__prioraNet. A
   // captura pela rede do navegador remoto não mostrou as chamadas do captcha nem
@@ -786,14 +809,46 @@ export async function driveTrackingPage(
     const vp0 = page.viewportSize() || { width: 1280, height: 800 };
     for (let i = 0; i < 14 && !sliderUp; i++) {
       sliderUp = await waitForCargoSmartSlider(page, 1500);
-      if (!sliderUp) {
+      if (!sliderUp && !antibot.events.length) {
         await page.mouse
           .move(vp0.width * (0.2 + Math.random() * 0.6), vp0.height * (0.2 + Math.random() * 0.6), { steps: 3 })
           .catch(() => undefined);
       }
     }
   }
-  if (sliderUp) {
+  // Com o resolvedor da Scrapfly armado: NÃO mexe — espera ele resolver (ou
+  // errar). Mexer o mouse aqui competia com o arrasto dele.
+  if (sliderUp && antibot.enabled) {
+    const t0 = Date.now();
+    let outcome: 'resolvido' | 'erro' | 'sumiu' | 'tempo' = 'tempo';
+    while (Date.now() - t0 < 75_000) {
+      await page.waitForTimeout(1000);
+      if (antibot.events.some((e) => e.ev === 'captchaSolved')) {
+        outcome = 'resolvido';
+        break;
+      }
+      if (antibot.events.some((e) => e.ev === 'captchaError')) {
+        outcome = 'erro';
+        break;
+      }
+      if (!(await page.locator('#cs_captcha .verify-move-block').first().isVisible().catch(() => false))) {
+        outcome = 'sumiu';
+        break;
+      }
+    }
+    const ok = (outcome === 'resolvido' || outcome === 'sumiu') && !/\/error\b/.test(page.url());
+    sliderDiag = {
+      found: true,
+      solved: ok,
+      attempts: [{ mode: 'scrapfly', result: outcome }],
+      ms: Date.now() - t0,
+    };
+    // Captcha ainda na tela depois do erro/tempo → o nosso resolvedor tenta.
+    if (!ok && (await page.locator('#cs_captcha .verify-move-block').first().isVisible().catch(() => false))) {
+      const own = await solveCargoSmartSlider(page, { captureImages: Boolean(opts.inventory) }).catch(() => null);
+      if (own) sliderDiag = { ...own, attempts: [...sliderDiag.attempts, ...own.attempts] };
+    }
+  } else if (sliderUp) {
     sliderDiag = await solveCargoSmartSlider(page, { captureImages: Boolean(opts.inventory) }).catch((e) => ({
       found: true,
       solved: false,
@@ -1053,6 +1108,7 @@ export async function driveTrackingPage(
       preNavigated,
       ...(lastAkamaiDiag ? { akamai: lastAkamaiDiag } : {}),
       ...(sliderDiag ? { slider: sliderDiag } : {}),
+      ...(antibot.enabled || antibot.error ? { antibot } : {}),
       ...(captchaNet.length ? { captchaNet, navStartedAt } : {}),
       ...((pageNet as unknown[]).length ? { pageNet, navStartedAt } : {}),
       landedUrl: activePage.url(),
