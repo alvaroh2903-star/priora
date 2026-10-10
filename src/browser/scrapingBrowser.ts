@@ -2,6 +2,7 @@ import { chromium, Browser, Page } from 'playwright';
 import { acceptCookies, tryFillSearch, robustClick } from './carriers/pageUtils';
 import { findCarrierDriver } from './carriers/drivers';
 import { findDetailCollector, DetailPage } from './carriers/detailCollectors';
+import { solveCargoSmartSlider, waitForCargoSmartSlider, SliderOutcome } from './carriers/slideCaptcha';
 import { solveCaptchaIfPresent } from './antiCaptcha';
 import { PoolMode } from './carriers/types';
 import { withRemoteSlot } from './remoteSlot';
@@ -682,6 +683,19 @@ export async function driveTrackingPage(
   await waitOutChallenge(page).catch(() => undefined);
 
   await acceptCookies(page);
+  // OOCL (CargoSmart): captcha de ARRASTAR a peça antes do resultado — e ele
+  // EXPIRA. Era o "This Page Has Expired": o motor esperava resultado enquanto o
+  // captcha vencia. Resolve na hora, antes de qualquer outra espera.
+  let sliderDiag: SliderOutcome | undefined;
+  if (/oocl\.com/i.test(opts.url) && (await waitForCargoSmartSlider(page, 20_000))) {
+    sliderDiag = await solveCargoSmartSlider(page, { captureImages: Boolean(opts.inventory) }).catch((e) => ({
+      found: true,
+      solved: false,
+      attempts: [],
+      ms: 0,
+      error: String((e as Error).message).slice(0, 200),
+    }));
+  }
   // Captcha INTERATIVO (reCAPTCHA/hCaptcha/Turnstile) na entrada: resolve via
   // anti-captcha se configurado (no-op rápido quando não há widget). Beneficia
   // tanto o diagnóstico quanto a produção, que compartilham este motor. EXCEÇÃO:
@@ -913,6 +927,7 @@ export async function driveTrackingPage(
       initialUrl,
       preNavigated,
       ...(lastAkamaiDiag ? { akamai: lastAkamaiDiag } : {}),
+      ...(sliderDiag ? { slider: sliderDiag } : {}),
       landedUrl: activePage.url(),
       blockMode,
       ...(followDiag ? { follow: followDiag } : {}),
