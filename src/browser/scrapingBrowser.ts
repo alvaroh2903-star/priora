@@ -485,10 +485,26 @@ async function waitForResults(
  * CSS/JS/XHR seguem passando (a SPA e a captura de JSON dependem deles). Best-effort:
  * se o browser remoto não suportar interceptação, segue sem bloqueio (sem dano).
  */
+/**
+ * Só as URLs de MÍDIA entram na interceptação — casadas por extensão.
+ *
+ * A versão anterior usava `page.route('**\/*')` e reemitia TODA requisição com
+ * `route.continue()`, inclusive HTML/JS/CSS/XHR. Em navegador remoto isso quebra
+ * o carregamento de ES modules com `crossorigin`, e a SPA simplesmente não monta.
+ * PROVADO ao vivo na OOCL, mesma URL, só alternando o bloqueio:
+ *   com interceptação total → htmlLen 2.106 (casca `<div id="scct">` vazia)
+ *   sem interceptação       → htmlLen 208.496 (app montado)
+ * Como o padrão abaixo casa apenas mídia, nada crítico passa por `continue()` —
+ * a economia de banda continua e o risco de estragar o render some.
+ */
+const MEDIA_URL_RE =
+  /\.(?:png|jpe?g|gif|svg|webp|avif|ico|bmp|woff2?|ttf|otf|eot|mp4|webm|ogg|mp3|wav|avi|mov)(?:[?#]|$)/i;
+
 async function blockHeavyResources(page: Page): Promise<void> {
   try {
-    await page.route('**/*', (route) => {
+    await page.route(MEDIA_URL_RE, (route) => {
       const t = route.request().resourceType();
+      // Confere o tipo também: evita abortar algo servido com extensão enganosa.
       if (t === 'image' || t === 'media' || t === 'font') route.abort().catch(() => undefined);
       else route.continue().catch(() => undefined);
     });
