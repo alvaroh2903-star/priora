@@ -381,7 +381,7 @@ export async function driveCmaForm(
   valueAfterFill: string | null;
   submitted: boolean;
   urlAfter: string;
-  attempts?: Array<{ searchBy: string | null; found: boolean; notFoundAlert: boolean }>;
+  attempts?: Array<{ searchBy: string | null; found: boolean; notFoundAlert: boolean; net?: string[] }>;
 }> {
   const INPUT = '#Reference, input[name="SearchViewModel.Reference"], input.bookingCheck';
   if ((await page.locator(INPUT).count().catch(() => 0)) === 0) {
@@ -395,7 +395,17 @@ export async function driveCmaForm(
   // Se o CMA disser "not found" e a ref não for contêiner, tenta os outros tipos.
   const isContainer = /^[A-Z]{4}\d{7}$/.test(ref.toUpperCase());
   const plan: Array<string | null> = isContainer ? [null] : [null, 'BL', 'Booking'];
-  const attempts: Array<{ searchBy: string | null; found: boolean; notFoundAlert: boolean }> = [];
+  const attempts: Array<{ searchBy: string | null; found: boolean; notFoundAlert: boolean; net?: string[] }> = [];
+  // Rede durante o envio (diagnóstico): o POST volta 302? 403 do DataDome? Para
+  // onde redireciona? Sem isso, "voltou o form vazio" não diz o porquê.
+  let net: string[] = [];
+  const onResp = (r: import('playwright').Response) => {
+    const t = r.request().resourceType();
+    if (net.length >= 15 || !['document', 'xhr', 'fetch'].includes(t)) return;
+    const loc = r.headers()['location'];
+    net.push(`${r.request().method()} ${r.status()} ${t} ${r.url().slice(0, 110)}${loc ? ` → ${loc.slice(0, 80)}` : ''}`);
+  };
+  page.on('response', onResp);
   let valueAfterFill: string | null = null;
   let submitted = false;
   for (const forced of plan) {
@@ -429,6 +439,7 @@ export async function driveCmaForm(
     // adivinhar um tempo fixo. Enter é o reforço se o botão não estiver clicável.
     const submit = page.locator('#btnTracking, button[type="submit"]:has-text("Search")').first();
     const navigation = page.waitForNavigation({ timeout: 30_000 }).catch(() => null);
+    net = [];
     if ((await submit.count().catch(() => 0)) > 0) {
       await submit.click({ timeout: 8000 }).catch(() => undefined);
     } else {
@@ -444,9 +455,10 @@ export async function driveCmaForm(
       .catch(() => false);
     const body = (await page.innerText('body').catch(() => '')) || '';
     const found = !notFoundAlert && body.toUpperCase().includes(ref.toUpperCase());
-    attempts.push({ searchBy, found, notFoundAlert });
+    attempts.push({ searchBy, found, notFoundAlert, net: [...net] });
     if (found) break;
   }
+  page.off('response', onResp);
   return { filled: true, valueAfterFill, submitted, urlAfter: page.url(), attempts };
 }
 

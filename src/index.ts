@@ -385,6 +385,21 @@ const JOB_TTL_MS = Math.max(
  */
 const JOB_HTML_CAP = 400_000;
 
+/**
+ * HTML guardado no job SEM script/style/svg/data-URI: é o DOM que o parser lê.
+ * Visto em 10/10: CMA (1 MB) e ZIM (2,3 MB) — os primeiros 400 KB brutos eram só
+ * CSS de widget e o resultado ficava de fora do corte.
+ */
+function cleanJobHtml(html: string): string {
+  const clean = html
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<svg[\s\S]*?<\/svg>/gi, '<svg/>')
+    .replace(/(src|href)="data:[^"]*"/gi, '$1=""')
+    .replace(/\s+/g, ' ');
+  return clean.length > JOB_HTML_CAP ? clean.slice(0, JOB_HTML_CAP) : clean;
+}
+
 function pruneScrapeJobs(): void {
   const cutoff = Date.now() - JOB_TTL_MS;
   for (const [id, j] of scrapeJobs) {
@@ -487,7 +502,7 @@ async function runScrapeJob(job: ScrapeJob): Promise<void> {
   try {
     const { result, html } = await scrapeAndParse(job.url, job.via, job.ref, job.render !== false);
     // Só um trecho generoso do HTML (o suficiente p/ afinar o parser via job-html).
-    job.html = html.length > JOB_HTML_CAP ? html.slice(0, JOB_HTML_CAP) : html;
+    job.html = cleanJobHtml(html);
     job.result = result;
     job.status = 'done';
   } catch (e) {
@@ -636,7 +651,8 @@ function resolveSbDiagParamsFrom(q: Record<string, unknown>): DiagParamsResult {
   const truthy = (v: string) => ['1', 'true', 'yes'].includes(v.toLowerCase());
   const probe = truthy(s('probe'));
   const find = s('find');
-  const htmlwin = Math.min(Math.max(parseInt(s('htmlwin') || '0', 10) || 0, 0), 20000);
+  // Até 100k: página de resultado em DIV (ZIM) não cabia em 20k.
+  const htmlwin = Math.min(Math.max(parseInt(s('htmlwin') || '0', 10) || 0, 0), 100_000);
   // block=all|media|none escolhe o modo de interceptação (default: media, no motor).
   // noblock=1 continua valendo como atalho para 'none'. Valor inválido é ignorado
   // (cai no default) em vez de virar erro — é rota de diagnóstico.
@@ -770,7 +786,7 @@ function startDiagJob(
     try {
       const { result, html } = await work(report);
       job.result = result;
-      if (html) job.html = html.length > JOB_HTML_CAP ? html.slice(0, JOB_HTML_CAP) : html;
+      if (html) job.html = cleanJobHtml(html);
       job.status = 'done';
     } catch (e) {
       job.status = 'error';
