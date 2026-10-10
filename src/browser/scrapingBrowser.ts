@@ -202,16 +202,21 @@ export interface SBScrapeOptions {
    */
   pool?: PoolMode;
   /**
-   * Bloquear imagem/mídia/fonte (economia de banda e tempo). Default: true.
-   *
-   * `false` DESLIGA a interceptação por completo — e isso importa: para bloquear,
-   * instalamos `page.route('**\/*')`, que refaz TODA requisição via
-   * `route.continue()`. Em navegador remoto isso pode quebrar o carregamento de
-   * ES modules com `crossorigin` (caso suspeito da OOCL, cujo app Vue não monta:
-   * só vem a casca `<div id="scct">`). Diagnóstico: `?noblock=1`.
+   * Como interceptar recursos (economia de banda e tempo). Default: 'media'.
+   *  - 'media': intercepta SÓ URLs de mídia (imagem/fonte/vídeo) — o padrão,
+   *    seguro para SPA (ver blockHeavyResources).
+   *  - 'all':  comportamento LEGADO — `page.route('**\/*')`, reemite TODA
+   *    requisição. Quebra SPA com ES module `crossorigin` (provado na OOCL), mas
+   *    foi com ele que a ZIM entregou o histórico completo; com 'media' ela caiu
+   *    no Akamai duas vezes seguidas (IPs diferentes). Mantido para testar a
+   *    hipótese de que a interceptação total atrapalhava o sensor do Akamai.
+   *  - 'none': sem interceptação nenhuma.
+   * Diagnóstico: `?block=all|media|none` (`?noblock=1` = 'none').
    */
-  blockResources?: boolean;
+  blockMode?: BlockMode;
 }
+
+export type BlockMode = 'media' | 'all' | 'none';
 
 /** Descrição de um elemento interativo para diagnóstico de formulário. */
 export interface DomElementInfo {
@@ -500,9 +505,11 @@ async function waitForResults(
 const MEDIA_URL_RE =
   /\.(?:png|jpe?g|gif|svg|webp|avif|ico|bmp|woff2?|ttf|otf|eot|mp4|webm|ogg|mp3|wav|avi|mov)(?:[?#]|$)/i;
 
-async function blockHeavyResources(page: Page): Promise<void> {
+async function blockHeavyResources(page: Page, mode: Exclude<BlockMode, 'none'>): Promise<void> {
   try {
-    await page.route(MEDIA_URL_RE, (route) => {
+    // 'all' = legado (intercepta tudo); 'media' = só URLs de mídia. Ver BlockMode.
+    const pattern: string | RegExp = mode === 'all' ? '**/*' : MEDIA_URL_RE;
+    await page.route(pattern, (route) => {
       const t = route.request().resourceType();
       // Confere o tipo também: evita abortar algo servido com extensão enganosa.
       if (t === 'image' || t === 'media' || t === 'font') route.abort().catch(() => undefined);
@@ -549,7 +556,8 @@ export async function driveTrackingPage(
   const postWait = opts.postLoadWait ?? 8000;
 
   // Economia de banda/tempo: bloqueia imagens/mídia/fontes ANTES de navegar.
-  if (opts.blockResources !== false) await blockHeavyResources(page);
+  const blockMode: BlockMode = opts.blockMode ?? 'media';
+  if (blockMode !== 'none') await blockHeavyResources(page, blockMode);
 
   let navError: string | null = null;
   // Com o Unblock Mode, quem navega até o alvo é o PRÓPRIO Scrapfly (é assim que
@@ -696,7 +704,7 @@ export async function driveTrackingPage(
     // `preNavigated`/`landedUrl` mostram se a aba já veio navegada pelo Unblock
     // (e onde ela parou) — é o que diferencia "o provedor entregou a página" de
     // "nós navegamos". Some junto do diag do driver, quando houver.
-    diag: { ...(diag || {}), preNavigated, landedUrl: activePage.url() },
+    diag: { ...(diag || {}), preNavigated, landedUrl: activePage.url(), blockMode },
     apiJson,
     error: navError || undefined,
   };

@@ -28,6 +28,7 @@ import { getAntiCaptchaBalance, solveRecaptchaV2 } from './browser/antiCaptcha';
 import { fetchViaUnblocker, isUnblockerConfigured } from './browser/webUnblocker';
 import { fetchViaBrightData, isBrightDataConfigured } from './browser/brightData';
 import { scrapeViaSB, driveTrackingPage, isSBConfigured, scrapeBrowserProvider, isHeavyScrapeConfigured } from './browser/scrapingBrowser';
+import type { BlockMode } from './browser/scrapingBrowser';
 import { deriveContainers, firstContainerNo } from './browser/carriers/scrapers/hapag';
 import { extractCarrierEvents } from './browser/carriers/scrapers/dispatch';
 import { isAntiCaptchaConfigured } from './config';
@@ -571,8 +572,8 @@ interface SbDiagParams {
   find: string;
   htmlwin: number;
   ref: string;
-  /** `?noblock=1` desliga a interceptação de recursos (ver SBScrapeOptions). */
-  blockResources: boolean;
+  /** Modo de interceptação: `?block=all|media|none` (`?noblock=1` = none). Ver BlockMode. */
+  blockMode?: BlockMode;
 }
 
 /**
@@ -621,10 +622,14 @@ function resolveSbDiagParams(req: Request): { params?: SbDiagParams; error?: { s
   const probe = ['1', 'true', 'yes'].includes(String(req.query.probe || '').toLowerCase());
   const find = String(req.query.find || '').trim();
   const htmlwin = Math.min(Math.max(parseInt(String(req.query.htmlwin || '0'), 10) || 0, 0), 20000);
-  // ?noblock=1: não instala page.route — testa se a interceptação é o que impede
-  // a SPA de montar (ES modules com crossorigin).
-  const blockResources = !['1', 'true', 'yes'].includes(String(req.query.noblock || '').toLowerCase());
-  return { params: { engine, url, searchReference, pool, probe, find, htmlwin, ref, blockResources } };
+  // ?block=all|media|none escolhe o modo de interceptação (default: media, no
+  // motor). ?noblock=1 continua valendo como atalho para 'none'. Valor inválido é
+  // ignorado (cai no default) em vez de virar erro — é rota de diagnóstico.
+  const blockQ = String(req.query.block || '').trim().toLowerCase();
+  let blockMode: BlockMode | undefined =
+    blockQ === 'all' || blockQ === 'media' || blockQ === 'none' ? blockQ : undefined;
+  if (['1', 'true', 'yes'].includes(String(req.query.noblock || '').toLowerCase())) blockMode = 'none';
+  return { params: { engine, url, searchReference, pool, probe, find, htmlwin, ref, blockMode } };
 }
 
 /**
@@ -642,7 +647,7 @@ async function runSbDiagnostic(p: SbDiagParams): Promise<{ payload: Record<strin
               url: p.url,
               reference: p.searchReference,
               inventory: p.probe,
-              blockResources: p.blockResources,
+              blockMode: p.blockMode,
             }),
           )),
           ms: Date.now() - startedAt,
@@ -652,7 +657,7 @@ async function runSbDiagnostic(p: SbDiagParams): Promise<{ payload: Record<strin
           reference: p.searchReference,
           inventory: p.probe,
           pool: p.pool,
-          blockResources: p.blockResources,
+          blockMode: p.blockMode,
         });
 
   let events: unknown[] = [];
