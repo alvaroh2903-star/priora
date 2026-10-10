@@ -1,5 +1,6 @@
 import { Page, BrowserContext } from 'playwright';
 import { detectMaintenance, maintenanceMessage } from './maintenance';
+import { canUseScrapflyApi, scrapeViaScrapflyApi } from './scrapflyFetch';
 import { CarrierMeta, ReferenceType, TrackingResult } from './types';
 import { PortalScraper, ScrapeContext } from './scraperTypes';
 import { resolveTrackingUrl, resolveSearchRef } from './registry';
@@ -140,6 +141,12 @@ export async function scrapeCarrier(
     events: [],
     fetchedAt: new Date().toISOString(),
   };
+
+  // Portais cujo anti-bot barra o navegador na 2ª camada: a API de Scrape da
+  // Scrapfly (ASP) faz a navegação inteira do lado dela (ver scrapflyFetch).
+  if (canUseScrapflyApi(carrier)) {
+    return scrapeViaScrapflyApi(carrier, ref, type);
+  }
 
   // EFICIÊNCIA (crédito Scrapfly): armadores com scraping SABIDAMENTE bloqueado
   // (DataDome/CargoSmart/hCaptcha-em-React) NÃO abrem sessão no navegador remoto —

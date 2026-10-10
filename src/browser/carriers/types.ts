@@ -174,6 +174,12 @@ export interface CarrierMeta {
    * override por ?pool=.
    */
   pool?: PoolMode;
+  /**
+   * Como buscar a página: 'browser' (padrão — navegador remoto + motor próprio)
+   * ou 'scrapfly_api' (API de Scrape da Scrapfly com ASP, a navegação inteira do
+   * lado dela). Para portais cujo anti-bot barra o navegador na 2ª camada (ZIM).
+   */
+  fetchVia?: 'browser' | 'scrapfly_api';
   /** Observações de implementação (o que está confirmado x a verificar). */
   notes?: string;
 }

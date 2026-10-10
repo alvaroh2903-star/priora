@@ -32,6 +32,7 @@ import { fetchViaBrightData, isBrightDataConfigured } from './browser/brightData
 import { scrapeViaSB, driveTrackingPage, isSBConfigured, scrapeBrowserProvider, isHeavyScrapeConfigured } from './browser/scrapingBrowser';
 import type { BlockMode } from './browser/scrapingBrowser';
 import { scrapflyScrape, getScrapflyKey } from './browser/scrapflyApi';
+import { scrapflyScenario } from './browser/carriers/scrapflyFetch';
 import { deriveContainers, firstContainerNo } from './browser/carriers/scrapers/hapag';
 import { extractCarrierEvents, extractEventsWithDetails } from './browser/carriers/scrapers/dispatch';
 import { isAntiCaptchaConfigured } from './config';
@@ -881,17 +882,10 @@ app.get('/health/scrapfly-api-async', (req, res) => {
     } catch {
       return res.status(400).json({ error: 'scenario inválido (JSON em base64url).' });
     }
-  } else if (carrier?.id === 'cmacgm') {
-    url = q('url') || 'https://www.cma-cgm.com/ebusiness/tracking/search';
-    jsScenario = [
-      // Teto da Scrapfly por etapa: 15 s (ERR::SCRAPE::CONFIG_ERROR acima disso).
-      { wait_for_selector: { selector: '#Reference', timeout: 15000 } },
-      { fill: { selector: '#Reference', value: searchRef, clear: true } },
-      { wait: 800 },
-      { click: { selector: '#btnTracking' } },
-      { wait_for_navigation: { timeout: 15000 } },
-      { wait: 3000 },
-    ];
+  } else if (carrier) {
+    const scen = scrapflyScenario(carrier.id, searchRef);
+    if (scen.url && !q('url')) url = scen.url;
+    jsScenario = scen.steps;
   }
   const wait = parseInt(q('wait') || '0', 10) || (jsScenario ? 0 : 8000);
   const find = q('find');

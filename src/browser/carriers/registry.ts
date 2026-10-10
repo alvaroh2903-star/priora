@@ -153,16 +153,14 @@ export const CARRIERS: CarrierMeta[] = [
     needsScrapingBrowser: true,
     // Akamai Bot Manager: o desafio é COMPORTAMENTAL (caixinha "I'm not a robot" +
     // "Verify" com barra de progresso) — o Unblock do Scrapfly não clica nisso.
-    // Desde 10/10 o motor resolve (scrapingBrowser: solveAkamaiBehavioral) e o
-    // link direto ?consnumber= traz o resultado: 2/2 passaram no diagnóstico (~4 s
-    // no desafio). MAS a 1ª rodada pelo caminho de produção, logo depois (5ª
-    // consulta do mesmo BL no dia), voltou página vazia em 10 min — o Akamai
-    // endurece com repetição. Segue bloqueado até um reteste com a reputação
-    // esfriada; leitor e solver já estão prontos.
-    scrapeBlocked: true,
+    // O navegador remoto vencia o desafio (solveAkamaiBehavioral) mas era barrado
+    // com repetição. A API de Scrape da Scrapfly com ASP passou mesmo depois de
+    // várias consultas no dia (10/10: 16 eventos, 260 créditos, 75 s) → é o modo
+    // de produção da ZIM.
+    fetchVia: 'scrapfly_api',
     pool: 'residential_unblock',
     notes:
-      'Akamai (desafio comportamental) resolvido pelo motor; link direto ?consnumber= (BL ou contêiner). Parser DEDICADO scrapers/zim.ts (cartões em DIV, ids _desktop_N_campo; o "Last Activity" do cabeçalho é a devolução). Validado 10/10: ZIMUTRT938698/TCNU7625335 — descarga 04/09, retirada 05/09, devolução 18/09 em Santos.',
+      'Produção via API de Scrape da Scrapfly com ASP (fetchVia scrapfly_api; ~260 créditos/consulta). Link direto ?consnumber= (BL ou contêiner). Parser DEDICADO scrapers/zim.ts (cartões em DIV, ids _desktop_N_campo; o "Last Activity" do cabeçalho é a devolução). Validado 10/10: ZIMUTRT938698/TCNU7625335 — descarga 04/09, retirada 05/09, devolução 18/09 em Santos.',
   },
   {
     id: 'hapag',
