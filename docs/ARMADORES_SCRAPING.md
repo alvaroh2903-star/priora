@@ -44,6 +44,17 @@ Escrevemos **uma vez** (serve para todos) — nada disto se repete por armador:
 | Datas de demurrage | `carriers/scrapers/hapag.ts` (`deriveContainers`) | eventos → datas |
 | Parser de datas | `parseDateToISO` | qualquer formato → ISO |
 
+### Dois modos de busca (por armador: `fetchVia`)
+
+- **`browser` (padrão):** navegador remoto da Scrapfly (CDP) + o nosso motor
+  (`driveTrackingPage`, drivers, coletores de detalhe). Barato e controlável.
+- **`scrapfly_api`:** API de Scrape da Scrapfly com **ASP** — a navegação inteira
+  é feita do lado dela, com o anti-bot mais forte que ela tem; interação via
+  `js_scenario` (`carriers/scrapflyFetch.ts`). Para portais cujo anti-bot barra o
+  navegador na 2ª camada: **CMA** (DataDome) e **ZIM** (Akamai). O HTML passa
+  pelos MESMOS parsers. Tetos da Scrapfly por etapa: `wait_for_selector` 15 s,
+  `wait_for_navigation` 10 s.
+
 ### Regras que valem para TODOS (aprendidas ao vivo)
 
 - **Previsão não é fato** (`carriers/estimates.ts`): evento com data depois de
@@ -78,14 +89,14 @@ Legenda **Anti-bot**: 🔴 Cloudflare interativo · 🟠 aceite/anti-bot leve ·
 | `maersk` | Maersk | MAEU, MSKU, MRKU | SPA (layout novo "ocean-design"; motor volta ao antigo) | `/tracking/{ref}` | 🟠 cookies + botões duplicados | ✅ histórico completo pelo layout antigo (validado 10/10, 274142590) |
 | `one` | Ocean Network Express | ONEY | SPA (site novo www.one-line.com: resumo 1 linha/contêiner) | `?trakNoParam=<sem ONEY>&trakNoTpCdParam=B` | 🟢 | ✅ resumo + histórico por clique no contêiner (coletor `one`; validado 10/10, NB6IAM548300: 2 contêineres, 8 eventos cada, previsões "E" fora) |
 | `msc` | MSC | MSCU, MEDU | SPA Alpine.js (driver) — dado lido do **estado Alpine** (`results`); reserva: DOM por `x-text` | 🟢 | ✅ (validado 10/10, MEDUY6394819: descarga 16/09, retirada 24/09, devolução 29/09, sem IA) |
-| `cmacgm` | CMA CGM | CMDU, CMAU, APLU | SPA | a confirmar | ❔ | ⬜ |
+| `cmacgm` | CMA CGM | CMDU, CMAU, APLU | form (Kendo) + DataDome | — (form via js_scenario) | 🔴 DataDome | ✅ **API de Scrape da Scrapfly com ASP** (`fetchVia: scrapfly_api`, ~30 créditos): form + "Display Previous Moves"; validado 10/10 (QGD3293058 e TJN0287340) |
 | `cosco` | COSCO | COSU | SPA SCCT (iframe Ant/Vue) | `scct/public/ct/base?trackingType=BILLOFLADING&number=` | 🟢 | ✅ só o evento atual por contêiner (não publica histórico, nem por contêiner) — compensado por cadência de 12h após a atracação |
 | `hmm` | HMM (Hyundai) | HDMU, HMMU, SGNM… | Formulário (srchBlNo1 + Retrieve) | form-based | 🟢 | ✅ (validado ao vivo; transbordo T/S ignorado) |
 | `yangming` | Yang Ming | YMLU, YMJA | Next.js (form genérico já busca) | 🟢 | ✅ histórico completo via página de detalhe por contêiner (clique; validado 10/10, FFAU6989181) |
 | `evergreen` | Evergreen (ShipmentLink) | EGLV, EVGL, EMCU | Servlet (driver dedicado: radio B/L + input#NO + Submit) | 🟠 | ✅ histórico completo via popup "Container Move Detail" por contêiner (validado 10/10, EGSU8138081) |
-| `zim` | ZIM | ZIMU | SPA React (form `.chips-input`) | 🔴 Akamai | 🟡 acesso INTERMITENTE (1 sucesso, 3 desafios Akamai); parser DIV a escrever |
+| `zim` | ZIM | ZIMU | SPA React (cartões em DIV) | `?consnumber=` (BL ou contêiner) | 🔴 Akamai | ✅ **API de Scrape da Scrapfly com ASP** (`fetchVia: scrapfly_api`, 260–470 créditos, ~1–4 min) + parser `zim.ts`; validado 10/10 (ZIMUTRT938698) |
 | `pil` | Pacific Int. Lines | PABV, NNPL, PILU | Página + form | `?...&refNo=` | 🟢 | ✅ (histórico completo via Trace, validado ao vivo; data com `*` = previsão, descartada) |
-| `oocl` | OOCL | OOLU | ASPX com formulário | a confirmar | 🟠 | ⬜ |
+| `oocl` | OOCL | OOLU | SCCT (Vue) + Cloudflare + slider CargoSmart | `?trackingType=BILLOFLADING&number=` | 🔴 | ⬜ pela API da Scrapfly o Cloudflare passa e a sessão abre; falta o captcha de arrastar (cs_captcha, 2 canvas) |
 
 > Detecção (ref → armador) e a URL de rastreio **já funcionam para os 12**. O que
 > falta nos ⬜ é só o tradutor do DOM — capturado quando tivermos um nº real.
