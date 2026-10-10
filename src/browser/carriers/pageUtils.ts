@@ -98,18 +98,24 @@ export async function robustClick(target: Locator, timeoutMs = 5000): Promise<Cl
     note('click', e);
   }
   try {
-    await el.evaluate((node) => (node as HTMLElement).click());
+    // Prazo explícito: sem ele, se o elemento sumiu, o evaluate espera o timeout
+    // PADRÃO do contexto (longo) — foi parte dos 16 min de um BL da Evergreen.
+    await el.evaluate((node) => (node as HTMLElement).click(), undefined, { timeout: timeoutMs });
     return { ok: true, method: 'js', visible, errors };
   } catch (e) {
     note('js', e);
   }
   try {
-    const clicked = await el.evaluate((node) => {
-      const anc = (node as HTMLElement).closest('button, [role="button"], summary, a') as HTMLElement | null;
-      if (!anc) return false;
-      anc.click();
-      return true;
-    });
+    const clicked = await el.evaluate(
+      (node) => {
+        const anc = (node as HTMLElement).closest('button, [role="button"], summary, a') as HTMLElement | null;
+        if (!anc) return false;
+        anc.click();
+        return true;
+      },
+      undefined,
+      { timeout: timeoutMs },
+    );
     if (clicked) return { ok: true, method: 'js-ancestor', visible, errors };
     errors.push('js-ancestor: nenhum ancestral clicável');
   } catch (e) {

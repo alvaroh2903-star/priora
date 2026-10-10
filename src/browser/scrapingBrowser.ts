@@ -795,11 +795,16 @@ export async function driveTrackingPage(
   const collector = opts.collectDetails === false ? undefined : findDetailCollector(activePage.url());
   if (collector) {
     const t0 = Date.now();
-    details = await collector.collect(activePage).catch(() => []);
+    const got = await collector.collect(activePage).catch((e) => ({
+      pages: [] as DetailPage[],
+      log: [`coletor falhou: ${String((e as Error).message).slice(0, 160)}`],
+    }));
+    details = got.pages;
     detailsDiag = {
       collector: collector.id,
       count: details.length,
       containers: details.map((d) => d.container),
+      log: got.log,
       ms: Date.now() - t0,
     };
   }
