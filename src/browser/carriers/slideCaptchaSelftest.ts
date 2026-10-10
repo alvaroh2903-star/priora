@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import { chromium } from 'playwright';
 import { solveCargoSmartSlider } from './slideCaptcha';
 
@@ -58,6 +60,41 @@ window.addEventListener('mouseup',()=>{if(!down)return;down=false;const ok=Math.
  else{setTimeout(()=>{mb.style.left='0px';off=0;draw();document.querySelector('.verify-msg').textContent='';},500);} });
 </script></body></html>`;
 
+// Modo ROTAÇÃO com as IMAGENS REAIS da OOCL (capturadas em 10/10): o fundo com
+// o buraco redondo e o círculo girado. Encaixe conferido a olho: 171° (o logo
+// "OOCL" fica legível e o navio emenda). A barra gira o círculo (curso inteiro =
+// 360°), redesenhando o canvas OU por CSS, conforme `how`.
+const img = (f: string) =>
+  'data:image/png;base64,' + fs.readFileSync(path.join(__dirname, 'fixtures', f)).toString('base64');
+const ROT_PAGE = (how: 'canvas' | 'css') => `<!doctype html><html><body style="margin:40px">
+<div class="capture-box" style="display:block"><div id="cs_captcha" style="position:relative">
+ <div class="verify-img-out"><div class="verify-img-panel" style="width:330px;height:160px;position:relative">
+  <canvas id="cs_captchaimgCanvas" width="330" height="160"></canvas>
+  <canvas id="cs_captchabockCanvas" width="330" height="160" style="position:absolute;top:0;left:0;z-index:2;transform-origin:218px 72px"></canvas>
+ </div></div>
+ <div class="verify-bar-area" style="width:332px;height:40px;position:relative;background:#eee">
+  <span id="slider-text">Please slide to verify</span>
+  <div class="verify-left-bar" style="width:38px;height:38px;position:absolute;left:0;top:0"><span class="verify-msg"></span>
+   <div class="verify-move-block" style="width:38px;height:38px;position:absolute;left:0;top:0;background:#fff;border:1px solid #999"></div></div>
+ </div></div></div>
+<script>
+const HOW='${how}', OK=171, CX=218, CY=72;
+const ib=new Image(), ip=new Image(); let ang=0;
+const bk=document.getElementById('cs_captchabockCanvas'), bc=bk.getContext('2d');
+function draw(){ if(HOW==='css'){ bk.style.transform='rotate('+ang+'deg)'; return; }
+ bc.clearRect(0,0,330,160); bc.save(); bc.translate(CX,CY); bc.rotate(ang*Math.PI/180); bc.translate(-CX,-CY); bc.drawImage(ip,0,0); bc.restore(); }
+ib.onload=()=>document.getElementById('cs_captchaimgCanvas').getContext('2d').drawImage(ib,0,0);
+ip.onload=()=>{ bc.drawImage(ip,0,0); };
+ib.src='${img('oocl-captcha-bg.png')}'; ip.src='${img('oocl-captcha-piece.png')}';
+const mb=document.querySelector('.verify-move-block'); let down=false,sx=0;
+mb.addEventListener('mousedown',e=>{down=true;sx=e.clientX;});
+window.addEventListener('mousemove',e=>{ if(!down)return; const left=Math.max(0,Math.min(332-38,e.clientX-sx)); mb.style.left=left+'px'; ang=left*360/(332-38); draw(); });
+window.addEventListener('mouseup',()=>{ if(!down)return; down=false; const d=Math.abs(((ang-OK)%360+540)%360-180); const ok=d<=6;
+ document.querySelector('.verify-msg').textContent=ok?'Validation successful':'Validation failed';
+ if(ok) setTimeout(()=>{document.querySelector('.capture-box').style.display='none';},300);
+ else setTimeout(()=>{mb.style.left='0px';ang=0;draw();document.querySelector('.verify-msg').textContent='';},500); });
+</script></body></html>`;
+
 let failures = 0;
 function check(label: string, cond: boolean, got?: unknown): void {
   if (cond) console.log(`  ✓ ${label}`);
@@ -83,6 +120,18 @@ async function main(): Promise<void> {
       console.log(`    buraco x=${gx}: alvo achado=${a?.targetX} (score ${a?.score} × 2º ${a?.second}), folga final=${a?.finalGap}px, ${r.attempts.length} tentativa(s), ${r.ms} ms → ${a?.result}`);
       check(`buraco em x=${gx}: análise acha o encaixe (±3px)`, Math.abs((r.attempts[0]?.targetX ?? -99) - gx) <= 3, r.attempts[0]?.targetX);
       check(`buraco em x=${gx}: arrasto aceito pelo "servidor"`, r.solved, r.attempts.map((x) => x.result));
+      await page.close();
+    }
+    console.log('[selftest] modo ROTAÇÃO com as imagens REAIS da OOCL (encaixe = 171°)');
+    for (const how of ['canvas', 'css'] as const) {
+      const page = await browser.newPage({ viewport: { width: 600, height: 400 } });
+      await page.setContent(ROT_PAGE(how));
+      await page.waitForTimeout(300);
+      const r = await solveCargoSmartSlider(page, { maxAttempts: 3 });
+      const a = r.attempts[r.attempts.length - 1];
+      console.log(`    giro por ${how}: ângulo achado=${a?.targetX}° (custo ${a?.score} × 2º ${a?.second}), modo=${a?.mode}, sobra=${a?.finalGap}°, ${r.attempts.length} tentativa(s), ${r.ms} ms → ${a?.result}`);
+      check(`giro por ${how}: análise acha 171° (±4°)`, Math.abs((r.attempts[0]?.targetX ?? -99) - 171) <= 4, r.attempts[0]?.targetX);
+      check(`giro por ${how}: arrasto aceito pelo "servidor" (±6°)`, r.solved, r.attempts.map((x) => x.result));
       await page.close();
     }
     console.log('[selftest] sem captcha na tela → não faz nada');

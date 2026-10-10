@@ -23,6 +23,9 @@ import { Page } from 'playwright';
  */
 
 export interface SliderAttempt {
+  /** 'rotação/css' | 'rotação/canvas' | 'rotação/linear' | (vazio = encaixe lateral). */
+  mode?: string;
+  degPerPx?: number;
   pieceX?: number;
   pieceW?: number;
   targetX?: number;
@@ -151,6 +154,226 @@ function analyzeSlider():
   };
 }
 
+/**
+ * Roda NA PÁGINA: modo ROTAÇÃO (o que a CargoSmart usa de fato — visto ao vivo
+ * em 10/10: fundo com um BURACO REDONDO branco e a "peça" = o círculo da foto
+ * GIRADO; arrastar a barra gira o círculo). Acha o ângulo em que a borda de
+ * dentro do círculo emenda com a borda de fora (o fundo em volta do buraco).
+ * Convenção: ângulos no sentido horário da tela; girar a peça de θ leva o pixel
+ * do ângulo φ para φ+θ. Guarda a assinatura do miolo em window.__csRotSig para
+ * medir, durante o arrasto, quanto o círculo JÁ girou.
+ */
+export function analyzeRotation():
+  | { error: string }
+  | { cx: number; cy: number; rp: number; rh: number; theta: number; cost: number; second: number } {
+  const bg = document.getElementById('cs_captchaimgCanvas') as HTMLCanvasElement | null;
+  const bk = document.getElementById('cs_captchabockCanvas') as HTMLCanvasElement | null;
+  if (!bg || !bk) return { error: 'canvas do captcha não encontrado' };
+  let B: Uint8ClampedArray;
+  let P: Uint8ClampedArray;
+  try {
+    B = bg.getContext('2d')!.getImageData(0, 0, bg.width, bg.height).data;
+    P = bk.getContext('2d')!.getImageData(0, 0, bk.width, bk.height).data;
+  } catch (e) {
+    return { error: `canvas bloqueado para leitura: ${(e as Error).message}` };
+  }
+  const W = bk.width;
+  const H = bk.height;
+  let minX = W;
+  let maxX = -1;
+  let minY = H;
+  let maxY = -1;
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      if (P[(y * W + x) * 4 + 3] > 60) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+  if (maxX < 0) return { error: 'peça vazia (imagem ainda não carregou?)' };
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  const rp = Math.min(maxX - minX, maxY - minY) / 2;
+  const BW = bg.width;
+  const BH = bg.height;
+  // O buraco é TRANSPARENTE no canvas (parece branco só porque a página é
+  // branca — visto nas imagens reais de 10/10); aceita branco também.
+  const white = (x: number, y: number) => {
+    const i = (Math.round(y) * BW + Math.round(x)) * 4;
+    return B[i + 3] < 60 || (B[i] > 235 && B[i + 1] > 235 && B[i + 2] > 235);
+  };
+  // Raio do buraco branco no fundo: mediana de 24 raios a partir do centro.
+  const rs: number[] = [];
+  for (let k = 0; k < 24; k++) {
+    const a = (k / 24) * Math.PI * 2;
+    let r = Math.max(2, rp * 0.6);
+    while (r < rp * 1.6) {
+      const x = cx + r * Math.cos(a);
+      const y = cy + r * Math.sin(a);
+      if (x < 0 || y < 0 || x >= BW || y >= BH || !white(x, y)) break;
+      r += 1;
+    }
+    rs.push(r);
+  }
+  rs.sort((p, q) => p - q);
+  const rh = rs[Math.floor(rs.length / 2)];
+  const ring = (data: Uint8ClampedArray, w: number, h: number, r0: number, r1: number) => {
+    const out: Array<[number, number, number] | null> = [];
+    for (let d = 0; d < 360; d++) {
+      const a = (d * Math.PI) / 180;
+      let sr = 0;
+      let sg = 0;
+      let sb = 0;
+      let n = 0;
+      for (let r = r0; r <= r1; r++) {
+        const x = Math.round(cx + r * Math.cos(a));
+        const y = Math.round(cy + r * Math.sin(a));
+        if (x < 0 || y < 0 || x >= w || y >= h) continue;
+        const i = (y * w + x) * 4;
+        if (data[i + 3] < 200) continue;
+        sr += data[i];
+        sg += data[i + 1];
+        sb += data[i + 2];
+        n++;
+      }
+      out.push(n ? [sr / n, sg / n, sb / n] : null);
+    }
+    return out;
+  };
+  const inner = ring(P, W, H, Math.round(rp - 6), Math.round(rp - 2));
+  const outer = ring(B, BW, BH, Math.round(rh + 2), Math.round(rh + 6));
+  const costs: number[] = [];
+  for (let t = 0; t < 360; t++) {
+    let c = 0;
+    let n = 0;
+    for (let d = 0; d < 360; d++) {
+      const o = outer[d];
+      const p = inner[(d - t + 360) % 360];
+      if (!o || !p) continue;
+      c += Math.abs(o[0] - p[0]) + Math.abs(o[1] - p[1]) + Math.abs(o[2] - p[2]);
+      n++;
+    }
+    costs.push(n ? c / n : Infinity);
+  }
+  let theta = 0;
+  for (let t = 1; t < 360; t++) if (costs[t] < costs[theta]) theta = t;
+  let second = Infinity;
+  for (let t = 0; t < 360; t++) {
+    const dd = Math.min(Math.abs(t - theta), 360 - Math.abs(t - theta));
+    if (dd > 12 && costs[t] < second) second = costs[t];
+  }
+  // Assinatura do miolo (para medir o giro durante o arrasto).
+  const sig = ring(P, W, H, Math.round(rp * 0.35), Math.round(rp * 0.85)).map((v) =>
+    v ? 0.299 * v[0] + 0.587 * v[1] + 0.114 * v[2] : -1,
+  );
+  (window as unknown as { __csRot?: unknown }).__csRot = { sig, cx, cy, rp };
+  return {
+    cx: Math.round(cx),
+    cy: Math.round(cy),
+    rp: Math.round(rp),
+    rh: Math.round(rh),
+    theta,
+    cost: Math.round(costs[theta]),
+    second: Math.round(second),
+  };
+}
+
+/** Roda NA PÁGINA: quanto o círculo JÁ girou (graus, horário) desde a análise. */
+export function measureRotation(): { angle: number; mode: string } | null {
+  const bk = document.getElementById('cs_captchabockCanvas') as HTMLCanvasElement | null;
+  const st = (window as unknown as { __csRot?: { sig: number[]; cx: number; cy: number; rp: number } }).__csRot;
+  if (!bk || !st) return null;
+  // 1) Giro por CSS (transform no canvas ou no pai).
+  for (const el of [bk, bk.parentElement]) {
+    if (!el) continue;
+    const tr = getComputedStyle(el).transform;
+    const m = tr && tr !== 'none' ? tr.match(/matrix\(([^)]+)\)/) : null;
+    if (m) {
+      const [a, b] = m[1].split(',').map(Number);
+      const ang = (Math.atan2(b, a) * 180) / Math.PI;
+      if (Math.abs(ang) > 0.2) return { angle: (ang + 360) % 360, mode: 'css' };
+    }
+  }
+  // 2) Giro redesenhado no canvas: compara a assinatura atual com a original.
+  let P: Uint8ClampedArray;
+  try {
+    P = bk.getContext('2d')!.getImageData(0, 0, bk.width, bk.height).data;
+  } catch {
+    return null;
+  }
+  const W = bk.width;
+  const H = bk.height;
+  const cur: number[] = [];
+  for (let d = 0; d < 360; d++) {
+    const a = (d * Math.PI) / 180;
+    let s = 0;
+    let n = 0;
+    for (let r = Math.round(st.rp * 0.35); r <= Math.round(st.rp * 0.85); r++) {
+      const x = Math.round(st.cx + r * Math.cos(a));
+      const y = Math.round(st.cy + r * Math.sin(a));
+      if (x < 0 || y < 0 || x >= W || y >= H) continue;
+      const i = (y * W + x) * 4;
+      if (P[i + 3] < 200) continue;
+      s += 0.299 * P[i] + 0.587 * P[i + 1] + 0.114 * P[i + 2];
+      n++;
+    }
+    cur.push(n ? s / n : -1);
+  }
+  let best = 0;
+  let bestC = Infinity;
+  for (let t = 0; t < 360; t++) {
+    let c = 0;
+    let n = 0;
+    for (let d = 0; d < 360; d++) {
+      const p = st.sig[(d - t + 360) % 360];
+      if (p < 0 || cur[d] < 0) continue;
+      c += Math.abs(cur[d] - p);
+      n++;
+    }
+    if (n && c / n < bestC) {
+      bestC = c / n;
+      best = t;
+    }
+  }
+  return { angle: best, mode: 'canvas' };
+}
+
+/** Roda NA PÁGINA: é o modo rotação? (peça redonda e grande + buraco branco no fundo) */
+export function isRotationMode(): boolean {
+  const bk = document.getElementById('cs_captchabockCanvas') as HTMLCanvasElement | null;
+  if (!bk) return false;
+  try {
+    const P = bk.getContext('2d')!.getImageData(0, 0, bk.width, bk.height).data;
+    let minX = bk.width;
+    let maxX = -1;
+    let minY = bk.height;
+    let maxY = -1;
+    let n = 0;
+    for (let y = 0; y < bk.height; y++) {
+      for (let x = 0; x < bk.width; x++) {
+        if (P[(y * bk.width + x) * 4 + 3] > 60) {
+          n++;
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+    const w = maxX - minX + 1;
+    const h = maxY - minY + 1;
+    if (w < 60 || h < 60 || Math.abs(w - h) > 8) return false;
+    // Disco: ocupa ~π/4 do quadrado.
+    const fill = n / (w * h);
+    return fill > 0.7 && fill < 0.86;
+  } catch {
+    return false;
+  }
+}
+
 /** Roda NA PÁGINA: posição da peça e do fundo na tela (px de tela). */
 function sliderGeometry(): { pieceLeft: number; bgLeft: number; scale: number } | null {
   const bg = document.getElementById('cs_captchaimgCanvas') as HTMLCanvasElement | null;
@@ -193,6 +416,68 @@ function sliderStatus(): string {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const rand = (a: number, b: number) => a + Math.random() * (b - a);
 
+/**
+ * Arrasto do modo ROTAÇÃO: mede a cada passo quanto o círculo já girou e para
+ * quando chega ao ângulo de encaixe. Descobre o sentido e a razão graus/px no
+ * 1º passo; se o giro não puder ser medido durante o arrasto, usa a razão
+ * linear da barra (curso inteiro = 360°).
+ */
+async function dragRotation(
+  page: Page,
+  theta: number,
+  hb: { x: number; y: number; width: number; height: number },
+): Promise<{ rem: number; degPerPx: number; mode: string }> {
+  const bar = await page.locator('#cs_captcha .verify-bar-area').first().boundingBox().catch(() => null);
+  const travel = bar ? bar.width - hb.width : 294;
+  const y0 = hb.y + hb.height / 2;
+  const x0 = hb.x + hb.width / 2;
+  let x = x0;
+  await page.mouse.move(x - rand(30, 60), y0 + rand(-8, 8), { steps: 4 });
+  await page.mouse.move(x, y0, { steps: 3 });
+  await sleep(rand(80, 180));
+  await page.mouse.down();
+  await sleep(rand(60, 140));
+  const probe = 16;
+  x += probe;
+  await page.mouse.move(x, y0 + rand(-1, 1), { steps: 3 });
+  await sleep(rand(60, 120));
+  const m1 = await page.evaluate(measureRotation).catch(() => null);
+  const moved1 = m1 ? Math.min(m1.angle, 360 - m1.angle) : 0;
+  let dir = 1;
+  let degPerPx = 360 / travel;
+  let mode = 'linear';
+  if (m1 && moved1 >= 3) {
+    dir = m1.angle < 180 ? 1 : -1;
+    degPerPx = moved1 / probe;
+    mode = m1.mode;
+  }
+  const remOf = (ang: number) => (dir > 0 ? (theta - ang + 360) % 360 : (ang - theta + 360) % 360);
+  let rem = remOf(mode === 'linear' ? probe * degPerPx : (m1 as { angle: number }).angle);
+  for (let i = 0; i < 80; i++) {
+    if (rem <= 1.5 || rem >= 358.5) break;
+    let step = (rem / degPerPx) * rand(0.45, 0.7);
+    step = Math.max(1, Math.min(26, step));
+    if (x + step > x0 + travel) step = Math.max(0, x0 + travel - x);
+    if (step <= 0) break;
+    x += step;
+    await page.mouse.move(x, y0 + rand(-1.5, 1.5), { steps: 2 });
+    await sleep(rand(15, 45));
+    if (mode === 'linear') {
+      rem = remOf(((x - x0) * degPerPx) % 360);
+    } else {
+      const m = await page.evaluate(measureRotation).catch(() => null);
+      if (!m) break;
+      rem = remOf(m.angle);
+      // Razão graus/px corrigida pelo caminho já andado (o componente pode não ser linear).
+      const done = dir > 0 ? m.angle : (360 - m.angle) % 360;
+      if (x - x0 > 20 && done > 2) degPerPx = done / (x - x0);
+    }
+  }
+  await sleep(rand(150, 350));
+  await page.mouse.up();
+  return { rem: Math.round((rem > 180 ? rem - 360 : rem) * 10) / 10, degPerPx: Math.round(degPerPx * 1000) / 1000, mode };
+}
+
 export async function solveCargoSmartSlider(
   page: Page,
   opts: { maxAttempts?: number; captureImages?: boolean } = {},
@@ -206,7 +491,79 @@ export async function solveCargoSmartSlider(
   out.found = true;
   const maxAttempts = opts.maxAttempts ?? 4;
   for (let n = 0; n < maxAttempts; n++) {
-    // Imagens carregam por XHR depois do componente: espera a peça ter pixels.
+    // Espera a peça ter pixels (as imagens chegam por XHR depois do componente).
+    for (let w = 0; w < 10; w++) {
+      const has = await page
+        .evaluate(() => {
+          const c = document.getElementById('cs_captchabockCanvas') as HTMLCanvasElement | null;
+          if (!c) return false;
+          try {
+            const d = c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data;
+            for (let i = 3; i < d.length; i += 4 * 7) if (d[i] > 60) return true;
+          } catch {
+            return true; // não dá para ler — segue e a análise reporta
+          }
+          return false;
+        })
+        .catch(() => true);
+      if (has) break;
+      await sleep(500);
+    }
+    if (opts.captureImages && !out.images) {
+      out.images = await page
+        .evaluate(() => ({
+          bg: (document.getElementById('cs_captchaimgCanvas') as HTMLCanvasElement).toDataURL('image/png'),
+          piece: (document.getElementById('cs_captchabockCanvas') as HTMLCanvasElement).toDataURL('image/png'),
+        }))
+        .catch(() => undefined);
+    }
+    // MODO ROTAÇÃO (o que a CargoSmart usa): girar o círculo até emendar.
+    if (await page.evaluate(isRotationMode).catch(() => false)) {
+      const ar = await page.evaluate(analyzeRotation).catch((e) => ({ error: String((e as Error).message) }));
+      if ('error' in ar) {
+        out.attempts.push({ result: `análise (rotação): ${ar.error}` });
+        out.error = ar.error;
+        break;
+      }
+      const hbr = await page.locator('#cs_captcha .verify-move-block').first().boundingBox().catch(() => null);
+      if (!hbr) {
+        out.attempts.push({ result: 'barra fora da tela' });
+        break;
+      }
+      const dr = await dragRotation(page, ar.theta, hbr);
+      const attR: SliderAttempt = {
+        mode: `rotação/${dr.mode}`,
+        targetX: ar.theta,
+        score: ar.cost,
+        second: ar.second,
+        finalGap: dr.rem,
+        degPerPx: dr.degPerPx,
+        result: '',
+      };
+      let stR = 'aberto';
+      for (let w = 0; w < 12; w++) {
+        await sleep(400);
+        stR = await page.evaluate(sliderStatus).catch(() => 'erro');
+        if (stR !== 'aberto') break;
+      }
+      if (stR === 'sumiu' && /\/error\b/i.test(page.url())) stR = 'página de erro';
+      attR.result = stR;
+      out.attempts.push(attR);
+      if (stR === 'sucesso' || stR === 'sumiu') {
+        out.solved = true;
+        break;
+      }
+      if (stR === 'página de erro') break;
+      await sleep(1200);
+      if (!(await hasCargoSmartSlider(page))) {
+        out.solved = !/\/error\b/i.test(page.url());
+        break;
+      }
+      await page.locator('#cs_captcha .verify-refresh').first().click({ timeout: 3000 }).catch(() => undefined);
+      await sleep(1500);
+      continue;
+    }
+    // MODO ENCAIXE (peça lateral) — mantido para variações do componente.
     let an = await page.evaluate(analyzeSlider).catch((e) => ({ error: String((e as Error).message) }));
     for (let w = 0; w < 10 && 'error' in an && /vazia/.test(an.error); w++) {
       await sleep(500);
