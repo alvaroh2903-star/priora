@@ -24,6 +24,7 @@
     "msc:selftest": "ts-node src/browser/carriers/scrapers/mscSelftest.ts",
     "yangming:selftest": "ts-node src/browser/carriers/scrapers/yangmingSelftest.ts",
     "zim:selftest": "ts-node src/browser/carriers/scrapers/zimSelftest.ts",
+    "cmaapi:selftest": "ts-node src/browser/carriers/api/cmacgmSelftest.ts",
     "botstore:selftest": "ts-node src/demurrage/demurrageBotStoreSelftest.ts",
     "reconciliation:selftest": "ts-node src/demurrage/reconciliationSelftest.ts",
     "events:selftest": "ts-node src/browser/carriers/scrapers/demurrageEventsSelftest.ts",

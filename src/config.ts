@@ -157,6 +157,15 @@ export const config = {
       // Header de auth (padrão Maersk: "Consumer-Key"). Configurável p/ OAuth/variações.
       authHeader: (process.env.MAERSK_AUTH_HEADER || 'Consumer-Key').trim(),
     },
+    // CMA CGM Track & Trace (DCSA) — chave self-service em api-portal.cma-cgm.com.
+    // URL e header a CONFIRMAR no portal após o cadastro (por isso configuráveis).
+    cmacgm: {
+      apiKey: (process.env.CMA_API_KEY || '').trim(),
+      baseUrl: (process.env.CMA_TRACK_URL || 'https://apis.cma-cgm.net/operation/trackandtrace/v1/events')
+        .trim()
+        .replace(/\/+$/, ''),
+      authHeader: (process.env.CMA_AUTH_HEADER || 'KeyId').trim(),
+    },
     // HMM (o usuário vai conseguir a chave). Deixado pronto p/ preencher.
     hmm: {
       apiKey: (process.env.HMM_API_KEY || '').trim(),

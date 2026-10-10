@@ -1,6 +1,7 @@
 import { CarrierMeta, ReferenceType, TrackingResult } from './types';
 import { config } from '../../config';
 import { fetchMaerskTracking } from './api/maersk';
+import { fetchCmaTracking } from './api/cmacgm';
 
 /**
  * Priora — Fontes de API OFICIAL por armador (ao lado do scraping).
@@ -20,6 +21,7 @@ type ApiFetcher = (ref: string, type: ReferenceType) => Promise<TrackingResult |
 /** Clients de API por id de armador (vão crescendo conforme integramos). */
 const CARRIER_APIS: Record<string, ApiFetcher> = {
   maersk: fetchMaerskTracking,
+  cmacgm: fetchCmaTracking,
 };
 
 /** Há credenciais de API configuradas para este armador? */

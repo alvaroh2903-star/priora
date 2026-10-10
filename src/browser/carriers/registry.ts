@@ -130,6 +130,8 @@ export const CARRIERS: CarrierMeta[] = [
     needsLoginForDemurrage: true,
     needsScrapingBrowser: true, // SPA React → render real; protegido por DataDome.
     scrapeBlocked: true, // DataDome comportamental — não vencemos por código; economiza crédito.
+    // API oficial (DCSA) primeiro quando CMA_API_KEY estiver no Render (api/cmacgm.ts).
+    apiFirst: true,
     pool: 'residential_unblock', // quando abre sessão (diagnóstico): residential + Unblock (fura DataDome — confirmado ao vivo).
     // Parser DEDICADO scrapers/cma.ts (Date|Moves|Location|Vessel) PRONTO e
     // testado offline. PORÉM o portal é protegido por DataDome (anti-bot

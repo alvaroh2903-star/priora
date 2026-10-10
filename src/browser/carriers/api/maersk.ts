@@ -19,7 +19,7 @@ export function isMaerskApiConfigured(): boolean {
 }
 
 /** Acha recursivamente o 1º array que parece uma lista de eventos DCSA. */
-function findEventArray(node: unknown, depth = 0): Record<string, unknown>[] | null {
+export function findEventArray(node: unknown, depth = 0): Record<string, unknown>[] | null {
   if (!node || depth > 6) return null;
   if (Array.isArray(node)) {
     const looksDcsa = node.some(
