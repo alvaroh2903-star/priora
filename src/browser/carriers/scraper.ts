@@ -152,7 +152,10 @@ export async function scrapeCarrier(
   // (COSCO/Evergreen); 'residential_unblock' p/ anti-bot pesado (CMA/OOCL/ZIM).
   const pool = carrier.pool ?? 'residential';
   const runner = <T>(fn: (page: Page, ctx: BrowserContext) => Promise<T>): Promise<T> =>
-    useRemote ? withRemotePage(fn, { pool }) : withPage(fn);
+    // `targetUrl` arma o bypass ASP do Scrapfly no pool de unblock (CMA/OOCL/ZIM):
+    // é o Scrapfly que navega até o portal e vence o anti-bot ANTES de nos
+    // entregar a sessão. Nos outros pools é ignorado.
+    useRemote ? withRemotePage(fn, { pool, targetUrl: sourceUrl }) : withPage(fn);
   const specific = SCRAPERS[carrier.id];
 
   try {

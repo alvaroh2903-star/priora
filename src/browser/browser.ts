@@ -170,10 +170,12 @@ export async function withPage<T>(
  */
 export async function withRemotePage<T>(
   fn: (page: Page, ctx: BrowserContext) => Promise<T>,
-  opts: { pool?: PoolMode } = {},
+  opts: { pool?: PoolMode; targetUrl?: string } = {},
 ): Promise<T> {
   // `opts.pool` escolhe o pool da sessão remota (datacenter/residential/
-  // residential_unblock). Ver connectSB/ConnectOptions.
+  // residential_unblock) e `opts.targetUrl` é o alvo do bypass ASP no pool de
+  // unblock (o Scrapfly navega ANTES de nos entregar a sessão).
+  // Ver connectSB/ConnectOptions.
   const browser = await connectSB(opts);
   try {
     // Reusa o contexto E a página que o provedor já entrega (Scrapfly/Bright Data

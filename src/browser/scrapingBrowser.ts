@@ -94,18 +94,53 @@ export function scrapeBrowserProvider(): string {
 }
 
 /**
+ * Arma o Unblock Mode do Scrapfly NA URL da sessão. Descoberto lendo o SDK
+ * oficial (`scrapfly/browser_config.py::websocket_url`) depois que o OOCL ficou
+ * 133s preso num Cloudflare Turnstile MESMO com `unblock=true` configurado:
+ *
+ *  - `unblock=true` sozinho é NO-OP. O bypass ASP acontece numa navegação feita
+ *    PELO Scrapfly no setup da sessão, e ele só sabe PARA ONDE navegar via
+ *    `target_url`. Sem isso, a sessão sobe residencial crua e somos NÓS que
+ *    navegamos depois (page.goto) — direto na parede do anti-bot.
+ *  - `solve_captcha=true` liga o solver nativo do Cloud Browser, que trata
+ *    "GeeTest, PerimeterX hold, and puzzle captchas" — o *puzzle* é exatamente o
+ *    slider do CargoSmart (OOCL). Cobrado por solve; falha não custa nada.
+ *
+ * Preserva o resto da URL que o operador colou (resolution, country…) e NÃO
+ * mexe no `proxy_pool` já existente (o `public_residential_pool` está provado em
+ * produção). Best-effort: URL não-Scrapfly volta intacta.
+ */
+function withUnblockMode(wss: string, targetUrl?: string): string {
+  try {
+    const u = new URL(wss);
+    const isScrapfly = u.searchParams.has('api_key') || /scrapfly/i.test(u.host);
+    if (!isScrapfly) return wss;
+    u.searchParams.set('unblock', 'true');
+    u.searchParams.set('solve_captcha', 'true');
+    // O alvo do bypass. Sem ele o `unblock` não tem o que desbloquear.
+    if (targetUrl) u.searchParams.set('target_url', targetUrl);
+    return u.toString();
+  } catch {
+    return wss;
+  }
+}
+
+/**
  * Monta o endpoint CDP conforme o POOL pedido (3 níveis — ver PoolMode):
- * - 'residential_unblock': URL dedicada residencial+Unblock (SCRAPE_BROWSER_WSS_HEAVY);
- *   sem ela, reescreve o pool da genérica p/ residencial (sem Unblock, best-effort).
+ * - 'residential_unblock': URL dedicada residencial (SCRAPE_BROWSER_WSS_HEAVY) ou a
+ *   genérica reescrita p/ residencial, SEMPRE com Unblock+solver armados
+ *   (`withUnblockMode`) e apontados ao `targetUrl` desta requisição.
  * - 'residential': reescreve o `proxy_pool` da URL genérica p/ residencial (sem Unblock).
  * - 'datacenter' (padrão do builder): URL genérica como está (barato), ou Bright Data.
+ *
+ * `targetUrl` é a URL do portal que vamos abrir — só usada no pool de unblock.
  */
-function buildWSEndpoint(pool: PoolMode = 'datacenter'): string {
+function buildWSEndpoint(pool: PoolMode = 'datacenter', targetUrl?: string): string {
   const generic = getGenericWss();
   if (pool === 'residential_unblock') {
     const dedicated = getGenericWssHeavy();
-    if (dedicated) return dedicated;
-    if (generic) return withResidentialPool(generic); // fallback: residencial sem Unblock
+    if (dedicated) return withUnblockMode(dedicated, targetUrl);
+    if (generic) return withUnblockMode(withResidentialPool(generic), targetUrl);
   } else if (pool === 'residential') {
     if (generic) return withResidentialPool(generic);
     // sem URL genérica: segue p/ o Bright Data abaixo (sem reescrita de pool).
@@ -126,6 +161,12 @@ export interface ConnectOptions {
    * 'residential_unblock' p/ anti-bot pesado (CMA/OOCL/ZIM).
    */
   pool?: PoolMode;
+  /**
+   * URL do portal que esta sessão vai abrir. No pool 'residential_unblock' vira
+   * o `target_url` do Scrapfly — é o ALVO do bypass ASP, feito por ELE antes de
+   * nos entregar a sessão. Sem isso o `unblock` não faz nada (ver withUnblockMode).
+   */
+  targetUrl?: string;
 }
 
 /**
@@ -138,7 +179,7 @@ export async function connectSB(opts: ConnectOptions = {}): Promise<Browser> {
   if (!isSBConfigured()) {
     throw new Error('Cloud browser não configurado (defina SCRAPE_BROWSER_WSS ou BRIGHTDATA_SB_AUTH).');
   }
-  return chromium.connectOverCDP(buildWSEndpoint(opts.pool), { timeout: 30_000 });
+  return chromium.connectOverCDP(buildWSEndpoint(opts.pool, opts.targetUrl), { timeout: 30_000 });
 }
 
 export interface SBScrapeOptions {
@@ -611,7 +652,9 @@ async function scrapeViaSBOnce(opts: SBScrapeOptions): Promise<SBScrapeResult> {
   const startedAt = Date.now();
   let browser: Browser | null = null;
   try {
-    browser = await connectSB({ pool: opts.pool });
+    // `targetUrl` = a URL que vamos abrir: no pool de unblock é o ALVO do bypass
+    // ASP que o Scrapfly faz ANTES de nos devolver a sessão (ver withUnblockMode).
+    browser = await connectSB({ pool: opts.pool, targetUrl: opts.url });
     // Reusa o contexto E a página que o provedor já entrega (Scrapfly gerencia o
     // fingerprint na sessão) — criar contexto/página novos pode perdê-lo.
     const context = browser.contexts()[0] || (await browser.newContext());
