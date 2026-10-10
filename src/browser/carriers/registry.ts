@@ -152,7 +152,12 @@ export const CARRIERS: CarrierMeta[] = [
     // Akamai Bot Manager: o desafio é COMPORTAMENTAL (caixinha "I'm not a robot" +
     // "Verify" com barra de progresso) — o Unblock do Scrapfly não clica nisso.
     // Desde 10/10 o motor resolve (scrapingBrowser: solveAkamaiBehavioral) e o
-    // link direto ?consnumber= traz o resultado: 2/2 passaram (~4 s no desafio).
+    // link direto ?consnumber= traz o resultado: 2/2 passaram no diagnóstico (~4 s
+    // no desafio). MAS a 1ª rodada pelo caminho de produção, logo depois (5ª
+    // consulta do mesmo BL no dia), voltou página vazia em 10 min — o Akamai
+    // endurece com repetição. Segue bloqueado até um reteste com a reputação
+    // esfriada; leitor e solver já estão prontos.
+    scrapeBlocked: true,
     pool: 'residential_unblock',
     notes:
       'Akamai (desafio comportamental) resolvido pelo motor; link direto ?consnumber= (BL ou contêiner). Parser DEDICADO scrapers/zim.ts (cartões em DIV, ids _desktop_N_campo; o "Last Activity" do cabeçalho é a devolução). Validado 10/10: ZIMUTRT938698/TCNU7625335 — descarga 04/09, retirada 05/09, devolução 18/09 em Santos.',
