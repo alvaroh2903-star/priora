@@ -45,6 +45,15 @@ export function classifyEvent(status: string): NormalizedEventType {
   if (/discharg|unload/.test(s) && /\bt\/s\b|transship|tranship|transbordo|feeder/.test(s)) {
     return 'other';
   }
+  // QUALQUER movimento em porto de TRANSBORDO é etapa INTERMEDIÁRIA (o demurrage
+  // conta no DESTINO), então não pode virar gate_out/available. Ex. real (MSC):
+  // "Full Transshipment Positioned Out LADEN" em Busan — o "full.*out" da regra
+  // de gate_out marcava isso como RETIRADA e cravava um gateOut falso. Transbordo
+  // = sempre `other`.
+  if (/transship|tranship|transbordo/.test(s)) return 'other';
+  // "Positioned Out/In" é reposicionamento de PÁTIO/ferrovia (empilhamento), não a
+  // entrega ao consignatário. Jargão de terminal, nunca de retirada final.
+  if (/position(?:ed)?\s+(?:out|in)\b/.test(s)) return 'other';
   for (const [type, re] of RULES) {
     if (re.test(s)) return type;
   }
