@@ -1,6 +1,7 @@
 import { extractEventsWithDetails } from './dispatch';
 import { extractYangMingDetailEvents, isYangMingDetailPage } from './yangming';
 import { deriveContainers } from './hapag';
+import { classifyEvent } from '../eventTypes';
 import { scrapeIntervalMs } from '../../../demurrage/demurrageBotStore';
 import { TrackingResult } from '../types';
 
@@ -114,6 +115,40 @@ const ct = { numero: 'CSNU8710333', tipo: null, status: null, dischargeDate: nul
 const ev = (type: 'berth' | 'other', status: string) => ({ date: '2026-10-08', status, location: null, vessel: null, voyage: null, type, container: 'CSNU8710333' });
 check('em alto mar → espera de trânsito (72h)', scrapeIntervalMs(base([ev('other', 'Departed')], [ct]), 12 * H, 72 * H) === 72 * H);
 check('navio chegou ao destino → ritmo ativo (12h)', scrapeIntervalMs(base([ev('berth', 'Vessel arrived at Last POD')], [ct]), 12 * H, 72 * H) === 12 * H);
+
+console.log('[selftest] Maersk — eventos REAIS (274142590 / MRSU2327730, layout antigo, 10/10/2026)');
+const mk = (date: string, status: string, location: string, vessel: string | null = null) => ({
+  date, status, location, vessel, voyage: null, type: classifyEvent(status), container: 'MRSU2327730',
+});
+const MAERSK_REAL = [
+  mk('2026-07-23', 'Gate out Empty', 'Antwerp'),
+  mk('2026-07-24', 'Gate in', 'ANTWERP'),
+  mk('2026-07-27', 'Load', 'ANTWERP', 'MAERSK LANCO'),
+  mk('2026-07-28', 'Vessel departure', 'ANTWERP', 'MAERSK LANCO'),
+  mk('2026-08-01', 'Vessel arrival', 'PORT TANGIER MEDITERRANEE', 'MAERSK LANCO'),
+  mk('2026-08-01', 'Discharge', 'PORT TANGIER MEDITERRANEE', 'MAERSK LANCO'),
+  mk('2026-08-02', 'Load', 'PORT TANGIER MEDITERRANEE', 'MAERSK LEON'),
+  mk('2026-08-03', 'Vessel departure', 'PORT TANGIER MEDITERRANEE', 'MAERSK LEON'),
+  mk('2026-08-23', 'Vessel arrival', 'ITAPOA', 'MAERSK LEON'),
+  mk('2026-08-24', 'Discharge', 'ITAPOA', 'MAERSK LEON'),
+  mk('2026-08-29', 'Gate out for delivery', 'ITAPOA'),
+  mk('2026-08-31', 'Empty container return', 'Itapoa'),
+];
+const mkc = deriveContainers(MAERSK_REAL, null)[0];
+check('BL completo: descarga = 2026-08-24 (Itapoá, destino)', mkc?.dischargeDate === '2026-08-24', String(mkc?.dischargeDate));
+check('retirada = 2026-08-29', mkc?.gateOut === '2026-08-29', String(mkc?.gateOut));
+check('devolução = 2026-08-31', mkc?.emptyReturn === '2026-08-31', String(mkc?.emptyReturn));
+// O cenário perigoso: o BL ainda NAVEGANDO de Tânger para o Brasil. A Maersk
+// escreve só "Discharge" em Tânger (sem a palavra transbordo).
+const emTransito = MAERSK_REAL.filter((e) => e.date <= '2026-08-03');
+const tc = deriveContainers(emTransito, null)[0];
+check('navegando após Tânger: descarga de transbordo NÃO inicia a contagem', tc?.dischargeDate == null, String(tc?.dischargeDate));
+check('navegando após Tânger: segue em espera de trânsito (72h)', scrapeIntervalMs(base(emTransito, [{ ...ct, numero: 'MRSU2327730' }]), 12 * H, 72 * H) === 72 * H);
+const atracado = MAERSK_REAL.filter((e) => e.date <= '2026-08-23');
+check('navio atracou em Itapoá (sem nova partida): ritmo ativo (12h)', scrapeIntervalMs(base(atracado, [{ ...ct, numero: 'MRSU2327730' }]), 12 * H, 72 * H) === 12 * H);
+// Entrega no interior por trem depois da descarga NÃO é transbordo.
+const comTrem = [...MAERSK_REAL.slice(0, 10), mk('2026-08-25', 'Load on rail', 'ITAPOA'), mk('2026-08-27', 'Gate out for delivery', 'JOINVILLE')];
+check('"Load on rail" após a descarga não cancela a descarga', deriveContainers(comTrem, null)[0]?.dischargeDate === '2026-08-24', String(deriveContainers(comTrem, null)[0]?.dischargeDate));
 
 console.log('');
 if (fail === 0) {

@@ -3,7 +3,7 @@ import path from 'path';
 import { config } from '../config';
 import { TrackingResult } from '../browser/carriers';
 import { TrackingEvent } from '../browser/carriers/types';
-import { deriveContainers } from '../browser/carriers/scrapers/hapag';
+import { deriveContainers, latestAtDestination } from '../browser/carriers/scrapers/hapag';
 
 /**
  * Priora — Cache dos resultados do bot de rastreio, por referência (BL/contêiner).
@@ -155,7 +155,9 @@ export function scrapeIntervalMs(
   // espera, descarga e retirada podiam acontecer dentro da janela e a DESCARGA —
   // início da contagem — sumia, substituída pela retirada. Chegada em porto de
   // transbordo já vem como `other` (guarda do classifyEvent), não cai aqui.
-  const navioChegou = (result.events || []).some((e) => e.type === 'berth');
+  // Só chegada no DESTINO: atracação seguida de nova partida/embarque em navio
+  // foi escala de transbordo — o navio seguiu viagem, continua em trânsito.
+  const navioChegou = latestAtDestination(result.events || [], 'berth') !== null;
   const emTransito = cs.length > 0 && !temEventoDestino && !navioChegou;
   return emTransito ? transitMs : activeMs;
 }

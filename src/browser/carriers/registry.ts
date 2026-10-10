@@ -30,7 +30,7 @@ export const CARRIERS: CarrierMeta[] = [
     needsLoginForDemurrage: true,
     // Scrapfly raspa a Maersk (Bright Data recusava por robots.txt). Scraping é
     // primário; a API oficial (MAERSK_API_KEY) fica como fallback. BLs 9 dígitos.
-    notes: 'parser da transport-plan (data-test) implementado; raspa via Scrapfly. API oficial DCSA como fallback.',
+    notes: 'Layout novo ("ocean-design") esconde os eventos num acordeão "View N events" — sem abrir, só chegada do navio e devolução. O motor fecha o banner de cookies e clica "Return to old tracking" (elemento VISÍVEL; há duplicata escondida), e o parser da transport-plan lê o plano inteiro. Validado ao vivo 10/10/2026 (274142590): 12 eventos, descarga 24/08, retirada 29/08, devolução 31/08 em Itapoá. Descarga de transbordo sem a palavra ("Discharge" em Tânger seguida de "Load") é descartada por latestAtDestination.',
   },
   {
     id: 'one',
@@ -55,7 +55,7 @@ export const CARRIERS: CarrierMeta[] = [
     containerPrefixes: ['YMLU', 'YMMU', 'YMPU', 'YMYU'],
     trackingUrl: 'https://www.yangming.com/en/esolution/cargo_tracking',
     needsLoginForDemurrage: true,
-    notes: 'formulário na página; verificar URL de deep link e seletores.',
+    notes: 'Resumo mostra só o último evento por contêiner. Histórico DCSA completo na página de detalhe, aberta por CLIQUE no nº do contêiner (URL direta vem vazia — depende do estado da busca). Coletor em detailCollectors.ts; parser extractYangMingDetailEvents. Validado ao vivo (FFAU6989181): descarga 25/09, retirada 29/09, devolução 30/09. Datas AAAA/MM/DD.',
   },
   {
     id: 'msc',

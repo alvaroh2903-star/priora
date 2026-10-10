@@ -357,6 +357,36 @@ function latestByTypeAfter(
   return dates.length ? dates[dates.length - 1] : null;
 }
 
+/**
+ * (Re)embarque em NAVIO ou partida de navio. Depois de uma descarga, prova que
+ * ela foi de TRANSBORDO — mesmo quando o portal não escreve "transshipment".
+ * Visto ao vivo na Maersk: "Discharge" em PORT TANGIER MEDITERRANEE (01/08)
+ * seguido de "Load" no MAERSK LEON (02/08). Transporte terrestre depois da
+ * descarga ("Load on rail/truck") NÃO conta — é entrega no interior, não
+ * transbordo.
+ */
+export function isVesselReload(e: TrackingEvent): boolean {
+  if (e.type !== 'other') return false;
+  const s = e.status || '';
+  if (/\b(rail|train|truck|road|barge)\b/i.test(s)) return false;
+  const loadOrDepart = /\bload|depart|on\s*board|sail|embarq/i.test(s);
+  const vesselish = Boolean(e.vessel) || /vessel|on\s*board|navio/i.test(s);
+  return loadOrDepart && vesselish;
+}
+
+/**
+ * Data mais recente de um tipo que NÃO foi seguida de (re)embarque em navio —
+ * ou seja, aconteceu no DESTINO, não num porto de transbordo. Se a mais recente
+ * tem reembarque depois dela, o navio seguiu viagem: ainda não há data de
+ * destino (null). Vale para descarga e chegada do navio.
+ */
+export function latestAtDestination(events: TrackingEvent[], type: NormalizedEventType): string | null {
+  const last = latestByType(events, type);
+  if (!last) return null;
+  const reloadedAfter = events.some((e) => e.date && (e.date as string) >= last && isVesselReload(e));
+  return reloadedAfter ? null : last;
+}
+
 function latestEvent(events: TrackingEvent[]): TrackingEvent | null {
   const withDate = events.filter((e) => e.date).sort((a, b) => (a.date! < b.date! ? -1 : 1));
   return withDate.length ? withDate[withDate.length - 1] : events[0] || null;
@@ -365,7 +395,9 @@ function latestEvent(events: TrackingEvent[]): TrackingEvent | null {
 /** Monta UM ContainerInfo a partir dos eventos daquele contêiner. */
 function buildContainerInfo(numero: string | null, events: TrackingEvent[]): ContainerInfo {
   const last = latestEvent(events);
-  const dischargeDate = latestByType(events, 'discharge');
+  // Descarga NO DESTINO: uma descarga seguida de reembarque em navio foi de
+  // transbordo e não pode iniciar a contagem do demurrage (BL ainda navegando).
+  const dischargeDate = latestAtDestination(events, 'discharge');
   return {
     numero,
     tipo: events.find((e) => e.tipo)?.tipo || null,

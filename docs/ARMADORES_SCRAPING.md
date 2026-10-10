@@ -59,14 +59,14 @@ Legenda **Anti-bot**: 🔴 Cloudflare interativo · 🟠 aceite/anti-bot leve ·
 | id | Armador | SCAC | Portal | Deep link | Anti-bot | Parser |
 |----|---------|------|--------|-----------|----------|--------|
 | `hapag` | Hapag-Lloyd | HLCU, HLXU, UACU | SPA "Tracking BETA" (Vue/Quasar) | `?booking=`/`?container=` | 🔴 | ✅ |
-| `maersk` | Maersk | MAEU, MSKU, MRKU | SPA | `/tracking/{ref}` | 🟢 | ✅ (validado ao vivo, 274319835) |
+| `maersk` | Maersk | MAEU, MSKU, MRKU | SPA (layout novo "ocean-design"; motor volta ao antigo) | `/tracking/{ref}` | 🟠 cookies + botões duplicados | ✅ histórico completo pelo layout antigo (validado 10/10, 274142590) |
 | `one` | Ocean Network Express | ONEY | SPA | `?trakNoParam=&trakNoTpCdParam=` | 🟢 | ✅ (validado ao vivo, ONEYTA6RA1675800) |
 | `msc` | MSC | MSCU, MEDU | SPA Alpine.js (driver) + **JSON da API interna** | 🟢 | ✅ (validado ao vivo, MEDUY8275040) |
 | `cmacgm` | CMA CGM | CMDU, CMAU, APLU | SPA | a confirmar | ❔ | ⬜ |
-| `cosco` | COSCO | COSU | SPA SCCT (iframe Ant/Vue) | `scct/public/ct/base?trackingType=BILLOFLADING&number=` | 🟢 | ✅ |
+| `cosco` | COSCO | COSU | SPA SCCT (iframe Ant/Vue) | `scct/public/ct/base?trackingType=BILLOFLADING&number=` | 🟢 | ✅ só o evento atual por contêiner (não publica histórico, nem por contêiner) — compensado por cadência de 12h após a atracação |
 | `hmm` | HMM (Hyundai) | HDMU, HMMU, SGNM… | Formulário (srchBlNo1 + Retrieve) | form-based | 🟢 | ✅ (validado ao vivo; transbordo T/S ignorado) |
-| `yangming` | Yang Ming | YMLU, YMJA | Next.js (form genérico já busca) | 🟢 | ✅ (validado ao vivo, YMJAB237020139) |
-| `evergreen` | Evergreen (ShipmentLink) | EGLV, EVGL, EMCU | Servlet (driver dedicado: radio B/L + input#NO + Submit) | 🟠 | ✅ (validado ao vivo, EGLV010600577145 → 6 contêineres) |
+| `yangming` | Yang Ming | YMLU, YMJA | Next.js (form genérico já busca) | 🟢 | ✅ histórico completo via página de detalhe por contêiner (clique; validado 10/10, FFAU6989181) |
+| `evergreen` | Evergreen (ShipmentLink) | EGLV, EVGL, EMCU | Servlet (driver dedicado: radio B/L + input#NO + Submit) | 🟠 | ✅ histórico completo via popup "Container Move Detail" por contêiner (validado 10/10, EGSU8138081) |
 | `zim` | ZIM | ZIMU | SPA React (form `.chips-input`) | 🔴 Akamai | 🟡 acesso INTERMITENTE (1 sucesso, 3 desafios Akamai); parser DIV a escrever |
 | `pil` | Pacific Int. Lines | PABV, NNPL, PILU | Página + form | `?...&refNo=` | 🟢 | ✅ (histórico completo via Trace, validado ao vivo) |
 | `oocl` | OOCL | OOLU | ASPX com formulário | a confirmar | 🟠 | ⬜ |
