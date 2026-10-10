@@ -376,36 +376,78 @@ export async function driveShipmentLinkForm(
 export async function driveCmaForm(
   page: Page,
   ref: string,
-): Promise<{ filled: boolean; valueAfterFill: string | null; submitted: boolean; urlAfter: string }> {
-  const input = page
-    .locator('#Reference, input[name="SearchViewModel.Reference"], input.bookingCheck')
-    .first();
-  if ((await input.count().catch(() => 0)) === 0) {
+): Promise<{
+  filled: boolean;
+  valueAfterFill: string | null;
+  submitted: boolean;
+  urlAfter: string;
+  attempts?: Array<{ searchBy: string | null; found: boolean; notFoundAlert: boolean }>;
+}> {
+  const INPUT = '#Reference, input[name="SearchViewModel.Reference"], input.bookingCheck';
+  if ((await page.locator(INPUT).count().catch(() => 0)) === 0) {
     return { filled: false, valueAfterFill: null, submitted: false, urlAfter: page.url() };
   }
-  await input.scrollIntoViewIfNeeded().catch(() => undefined);
-  await input.click().catch(() => undefined);
-  await input.fill(ref).catch(() => undefined);
-  // Kendo UI só registra o valor quando os eventos nativos disparam.
-  await input.dispatchEvent('input').catch(() => undefined);
-  await input.dispatchEvent('change').catch(() => undefined);
-  const valueAfterFill = await input.inputValue().catch(() => null);
-
-  // O submit navega (form server-rendered): aguardamos a navegação em vez de
-  // adivinhar um tempo fixo. Enter é o reforço se o botão não estiver clicável.
-  const submit = page.locator('#btnTracking, button[type="submit"]:has-text("Search")').first();
-  const navigation = page.waitForNavigation({ timeout: 30_000 }).catch(() => null);
+  // O form tem um campo OCULTO `SearchViewModel.SearchBy` que vem com "Container".
+  // Visto ao vivo (10/10, QGD3293058): enviando um BL com SearchBy=Container o CMA
+  // não acha nada e devolve o form vazio — parecia bloqueio, era o TIPO errado.
+  // 1ª tentativa: DIGITAR como gente (o JS do site — classes bookingCheck/
+  // duplicatecheck — detecta o tipo enquanto digita) e deixar o site escolher.
+  // Se o CMA disser "not found" e a ref não for contêiner, tenta os outros tipos.
+  const isContainer = /^[A-Z]{4}\d{7}$/.test(ref.toUpperCase());
+  const plan: Array<string | null> = isContainer ? [null] : [null, 'BL', 'Booking'];
+  const attempts: Array<{ searchBy: string | null; found: boolean; notFoundAlert: boolean }> = [];
+  let valueAfterFill: string | null = null;
   let submitted = false;
-  if ((await submit.count().catch(() => 0)) > 0) {
-    await submit.click({ timeout: 8000 }).catch(() => undefined);
+  for (const forced of plan) {
+    const input = page.locator(INPUT).first();
+    if ((await input.count().catch(() => 0)) === 0) break;
+    await input.scrollIntoViewIfNeeded().catch(() => undefined);
+    await input.click().catch(() => undefined);
+    await input.fill('').catch(() => undefined);
+    await input.pressSequentially(ref, { delay: 60 }).catch(() => input.fill(ref).catch(() => undefined));
+    // Kendo UI só registra o valor quando os eventos nativos disparam.
+    await input.dispatchEvent('input').catch(() => undefined);
+    await input.dispatchEvent('change').catch(() => undefined);
+    await input.press('Tab').catch(() => undefined); // blur: validação/detecção do tipo
+    await page.waitForTimeout(1200);
+    if (forced) {
+      await page
+        .evaluate((v) => {
+          const sb = document.querySelector<HTMLInputElement>('input[name="SearchViewModel.SearchBy"], #SearchBy');
+          if (sb) sb.value = v;
+        }, forced)
+        .catch(() => undefined);
+    }
+    const searchBy = await page
+      .locator('input[name="SearchViewModel.SearchBy"], #SearchBy')
+      .first()
+      .inputValue()
+      .catch(() => null);
+    valueAfterFill = await input.inputValue().catch(() => null);
+
+    // O submit navega (form server-rendered): aguardamos a navegação em vez de
+    // adivinhar um tempo fixo. Enter é o reforço se o botão não estiver clicável.
+    const submit = page.locator('#btnTracking, button[type="submit"]:has-text("Search")').first();
+    const navigation = page.waitForNavigation({ timeout: 30_000 }).catch(() => null);
+    if ((await submit.count().catch(() => 0)) > 0) {
+      await submit.click({ timeout: 8000 }).catch(() => undefined);
+    } else {
+      await input.press('Enter').catch(() => undefined);
+    }
     submitted = true;
-  } else {
-    await input.press('Enter').catch(() => undefined);
-    submitted = true;
+    await navigation;
+    await page.waitForLoadState('domcontentloaded', { timeout: 20_000 }).catch(() => undefined);
+    await page.waitForTimeout(1500);
+    const notFoundAlert = await page
+      .locator('#trackingAlertError')
+      .isVisible()
+      .catch(() => false);
+    const body = (await page.innerText('body').catch(() => '')) || '';
+    const found = !notFoundAlert && body.toUpperCase().includes(ref.toUpperCase());
+    attempts.push({ searchBy, found, notFoundAlert });
+    if (found) break;
   }
-  await navigation;
-  await page.waitForLoadState('domcontentloaded', { timeout: 20_000 }).catch(() => undefined);
-  return { filled: true, valueAfterFill, submitted, urlAfter: page.url() };
+  return { filled: true, valueAfterFill, submitted, urlAfter: page.url(), attempts };
 }
 
 /**

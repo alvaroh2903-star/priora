@@ -93,6 +93,7 @@ export const CARRIER_DRIVERS: CarrierDriver[] = [
           submitted: r.submitted,
           valueAfterFill: r.valueAfterFill,
           urlAfter: r.urlAfter,
+          attempts: r.attempts,
         },
       };
     },

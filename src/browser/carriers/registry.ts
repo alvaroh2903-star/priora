@@ -143,11 +143,10 @@ export const CARRIERS: CarrierMeta[] = [
     scac: ['ZIMU'],
     containerPrefixes: ['ZIMU', 'ZCSU', 'ZMOU', 'ZBDU'],
     trackingUrl: 'https://www.zim.com/tools/track-a-shipment',
-    // Padrão conhecido: ?consnumber={ref} (contêiner). Verificar para BL.
-    buildTrackingUrl: (ref, type) =>
-      type === 'container'
-        ? `https://www.zim.com/tools/track-a-shipment?consnumber=${encodeURIComponent(ref)}`
-        : null,
+    // ?consnumber={ref} — vale para contêiner e BL (o campo da ZIM aceita os dois).
+    // Com link direto, quem navega até o resultado é o PRÓPRIO Unblock do Scrapfly.
+    buildTrackingUrl: (ref) =>
+      `https://www.zim.com/tools/track-a-shipment?consnumber=${encodeURIComponent(ref)}`,
     needsLoginForDemurrage: true,
     needsScrapingBrowser: true,
     // ACESSO INTERMITENTE — Akamai Bot Manager. Na 1ª rodada ao vivo (Scrapfly

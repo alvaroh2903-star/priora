@@ -434,11 +434,86 @@ export function isChallengePage(title: string, html: string): boolean {
 async function onChallenge(page: Page): Promise<boolean> {
   const title = (await page.title().catch(() => '')) || '';
   if (isChallengePage(title, '')) return true;
+  if (/challenge validation|akamai challenge/i.test(title)) return true;
+  if (await findAkamaiBehavioralFrame(page)) return true;
   const n = await page
     .locator('#challenge-error-text, #challenge-stage, #cf-challenge-running, script[src*="challenges.cloudflare.com"]')
     .count()
     .catch(() => 0);
   return n > 0;
+}
+
+/**
+ * Desafio COMPORTAMENTAL do Akamai ("sec-cpt"). Visto ao vivo na ZIM (10/10,
+ * link direto ?consnumber=): página "Challenge Validation" com um iframe que
+ * traz a caixinha "I'm not a robot"/"Je ne suis pas un robot" (#robot-checkbox) e
+ * o botão "Verify"/"Valider" (#progress-button), habilitado após o clique e uma
+ * barra de progresso (~30 s, prova de trabalho feita pelo próprio iframe). O
+ * Unblock do Scrapfly NÃO clica nisso — esperar não resolve.
+ */
+async function findAkamaiBehavioralFrame(page: Page): Promise<import('playwright').Frame | null> {
+  for (const f of page.frames()) {
+    const n = await f.locator('#sec-if-cpt-container #robot-checkbox, #sec-if-behaviours').count().catch(() => 0);
+    if (n > 0) return f;
+  }
+  return null;
+}
+
+/** Diagnóstico da última tentativa no desafio do Akamai (vai para o `diag`). */
+let lastAkamaiDiag: Record<string, unknown> | undefined;
+
+/**
+ * Faz o que uma pessoa faz no desafio do Akamai: marca a caixinha, espera o botão
+ * habilitar (fim da barra de progresso) e clica em "Verify". Depois espera a
+ * página sair do desafio. Devolve true se saiu.
+ */
+async function solveAkamaiBehavioral(page: Page, ms = 75_000): Promise<boolean> {
+  const t0 = Date.now();
+  const frame = await findAkamaiBehavioralFrame(page);
+  if (!frame) return false;
+  const d: Record<string, unknown> = { found: true };
+  lastAkamaiDiag = d;
+  const box = frame.locator('#sec-if-behaviours-child, #robot-checkbox').first();
+  d.checkbox = await box
+    .click({ timeout: 8000 })
+    .then(() => 'click')
+    .catch(async () =>
+      frame
+        .locator('#robot-checkbox')
+        .evaluate((el) => (el as HTMLInputElement).click())
+        .then(() => 'js')
+        .catch(() => 'falhou'),
+    );
+  // O botão fica com a classe progress-btn-disabled até a prova de trabalho acabar.
+  d.enabled = await frame
+    .waitForFunction(
+      () => {
+        const b = document.querySelector('.behavioral-button');
+        return Boolean(b) && !b!.className.includes('progress-btn-disabled');
+      },
+      undefined,
+      { timeout: 50_000 },
+    )
+    .then(() => true)
+    .catch(() => false);
+  d.proceed = await frame
+    .locator('#progress-button')
+    .click({ timeout: 8000 })
+    .then(() => 'click')
+    .catch(() => 'falhou');
+  // Passou = a página deixa de ser o desafio (recarrega no conteúdo real).
+  let passed = false;
+  while (Date.now() - t0 < ms) {
+    await page.waitForTimeout(2500);
+    const title = (await page.title().catch(() => '')) || '';
+    if (!/challenge/i.test(title) && !(await findAkamaiBehavioralFrame(page))) {
+      passed = true;
+      break;
+    }
+  }
+  d.passed = passed;
+  d.ms = Date.now() - t0;
+  return passed;
 }
 
 /**
@@ -451,6 +526,10 @@ async function waitOutChallenge(page: Page, ms = 45_000): Promise<void> {
   const deadline = Date.now() + ms;
   // Se nem é desafio, sai na hora.
   if (!(await onChallenge(page))) return;
+  // Desafio COMPORTAMENTAL do Akamai: não se resolve esperando — exige o clique.
+  if (await findAkamaiBehavioralFrame(page)) {
+    await solveAkamaiBehavioral(page).catch(() => undefined);
+  }
   while (Date.now() < deadline) {
     await page.waitForTimeout(3000);
     if (!(await onChallenge(page))) return; // passou
@@ -582,7 +661,11 @@ export async function driveTrackingPage(
   // queima o estado: a OOCL respondeu "This Page Has Expired" e jogou a sessão
   // para /scct/public/moc/error — depois de termos furado o Turnstile. Então, se
   // a aba já está no alvo, NÃO renavegamos (também economiza tempo de sessão).
-  const preNavigated = alreadyOnTarget(page.url(), opts.url);
+  // Onde a aba estava quando a recebemos (com Unblock, o Scrapfly já navegou):
+  // é o que diz se o bypass entregou o alvo, uma página de erro ou nada.
+  const initialUrl = page.url();
+  lastAkamaiDiag = undefined;
+  const preNavigated = alreadyOnTarget(initialUrl, opts.url);
   if (!preNavigated) {
     try {
       // 'commit' retorna assim que a navegação começa — não trava em SPAs pesadas
@@ -646,6 +729,11 @@ export async function driveTrackingPage(
         await activePage.waitForSelector(RESULT_SELECTOR, { timeout: 15_000 }).catch(() => {});
         await acceptCookies(activePage);
       }
+    }
+    // O desafio do Akamai também aparece DEPOIS da busca (ZIM: "Please try again.
+    // ⚠️ Verify" no lugar do resultado) — resolve e deixa a página recarregar.
+    if (await findAkamaiBehavioralFrame(activePage)) {
+      await solveAkamaiBehavioral(activePage).catch(() => undefined);
     }
     // Espera DETERMINÍSTICA pelos resultados (agnóstico de provedor): só segue
     // quando o conteúdo real apareceu (ref/contêiner) — não por tempo fixo. Vale
@@ -822,7 +910,9 @@ export async function driveTrackingPage(
     // "nós navegamos". Some junto do diag do driver, quando houver.
     diag: {
       ...(diag || {}),
+      initialUrl,
       preNavigated,
+      ...(lastAkamaiDiag ? { akamai: lastAkamaiDiag } : {}),
       landedUrl: activePage.url(),
       blockMode,
       ...(followDiag ? { follow: followDiag } : {}),
