@@ -742,9 +742,14 @@ async function runSbDiagnostic(p: SbDiagParams): Promise<{ payload: Record<strin
  * disco) e sai em /health/job?id=. Base comum de scrape-sb-async, watchdog-async
  * e capture-batch-async.
  */
+/**
+ * `report(parcial)` grava um resultado PARCIAL com o job ainda `pending` — lotes
+ * e watchdog levam muitos minutos e, sem isto, nada aparecia antes do fim (dava
+ * para achar que tinha travado).
+ */
 function startDiagJob(
   meta: { ref: string; url: string; via: string },
-  work: () => Promise<{ result: unknown; html?: string }>,
+  work: (report: (partial: unknown) => void) => Promise<{ result: unknown; html?: string }>,
 ): ScrapeJob {
   pruneScrapeJobs();
   const job: ScrapeJob = {
@@ -756,9 +761,14 @@ function startDiagJob(
   };
   scrapeJobs.set(job.id, job);
   persistJob(job);
+  const report = (partial: unknown) => {
+    if (job.status !== 'pending') return;
+    job.result = partial;
+    persistJob(job);
+  };
   void (async () => {
     try {
-      const { result, html } = await work();
+      const { result, html } = await work(report);
       job.result = result;
       if (html) job.html = html.length > JOB_HTML_CAP ? html.slice(0, JOB_HTML_CAP) : html;
       job.status = 'done';
@@ -850,7 +860,7 @@ app.get('/health/capture-batch-async', (req, res) => {
 
   const job = startDiagJob(
     { ref: resolved.map((r) => r.params!.ref).join(','), url: '(lote)', via: `batch:${resolved.length}` },
-    async () => {
+    async (report) => {
       const out: Array<Record<string, unknown>> = [];
       for (const r of resolved) {
         try {
@@ -859,8 +869,10 @@ app.get('/health/capture-batch-async', (req, res) => {
         } catch (e) {
           out.push({ input: r.input, ok: false, error: (e as Error).message });
         }
+        // Parcial: cada item aparece assim que termina (item=N já funciona).
+        report({ commit: BUILD_COMMIT, count: resolved.length, done: out.length, items: [...out] });
       }
-      return { result: { commit: BUILD_COMMIT, count: out.length, items: out } };
+      return { result: { commit: BUILD_COMMIT, count: out.length, done: out.length, items: out } };
     },
   );
   res.json(jobCreatedResponse(req, token, job, { count: resolved.length }));
@@ -892,12 +904,14 @@ app.get('/health/watchdog-async', (req, res) => {
     }
   }
   const aiFallback = String(req.query.ai ?? '1') !== '0';
-  const job = startDiagJob({ ref: Object.values(overrides).join(',') || '(cache)', url: '(watchdog)', via: 'watchdog' }, async () => ({
+  const job = startDiagJob({ ref: Object.values(overrides).join(',') || '(cache)', url: '(watchdog)', via: 'watchdog' }, async (report) => ({
     result: await runWatchdog({
       carrierIds: carrierIds.length ? carrierIds : undefined,
       overrides: Object.keys(overrides).length ? overrides : undefined,
       concurrency: 1,
       aiFallback,
+      // Parcial: cada armador aparece no poll assim que termina.
+      onProgress: (rows, total) => report({ mode: 'watchdog', parcial: true, done: rows.length, total, carriers: rows }),
     }),
   }));
   res.json(jobCreatedResponse(req, token, job, { refs: overrides }));

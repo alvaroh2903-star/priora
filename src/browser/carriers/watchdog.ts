@@ -239,6 +239,11 @@ export interface WatchdogOptions {
   concurrency?: number;
   /** Camada de IA ligada (paridade com produção). Default true. */
   aiFallback?: boolean;
+  /**
+   * Chamado a cada armador concluído, com as linhas prontas até ali. Uma volta
+   * nos 9 leva 30–45 min em sequência: sem isto, nada aparecia antes do fim.
+   */
+  onProgress?: (rows: WatchdogCarrierReport[], total: number) => void;
 }
 
 function buildRow(
@@ -312,9 +317,13 @@ export async function runWatchdog(opts: WatchdogOptions = {}): Promise<WatchdogR
   const c = Math.min(Math.max(opts.concurrency ?? 1, 1), 4);
   const aiFallback = opts.aiFallback !== false;
 
-  const rows = await mapLimit(carriers, c, (carrier) =>
-    checkCarrier(carrier, refs[carrier.id] || null, aiFallback),
-  );
+  const done: WatchdogCarrierReport[] = [];
+  const rows = await mapLimit(carriers, c, async (carrier) => {
+    const row = await checkCarrier(carrier, refs[carrier.id] || null, aiFallback);
+    done.push(row);
+    opts.onProgress?.([...done], carriers.length);
+    return row;
+  });
 
   const summary: Record<string, number> = { total: rows.length };
   for (const r of rows) summary[r.health] = (summary[r.health] || 0) + 1;
