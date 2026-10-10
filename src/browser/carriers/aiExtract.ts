@@ -53,6 +53,8 @@ MUITO IMPORTANTE: inclua TODOS os eventos que achar, com atenção especial a:
 - DEVOLUÇÃO do vazio (empty returned / empty return / devolução).
 Ignore itens de navegação/menu/rodapé do site — só interessa o rastreio.
 
+PREVISÕES NÃO SÃO EVENTOS: ignore tudo que for estimado/planejado (ETA, ETD, "Estimated", "Estimate", "Expected", "Planned", "Previsto", datas de chegada/descarga/devolução que ainda não aconteceram). Só devolva movimentos que JÁ OCORRERAM ("Actual"). Uma previsão lida como fato faria o contêiner parecer descarregado/devolvido antes da hora.
+
 Regras: NUNCA invente datas ou números. Normalize datas para AAAA-MM-DD. Campo ausente = null. Se não houver nenhum evento de rastreio real no texto, devolva events vazio e confidence baixa. Responda só com o objeto estruturado.`;
 
 /** Normaliza a data vinda da IA: aceita AAAA-MM-DD direto; senão tenta parsear. */

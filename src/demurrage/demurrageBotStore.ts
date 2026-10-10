@@ -4,6 +4,7 @@ import { config } from '../config';
 import { TrackingResult } from '../browser/carriers';
 import { TrackingEvent } from '../browser/carriers/types';
 import { deriveContainers, latestAtDestination } from '../browser/carriers/scrapers/hapag';
+import { dropFutureEvents } from '../browser/carriers/estimates';
 
 /**
  * Priora — Cache dos resultados do bot de rastreio, por referência (BL/contêiner).
@@ -84,9 +85,11 @@ export function saveBotResult(ref: string, result: TrackingResult): StoredBotRes
   const key = refKey(ref);
   const prev = store[key]?.result;
 
-  let toStore = result;
-  const prevEvents = prev?.events ?? [];
-  const newEvents = result.events ?? [];
+  // Previsão (data futura) nunca entra no histórico acumulado: quando a data
+  // chegasse, a estimativa velha passaria a valer como fato. Ver carriers/estimates.
+  const prevEvents = dropFutureEvents(prev?.events ?? []);
+  const newEvents = dropFutureEvents(result.events ?? []);
+  let toStore: TrackingResult = { ...result, events: newEvents };
   const sameCarrier = !prev?.carrierId || prev.carrierId === result.carrierId;
   if (sameCarrier && (prevEvents.length > 0 || newEvents.length > 0)) {
     const events = mergeEvents(prevEvents, newEvents);
@@ -157,7 +160,7 @@ export function scrapeIntervalMs(
   // transbordo já vem como `other` (guarda do classifyEvent), não cai aqui.
   // Só chegada no DESTINO: atracação seguida de nova partida/embarque em navio
   // foi escala de transbordo — o navio seguiu viagem, continua em trânsito.
-  const navioChegou = latestAtDestination(result.events || [], 'berth') !== null;
+  const navioChegou = latestAtDestination(dropFutureEvents(result.events || []), 'berth') !== null;
   const emTransito = cs.length > 0 && !temEventoDestino && !navioChegou;
   return emTransito ? transitMs : activeMs;
 }

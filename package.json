@@ -30,6 +30,7 @@
     "autosync:selftest": "ts-node src/demurrage/autoSyncSelftest.ts",
     "remoteslot:selftest": "ts-node src/browser/remoteSlotSelftest.ts",
     "detailhistory:selftest": "ts-node src/browser/carriers/scrapers/detailHistorySelftest.ts",
+    "estimates:selftest": "ts-node src/browser/carriers/estimatesSelftest.ts",
     "demurrage:calc": "ts-node src/demurrage/calculatorSelftest.ts",
     "auth:selftest": "ts-node src/auth/accountSwitchSelftest.ts",
     "rocket:selftest": "ts-node src/rocket/rocketSelftest.ts",

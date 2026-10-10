@@ -5,6 +5,7 @@ import { hasApiSource, fetchViaApi } from './apiSources';
 import { CarrierMeta, ReferenceType, TrackingResult } from './types';
 import { extractEventsViaAI } from './aiExtract';
 import { deriveContainers } from './scrapers/hapag';
+import { dropFutureEvents } from './estimates';
 
 /**
  * Priora — Fachada do bot de armadores (usada pelas rotas).
@@ -48,6 +49,16 @@ export interface TrackOptions {
 export async function trackShipment(
   input: string,
   opts: TrackOptions = {},
+): Promise<TrackingResult> {
+  const result = await trackShipmentRaw(input, opts);
+  // Saída ÚNICA de todos os caminhos (scraping, IA, API oficial): previsão (evento
+  // com data futura) não é fato e não sai daqui — ver carriers/estimates.
+  return { ...result, events: dropFutureEvents(result.events || []) };
+}
+
+async function trackShipmentRaw(
+  input: string,
+  opts: TrackOptions,
 ): Promise<TrackingResult> {
   const reference = normalizeRef(input);
   if (!reference) throw new Error('Informe uma referência (contêiner, BL ou booking).');

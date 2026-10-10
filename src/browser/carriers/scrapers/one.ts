@@ -2,6 +2,18 @@ import { TrackingEvent } from '../types';
 import { classifyEvent } from '../eventTypes';
 import { parseDateToISO, stripTags, dedupe } from './hapag';
 
+// Ícone da data: cor de fundo do "E" de Estimate, ou o traçado da própria letra E
+// (se mudarem a cor, o desenho da letra ainda denuncia).
+const ONE_ESTIMATE_ICON = /#BD0F72|M11\.252 12\.6621H4\.40039V2\.66211/i;
+
+/** A data desta linha é ESTIMADA (ícone "E" da ONE)? */
+export function isOneEstimateRow(rowHtml: string): boolean {
+  const i = rowHtml.search(/EventDate_event-date-container/i);
+  if (i < 0) return false;
+  const icon = rowHtml.slice(i).match(/<svg\b[\s\S]*?<\/svg>/i);
+  return Boolean(icon && ONE_ESTIMATE_ICON.test(icon[0]));
+}
+
 /**
  * Priora — Parser do rastreio da ONE (ecomm.one-line.com), tabela React.
  *
@@ -15,6 +27,12 @@ import { parseDateToISO, stripTags, dedupe } from './hapag';
  * Nomes de evento (classificam direto): "Unloaded from Vessel…" → discharge,
  * "Gate Out … for Delivery to Consignee" → gate_out, "Empty Container Returned
  * from Customer" → empty_return, "Vessel Arrival…" → berth.
+ *
+ * PREVISÕES: a ONE mistura no MESMO histórico o realizado e o estimado (legenda
+ * "Actual Schedule" × "Estimate Schedule"). Cada data traz um ícone redondo com a
+ * letra "A" (azul #00506D) ou "E" (magenta #BD0F72). Linha "E" é descartada aqui —
+ * visto ao vivo (NB6IAM548300): descarga, retirada E devolução estimadas, todas
+ * com data de 29/10, apareciam como fato.
  */
 export function extractOneEvents(html: string): TrackingEvent[] {
   const out: TrackingEvent[] = [];
@@ -42,6 +60,7 @@ export function extractOneEvents(html: string): TrackingEvent[] {
     const date = dateM ? parseDateToISO(stripTags(dateM[1])) : null;
 
     if (!status || !date) continue;
+    if (isOneEstimateRow(chunk)) continue; // previsão, não aconteceu
 
     // Navio/voyage (opcional): <a …>RDO ENDEAVOUR 078W</a>.
     let vessel: string | null = null;

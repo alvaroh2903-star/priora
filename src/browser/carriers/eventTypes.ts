@@ -83,7 +83,11 @@ export function classifyEvent(status: string): NormalizedEventType {
   // waiting for transshippING" (Ningbo, porto de transbordo). Com `...hipment`
   // isso escapava e virava DESCARGA — num BL ainda em trânsito, a descarga do
   // transbordo seria lida como início da contagem de demurrage.
-  if (/trans\w*hip|transbordo/.test(s)) return 'other';
+  //
+  // E a abreviação "T/S" (ONE: "Vessel Arrival at T/S Port"): sem ela, a chegada
+  // no porto de transbordo virava `berth` — e "navio chegou ao destino" tira o BL
+  // da espera de trânsito antes da hora (raspagens à toa a cada 12h).
+  if (/trans\w*hip|transbordo|\bt\/s\b/.test(s)) return 'other';
   // "Positioned Out/In" é reposicionamento de PÁTIO/ferrovia (empilhamento), não a
   // entrega ao consignatário. Jargão de terminal, nunca de retirada final.
   if (/position(?:ed)?\s+(?:out|in)\b/.test(s)) return 'other';

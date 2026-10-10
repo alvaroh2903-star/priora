@@ -1,4 +1,5 @@
 import { TrackingEvent } from '../types';
+import { dropFutureEvents } from '../estimates';
 import { extractEventsFromHtml as extractHapagOrGeneric } from './hapag';
 import { extractMaerskEvents } from './maersk';
 import { extractOneEvents } from './one';
@@ -104,8 +105,19 @@ export interface DetailHtml {
  *    evento do resumo — nada se perde;
  *  - todo evento de detalhe herda o nº do contêiner da página (as linhas do
  *    detalhe não o repetem) e, se faltar, o tipo (40HQ…) que o resumo mostrou.
+ *
+ * Eventos com data FUTURA (previsões que o portal mistura no histórico, ex.: ONE)
+ * saem aqui mesmo — o diagnóstico e a produção mostram o mesmo que o cálculo usa.
  */
 export function extractEventsWithDetails(
+  html: string,
+  apiJson?: string,
+  details?: DetailHtml[],
+): TrackingEvent[] {
+  return dropFutureEvents(mergeSummaryAndDetails(html, apiJson, details));
+}
+
+function mergeSummaryAndDetails(
   html: string,
   apiJson?: string,
   details?: DetailHtml[],

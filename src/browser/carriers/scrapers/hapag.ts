@@ -2,6 +2,7 @@ import { Page } from 'playwright';
 import { ContainerInfo, NormalizedEventType, TrackingEvent } from '../types';
 import { classifyEvent } from '../eventTypes';
 import { isValidContainer } from '../detect';
+import { dropFutureEvents } from '../estimates';
 import { ScrapeContext, ScrapeOutput } from '../scraperTypes';
 import {
   acceptCookies,
@@ -422,9 +423,14 @@ function buildContainerInfo(numero: string | null, events: TrackingEvent[]): Con
  *    (Hapag/Maersk/ONE, que expõem os eventos de um contêiner por vez).
  */
 export function deriveContainers(
-  events: TrackingEvent[],
+  allEvents: TrackingEvent[],
   containerHint: string | null,
 ): ContainerInfo[] {
+  // PREVISÃO não é fato: evento com data futura (ONE mistura "Estimate Schedule"
+  // na mesma linha do tempo) nunca vira descarga/retirada/devolução — senão o
+  // contêiner sairia "devolvido" numa data que ainda não chegou e seria congelado
+  // como resolvido. Ver carriers/estimates.
+  const events = dropFutureEvents(allEvents);
   const withContainer = events.filter((e) => e.container);
   if (withContainer.length > 0) {
     const groups = new Map<string, TrackingEvent[]>();
