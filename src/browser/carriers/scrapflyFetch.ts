@@ -29,6 +29,11 @@ export function scrapflyScenario(carrierId: string, searchRef: string): { url?: 
         { click: { selector: '#btnTracking' } },
         { wait_for_navigation: { timeout: 10000 } },
         { wait: 3000 },
+        // O resultado mostra só o ÚLTIMO movimento (visto ao vivo em 10/10:
+        // HPCU5300140, "Gate in empty at Depot"); a descarga está no histórico,
+        // atrás do "Display Previous Moves" da linha do contêiner (grid Kendo).
+        { click: { selector: 'a[aria-label="Display Previous Moves"]', ignore_if_not_visible: true } },
+        { wait: 2500 },
       ],
     };
   }
