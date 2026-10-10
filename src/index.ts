@@ -21,6 +21,7 @@ import { withPage } from './browser/browser';
 import { trackShipment, detect, detectCarrier, resolveSearchRef } from './browser/carriers';
 import type { PoolMode } from './browser/carriers/types';
 import { mapLimit } from './browser/carriers/concurrency';
+import { runWatchdog } from './browser/carriers/watchdog';
 import type { TrackingResult } from './browser/carriers';
 import { tryFillSearch } from './browser/carriers/pageUtils';
 import { getAntiCaptchaBalance, solveRecaptchaV2 } from './browser/antiCaptcha';
@@ -713,6 +714,58 @@ app.get('/health/track', async (req, res) => {
     res.json({ ok: result.ok, ms: Date.now() - startedAt, result });
   } catch (e) {
     res.status(502).json({ ok: false, ms: Date.now() - startedAt, error: (e as Error).message });
+  }
+});
+
+/**
+ * Camada 3 — VIGILÂNCIA (gated por DIAG_TOKEN): puxa um BL-canário por armador
+ * pelo pipeline REAL de produção e classifica a SAÚDE de cada um — para cravar/
+ * ajustar o parser ANTES de o cliente sentir. Os canários saem do cache de
+ * resultados reais (renovam-se sozinhos conforme embarques fluem); seed por env
+ * (WATCHDOG_SEED_REFS) e override por query cobrem o resto.
+ *
+ * Saúde: healthy | degraded_ai (caiu pra IA → cravar parser) | stale_ref (BL
+ * expirado → renovar) | thin (render magro, infra) | captcha | broken
+ * (investigar) | blocked_by_design (anti-bot → API) | no_ref | error.
+ *
+ * Uso:  /health/watchdog?token=<DIAG_TOKEN>
+ *       [&carriers=maersk,msc]        -> subconjunto
+ *       [&refs=maersk:123,msc:MEDU..] -> override de canário por armador
+ *       [&c=1] [&ai=1]
+ */
+app.get('/health/watchdog', async (req, res) => {
+  const token = (process.env.DIAG_TOKEN || '').trim();
+  if (!token) return res.status(404).json({ error: 'Desativado (defina DIAG_TOKEN).' });
+  if (String(req.query.token || '') !== token) return res.status(401).json({ error: 'token inválido.' });
+
+  const carrierIds = String(req.query.carriers || '')
+    .split(/[,\s]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  // Override de canário: "carrierId:ref,carrierId:ref".
+  const overrides: Record<string, string> = {};
+  for (const pair of String(req.query.refs || '').split(/[,\s]+/)) {
+    const i = pair.indexOf(':');
+    if (i > 0) {
+      const cid = pair.slice(0, i).trim();
+      const ref = pair.slice(i + 1).trim();
+      if (cid && ref) overrides[cid] = ref;
+    }
+  }
+  const concurrency = Math.min(Math.max(parseInt(String(req.query.c || '1'), 10) || 1, 1), 4);
+  const aiFallback = String(req.query.ai ?? '1') !== '0';
+
+  try {
+    const report = await runWatchdog({
+      carrierIds: carrierIds.length ? carrierIds : undefined,
+      overrides: Object.keys(overrides).length ? overrides : undefined,
+      concurrency,
+      aiFallback,
+    });
+    // Gravidade vira o status HTTP: ok=200, warn=200, fail=503 (facilita alerta externo).
+    res.status(report.severity === 'fail' ? 503 : 200).json(report);
+  } catch (e) {
+    res.status(502).json({ mode: 'watchdog', ok: false, error: (e as Error).message });
   }
 });
 
