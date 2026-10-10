@@ -1,4 +1,4 @@
-import { Page, Frame } from 'playwright';
+import { Page, Frame, Locator } from 'playwright';
 
 /**
  * Priora — Utilitários de página compartilhados pelos scrapers de armadores.
@@ -62,6 +62,58 @@ const LOGIN_TEXT_HINTS = [
 ];
 
 /** Aceita o banner de cookies e fecha camadas de idioma/região (best-effort). */
+/** Resultado de um clique robusto: deu certo? por qual método? o que falhou antes? */
+export interface ClickOutcome {
+  ok: boolean;
+  method: 'click' | 'force' | 'js' | 'js-ancestor' | null;
+  errors: string[];
+}
+
+/**
+ * Clique que não desiste no primeiro obstáculo. Portais com design system de
+ * componentes web (Maersk: o "View 11 events" é um `<span slot="heading">` dentro
+ * de um acordeão) fazem o clique normal do Playwright esperar até estourar o
+ * tempo — o alvo "não recebe eventos" porque quem recebe é o componente-pai.
+ * Tentativas, em ordem: clique normal → clique forçado (pula a checagem de
+ * acionabilidade) → `el.click()` via JavaScript → clique no ancestral
+ * interativo mais próximo (button / [role=button] / summary / a).
+ */
+export async function robustClick(target: Locator, timeoutMs = 5000): Promise<ClickOutcome> {
+  const errors: string[] = [];
+  const note = (label: string, e: unknown) => errors.push(`${label}: ${String((e as Error)?.message || e).slice(0, 300)}`);
+  try {
+    await target.click({ timeout: timeoutMs });
+    return { ok: true, method: 'click', errors };
+  } catch (e) {
+    note('click', e);
+  }
+  try {
+    await target.click({ timeout: timeoutMs, force: true });
+    return { ok: true, method: 'force', errors };
+  } catch (e) {
+    note('force', e);
+  }
+  try {
+    await target.evaluate((el) => (el as HTMLElement).click());
+    return { ok: true, method: 'js', errors };
+  } catch (e) {
+    note('js', e);
+  }
+  try {
+    const clicked = await target.evaluate((el) => {
+      const anc = (el as HTMLElement).closest('button, [role="button"], summary, a') as HTMLElement | null;
+      if (!anc) return false;
+      anc.click();
+      return true;
+    });
+    if (clicked) return { ok: true, method: 'js-ancestor', errors };
+    errors.push('js-ancestor: nenhum ancestral clicável');
+  } catch (e) {
+    note('js-ancestor', e);
+  }
+  return { ok: false, method: null, errors };
+}
+
 export async function acceptCookies(page: Page): Promise<void> {
   // O banner pode surgir alguns SEGUNDOS após o load (ex.: Cookie Information da
   // Maersk injeta o "Allow all" tarde). Tenta clicar várias vezes com 1s de

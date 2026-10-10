@@ -148,7 +148,15 @@ export function scrapeIntervalMs(
   const temEventoDestino = cs.some(
     (c) => c.dischargeDate || c.availableDate || c.gateOut || c.emptyReturn,
   );
-  const emTransito = cs.length > 0 && !temEventoDestino;
+  // Navio JÁ CHEGOU ao destino (evento de atracação/chegada) mas a descarga ainda
+  // não apareceu: a descarga é questão de horas, então sai da espera de dias e
+  // volta ao ritmo ativo. Importa nos portais que mostram SÓ o evento mais recente
+  // (COSCO não publica histórico nem por contêiner — validado ao vivo): com 72h de
+  // espera, descarga e retirada podiam acontecer dentro da janela e a DESCARGA —
+  // início da contagem — sumia, substituída pela retirada. Chegada em porto de
+  // transbordo já vem como `other` (guarda do classifyEvent), não cai aqui.
+  const navioChegou = (result.events || []).some((e) => e.type === 'berth');
+  const emTransito = cs.length > 0 && !temEventoDestino && !navioChegou;
   return emTransito ? transitMs : activeMs;
 }
 

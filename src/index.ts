@@ -32,7 +32,7 @@ import { fetchViaBrightData, isBrightDataConfigured } from './browser/brightData
 import { scrapeViaSB, driveTrackingPage, isSBConfigured, scrapeBrowserProvider, isHeavyScrapeConfigured } from './browser/scrapingBrowser';
 import type { BlockMode } from './browser/scrapingBrowser';
 import { deriveContainers, firstContainerNo } from './browser/carriers/scrapers/hapag';
-import { extractCarrierEvents } from './browser/carriers/scrapers/dispatch';
+import { extractCarrierEvents, extractEventsWithDetails } from './browser/carriers/scrapers/dispatch';
 import { isAntiCaptchaConfigured } from './config';
 import { getActiveHomeAccountId } from './auth/microsoftAccount';
 import { prioraAuthRouter, ensureOrgForUser } from './auth/prioraAuthRoutes';
@@ -674,7 +674,8 @@ async function runSbDiagnostic(p: SbDiagParams): Promise<{ payload: Record<strin
   let events: unknown[] = [];
   let containers: unknown[] = [];
   try {
-    const parsed = extractCarrierEvents(sb.html, sb.apiJson);
+    // Mesma extração da produção: resumo + páginas de detalhe por contêiner.
+    const parsed = extractEventsWithDetails(sb.html, sb.apiJson, sb.details);
     events = parsed;
     containers = deriveContainers(parsed, firstContainerNo(sb.html));
   } catch {

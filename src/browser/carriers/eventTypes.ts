@@ -28,7 +28,12 @@ const RULES: Array<[NormalizedEventType, RegExp]> = [
     // from Port of Discharge to Customer". Sem o hífen aqui, a RETIRADA escapava
     // e caía em `discharge`, porque o texto contém "Port of Discharge" (nome do
     // porto, não o evento) — datas de demurrage erradas.
-    /gated?[\s-]*out|to consignee|delivered to|picked up|full.*out|out\s?gate|import.*deliver|entregue|sa[ií]da.*cheio/i,
+    //
+    // CHEIO recebido em DEPÓSITO NO INTERIOR (Evergreen: "Full import container
+    // received at inland depot", Santos, 1 dia após a descarga) = o contêiner
+    // cheio SAIU do terminal portuário — na prática, a retirada (comum em DTA /
+    // porto seco). Exige cheio/importação/laden: vazio no depósito é outra coisa.
+    /gated?[\s-]*out|to consignee|delivered to|picked up|full.*out|out\s?gate|import.*deliver|entregue|sa[ií]da.*cheio|(?:full|import|laden)\b.*\b(?:inland depot|dry port|porto seco)/i,
   ],
   // `releas` (e não `released`): a ZIM emite "Carrier Release", sem o D. A liberação
   // de VAZIO na origem já é descartada pelo guard lá embaixo, então afrouxar aqui
@@ -51,7 +56,7 @@ export function classifyEvent(status: string): NormalizedEventType {
   // Descarga/descida em porto de TRANSBORDO (T/S) — ex.: HMM "Feeder Discharged
   // at T/S Port", ONE "Unloaded from Vessel at Transshipment Port". NÃO é a
   // descarga no DESTINO, então não pode iniciar a contagem de demurrage.
-  if (/discharg|unload/.test(s) && /\bt\/s\b|trans\w*hipment|transbordo|feeder/.test(s)) {
+  if (/discharg|unload/.test(s) && /\bt\/s\b|trans\w*hip|transbordo|feeder/.test(s)) {
     return 'other';
   }
   // QUALQUER movimento em porto de TRANSBORDO é etapa INTERMEDIÁRIA (o demurrage
@@ -65,7 +70,12 @@ export function classifyEvent(status: string): NormalizedEventType {
   // Discharge". A grafia errada escapava da guarda e, por conter "Port of
   // Discharge", era classificada como DESCARGA — contaminando o início da contagem.
   // O padrão tolerante cobre transshipment / transhipment / transsihipment.
-  if (/trans\w*hipment|transbordo/.test(s)) return 'other';
+  //
+  // E `trans\w*hip` (sem exigir "-ment"): a Evergreen escreve "Discharged and
+  // waiting for transshippING" (Ningbo, porto de transbordo). Com `...hipment`
+  // isso escapava e virava DESCARGA — num BL ainda em trânsito, a descarga do
+  // transbordo seria lida como início da contagem de demurrage.
+  if (/trans\w*hip|transbordo/.test(s)) return 'other';
   // "Positioned Out/In" é reposicionamento de PÁTIO/ferrovia (empilhamento), não a
   // entrega ao consignatário. Jargão de terminal, nunca de retirada final.
   if (/position(?:ed)?\s+(?:out|in)\b/.test(s)) return 'other';

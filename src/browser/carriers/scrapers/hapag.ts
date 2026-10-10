@@ -40,6 +40,16 @@ export function parseDateToISO(text: string): string | null {
   // ISO: 2026-05-13 (com ou sem hora)
   let m = s.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
   if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  // 2026/09/25 [22:08] — ANO/mês/dia com barra ou ponto (Yang Ming, página de
+  // detalhe do contêiner). Sem isto, a grade inteira de eventos dela era
+  // descartada por "falta de data". Vem antes do dia/mês/ano porque começa com
+  // 4 dígitos — os dois formatos nunca se confundem.
+  m = s.match(/\b(\d{4})[./](\d{1,2})[./](\d{1,2})\b/);
+  if (m) {
+    const mes = +m[2];
+    const dia = +m[3];
+    if (mes >= 1 && mes <= 12 && dia >= 1 && dia <= 31) return `${m[1]}-${pad(mes)}-${pad(dia)}`;
+  }
   // 13-May-2026 / 13 May 2026 / 13.MAY.2026
   m = s.match(/\b(\d{1,2})[-.\s]([A-Za-zÀ-ÿ]{3,})[-.\s](\d{4})\b/);
   if (m) {

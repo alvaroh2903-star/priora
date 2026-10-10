@@ -1,6 +1,7 @@
 import { chromium, Browser, Page } from 'playwright';
-import { acceptCookies, tryFillSearch } from './carriers/pageUtils';
+import { acceptCookies, tryFillSearch, robustClick } from './carriers/pageUtils';
 import { findCarrierDriver } from './carriers/drivers';
+import { findDetailCollector, DetailPage } from './carriers/detailCollectors';
 import { solveCaptchaIfPresent } from './antiCaptcha';
 import { PoolMode } from './carriers/types';
 import { withRemoteSlot } from './remoteSlot';
@@ -223,6 +224,11 @@ export interface SBScrapeOptions {
    * só, sem chumbar fluxo por armador. Só o 1º elemento que casar é seguido.
    */
   follow?: string;
+  /**
+   * Visitar a página/popup de DETALHE de cada contêiner (histórico completo),
+   * quando o portal tem coletor (ver carriers/detailCollectors). Default: true.
+   */
+  collectDetails?: boolean;
 }
 
 export type BlockMode = 'media' | 'all' | 'none';
@@ -265,6 +271,8 @@ export interface SBScrapeResult {
   diag?: Record<string, unknown>;
   /** JSON bruto capturado da API interna do portal (ex.: MSC), quando aplicável. */
   apiJson?: string;
+  /** Páginas de DETALHE por contêiner (histórico completo), quando o portal tem coletor. */
+  details?: DetailPage[];
   error?: string;
 }
 
@@ -662,6 +670,30 @@ export async function driveTrackingPage(
     await activePage.waitForTimeout(1500);
   }
 
+  // MAERSK (layout novo): cada contêiner mostra só o resumo e esconde o histórico
+  // num acordeão "View 11 events completed from origin". Sem abrir, a descarga e a
+  // retirada nem existem no HTML (a IA só via chegada do navio e devolução). O
+  // título é um <span slot="heading"> de componente web → clique robusto.
+  if (/maersk\.com/i.test(activePage.url())) {
+    const sel = 'text=/View \\d+ events?/i';
+    const n0 = await activePage.locator(sel).count().catch(() => 0);
+    let opened = 0;
+    for (let i = 0; i < Math.min(n0, 10); i++) {
+      // Se o texto some ao abrir ("View" → "Hide"), a lista encolhe: pega sempre o
+      // primeiro. Se o texto fica, anda pelo índice.
+      const cur = await activePage.locator(sel).count().catch(() => 0);
+      if (cur === 0) break;
+      const target = cur < n0 ? activePage.locator(sel).first() : activePage.locator(sel).nth(i);
+      const r = await robustClick(target, 4000);
+      if (r.ok) opened++;
+      await activePage.waitForTimeout(1500);
+    }
+    if (n0 > 0) {
+      await activePage.waitForLoadState('networkidle', { timeout: postWait }).catch(() => undefined);
+      diag = { ...(diag || {}), maerskEventsOpened: `${opened}/${n0}` };
+    }
+  }
+
   // Outros mostram só o ÚLTIMO movimento e escondem o histórico atrás de um
   // "Display Previous Moves"/"Show all"/"Ver mais" (ex.: CMA CGM). Expande p/ o
   // parser enxergar descarga/retirada/devolução — não só o último evento.
@@ -696,11 +728,17 @@ export async function driveTrackingPage(
     if (matched) {
       followDiag.href = await target.getAttribute('href').catch(() => null);
       followDiag.text = ((await target.innerText().catch(() => '')) || '').slice(0, 80);
-      const popupP = activePage.waitForEvent('popup', { timeout: 10_000 }).catch(() => null);
-      await target.click({ timeout: 8000 }).catch((e) => {
-        followDiag!.clickError = (e as Error).message.slice(0, 160);
-      });
-      const popup = await popupP;
+      const popupP = activePage.waitForEvent('popup', { timeout: 30_000 }).catch(() => null);
+      // Clique robusto (normal → forçado → JS → ancestral): o clique normal travava
+      // no "View 11 events" da Maersk (span dentro de componente web).
+      const click = await robustClick(target);
+      followDiag.click = { ok: click.ok, method: click.method, errors: click.errors };
+      // Popup que não abre em 6s depois do clique = clique que expande/navega na
+      // própria aba (não ficamos presos esperando o timeout do popup).
+      const popup = await Promise.race([
+        popupP,
+        new Promise<null>((r) => setTimeout(() => r(null), 6000)),
+      ]);
       if (popup) activePage = popup;
       followDiag.popup = Boolean(popup);
       await activePage.waitForLoadState('domcontentloaded', { timeout: 20_000 }).catch(() => undefined);
@@ -727,6 +765,22 @@ export async function driveTrackingPage(
     ? textContent.toUpperCase().includes(opts.reference.toUpperCase())
     : false;
 
+  // Histórico COMPLETO por contêiner (Yang Ming, Evergreen…): roda por último,
+  // com o resumo já guardado acima, porque o coletor pode navegar a própria aba.
+  let details: DetailPage[] | undefined;
+  let detailsDiag: Record<string, unknown> | undefined;
+  const collector = opts.collectDetails === false ? undefined : findDetailCollector(activePage.url());
+  if (collector) {
+    const t0 = Date.now();
+    details = await collector.collect(activePage).catch(() => []);
+    detailsDiag = {
+      collector: collector.id,
+      count: details.length,
+      containers: details.map((d) => d.container),
+      ms: Date.now() - t0,
+    };
+  }
+
   return {
     ok: !navError && html.length > 0,
     html,
@@ -744,8 +798,10 @@ export async function driveTrackingPage(
       landedUrl: activePage.url(),
       blockMode,
       ...(followDiag ? { follow: followDiag } : {}),
+      ...(detailsDiag ? { details: detailsDiag } : {}),
     },
     apiJson,
+    details,
     error: navError || undefined,
   };
 }

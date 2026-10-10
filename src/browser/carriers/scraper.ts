@@ -6,7 +6,7 @@ import { withPage, withRemotePage } from '../browser';
 import { isSBConfigured, driveTrackingPage } from '../scrapingBrowser';
 import { detectCaptcha, detectLogin } from './pageUtils';
 import { deriveContainers, firstContainerNo } from './scrapers/hapag';
-import { extractCarrierEvents } from './scrapers/dispatch';
+import { extractEventsWithDetails } from './scrapers/dispatch';
 import { solveCaptchaIfPresent } from '../antiCaptcha';
 import { isAntiCaptchaConfigured } from '../../config';
 
@@ -56,7 +56,9 @@ async function genericScrape(
 
   // Extração ESTRUTURADA multi-armador. `apiJson` (ex.: MSC) tem prioridade; senão,
   // o HTML de todos os frames (o resultado pode estar num iframe/popup).
-  const events = extractCarrierEvents(driven.html, driven.apiJson);
+  // + páginas de DETALHE por contêiner (histórico completo), quando o portal tem
+  // coletor — é o que traz a descarga que o resumo de alguns portais esconde.
+  const events = extractEventsWithDetails(driven.html, driven.apiJson, driven.details);
   if (events.length > 0) {
     const containerHint =
       firstContainerNo(driven.html) || (ctx.referenceType === 'container' ? ctx.reference : null);

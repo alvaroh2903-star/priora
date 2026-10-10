@@ -9,7 +9,7 @@ import { extractCmaEvents } from './cma';
 import { extractHmmEvents } from './hmm';
 import { extractEvergreenEvents } from './evergreen';
 import { extractMscEvents } from './msc';
-import { extractYangMingEvents } from './yangming';
+import { extractYangMingEvents, extractYangMingDetailEvents, isYangMingDetailPage } from './yangming';
 
 /**
  * Priora — Dispatcher multi-armador de extração de eventos.
@@ -75,9 +75,62 @@ export function extractCarrierEvents(html: string, apiJson?: string): TrackingEv
   // Yang Ming (Next.js) — tabela "Container Status" (grade react-aria): 1 linha/
   // contêiner com o ÚLTIMO evento. Assinatura: yangming / cargo_tracking_detail.
   if (/yangming|cargo_tracking_detail/i.test(html)) {
+    // Página de DETALHE (histórico DCSA completo) tem prioridade sobre o resumo.
+    if (isYangMingDetailPage(html)) {
+      const det = extractYangMingDetailEvents(html);
+      if (det.length) return det;
+    }
     const ym = extractYangMingEvents(html);
     if (ym.length) return ym;
   }
   // Hapag (timeline .hal-event) → tabela genérica <tr>/<td> / grade ARIA.
   return extractHapagOrGeneric(html);
+}
+
+/** Página de detalhe de UM contêiner (ver carriers/detailCollectors). */
+export interface DetailHtml {
+  container: string | null;
+  html: string;
+}
+
+/**
+ * Eventos do resumo + das páginas de DETALHE por contêiner.
+ *
+ * O resumo de vários portais traz só o ÚLTIMO evento por contêiner; o detalhe
+ * traz o histórico inteiro (é onde aparece a descarga). Regras:
+ *  - contêiner COM detalhe → vale o histórico do detalhe (o último evento do
+ *    resumo já está lá dentro);
+ *  - contêiner sem detalhe (teto de contêineres, falha ao abrir) → segue com o
+ *    evento do resumo — nada se perde;
+ *  - todo evento de detalhe herda o nº do contêiner da página (as linhas do
+ *    detalhe não o repetem) e, se faltar, o tipo (40HQ…) que o resumo mostrou.
+ */
+export function extractEventsWithDetails(
+  html: string,
+  apiJson?: string,
+  details?: DetailHtml[],
+): TrackingEvent[] {
+  const summary = extractCarrierEvents(html, apiJson);
+  if (!details || details.length === 0) return summary;
+
+  const tipoBy = new Map<string, string>();
+  for (const e of summary) if (e.container && e.tipo) tipoBy.set(e.container, e.tipo);
+
+  const fromDetails: TrackingEvent[] = [];
+  const covered = new Set<string>();
+  for (const d of details) {
+    const evs = isYangMingDetailPage(d.html)
+      ? extractYangMingDetailEvents(d.html, d.container)
+      : extractCarrierEvents(d.html);
+    for (const e of evs) {
+      const container = e.container || d.container;
+      fromDetails.push({ ...e, container, tipo: e.tipo || (container ? tipoBy.get(container) ?? null : null) });
+    }
+    if (evs.length > 0 && d.container) covered.add(d.container);
+  }
+  if (fromDetails.length === 0) return summary;
+  // Do resumo, só os contêineres que NÃO ganharam detalhe. Evento de resumo sem
+  // contêiner não dá para atribuir com segurança quando há detalhes — fica fora.
+  const rest = summary.filter((e) => e.container && !covered.has(e.container));
+  return [...fromDetails, ...rest];
 }
