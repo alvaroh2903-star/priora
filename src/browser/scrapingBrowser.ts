@@ -113,7 +113,7 @@ export function scrapeBrowserProvider(): string {
  * mexe no `proxy_pool` já existente (o `public_residential_pool` está provado em
  * produção). Best-effort: URL não-Scrapfly volta intacta.
  */
-function withUnblockMode(wss: string, targetUrl?: string): string {
+function withUnblockMode(wss: string, targetUrl?: string, antibotMode?: AntibotMode): string {
   try {
     const u = new URL(wss);
     const isScrapfly = u.searchParams.has('api_key') || /scrapfly/i.test(u.host);
@@ -123,7 +123,9 @@ function withUnblockMode(wss: string, targetUrl?: string): string {
     // em driveTrackingPage. Ligado também aqui, rodavam DOIS resolvedores no
     // mesmo captcha (cada detecção chegava em dobro, com dois detectionId, os dois
     // arrastando) — "rotation rejected after retries" (visto ao vivo em 10/10).
-    if (!/oocl\.com/i.test(targetUrl || '')) u.searchParams.set('solve_captcha', 'true');
+    // Modo explícito (diagnóstico) manda: só 'url' liga pela conexão.
+    const urlSolver = antibotMode ? antibotMode === 'url' : !/oocl\.com/i.test(targetUrl || '');
+    if (urlSolver) u.searchParams.set('solve_captcha', 'true');
     // O alvo do bypass. Sem ele o `unblock` não tem o que desbloquear.
     if (targetUrl) u.searchParams.set('target_url', targetUrl);
     return u.toString();
@@ -142,12 +144,12 @@ function withUnblockMode(wss: string, targetUrl?: string): string {
  *
  * `targetUrl` é a URL do portal que vamos abrir — só usada no pool de unblock.
  */
-function buildWSEndpoint(pool: PoolMode = 'datacenter', targetUrl?: string): string {
+function buildWSEndpoint(pool: PoolMode = 'datacenter', targetUrl?: string, antibotMode?: AntibotMode): string {
   const generic = getGenericWss();
   if (pool === 'residential_unblock') {
     const dedicated = getGenericWssHeavy();
-    if (dedicated) return withUnblockMode(dedicated, targetUrl);
-    if (generic) return withUnblockMode(withResidentialPool(generic), targetUrl);
+    if (dedicated) return withUnblockMode(dedicated, targetUrl, antibotMode);
+    if (generic) return withUnblockMode(withResidentialPool(generic), targetUrl, antibotMode);
   } else if (pool === 'residential') {
     if (generic) return withResidentialPool(generic);
     // sem URL genérica: segue p/ o Bright Data abaixo (sem reescrita de pool).
@@ -174,7 +176,22 @@ export interface ConnectOptions {
    * nos entregar a sessão. Sem isso o `unblock` não faz nada (ver withUnblockMode).
    */
   targetUrl?: string;
+  /** Onde ligar o resolvedor de captcha da Scrapfly (ver AntibotMode). */
+  antibotMode?: AntibotMode;
 }
+
+/**
+ * Onde o resolvedor NATIVO de captcha da Scrapfly é ligado (hoje só faz diferença
+ * na OOCL, que tem o captcha de girar da CargoSmart):
+ *  - 'cdp' (padrão na OOCL): pela página (Antibot.captchaEnable), com eventos no
+ *    diag. Resolve o captcha em 3–5 s, mas o app da OOCL ainda recusou a consulta
+ *    ("Missing ticket") em todas as rodadas de 10/10.
+ *  - 'url': pelo parâmetro `solve_captcha` da conexão — a configuração da ÚNICA
+ *    rodada que chegou na consulta do app (commit 7e71df9). Sem eventos.
+ *  - 'off': só o nosso resolvedor (slideCaptcha.ts).
+ * Diagnóstico: `?antibot=cdp|url|off`.
+ */
+export type AntibotMode = 'cdp' | 'url' | 'off';
 
 /**
  * Conecta ao Scraping Browser (Chromium remoto) via CDP e devolve o Browser. Quem
@@ -186,7 +203,7 @@ export async function connectSB(opts: ConnectOptions = {}): Promise<Browser> {
   if (!isSBConfigured()) {
     throw new Error('Cloud browser não configurado (defina SCRAPE_BROWSER_WSS ou BRIGHTDATA_SB_AUTH).');
   }
-  return chromium.connectOverCDP(buildWSEndpoint(opts.pool, opts.targetUrl), { timeout: 30_000 });
+  return chromium.connectOverCDP(buildWSEndpoint(opts.pool, opts.targetUrl, opts.antibotMode), { timeout: 30_000 });
 }
 
 export interface SBScrapeOptions {
@@ -234,6 +251,8 @@ export interface SBScrapeOptions {
    * quando o portal tem coletor (ver carriers/detailCollectors). Default: true.
    */
   collectDetails?: boolean;
+  /** DIAGNÓSTICO: onde ligar o resolvedor de captcha da Scrapfly (ver AntibotMode). */
+  antibotMode?: AntibotMode;
 }
 
 export type BlockMode = 'media' | 'all' | 'none';
@@ -713,9 +732,11 @@ export async function driveTrackingPage(
   // cloud-browser-api/captcha-solver). Ele é ligado POR PÁGINA (Antibot.captchaEnable
   // na mesma sessão CDP) e trabalha sozinho depois da navegação; o nosso
   // resolvedor fica de reserva. Os eventos vão para o diag.
+  const isOocl = /oocl\.com/i.test(opts.url);
+  const antibotMode: AntibotMode = opts.antibotMode ?? 'cdp';
   const antibot: { enabled: boolean; error?: string; events: Array<Record<string, unknown>> } = { enabled: false, events: [] };
   let antibotCdp: { send: (m: string, p?: Record<string, unknown>) => Promise<unknown> } | null = null;
-  if (/oocl\.com/i.test(opts.url)) {
+  if (isOocl && antibotMode === 'cdp') {
     try {
       const cdp = (await page.context().newCDPSession(page)) as unknown as {
         send: (m: string, p?: Record<string, unknown>) => Promise<unknown>;
@@ -812,6 +833,25 @@ export async function driveTrackingPage(
     // arrastariam juntos).
     if (!ok && (await page.locator('#cs_captcha .verify-move-block').first().isVisible().catch(() => false))) {
       await antibotCdp?.send('Antibot.captchaDisable').catch(() => undefined);
+      const own = await solveCargoSmartSlider(page, { captureImages: Boolean(opts.inventory) }).catch(() => null);
+      if (own) sliderDiag = { ...own, attempts: [...sliderDiag.attempts, ...own.attempts] };
+    }
+  } else if (sliderUp && antibotMode === 'url') {
+    // Resolvedor ligado pela CONEXÃO: sem eventos — o sinal é o captcha sumir.
+    // Espera parado (sem mouse, para não competir com o arrasto dele) até 45 s;
+    // se não sumir, o nosso tenta (o dele não dá para desligar nesse modo).
+    const t0 = Date.now();
+    let gone = false;
+    while (Date.now() - t0 < 45_000) {
+      await page.waitForTimeout(1000);
+      if (!(await page.locator('#cs_captcha .verify-move-block').first().isVisible().catch(() => false))) {
+        gone = true;
+        break;
+      }
+    }
+    const ok = gone && !/\/error\b/.test(page.url());
+    sliderDiag = { found: true, solved: ok, attempts: [{ mode: 'scrapfly-url', result: gone ? 'sumiu' : 'tempo' }], ms: Date.now() - t0 };
+    if (!gone) {
       const own = await solveCargoSmartSlider(page, { captureImages: Boolean(opts.inventory) }).catch(() => null);
       if (own) sliderDiag = { ...own, attempts: [...sliderDiag.attempts, ...own.attempts] };
     }
@@ -1072,6 +1112,7 @@ export async function driveTrackingPage(
       preNavigated,
       ...(lastAkamaiDiag ? { akamai: lastAkamaiDiag } : {}),
       ...(sliderDiag ? { slider: sliderDiag } : {}),
+      ...(isOocl ? { antibotMode } : {}),
       ...(antibot.enabled || antibot.error ? { antibot } : {}),
       ...(captchaNet.length ? { captchaNet, navStartedAt } : {}),
       landedUrl: activePage.url(),
@@ -1097,7 +1138,7 @@ async function scrapeViaSBOnceInSlot(opts: SBScrapeOptions): Promise<SBScrapeRes
   try {
     // `targetUrl` = a URL que vamos abrir: no pool de unblock é o ALVO do bypass
     // ASP que o Scrapfly faz ANTES de nos devolver a sessão (ver withUnblockMode).
-    browser = await connectSB({ pool: opts.pool, targetUrl: opts.url });
+    browser = await connectSB({ pool: opts.pool, targetUrl: opts.url, antibotMode: opts.antibotMode });
     // Reusa o contexto E a página que o provedor já entrega (Scrapfly gerencia o
     // fingerprint na sessão) — criar contexto/página novos pode perdê-lo.
     const context = browser.contexts()[0] || (await browser.newContext());

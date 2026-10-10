@@ -30,7 +30,7 @@ import { getAntiCaptchaBalance, solveRecaptchaV2 } from './browser/antiCaptcha';
 import { fetchViaUnblocker, isUnblockerConfigured } from './browser/webUnblocker';
 import { fetchViaBrightData, isBrightDataConfigured } from './browser/brightData';
 import { scrapeViaSB, driveTrackingPage, isSBConfigured, scrapeBrowserProvider, isHeavyScrapeConfigured } from './browser/scrapingBrowser';
-import type { BlockMode } from './browser/scrapingBrowser';
+import type { AntibotMode, BlockMode } from './browser/scrapingBrowser';
 import { scrapflyScrape, getScrapflyKey } from './browser/scrapflyApi';
 import { scrapflyScenario } from './browser/carriers/scrapflyFetch';
 import { deriveContainers, firstContainerNo } from './browser/carriers/scrapers/hapag';
@@ -601,6 +601,8 @@ interface SbDiagParams {
   blockMode?: BlockMode;
   /** Seletor CSS a clicar após o resultado (captura a página de detalhe). Ver SBScrapeOptions.follow. */
   follow?: string;
+  /** Onde ligar o resolvedor de captcha da Scrapfly: `antibot=cdp|url|off`. Ver AntibotMode. */
+  antibotMode?: AntibotMode;
 }
 
 type DiagParamsResult = { params?: SbDiagParams; error?: { status: number; body: object } };
@@ -663,7 +665,11 @@ function resolveSbDiagParamsFrom(q: Record<string, unknown>): DiagParamsResult {
     blockQ === 'all' || blockQ === 'media' || blockQ === 'none' ? blockQ : undefined;
   if (truthy(s('noblock'))) blockMode = 'none';
   const follow = s('follow') || undefined;
-  return { params: { engine, url, searchReference, pool, probe, find, htmlwin, ref, blockMode, follow } };
+  // antibot=cdp|url|off (OOCL): retestar o captcha sem um deploy por hipótese.
+  const antibotQ = s('antibot').toLowerCase();
+  const antibotMode: AntibotMode | undefined =
+    antibotQ === 'cdp' || antibotQ === 'url' || antibotQ === 'off' ? antibotQ : undefined;
+  return { params: { engine, url, searchReference, pool, probe, find, htmlwin, ref, blockMode, follow, antibotMode } };
 }
 
 function resolveSbDiagParams(req: Request): DiagParamsResult {
@@ -683,6 +689,7 @@ async function runSbDiagnostic(p: SbDiagParams): Promise<{ payload: Record<strin
     inventory: p.probe,
     blockMode: p.blockMode,
     follow: p.follow,
+    antibotMode: p.antibotMode,
   };
   const sb =
     p.engine === 'local'
