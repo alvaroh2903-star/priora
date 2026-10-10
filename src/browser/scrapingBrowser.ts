@@ -497,6 +497,24 @@ async function blockHeavyResources(page: Page): Promise<void> {
  * TODO o conteúdo é lido de TODOS os frames (o rastreio pode estar num iframe),
  * e a busca do formulário (tryFillSearch) também varre os frames.
  */
+/**
+ * A aba JÁ está na página-alvo? No Unblock Mode o Scrapfly navega até
+ * `target_url` durante o setup da sessão e nos entrega a aba pronta; um
+ * `page.goto()` nosso em cima disso refaz a navegação com estado já gasto e
+ * alguns portais invalidam a sessão (OOCL: "This Page Has Expired" → /moc/error).
+ * Compara origem + caminho; `about:blank` (fluxo normal) nunca casa, então os
+ * outros armadores seguem navegando como antes.
+ */
+function alreadyOnTarget(current: string, target: string): boolean {
+  try {
+    const a = new URL(current);
+    const b = new URL(target);
+    return a.origin === b.origin && a.pathname === b.pathname;
+  } catch {
+    return false; // about:blank, URL vazia etc.
+  }
+}
+
 export async function driveTrackingPage(
   page: Page,
   opts: SBScrapeOptions,
@@ -508,13 +526,21 @@ export async function driveTrackingPage(
   await blockHeavyResources(page);
 
   let navError: string | null = null;
-  try {
-    // 'commit' retorna assim que a navegação começa — não trava em SPAs pesadas
-    // (ex.: ONE) que demoram no 'domcontentloaded'. A espera pelos resultados
-    // (waitForSelector/networkidle abaixo) é quem garante o render.
-    await page.goto(opts.url, { waitUntil: 'commit', timeout: navTimeout });
-  } catch (e) {
-    navError = (e as Error).message;
+  // Com o Unblock Mode, quem navega até o alvo é o PRÓPRIO Scrapfly (é assim que
+  // ele vence o Cloudflare) e nos entrega a aba JÁ carregada. Navegar de novo
+  // queima o estado: a OOCL respondeu "This Page Has Expired" e jogou a sessão
+  // para /scct/public/moc/error — depois de termos furado o Turnstile. Então, se
+  // a aba já está no alvo, NÃO renavegamos (também economiza tempo de sessão).
+  const preNavigated = alreadyOnTarget(page.url(), opts.url);
+  if (!preNavigated) {
+    try {
+      // 'commit' retorna assim que a navegação começa — não trava em SPAs pesadas
+      // (ex.: ONE) que demoram no 'domcontentloaded'. A espera pelos resultados
+      // (waitForSelector/networkidle abaixo) é quem garante o render.
+      await page.goto(opts.url, { waitUntil: 'commit', timeout: navTimeout });
+    } catch (e) {
+      navError = (e as Error).message;
+    }
   }
 
   // Portais atrás de Cloudflare (ex.: OOCL) mostram um interstitial antes do
@@ -641,7 +667,10 @@ export async function driveTrackingPage(
     mentionsRef,
     rowCount,
     inventory,
-    diag,
+    // `preNavigated`/`landedUrl` mostram se a aba já veio navegada pelo Unblock
+    // (e onde ela parou) — é o que diferencia "o provedor entregou a página" de
+    // "nós navegamos". Some junto do diag do driver, quando houver.
+    diag: { ...(diag || {}), preNavigated, landedUrl: activePage.url() },
     apiJson,
     error: navError || undefined,
   };
