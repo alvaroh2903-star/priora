@@ -359,8 +359,29 @@ function getJob(id: string): ScrapeJob | undefined {
   return onDisk;
 }
 
+/**
+ * Por quanto tempo um job de diagnóstico sobrevive. Eram 30 min, e isso APAGAVA
+ * resultados antes de a gente conseguir ler (uma raspagem leva ~2-4 min e a
+ * análise do resultado vem depois, em outra rodada de conversa). 6h dá folga de
+ * sobra sem encher o disco, já que cada job agora guarda bem menos HTML.
+ */
+const JOB_TTL_MS = Math.max(
+  5 * 60_000,
+  (parseInt(process.env.DIAG_JOB_TTL_MIN || '', 10) || 360) * 60_000,
+);
+
+/**
+ * Teto do HTML guardado por job (memória + disco). Era 2 MB, o que numa
+ * instância de 512 MB com raspagens simultâneas (CMA 1 MB, ZIM 2,1 MB, cada uma
+ * em 5 frames) é candidato a derrubar o processo — e job morto é resultado
+ * perdido. 400 KB basta: a inspeção fina do DOM hoje é feita pelo `htmlSlice`
+ * do payload (?find= centra a janela no trecho que interessa), não pelo
+ * /health/job-html.
+ */
+const JOB_HTML_CAP = 400_000;
+
 function pruneScrapeJobs(): void {
-  const cutoff = Date.now() - 30 * 60_000;
+  const cutoff = Date.now() - JOB_TTL_MS;
   for (const [id, j] of scrapeJobs) {
     if ((j.finishedAt || j.startedAt) < cutoff) scrapeJobs.delete(id);
   }
@@ -461,7 +482,7 @@ async function runScrapeJob(job: ScrapeJob): Promise<void> {
   try {
     const { result, html } = await scrapeAndParse(job.url, job.via, job.ref, job.render !== false);
     // Só um trecho generoso do HTML (o suficiente p/ afinar o parser via job-html).
-    job.html = html.length > 2_000_000 ? html.slice(0, 2_000_000) : html;
+    job.html = html.length > JOB_HTML_CAP ? html.slice(0, JOB_HTML_CAP) : html;
     job.result = result;
     job.status = 'done';
   } catch (e) {
@@ -706,7 +727,7 @@ app.get('/health/scrape-sb-async', (req, res) => {
     try {
       const { payload, html } = await runSbDiagnostic(p);
       job.result = payload;
-      job.html = html.length > 2_000_000 ? html.slice(0, 2_000_000) : html;
+      job.html = html.length > JOB_HTML_CAP ? html.slice(0, JOB_HTML_CAP) : html;
       job.status = 'done';
     } catch (e) {
       job.status = 'error';
@@ -874,6 +895,40 @@ app.get('/health/watchdog', async (req, res) => {
   } catch (e) {
     res.status(502).json({ mode: 'watchdog', ok: false, error: (e as Error).message });
   }
+});
+
+/**
+ * Lista os jobs vivos (gated por DIAG_TOKEN). Diagnóstico do DIAGNÓSTICO: quando
+ * um poll devolve "job não encontrado", isto diz se o serviço perdeu TUDO
+ * (reinício/deploy → lista vazia) ou se só aquele id expirou (lista com outros).
+ */
+app.get('/health/jobs', (req, res) => {
+  const token = (process.env.DIAG_TOKEN || '').trim();
+  if (!token) return res.status(404).json({ error: 'Desativado (defina DIAG_TOKEN).' });
+  if (String(req.query.token || '') !== token) return res.status(401).json({ error: 'token inválido.' });
+  const now = Date.now();
+  const emMemoria = [...scrapeJobs.values()].map((j) => ({
+    id: j.id,
+    status: j.status,
+    ref: j.ref,
+    via: j.via,
+    idadeSeg: Math.round((now - j.startedAt) / 1000),
+    duracaoSeg: j.finishedAt ? Math.round((j.finishedAt - j.startedAt) / 1000) : null,
+  }));
+  let emDisco: string[] = [];
+  try {
+    emDisco = fs.readdirSync(JOBS_DIR).filter((f) => f.endsWith('.json')).map((f) => f.replace(/\.json$/, ''));
+  } catch {
+    /* pasta pode não existir */
+  }
+  res.json({
+    ttlHoras: JOB_TTL_MS / 3_600_000,
+    // Tempo desde que ESTE processo subiu: se for baixo e a lista estiver vazia,
+    // o serviço reiniciou (foi isso que levou os jobs, não o TTL).
+    processoDePeSeg: Math.round(process.uptime()),
+    emMemoria,
+    emDisco,
+  });
 });
 
 /** Consulta o resultado de uma raspagem assíncrona. */
