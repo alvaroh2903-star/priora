@@ -700,6 +700,13 @@ export async function driveTrackingPage(
       captchaNet.push({ at: Date.now(), type: t, url: u.slice(0, 160), method: q.method(), failed: q.failure()?.errorText || 'falhou' });
     });
   }
+  // OOCL: o app tem largura mínima de 1366 px. Numa janela menor aparece rolagem
+  // e, ao arrastar o captcha, a página rola sozinha — o trajeto do mouse enviado
+  // ao servidor sai torto (visto ao vivo: botão "pulando" para −161 px e y
+  // escorregando 18 px no trajeto). Janela maior que o app = sem rolagem.
+  if (/oocl\.com/i.test(opts.url)) {
+    await page.setViewportSize({ width: 1600, height: 1000 }).catch(() => undefined);
+  }
   // Gravador DENTRO da página (OOCL): envolve fetch/XHR antes de o app carregar e
   // guarda cada chamada (endereço, envio, resposta) em window.__prioraNet. A
   // captura pela rede do navegador remoto não mostrou as chamadas do captcha nem

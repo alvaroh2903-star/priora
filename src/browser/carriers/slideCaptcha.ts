@@ -378,7 +378,8 @@ async function dragRotation(
   const targetDx = theta / degPerPx;
   const y0 = hb.y + hb.height / 2;
   const x0 = hb.x + hb.width / 2;
-  const trace: string[] = [`curso=${travel.toFixed(1)} alvo do mouse=${targetDx.toFixed(1)}px`];
+  const scroll = () => page.evaluate(() => `${Math.round(window.scrollX)},${Math.round(window.scrollY)}`).catch(() => '?');
+  const trace: string[] = [`curso=${travel.toFixed(1)} alvo do mouse=${targetDx.toFixed(1)}px rolagem=${await scroll()}`];
   await page.mouse.move(x0 - rand(25, 50), y0 + rand(-10, 10), { steps: 5 });
   await page.mouse.move(x0, y0, { steps: 4 });
   await sleep(rand(90, 200));
@@ -423,7 +424,7 @@ async function dragRotation(
   await page.mouse.move(mx, y0 + drift + rand(-0.4, 0.4));
   await sleep(rand(180, 360));
   const b = await page.locator('#cs_captcha .verify-move-block').first().boundingBox().catch(() => null);
-  if (b) trace.push(`botão na tela=${(b.x + b.width / 2 - x0).toFixed(1)}px (só diagnóstico)`);
+  if (b) trace.push(`botão na tela=${(b.x + b.width / 2 - x0).toFixed(1)}px rolagem=${await scroll()}`);
   await page.mouse.up();
   return { rem: 0, degPerPx: Math.round(degPerPx * 1000) / 1000, mode: 'mouse', trace };
 }
@@ -481,6 +482,8 @@ export async function solveCargoSmartSlider(
         }))
         .catch(() => undefined);
     }
+    // Captcha inteiro na tela antes de arrastar (sem rolar durante o arrasto).
+    await page.locator('#cs_captcha').first().scrollIntoViewIfNeeded().catch(() => undefined);
     // MODO ROTAÇÃO (o que a CargoSmart usa): girar o círculo até emendar.
     if (await page.evaluate(isRotationMode).catch(() => false)) {
       const ar = await page.evaluate(analyzeRotation).catch((e) => ({ error: String((e as Error).message) }));
