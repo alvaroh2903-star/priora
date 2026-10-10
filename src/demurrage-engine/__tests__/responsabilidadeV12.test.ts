@@ -512,7 +512,8 @@ test('v1.2 migração 0033 → 0034: decisões existentes preservadas; dias/per�
     const antes = await snapshot();
 
     const r = await runMigrations(pool);
-    assert.deepEqual(r.applied, ['0034_responsabilidade_v1_2_agregado.sql']);
+    // Só a faixa da Demurrage (00xx); as 0100_liberacao_* (N-2) ficam fora desta lista.
+    assert.deepEqual(r.applied.filter((f) => /^00\d\d_/.test(f)), ['0034_responsabilidade_v1_2_agregado.sql']);
     // A migração não reescreve nem revalida retroativamente nada existente.
     assert.deepEqual(await snapshot(), antes);
 

@@ -151,7 +151,8 @@ test('migration 0006: compatibilidade com registros existentes do vínculo antig
     );
 
     const result = await runMigrations(pool);
-    assert.deepEqual(result.applied, [
+    // Só a faixa da Demurrage (00xx); as 0100_liberacao_* (N-2) ficam fora desta lista.
+    assert.deepEqual(result.applied.filter((f) => /^00\d\d_/.test(f)), [
       '0006_responsavel_operacional_membership.sql',
       '0007_org_imutavel_e_responsavel_interno.sql',
       '0008_relogios.sql',

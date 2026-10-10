@@ -47,13 +47,16 @@ test('migrations: aplica todas as migrations pendentes em um banco novo e é ide
       '0034_responsabilidade_v1_2_agregado.sql',
     ];
 
+    // Catálogo da Demurrage = faixa 00xx; as 0100_liberacao_* (N-2) aplicam depois e ficam fora desta lista.
+    const faixaDemurrage = (arquivos: string[]) => arquivos.filter((f) => /^00\d\d_/.test(f));
+
     const first = await runMigrations(pool);
-    assert.deepEqual(first.applied, expected, 'todas as migrations aplicadas (Fase 1 + corretivas 0006/0007 + relógios 0008) devem ser aplicadas em ordem num banco novo');
+    assert.deepEqual(faixaDemurrage(first.applied), expected, 'todas as migrations aplicadas (Fase 1 + corretivas 0006/0007 + relógios 0008) devem ser aplicadas em ordem num banco novo');
     assert.deepEqual(first.alreadyApplied, []);
 
     const second = await runMigrations(pool);
     assert.deepEqual(second.applied, [], 'reexecutar não deve reaplicar nenhuma migration');
-    assert.deepEqual(second.alreadyApplied, expected);
+    assert.deepEqual(faixaDemurrage(second.alreadyApplied), expected);
 
     const { rows } = await pool.query(
       `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name`,

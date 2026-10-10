@@ -313,7 +313,8 @@ test('v1.2 §3: 0028 → 0029 → 0030 com seleção legada — vínculo correto
 
     // 3) Aplica 0029 e 0030.
     const r = await runMigrations(pool);
-    assert.deepEqual(r.applied, [
+    // Só a faixa da Demurrage (00xx); as 0100_liberacao_* (N-2) ficam fora desta lista.
+    assert.deepEqual(r.applied.filter((f) => /^00\d\d_/.test(f)), [
       '0029_demurrage_registro_v1_1.sql', '0030_demurrage_registro_v1_2.sql',
       '0031_responsabilidade_decisoes.sql', '0032_responsabilidade_projecao_guard.sql', '0033_responsabilidade_v1_1_corretiva.sql',
       '0034_responsabilidade_v1_2_agregado.sql',
@@ -375,7 +376,9 @@ test('v1.2 §3: banco novo 0001 → 0030 — registro pelo contrato grava a sele
     await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
     const r = await runMigrations(pool);
     assert.equal(r.applied[0], '0001_organizations_and_users.sql');
-    assert.equal(r.applied[r.applied.length - 1], '0034_responsabilidade_v1_2_agregado.sql');
+    // Última da faixa da Demurrage (00xx); as 0100_liberacao_* (N-2) aplicam depois.
+    const faixaDemurrage = r.applied.filter((f) => /^00\d\d_/.test(f));
+    assert.equal(faixaDemurrage[faixaDemurrage.length - 1], '0034_responsabilidade_v1_2_agregado.sql');
     const org = await new OrganizationRepository(pool).create('Rocket', 'rocket');
     const reg = await registrarProcessoDemurrage(contratoRegistro({
       organizationId: org.id, numeroProcesso: 'IM-NOVO',
