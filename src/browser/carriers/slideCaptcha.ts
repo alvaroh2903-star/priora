@@ -384,18 +384,43 @@ async function dragRotation(
   await sleep(rand(90, 200));
   await page.mouse.down();
   await sleep(rand(80, 160));
-  // Contínuo, acelera e desacelera, leve deriva em y; termina EXATO no alvo.
-  const n = Math.round(rand(26, 38));
-  const drift = rand(-2.5, 2.5);
-  const wob = rand(0.6, 1.4);
-  for (let i = 1; i <= n; i++) {
-    const p = i / n;
-    const ease = 1 - Math.pow(1 - p, 3);
-    const x = x0 + targetDx * ease + (i < n ? rand(-0.35, 0.35) : 0);
-    const y = y0 + drift * p + Math.sin(p * Math.PI * wob) * 1.0;
-    await page.mouse.move(x, y);
-    await sleep(rand(11, 26));
+  // Ritmo da tentativa APROVADA ao vivo: 1º trecho curto, pausa, depois passos
+  // curtos (≤ ~5 px) que vão diminuindo — ~1,5–2 s no total. O movimento rápido
+  // (< 1 s) não era acompanhado pelo componente (botão parado em 0).
+  const handleDx = async (): Promise<number> => {
+    const hb2 = await page.locator('#cs_captcha .verify-move-block').first().boundingBox().catch(() => null);
+    return hb2 ? hb2.x + hb2.width / 2 - x0 : 0;
+  };
+  let mx = x0;
+  const first = Math.min(14, targetDx * 0.15);
+  for (let i = 1; i <= 4; i++) {
+    mx = x0 + (first * i) / 4;
+    await page.mouse.move(mx, y0 + rand(-0.8, 0.8));
+    await sleep(rand(22, 40));
   }
+  await sleep(rand(250, 450));
+  // O botão "pegou"? Se não, solta sem mandar um arrasto inválido.
+  const grabbed = await handleDx();
+  trace.push(`após ${first.toFixed(1)}px: botão=${grabbed.toFixed(1)}px`);
+  if (grabbed < 2) {
+    await page.mouse.up();
+    trace.push('botão não acompanhou — refaz');
+    return { rem: 0, degPerPx: Math.round(degPerPx * 1000) / 1000, mode: 'mouse/sem-pegada', trace };
+  }
+  const drift = rand(-2, 2);
+  for (let i = 0; i < 120; i++) {
+    const rem = x0 + targetDx - mx;
+    if (Math.abs(rem) < 0.05) break;
+    let step = rem * rand(0.12, 0.22);
+    step = Math.sign(rem) * Math.min(Math.abs(rem), Math.max(0.6, Math.min(5.5, Math.abs(step))));
+    mx += step;
+    const p = (mx - x0) / targetDx;
+    await page.mouse.move(mx, y0 + drift * p + rand(-0.6, 0.6));
+    await sleep(rand(16, 38));
+  }
+  // Termina exatamente no alvo.
+  mx = x0 + targetDx;
+  await page.mouse.move(mx, y0 + drift + rand(-0.4, 0.4));
   await sleep(rand(180, 360));
   const b = await page.locator('#cs_captcha .verify-move-block').first().boundingBox().catch(() => null);
   if (b) trace.push(`botão na tela=${(b.x + b.width / 2 - x0).toFixed(1)}px (só diagnóstico)`);
@@ -469,7 +494,12 @@ export async function solveCargoSmartSlider(
         out.attempts.push({ result: 'barra fora da tela' });
         break;
       }
-      const dr = await dragRotation(page, ar.theta, hbr);
+      let dr = await dragRotation(page, ar.theta, hbr);
+      if (dr.mode === 'mouse/sem-pegada') {
+        await sleep(rand(400, 700));
+        const hb3 = await page.locator('#cs_captcha .verify-move-block').first().boundingBox().catch(() => null);
+        if (hb3) dr = await dragRotation(page, ar.theta, hb3);
+      }
       const attR: SliderAttempt = {
         trace: dr.trace,
         mode: `rotação/${dr.mode}`,
