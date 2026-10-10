@@ -88,11 +88,14 @@ ip.onload=()=>{ bc.drawImage(ip,0,0); };
 ib.src='${img('oocl-captcha-bg.png')}'; ip.src='${img('oocl-captcha-piece.png')}';
 const mb=document.querySelector('.verify-move-block'); let down=false,sx=0;
 mb.addEventListener('mousedown',e=>{down=true;sx=e.clientX;});
-window.addEventListener('mousemove',e=>{ if(!down)return; const left=Math.max(0,Math.min(332-38,e.clientX-sx)); mb.style.left=left+'px'; ang=left*360/(332-38); draw(); });
-window.addEventListener('mouseup',()=>{ if(!down)return; down=false; const d=Math.abs(((ang-OK)%360+540)%360-180); const ok=d<=6;
+// Como a CargoSmart (visto ao vivo): o giro VISUAL usa 360°/largura da barra,
+// mas o "servidor" confere pela posição do botão com 360° = curso (barra − botão).
+let left=0;
+window.addEventListener('mousemove',e=>{ if(!down)return; left=Math.max(0,Math.min(332-38,e.clientX-sx)); mb.style.left=left+'px'; ang=left*360/332; draw(); });
+window.addEventListener('mouseup',()=>{ if(!down)return; down=false; const srv=left*360/(332-38); const d=Math.abs(((srv-OK)%360+540)%360-180); const ok=d<=6;
  document.querySelector('.verify-msg').textContent=ok?'Validation successful':'Validation failed';
  if(ok) setTimeout(()=>{document.querySelector('.capture-box').style.display='none';},300);
- else setTimeout(()=>{mb.style.left='0px';ang=0;draw();document.querySelector('.verify-msg').textContent='';},500); });
+ else setTimeout(()=>{mb.style.left='0px';ang=0;left=0;draw();document.querySelector('.verify-msg').textContent='';},500); });
 </script></body></html>`;
 
 let failures = 0;

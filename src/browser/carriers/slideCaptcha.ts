@@ -165,8 +165,7 @@ function analyzeSlider():
  * GIRADO; arrastar a barra gira o círculo). Acha o ângulo em que a borda de
  * dentro do círculo emenda com a borda de fora (o fundo em volta do buraco).
  * Convenção: ângulos no sentido horário da tela; girar a peça de θ leva o pixel
- * do ângulo φ para φ+θ. Guarda a assinatura do miolo em window.__csRotSig para
- * medir, durante o arrasto, quanto o círculo JÁ girou.
+ * do ângulo φ para φ+θ.
  */
 export function analyzeRotation():
   | { error: string }
@@ -270,11 +269,6 @@ export function analyzeRotation():
     const dd = Math.min(Math.abs(t - theta), 360 - Math.abs(t - theta));
     if (dd > 12 && costs[t] < second) second = costs[t];
   }
-  // Assinatura do miolo (para medir o giro durante o arrasto).
-  const sig = ring(P, W, H, Math.round(rp * 0.35), Math.round(rp * 0.85)).map((v) =>
-    v ? 0.299 * v[0] + 0.587 * v[1] + 0.114 * v[2] : -1,
-  );
-  (window as unknown as { __csRot?: unknown }).__csRot = { sig, cx, cy, rp };
   return {
     cx: Math.round(cx),
     cy: Math.round(cy),
@@ -284,66 +278,6 @@ export function analyzeRotation():
     cost: Math.round(costs[theta]),
     second: Math.round(second),
   };
-}
-
-/** Roda NA PÁGINA: quanto o círculo JÁ girou (graus, horário) desde a análise. */
-export function measureRotation(): { angle: number; mode: string } | null {
-  const bk = document.getElementById('cs_captchabockCanvas') as HTMLCanvasElement | null;
-  const st = (window as unknown as { __csRot?: { sig: number[]; cx: number; cy: number; rp: number } }).__csRot;
-  if (!bk || !st) return null;
-  // 1) Giro por CSS (transform no canvas ou no pai).
-  for (const el of [bk, bk.parentElement]) {
-    if (!el) continue;
-    const tr = getComputedStyle(el).transform;
-    const m = tr && tr !== 'none' ? tr.match(/matrix\(([^)]+)\)/) : null;
-    if (m) {
-      const [a, b] = m[1].split(',').map(Number);
-      const ang = (Math.atan2(b, a) * 180) / Math.PI;
-      if (Math.abs(ang) > 0.2) return { angle: (ang + 360) % 360, mode: 'css' };
-    }
-  }
-  // 2) Giro redesenhado no canvas: compara a assinatura atual com a original.
-  let P: Uint8ClampedArray;
-  try {
-    P = bk.getContext('2d')!.getImageData(0, 0, bk.width, bk.height).data;
-  } catch {
-    return null;
-  }
-  const W = bk.width;
-  const H = bk.height;
-  const cur: number[] = [];
-  for (let d = 0; d < 360; d++) {
-    const a = (d * Math.PI) / 180;
-    let s = 0;
-    let n = 0;
-    for (let r = Math.round(st.rp * 0.35); r <= Math.round(st.rp * 0.85); r++) {
-      const x = Math.round(st.cx + r * Math.cos(a));
-      const y = Math.round(st.cy + r * Math.sin(a));
-      if (x < 0 || y < 0 || x >= W || y >= H) continue;
-      const i = (y * W + x) * 4;
-      if (P[i + 3] < 200) continue;
-      s += 0.299 * P[i] + 0.587 * P[i + 1] + 0.114 * P[i + 2];
-      n++;
-    }
-    cur.push(n ? s / n : -1);
-  }
-  let best = 0;
-  let bestC = Infinity;
-  for (let t = 0; t < 360; t++) {
-    let c = 0;
-    let n = 0;
-    for (let d = 0; d < 360; d++) {
-      const p = st.sig[(d - t + 360) % 360];
-      if (p < 0 || cur[d] < 0) continue;
-      c += Math.abs(cur[d] - p);
-      n++;
-    }
-    if (n && c / n < bestC) {
-      bestC = c / n;
-      best = t;
-    }
-  }
-  return { angle: best, mode: 'canvas' };
 }
 
 /** Roda NA PÁGINA: é o modo rotação? (peça redonda e grande + buraco branco no fundo) */
@@ -422,10 +356,13 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const rand = (a: number, b: number) => a + Math.random() * (b - a);
 
 /**
- * Arrasto do modo ROTAÇÃO: mede a cada passo quanto o círculo já girou e para
- * quando chega ao ângulo de encaixe. Descobre o sentido e a razão graus/px no
- * 1º passo; se o giro não puder ser medido durante o arrasto, usa a razão
- * linear da barra (curso inteiro = 360°).
+ * Arrasto do modo ROTAÇÃO guiado pela POSIÇÃO DA BARRA. Descoberto ao vivo em
+ * 10/10: o servidor da CargoSmart confere o ângulo pela posição da barra, com
+ * 360° = curso inteiro (largura da barra − largura do botão); o giro VISUAL do
+ * círculo usa outra escala (~360°/largura da barra). Alinhar pela imagem
+ * (giro visual certo, 0,7° do encaixe) foi RECUSADO; pela barra, ACEITO.
+ * Então: deslocamento alvo = θ/360 × curso, conferindo a posição real do botão
+ * a cada passo (o botão segue o mouse; aqui garantimos o px exato).
  */
 async function dragRotation(
   page: Page,
@@ -434,83 +371,39 @@ async function dragRotation(
 ): Promise<{ rem: number; degPerPx: number; mode: string; trace: string[] }> {
   const bar = await page.locator('#cs_captcha .verify-bar-area').first().boundingBox().catch(() => null);
   const travel = bar ? bar.width - hb.width : 294;
+  const degPerPx = 360 / travel;
+  const targetDx = theta / degPerPx;
   const y0 = hb.y + hb.height / 2;
   const x0 = hb.x + hb.width / 2;
-  const trace: string[] = [];
-  // Mede o giro só depois de ele ASSENTAR: visto ao vivo (10/10), medir no meio
-  // da animação fazia o arrasto passar do ponto.
-  const settled = async (): Promise<{ angle: number; mode: string } | null> => {
-    let last = await page.evaluate(measureRotation).catch(() => null);
-    for (let k = 0; k < 8; k++) {
-      await sleep(70);
-      const m = await page.evaluate(measureRotation).catch(() => null);
-      if (!m || !last) return m;
-      const d = Math.abs(((m.angle - last.angle + 540) % 360) - 180);
-      last = m;
-      if (d < 0.3) break;
-    }
-    return last;
+  const handleDx = async (): Promise<number | null> => {
+    const b = await page.locator('#cs_captcha .verify-move-block').first().boundingBox().catch(() => null);
+    return b ? b.x + b.width / 2 - x0 : null;
   };
+  const trace: string[] = [`curso=${travel.toFixed(1)} alvo=${targetDx.toFixed(1)}px`];
   let x = x0;
   await page.mouse.move(x - rand(30, 60), y0 + rand(-8, 8), { steps: 4 });
   await page.mouse.move(x, y0, { steps: 3 });
   await sleep(rand(80, 180));
   await page.mouse.down();
   await sleep(rand(60, 140));
-  const probe = 16;
-  x += probe;
-  await page.mouse.move(x, y0 + rand(-1, 1), { steps: 3 });
-  let m1 = await settled();
-  // Medida falhou ou não mexeu (visto ao vivo: caía no modo "linear" e errava):
-  // anda mais um pouco e mede de novo antes de desistir da medição.
-  for (let k = 0; k < 2 && (!m1 || Math.min(m1.angle, 360 - m1.angle) < 3); k++) {
-    x += 10;
-    await page.mouse.move(x, y0 + rand(-1, 1), { steps: 2 });
-    await sleep(250);
-    m1 = await settled();
-  }
-  const probeDone = x - x0;
-  trace.push(`dx=${probeDone} ang=${m1 ? m1.angle.toFixed(1) : '?'}`);
-  const moved1 = m1 ? Math.min(m1.angle, 360 - m1.angle) : 0;
-  let dir = 1;
-  let degPerPx = 360 / travel;
-  let mode = 'linear';
-  if (m1 && moved1 >= 3) {
-    dir = m1.angle < 180 ? 1 : -1;
-    degPerPx = moved1 / probeDone;
-    mode = m1.mode;
-  }
-  // Quanto falta girar, COM sinal (-180..180]: positivo = seguir em frente.
-  const remOf = (ang: number) => {
-    const raw = dir > 0 ? theta - ang : ang - theta;
-    return ((raw % 360) + 540) % 360 - 180;
-  };
-  let rem = remOf(mode === 'linear' ? probeDone * degPerPx : (m1 as { angle: number }).angle);
-  for (let i = 0; i < 90; i++) {
-    if (Math.abs(rem) <= 1.2) break;
-    // Perto do alvo, passos pequenos; pode VOLTAR se passou do ponto.
-    let step = (rem / degPerPx) * (Math.abs(rem) > 20 ? rand(0.5, 0.7) : rand(0.6, 0.85));
-    step = Math.max(-20, Math.min(26, step));
-    if (Math.abs(step) < 0.6) step = Math.sign(rem) * 0.6;
-    const nx = Math.max(x0, Math.min(x0 + travel, x + step));
-    if (Math.abs(nx - x) < 0.3) break; // bateu no fim/início da barra
-    x = nx;
+  let rem = targetDx;
+  for (let i = 0; i < 60; i++) {
+    const d = await handleDx();
+    if (d === null) break;
+    rem = targetDx - d;
+    if (trace.length < 30) trace.push(`botão=${d.toFixed(1)} falta=${rem.toFixed(1)}`);
+    if (Math.abs(rem) <= 0.4) break;
+    // Rápido longe, devagar perto; corrige se passar.
+    let step = rem * (Math.abs(rem) > 15 ? rand(0.45, 0.7) : rand(0.7, 0.95));
+    step = Math.max(-15, Math.min(28, step));
+    if (Math.abs(step) < 0.3) step = Math.sign(rem) * 0.3;
+    x += step;
     await page.mouse.move(x, y0 + rand(-1.2, 1.2), { steps: 2 });
-    if (mode === 'linear') {
-      await sleep(rand(20, 50));
-      rem = remOf(((x - x0) * degPerPx) % 360);
-    } else {
-      const m = await settled();
-      if (!m) break;
-      rem = remOf(m.angle);
-      if (trace.length < 40) trace.push(`dx=${(x - x0).toFixed(1)} ang=${m.angle.toFixed(1)} falta=${rem.toFixed(1)}`);
-      const done = dir > 0 ? m.angle : (360 - m.angle) % 360;
-      if (x - x0 > 20 && done > 2 && done < 350) degPerPx = done / (x - x0);
-    }
+    await sleep(rand(18, 45));
   }
   await sleep(rand(200, 400));
   await page.mouse.up();
-  return { rem: Math.round(rem * 10) / 10, degPerPx: Math.round(degPerPx * 1000) / 1000, mode, trace };
+  return { rem: Math.round(rem * degPerPx * 10) / 10, degPerPx: Math.round(degPerPx * 1000) / 1000, mode: 'barra', trace };
 }
 
 /** Assinatura rápida do fundo (para saber quando a imagem nova chegou). */
