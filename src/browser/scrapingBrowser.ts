@@ -700,6 +700,52 @@ export async function driveTrackingPage(
       captchaNet.push({ at: Date.now(), type: t, url: u.slice(0, 160), method: q.method(), failed: q.failure()?.errorText || 'falhou' });
     });
   }
+  // Gravador DENTRO da página (OOCL): envolve fetch/XHR antes de o app carregar e
+  // guarda cada chamada (endereço, envio, resposta) em window.__prioraNet. A
+  // captura pela rede do navegador remoto não mostrou as chamadas do captcha nem
+  // da consulta — este registro mostra o que o captcha ENVIA e o que o servidor
+  // RESPONDE (é o que explica as recusas).
+  if (/oocl\.com/i.test(opts.url)) {
+    await page
+      .addInitScript(() => {
+        const w = window as unknown as { __prioraNet?: unknown[] };
+        if (w.__prioraNet) return;
+        const log: unknown[] = [];
+        w.__prioraNet = log;
+        const cut = (v: unknown, n: number) => {
+          const t = typeof v === 'string' ? v : v == null ? '' : (() => { try { return JSON.stringify(v); } catch { return String(v); } })();
+          return t.replace(/"([A-Za-z0-9+/=]{200,})"/g, (_m: string, b: string) => `"<base64 ${b.length}>"`).slice(0, n);
+        };
+        const of = window.fetch.bind(window);
+        window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = String((input as Request).url || input);
+          const rec: Record<string, unknown> = { t: Date.now(), via: 'fetch', url: url.slice(0, 200), method: init?.method || 'GET', req: cut(init?.body, 1200) };
+          if (log.length < 40) log.push(rec);
+          const res = await of(input, init);
+          rec.status = res.status;
+          res.clone().text().then((b) => { rec.res = cut(b, 2000); }).catch(() => undefined);
+          return res;
+        };
+        const oo = XMLHttpRequest.prototype.open;
+        const os = XMLHttpRequest.prototype.send;
+        XMLHttpRequest.prototype.open = function (this: XMLHttpRequest & { __r?: Record<string, unknown> }, m: string, u: string | URL, ...rest: unknown[]) {
+          this.__r = { t: Date.now(), via: 'xhr', url: String(u).slice(0, 200), method: m };
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          return (oo as any).call(this, m, u, ...rest);
+        } as typeof XMLHttpRequest.prototype.open;
+        XMLHttpRequest.prototype.send = function (this: XMLHttpRequest & { __r?: Record<string, unknown> }, body?: Document | XMLHttpRequestBodyInit | null) {
+          const rec = this.__r || { t: Date.now(), via: 'xhr' };
+          rec.req = cut(body, 1200);
+          if (log.length < 40) log.push(rec);
+          this.addEventListener('loadend', () => {
+            rec.status = this.status;
+            try { rec.res = cut(this.responseText, 2000); } catch { /* resposta binária */ }
+          });
+          return os.call(this, body);
+        };
+      })
+      .catch(() => undefined);
+  }
   // Onde a aba estava quando a recebemos (com Unblock, o Scrapfly já navegou):
   // é o que diz se o bypass entregou o alvo, uma página de erro ou nada.
   const initialUrl = page.url();
@@ -948,6 +994,9 @@ export async function driveTrackingPage(
     inventory = await collectInventory(activePage).catch(() => undefined);
   }
 
+  const pageNet = /oocl\.com/i.test(opts.url)
+    ? await page.evaluate(() => (window as unknown as { __prioraNet?: unknown[] }).__prioraNet || []).catch(() => [])
+    : [];
   const title = await activePage.title().catch(() => '');
   // HTML e texto de TODOS os frames (o resultado pode estar num iframe).
   const html = await collectFramesHtml(activePage);
@@ -998,6 +1047,7 @@ export async function driveTrackingPage(
       ...(lastAkamaiDiag ? { akamai: lastAkamaiDiag } : {}),
       ...(sliderDiag ? { slider: sliderDiag } : {}),
       ...(captchaNet.length ? { captchaNet, navStartedAt } : {}),
+      ...((pageNet as unknown[]).length ? { pageNet, navStartedAt } : {}),
       landedUrl: activePage.url(),
       blockMode,
       ...(followDiag ? { follow: followDiag } : {}),
