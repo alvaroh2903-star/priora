@@ -46,7 +46,7 @@ function mkResult(over: Partial<TrackingResult>): TrackingResult {
 }
 
 const maersk = getCarrier('maersk') as CarrierMeta;
-const cma = getCarrier('cmacgm') as CarrierMeta; // scrapeBlocked
+const cma = getCarrier('cmacgm') as CarrierMeta;
 const evt = { date: '2026-08-28', status: 'Discharged', location: null, vessel: null, voyage: null };
 
 function expectHealth(name: string, carrier: CarrierMeta, result: TrackingResult | null, opts: any, want: CarrierHealth) {
@@ -106,7 +106,8 @@ expectHealth(
 );
 // scrapeBlocked (independe do resultado).
 expectHealth('scrapeBlocked => blocked_by_design', cma, null, { blocked: true }, 'blocked_by_design');
-expectHealth('scrapeBlocked pelo flag do carrier', cma, mkResult({ ok: true, events: [evt] }), {}, 'blocked_by_design');
+// (OOCL: segue scrapeBlocked — CMA e ZIM saíram em 10/10, via API da Scrapfly.)
+expectHealth('scrapeBlocked pelo flag do carrier', getCarrier('oocl') as CarrierMeta, mkResult({ ok: true, events: [evt] }), {}, 'blocked_by_design');
 // Sem referência.
 expectHealth('sem canário => no_ref', maersk, null, {}, 'no_ref');
 // Exceção.

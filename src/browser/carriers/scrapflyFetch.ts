@@ -37,6 +37,23 @@ export function scrapflyScenario(carrierId: string, searchRef: string): { url?: 
       ],
     };
   }
+  if (carrierId === 'zim') {
+    // Link direto ?consnumber= já busca. Visto em 10/10: às vezes a página vem,
+    // mas a chamada interna dos dados leva "Please try again" (o Akamai barra só
+    // ela). Como uma pessoa faria: espera e, se aparecer, busca de novo — com os
+    // cookies do Akamai já validados pela página.
+    const retry =
+      "if((document.body.innerText||'').includes('Please try again')){var b=document.querySelector('.chips-search-button');if(b)b.click();}";
+    return {
+      steps: [
+        { wait: 6000 },
+        { execute: { script: retry, timeout: 3000 } },
+        { wait: 8000 },
+        { execute: { script: retry, timeout: 3000 } },
+        { wait: 8000 },
+      ],
+    };
+  }
   return {};
 }
 

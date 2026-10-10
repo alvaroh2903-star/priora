@@ -129,15 +129,15 @@ export const CARRIERS: CarrierMeta[] = [
     trackingUrl: 'https://www.cma-cgm.com/ebusiness/tracking/search',
     needsLoginForDemurrage: true,
     needsScrapingBrowser: true, // SPA React → render real; protegido por DataDome.
-    scrapeBlocked: true, // DataDome comportamental — não vencemos por código; economiza crédito.
-    // API oficial (DCSA) primeiro quando CMA_API_KEY estiver no Render (api/cmacgm.ts).
+    // DataDome: o navegador remoto caía no captcha visual/áudio. A API de Scrape da
+    // Scrapfly com ASP passou e trouxe o histórico completo (10/10, QGD3293058 /
+    // HPCU5300140: descarga 29/09, retirada 03/10, devolução 05/10 em Itapoá;
+    // 30 créditos, 29 s) → modo de produção do CMA (cenário em scrapflyFetch).
+    fetchVia: 'scrapfly_api',
+    // API oficial (DCSA) primeiro, se um dia CMA_API_KEY entrar no Render.
     apiFirst: true,
     pool: 'residential_unblock', // quando abre sessão (diagnóstico): residential + Unblock (fura DataDome — confirmado ao vivo).
-    // Parser DEDICADO scrapers/cma.ts (Date|Moves|Location|Vessel) PRONTO e
-    // testado offline. PORÉM o portal é protegido por DataDome (anti-bot
-    // comportamental) — o acesso automatizado é bloqueado de forma intermitente.
-    // A própria CMA anuncia API-EDI: candidata forte à API oficial (api.cma-cgm.com).
-    notes: 'parser scrapers/cma.ts pronto (Date|Moves|Location|Vessel) + expande "Display Previous Moves". BLOQUEIO: portal com DataDome — scrapeBlocked (produção não abre sessão). CMA oferece API oficial (API-EDI) → caminho recomendado.',
+    notes: 'Produção via API de Scrape da Scrapfly com ASP (fetchVia scrapfly_api; ~30 créditos/consulta): form #Reference + #btnTracking e "Display Previous Moves" no js_scenario; parser scrapers/cma.ts (Date|Moves|Location|Vessel). Validado 10/10 (QGD3293058/HPCU5300140).',
   },
   {
     id: 'zim',

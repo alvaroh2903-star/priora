@@ -53,15 +53,16 @@ async function main(): Promise<void> {
   check('intervalo e teto configurados', st.intervalMin >= 15 && st.maxRefsPerRun >= 1);
 
   console.log('[selftest] enrichOne compartilha raspagem simultânea do mesmo BL');
-  // CMA está em scrapeBlocked → trackShipment devolve na hora, SEM abrir sessão
-  // remota. Serve para exercitar o caminho de raspagem offline.
-  const ref = 'QGD3293058';
+  // OOCL está em scrapeBlocked → trackShipment devolve na hora, SEM abrir sessão
+  // remota. Serve para exercitar o caminho de raspagem offline. (Era o CMA até
+  // 10/10, quando ele passou a ser raspado pela API da Scrapfly.)
+  const ref = 'OOLU2335731403';
   const p1 = enrichOne(ref, undefined, true);
   const p2 = enrichOne(ref, undefined, true);
   const [r1, r2] = await Promise.all([p1, p2]);
   check('dois pedidos simultâneos recebem o MESMO resultado (uma raspagem só)', r1 === r2);
   check('resultado não veio do cache (refresh)', r1.cached === false);
-  check('armador detectado (CMA)', r1.carrier.id === 'cmacgm', r1.carrier.id);
+  check('armador detectado (OOCL)', r1.carrier.id === 'oocl', r1.carrier.id);
 
   const r3 = await enrichOne(ref);
   check('3º pedido (sem refresh) sai do cache', r3.cached === true);
