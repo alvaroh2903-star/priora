@@ -356,15 +356,16 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const rand = (a: number, b: number) => a + Math.random() * (b - a);
 
 /**
- * Arrasto do modo ROTAÇÃO guiado pela POSIÇÃO DA BARRA (360° = curso inteiro:
- * largura da barra − botão), conferindo o botão a cada passo — é o que
- * posiciona com precisão (0,2–0,4° ao vivo). O movimento "contínuo" testado em
- * 10/10 deixou o botão errático (voltava a zero no meio do arrasto).
+ * Arrasto do modo ROTAÇÃO: move o MOUSE exatamente θ × curso/360 px (curso =
+ * largura da barra − botão), num movimento contínuo, e solta.
  *
- * SENTIDO: o alvo na barra é 360° − θ. Evidência ao vivo (10/10): todas as
- * recusas com o botão EXATO em θ foram com ângulos longe de 180° (130°, 136°);
- * a aprovação clara foi com θ = 178°, onde os dois sentidos quase coincidem.
- * O servidor confere o giro no sentido contrário ao do desenho do círculo.
+ * Por quê (ao vivo, 10/10, com o gravador dentro da página): o componente envia
+ * ao servidor o TRAJETO DO MOUSE (x de cada ponto, relativo ao clique) e o
+ * servidor calcula o ângulo por ele — o botão desenhado na tela atrasa em
+ * relação ao mouse e não importa. Aprovado: mouse em θ × 294/360 sem correção.
+ * Recusados: (a) empurrar o mouse até o BOTÃO chegar ao alvo (o mouse passava do
+ * ponto); (b) alinhar pelo giro desenhado do círculo (escala diferente);
+ * (c) mirar 360° − θ.
  */
 async function dragRotation(
   page: Page,
@@ -374,38 +375,32 @@ async function dragRotation(
   const bar = await page.locator('#cs_captcha .verify-bar-area').first().boundingBox().catch(() => null);
   const travel = bar ? bar.width - hb.width : 294;
   const degPerPx = 360 / travel;
-  const targetDx = ((360 - theta) % 360) / degPerPx;
+  const targetDx = theta / degPerPx;
   const y0 = hb.y + hb.height / 2;
   const x0 = hb.x + hb.width / 2;
-  const handleDx = async (): Promise<number | null> => {
-    const b = await page.locator('#cs_captcha .verify-move-block').first().boundingBox().catch(() => null);
-    return b ? b.x + b.width / 2 - x0 : null;
-  };
-  const trace: string[] = [`curso=${travel.toFixed(1)} alvo=${targetDx.toFixed(1)}px`];
-  let x = x0;
-  await page.mouse.move(x - rand(30, 60), y0 + rand(-8, 8), { steps: 4 });
-  await page.mouse.move(x, y0, { steps: 3 });
-  await sleep(rand(80, 180));
+  const trace: string[] = [`curso=${travel.toFixed(1)} alvo do mouse=${targetDx.toFixed(1)}px`];
+  await page.mouse.move(x0 - rand(25, 50), y0 + rand(-10, 10), { steps: 5 });
+  await page.mouse.move(x0, y0, { steps: 4 });
+  await sleep(rand(90, 200));
   await page.mouse.down();
-  await sleep(rand(60, 140));
-  let rem = targetDx;
-  for (let i = 0; i < 60; i++) {
-    const d = await handleDx();
-    if (d === null) break;
-    rem = targetDx - d;
-    if (trace.length < 30) trace.push(`botão=${d.toFixed(1)} falta=${rem.toFixed(1)}`);
-    if (Math.abs(rem) <= 0.4) break;
-    // Rápido longe, devagar perto; corrige se passar.
-    let step = rem * (Math.abs(rem) > 15 ? rand(0.45, 0.7) : rand(0.7, 0.95));
-    step = Math.max(-15, Math.min(28, step));
-    if (Math.abs(step) < 0.3) step = Math.sign(rem) * 0.3;
-    x += step;
-    await page.mouse.move(x, y0 + rand(-1.2, 1.2), { steps: 2 });
-    await sleep(rand(18, 45));
+  await sleep(rand(80, 160));
+  // Contínuo, acelera e desacelera, leve deriva em y; termina EXATO no alvo.
+  const n = Math.round(rand(26, 38));
+  const drift = rand(-2.5, 2.5);
+  const wob = rand(0.6, 1.4);
+  for (let i = 1; i <= n; i++) {
+    const p = i / n;
+    const ease = 1 - Math.pow(1 - p, 3);
+    const x = x0 + targetDx * ease + (i < n ? rand(-0.35, 0.35) : 0);
+    const y = y0 + drift * p + Math.sin(p * Math.PI * wob) * 1.0;
+    await page.mouse.move(x, y);
+    await sleep(rand(11, 26));
   }
-  await sleep(rand(200, 400));
+  await sleep(rand(180, 360));
+  const b = await page.locator('#cs_captcha .verify-move-block').first().boundingBox().catch(() => null);
+  if (b) trace.push(`botão na tela=${(b.x + b.width / 2 - x0).toFixed(1)}px (só diagnóstico)`);
   await page.mouse.up();
-  return { rem: Math.round(rem * degPerPx * 10) / 10, degPerPx: Math.round(degPerPx * 1000) / 1000, mode: 'barra', trace };
+  return { rem: 0, degPerPx: Math.round(degPerPx * 1000) / 1000, mode: 'mouse', trace };
 }
 
 /** Assinatura rápida do fundo (para saber quando a imagem nova chegou). */
