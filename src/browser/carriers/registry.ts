@@ -149,19 +149,13 @@ export const CARRIERS: CarrierMeta[] = [
       `https://www.zim.com/tools/track-a-shipment?consnumber=${encodeURIComponent(ref)}`,
     needsLoginForDemurrage: true,
     needsScrapingBrowser: true,
-    // ACESSO INTERMITENTE — Akamai Bot Manager. Na 1ª rodada ao vivo (Scrapfly
-    // residential + Unblock) a busca rodou e o histórico completo veio. As 3
-    // seguintes caíram no desafio "I'm not a robot" do Akamai, com IPs diferentes
-    // (desafio em inglês e em francês) e com OS DOIS modos de interceptação
-    // ('media' e 'all') — então não é IP sujo nem efeito da correção de render: é
-    // o Akamai endurecendo, provavelmente por reputação após repetições no mesmo
-    // BL. Bloqueado de volta para não pagar sessão residencial + solve de hCaptcha
-    // em falha quase certa. Retestar pelo diagnóstico (que ignora este flag) com a
-    // reputação esfriada.
-    scrapeBlocked: true,
+    // Akamai Bot Manager: o desafio é COMPORTAMENTAL (caixinha "I'm not a robot" +
+    // "Verify" com barra de progresso) — o Unblock do Scrapfly não clica nisso.
+    // Desde 10/10 o motor resolve (scrapingBrowser: solveAkamaiBehavioral) e o
+    // link direto ?consnumber= traz o resultado: 2/2 passaram (~4 s no desafio).
     pool: 'residential_unblock',
     notes:
-      'Akamai Bot Manager → acesso INTERMITENTE (1 sucesso, depois 3 desafios seguidos, IPs e modos de interceptação diferentes). Quando passa, os dados vêm completos (ZIMUTRT938698: descarga 04-Sep, retirada 05-Sep, disponível 16-Sep, devolução 18-Sep em SANTOS). Busca via driver (drivers.ts:zim) → URL ?consnumber=. O hCaptcha da página não gateia o rastreio (meta tracing-captcha:0); quem barra é o Akamai. Layout em DIV (sem <table>) → parser dedicado ainda a escrever. BL costuma ter VÁRIOS contêineres.',
+      'Akamai (desafio comportamental) resolvido pelo motor; link direto ?consnumber= (BL ou contêiner). Parser DEDICADO scrapers/zim.ts (cartões em DIV, ids _desktop_N_campo; o "Last Activity" do cabeçalho é a devolução). Validado 10/10: ZIMUTRT938698/TCNU7625335 — descarga 04/09, retirada 05/09, devolução 18/09 em Santos.',
   },
   {
     id: 'hapag',

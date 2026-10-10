@@ -88,6 +88,10 @@ export function classifyEvent(status: string): NormalizedEventType {
   // no porto de transbordo virava `berth` — e "navio chegou ao destino" tira o BL
   // da espera de trânsito antes da hora (raspagens à toa a cada 12h).
   if (/trans\w*hip|transbordo|\bt\/s\b/.test(s)) return 'other';
+  // Chegada/partida de CAMINHÃO ou TREM não é atracação do navio. Visto na ZIM:
+  // "Export truck arrival to Port of Loading" (origem) caía em `berth` pelo
+  // "arrival … Port".
+  if (/\b(truck|rail|train|barge)\b/.test(s) && /arriv|depart/.test(s)) return 'other';
   // "Positioned Out/In" é reposicionamento de PÁTIO/ferrovia (empilhamento), não a
   // entrega ao consignatário. Jargão de terminal, nunca de retirada final.
   if (/position(?:ed)?\s+(?:out|in)\b/.test(s)) return 'other';

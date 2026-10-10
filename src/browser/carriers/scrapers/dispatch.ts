@@ -10,6 +10,7 @@ import { extractCmaEvents } from './cma';
 import { extractHmmEvents } from './hmm';
 import { extractEvergreenEvents } from './evergreen';
 import { extractMscEvents, extractMscDomEvents, MSC_DOM_RE } from './msc';
+import { extractZimEvents, ZIM_DOM_RE } from './zim';
 import { extractYangMingEvents, extractYangMingDetailEvents, isYangMingDetailPage } from './yangming';
 
 /**
@@ -61,6 +62,11 @@ export function extractCarrierEvents(html: string, apiJson?: string): TrackingEv
   // do histórico completo que estava lá. A MESMA saída se reproduz offline só com
   // um navio "OOCL …" na página (a assinatura antiga era a palavra /oocl/).
 
+  // ZIM — cartões React em DIV (li.card-container-v2 + ids _desktop_N_campo).
+  if (ZIM_DOM_RE.test(html)) {
+    const z = extractZimEvents(html);
+    if (z.length) return z;
+  }
   // PIL — "Container T&T": histórico em tbody#container_info_sub_<CONTÊINER> e
   // link "Trace" (name="trackinfo::job::<BL>::<CONTÊINER>"). Marcas exclusivas.
   if (/container_info_sub_[A-Z]{4}\d{7}|trackinfo::/i.test(html)) {

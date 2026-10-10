@@ -381,7 +381,7 @@ export async function driveCmaForm(
   valueAfterFill: string | null;
   submitted: boolean;
   urlAfter: string;
-  attempts?: Array<{ searchBy: string | null; found: boolean; notFoundAlert: boolean; net?: string[] }>;
+  attempts?: Array<{ searchBy: string | null; found: boolean; notFoundAlert: boolean; how?: string; net?: string[] }>;
 }> {
   const INPUT = '#Reference, input[name="SearchViewModel.Reference"], input.bookingCheck';
   if ((await page.locator(INPUT).count().catch(() => 0)) === 0) {
@@ -395,7 +395,7 @@ export async function driveCmaForm(
   // Se o CMA disser "not found" e a ref não for contêiner, tenta os outros tipos.
   const isContainer = /^[A-Z]{4}\d{7}$/.test(ref.toUpperCase());
   const plan: Array<string | null> = isContainer ? [null] : [null, 'BL', 'Booking'];
-  const attempts: Array<{ searchBy: string | null; found: boolean; notFoundAlert: boolean; net?: string[] }> = [];
+  const attempts: Array<{ searchBy: string | null; found: boolean; notFoundAlert: boolean; how?: string; net?: string[] }> = [];
   // Rede durante o envio (diagnóstico): o POST volta 302? 403 do DataDome? Para
   // onde redireciona? Sem isso, "voltou o form vazio" não diz o porquê.
   let net: string[] = [];
@@ -440,10 +440,30 @@ export async function driveCmaForm(
     const submit = page.locator('#btnTracking, button[type="submit"]:has-text("Search")').first();
     const navigation = page.waitForNavigation({ timeout: 30_000 }).catch(() => null);
     net = [];
+    // Visto ao vivo (10/10): o clique "normal" no Search não gerava NENHUMA
+    // requisição — algo por cima do botão (banner/widget) e o erro era engolido.
+    // Agora: clique robusto (visível → JS) e, se nada sair na rede, o próprio
+    // form.requestSubmit() — o envio que o navegador faria.
+    let how = 'nenhum';
     if ((await submit.count().catch(() => 0)) > 0) {
-      await submit.click({ timeout: 8000 }).catch(() => undefined);
+      const c = await robustClick(submit, 8000);
+      how = c.ok ? (c.method ?? 'ok') : 'falhou';
     } else {
       await input.press('Enter').catch(() => undefined);
+      how = 'enter';
+    }
+    await page.waitForTimeout(2500);
+    if (net.length === 0) {
+      const ok = await page
+        .evaluate(() => {
+          const f = document.querySelector<HTMLFormElement>('form[action*="/ebusiness/tracking/search"]');
+          if (!f) return false;
+          if (typeof f.requestSubmit === 'function') f.requestSubmit();
+          else f.submit();
+          return true;
+        })
+        .catch(() => false);
+      if (ok) how += '+requestSubmit';
     }
     submitted = true;
     await navigation;
@@ -455,7 +475,7 @@ export async function driveCmaForm(
       .catch(() => false);
     const body = (await page.innerText('body').catch(() => '')) || '';
     const found = !notFoundAlert && body.toUpperCase().includes(ref.toUpperCase());
-    attempts.push({ searchBy, found, notFoundAlert, net: [...net] });
+    attempts.push({ searchBy, found, notFoundAlert, how, net: [...net] });
     if (found) break;
   }
   page.off('response', onResp);
