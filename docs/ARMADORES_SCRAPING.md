@@ -67,7 +67,7 @@ Legenda **Anti-bot**: 🔴 Cloudflare interativo · 🟠 aceite/anti-bot leve ·
 | `hmm` | HMM (Hyundai) | HDMU, HMMU, SGNM… | Formulário (srchBlNo1 + Retrieve) | form-based | 🟢 | ✅ (validado ao vivo; transbordo T/S ignorado) |
 | `yangming` | Yang Ming | YMLU, YMJA | Next.js (form genérico já busca) | 🟢 | ✅ (validado ao vivo, YMJAB237020139) |
 | `evergreen` | Evergreen (ShipmentLink) | EGLV, EVGL, EMCU | Servlet (driver dedicado: radio B/L + input#NO + Submit) | 🟠 | ✅ (validado ao vivo, EGLV010600577145 → 6 contêineres) |
-| `zim` | ZIM | ZIMU | SPA React (form `.chips-input`) | 🟢 | 🟡 dados OK via IA; parser DIV a escrever (validado ao vivo, ZIMUTRT938698) |
+| `zim` | ZIM | ZIMU | SPA React (form `.chips-input`) | 🔴 Akamai | 🟡 acesso INTERMITENTE (1 sucesso, 3 desafios Akamai); parser DIV a escrever |
 | `pil` | Pacific Int. Lines | PABV, NNPL, PILU | Página + form | `?...&refNo=` | 🟢 | ✅ (histórico completo via Trace, validado ao vivo) |
 | `oocl` | OOCL | OOLU | ASPX com formulário | a confirmar | 🟠 | ⬜ |
 
@@ -76,8 +76,14 @@ Legenda **Anti-bot**: 🔴 Cloudflare interativo · 🟠 aceite/anti-bot leve ·
 
 ## 3.1 Validados + modo de operação (resumo executivo)
 
-**✅ Raspando ponta a ponta na PRODUÇÃO (validado ao vivo) — 10:**
-Hapag · Maersk · ONE · COSCO · PIL · HMM · Evergreen · MSC · Yang Ming · **ZIM**
+**✅ Raspando ponta a ponta na PRODUÇÃO (validado ao vivo) — 9:**
+Hapag · Maersk · ONE · COSCO · PIL · HMM · Evergreen · MSC · Yang Ming
+
+**⚠️ Acesso INTERMITENTE (Akamai Bot Manager) — `scrapeBlocked` até retestar — 1:**
+- **ZIM:** a 1ª rodada trouxe o histórico completo; as 3 seguintes caíram no desafio
+  do Akamai com IPs diferentes e com os dois modos de interceptação. Não é IP sujo
+  nem efeito da correção de render — é o Akamai endurecendo (provável reputação após
+  repetições no mesmo BL). Retestar com a reputação esfriada, poucas vezes.
 
 **🔓 Acesso VENCIDO com Scrapfly pago (residential + Unblock), produção a liberar — 2:**
 - **CMA (DataDome):** o DataDome **não apareceu** — portal renderizou inteiro (1 MB,
@@ -209,7 +215,22 @@ Logo, gastar menos = **menos sessões**, **sessões mais curtas** e **menos band
   `/en/esolution/tracking/cargo_tracking_detail?trackNo=<CNTR>&position=BL_CT&refNo=<BL sem prefixo YMJA>`
   — URL limpa/determinística, **a plugar** (navegar por contêiner e ler os eventos).
 
-**ZIM — VALIDADA ao vivo (`ZIMUTRT938698`, Scrapfly residential + Unblock):**
+**ZIM — ACESSO INTERMITENTE (Akamai Bot Manager), `ZIMUTRT938698`:**
+- **Histórico das rodadas ao vivo (10/10/2026):**
+
+  | # | Interceptação | Idioma do desafio (≈ IP) | Resultado |
+  |---|---|---|---|
+  | 1 | total (`**/*`) | — | ✅ histórico completo (2,1 MB) |
+  | 2 | só mídia | inglês | ❌ Akamai "I'm not a robot" |
+  | 3 | só mídia | francês | ❌ Akamai |
+  | 4 | total (`?block=all`) | inglês | ❌ Akamai |
+
+  IP e modo de interceptação variaram, o bloqueio não. O `hcaptchaSolved:true` nas
+  rodadas barradas mostra que o hCaptcha era resolvido (e pago) e o Akamai barrava
+  depois. Por isso `scrapeBlocked` voltou: produção não abre sessão até um reteste
+  limpo, feito com espaçamento (a hipótese é reputação por repetição).
+
+**O que a rodada 1 provou (quando o acesso passa):**
 - **O captcha NÃO gateia o rastreio.** A página serve `<meta name="tracing-captcha"
   content="0">`: o widget hCaptcha existe no DOM, mas a busca completa sem ele —
   o resultado veio com `hcaptchaSolved:false` e `mentionsRef:true`. Toda a análise

@@ -137,13 +137,19 @@ export const CARRIERS: CarrierMeta[] = [
         : null,
     needsLoginForDemurrage: true,
     needsScrapingBrowser: true,
-    // DESBLOQUEADO (validado ao vivo com Scrapfly residential + Unblock): a página
-    // renderizou (2,1 MB), o form montou, a busca RODOU (URL virou ?consnumber=) e
-    // o histórico completo veio no texto — mesmo com hcaptchaSolved:false, porque
-    // a ZIM serve o rastreio com `tracing-captcha: 0` (captcha não gateia a busca).
-    pool: 'residential_unblock', // residential + Unblock (é o que fez a página vir inteira).
+    // ACESSO INTERMITENTE — Akamai Bot Manager. Na 1ª rodada ao vivo (Scrapfly
+    // residential + Unblock) a busca rodou e o histórico completo veio. As 3
+    // seguintes caíram no desafio "I'm not a robot" do Akamai, com IPs diferentes
+    // (desafio em inglês e em francês) e com OS DOIS modos de interceptação
+    // ('media' e 'all') — então não é IP sujo nem efeito da correção de render: é
+    // o Akamai endurecendo, provavelmente por reputação após repetições no mesmo
+    // BL. Bloqueado de volta para não pagar sessão residencial + solve de hCaptcha
+    // em falha quase certa. Retestar pelo diagnóstico (que ignora este flag) com a
+    // reputação esfriada.
+    scrapeBlocked: true,
+    pool: 'residential_unblock',
     notes:
-      'SPA React validada ao vivo (ZIMUTRT938698): descarga 04-Sep, retirada 05-Sep, disponível 16-Sep, devolução 18-Sep em SANTOS. Busca via driver (drivers.ts:zim) → URL ?consnumber=. O hCaptcha existe na página mas NÃO gateia o rastreio (meta tracing-captcha:0). Layout em DIV (sem <table>) → parser dedicado a escrever; hoje a camada de IA cobre. BL costuma ter VÁRIOS contêineres.',
+      'Akamai Bot Manager → acesso INTERMITENTE (1 sucesso, depois 3 desafios seguidos, IPs e modos de interceptação diferentes). Quando passa, os dados vêm completos (ZIMUTRT938698: descarga 04-Sep, retirada 05-Sep, disponível 16-Sep, devolução 18-Sep em SANTOS). Busca via driver (drivers.ts:zim) → URL ?consnumber=. O hCaptcha da página não gateia o rastreio (meta tracing-captcha:0); quem barra é o Akamai. Layout em DIV (sem <table>) → parser dedicado ainda a escrever. BL costuma ter VÁRIOS contêineres.',
   },
   {
     id: 'hapag',
