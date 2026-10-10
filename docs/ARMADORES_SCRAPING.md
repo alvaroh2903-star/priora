@@ -44,6 +44,22 @@ Escrevemos **uma vez** (serve para todos) — nada disto se repete por armador:
 | Datas de demurrage | `carriers/scrapers/hapag.ts` (`deriveContainers`) | eventos → datas |
 | Parser de datas | `parseDateToISO` | qualquer formato → ISO |
 
+### Regras que valem para TODOS (aprendidas ao vivo)
+
+- **Previsão não é fato** (`carriers/estimates.ts`): evento com data depois de
+  hoje+1 dia (margem de fuso) é estimativa e sai — na extração, na saída do
+  `trackShipment` (scraping, IA e API), no `deriveContainers`, no histórico salvo e
+  no TTL. Origem: a ONE mostrava descarga, retirada **e devolução** previstas para
+  29/10 como se tivessem acontecido; o contêiner virava "resolvido" e era congelado.
+  Previsão **vencida** que o portal não atualizou a data não é pega pela data —
+  cada parser descarta pela marca do próprio portal: ONE = ícone "E" (Estimate),
+  PIL = asterisco (`* 03-Oct-2026`). A IA (Clara) tem a mesma ordem no prompt.
+- **Despachante (`scrapers/dispatch.ts`) reconhece o portal pelo DOM/domínio, nunca
+  pelo nome do armador**: nome de armador aparece em página de outro (navio "OOCL …"
+  na lista da PIL, "CMA CGM …" em BL da Evergreen). A palavra `/oocl/` fazia o parser
+  da OOCL ler a página da PIL. Ordem: marcas exclusivas primeiro; CMA por último.
+- **"T/S" = transbordo** (`classifyEvent`), igual a "transshipment".
+
 **Por armador** só existe **um "tradutor" do DOM** (`extractXxxEvents`, ~30 linhas)
 + **uma linha** no mapa `SCRAPERS` (`carriers/scraper.ts`). Sem tradutor, o portal
 cai no `genericScrape` (lê tabela simples; se não reconhece, devolve honestamente
@@ -68,7 +84,7 @@ Legenda **Anti-bot**: 🔴 Cloudflare interativo · 🟠 aceite/anti-bot leve ·
 | `yangming` | Yang Ming | YMLU, YMJA | Next.js (form genérico já busca) | 🟢 | ✅ histórico completo via página de detalhe por contêiner (clique; validado 10/10, FFAU6989181) |
 | `evergreen` | Evergreen (ShipmentLink) | EGLV, EVGL, EMCU | Servlet (driver dedicado: radio B/L + input#NO + Submit) | 🟠 | ✅ histórico completo via popup "Container Move Detail" por contêiner (validado 10/10, EGSU8138081) |
 | `zim` | ZIM | ZIMU | SPA React (form `.chips-input`) | 🔴 Akamai | 🟡 acesso INTERMITENTE (1 sucesso, 3 desafios Akamai); parser DIV a escrever |
-| `pil` | Pacific Int. Lines | PABV, NNPL, PILU | Página + form | `?...&refNo=` | 🟢 | ✅ (histórico completo via Trace, validado ao vivo) |
+| `pil` | Pacific Int. Lines | PABV, NNPL, PILU | Página + form | `?...&refNo=` | 🟢 | ✅ (histórico completo via Trace, validado ao vivo; data com `*` = previsão, descartada) |
 | `oocl` | OOCL | OOLU | ASPX com formulário | a confirmar | 🟠 | ⬜ |
 
 > Detecção (ref → armador) e a URL de rastreio **já funcionam para os 12**. O que
