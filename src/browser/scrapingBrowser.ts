@@ -670,28 +670,51 @@ export async function driveTrackingPage(
     await activePage.waitForTimeout(1500);
   }
 
-  // MAERSK (layout novo): cada contêiner mostra só o resumo e esconde o histórico
-  // num acordeão "View 11 events completed from origin". Sem abrir, a descarga e a
-  // retirada nem existem no HTML (a IA só via chegada do navio e devolução). O
-  // título é um <span slot="heading"> de componente web → clique robusto.
+  // MAERSK: o layout novo ("ocean-design") mostra por contêiner só um resumo e
+  // esconde os eventos num acordeão "View 11 events completed from origin" — sem
+  // abrir, a descarga e a retirada nem existem na página (a IA só via chegada do
+  // navio e devolução). Ordem:
+  //  1. fecha o banner de cookies (visto aberto na captura, por cima de tudo);
+  //  2. volta para o layout ANTIGO ("Return to old tracking"), que lista o plano
+  //     de transporte inteiro e que o parser dedicado (validado) já lê;
+  //  3. se o antigo não carregar, abre os acordeões do layout novo.
+  // Validado ao vivo: os dois links existem em DUPLICATA (responsivo) e o 1º da
+  // página é o escondido — o robustClick mira o visível.
   if (/maersk\.com/i.test(activePage.url())) {
-    const sel = 'text=/View \\d+ events?/i';
-    const n0 = await activePage.locator(sel).count().catch(() => 0);
-    let opened = 0;
-    for (let i = 0; i < Math.min(n0, 10); i++) {
-      // Se o texto some ao abrir ("View" → "Hide"), a lista encolhe: pega sempre o
-      // primeiro. Se o texto fica, anda pelo índice.
-      const cur = await activePage.locator(sel).count().catch(() => 0);
-      if (cur === 0) break;
-      const target = cur < n0 ? activePage.locator(sel).first() : activePage.locator(sel).nth(i);
-      const r = await robustClick(target, 4000);
-      if (r.ok) opened++;
-      await activePage.waitForTimeout(1500);
+    const md: Record<string, unknown> = {};
+    const cookie = activePage.locator('button.coi-banner__accept, button:has-text("Allow all")');
+    if ((await cookie.count().catch(() => 0)) > 0) {
+      md.cookie = (await robustClick(cookie, 3000)).method;
+      await activePage.waitForTimeout(800);
     }
-    if (n0 > 0) {
-      await activePage.waitForLoadState('networkidle', { timeout: postWait }).catch(() => undefined);
-      diag = { ...(diag || {}), maerskEventsOpened: `${opened}/${n0}` };
+    const oldLink = activePage.locator('[data-test="ocean-beta-return-link"], a:has-text("Return to old tracking")');
+    if ((await oldLink.count().catch(() => 0)) > 0) {
+      const r = await robustClick(oldLink, 5000);
+      md.oldTracking = { click: r.method, visible: r.visible };
+      await activePage.waitForLoadState('domcontentloaded', { timeout: 20_000 }).catch(() => undefined);
+      const oldOk = await activePage
+        .waitForSelector('.transport-plan__list__item', { timeout: 25_000 })
+        .then(() => true)
+        .catch(() => false);
+      md.layout = oldOk ? 'antigo' : 'novo';
+    } else {
+      md.layout = 'novo';
     }
+    if (md.layout === 'novo') {
+      const sel = 'text=/View \\d+ events?/i';
+      const n0 = await activePage.locator(sel).filter({ visible: true }).count().catch(() => 0);
+      let opened = 0;
+      for (let i = 0; i < Math.min(n0, 10); i++) {
+        const vis = activePage.locator(sel).filter({ visible: true });
+        if ((await vis.count().catch(() => 0)) === 0) break;
+        const r = await robustClick(n0 > (await vis.count().catch(() => 0)) ? vis.first() : vis.nth(i), 4000);
+        if (r.ok) opened++;
+        await activePage.waitForTimeout(1500);
+      }
+      md.eventsOpened = `${opened}/${n0}`;
+      if (n0 > 0) await activePage.waitForLoadState('networkidle', { timeout: postWait }).catch(() => undefined);
+    }
+    diag = { ...(diag || {}), maersk: md };
   }
 
   // Outros mostram só o ÚLTIMO movimento e escondem o histórico atrás de um

@@ -65,53 +65,63 @@ const LOGIN_TEXT_HINTS = [
 /** Resultado de um clique robusto: deu certo? por qual método? o que falhou antes? */
 export interface ClickOutcome {
   ok: boolean;
-  method: 'click' | 'force' | 'js' | 'js-ancestor' | null;
+  method: 'click' | 'js' | 'js-ancestor' | 'force' | null;
+  /** O elemento clicado estava visível? (marcação responsiva duplica elementos) */
+  visible: boolean;
   errors: string[];
 }
 
 /**
- * Clique que não desiste no primeiro obstáculo. Portais com design system de
- * componentes web (Maersk: o "View 11 events" é um `<span slot="heading">` dentro
- * de um acordeão) fazem o clique normal do Playwright esperar até estourar o
- * tempo — o alvo "não recebe eventos" porque quem recebe é o componente-pai.
- * Tentativas, em ordem: clique normal → clique forçado (pula a checagem de
- * acionabilidade) → `el.click()` via JavaScript → clique no ancestral
- * interativo mais próximo (button / [role=button] / summary / a).
+ * Clique que não desiste no primeiro obstáculo — e que mira o elemento CERTO.
+ *
+ * Duas armadilhas vistas ao vivo na Maersk:
+ *  1. Marcação DUPLICADA para layout responsivo: o 1º "Return to old tracking" da
+ *     página é a versão escondida ("waiting for element to be visible"). Por isso
+ *     preferimos o primeiro elemento VISÍVEL que casar.
+ *  2. Componentes web / overlays: o clique normal estoura o tempo. O clique
+ *     FORÇADO então "dá certo" mesmo acertando outra coisa (overlay, elemento
+ *     invisível) — falso sucesso. Por isso ele é o ÚLTIMO recurso, depois do
+ *     `el.click()` via JavaScript, que dispara direto no alvo e atravessa o
+ *     slot do componente.
+ * Ordem: clique normal → JS no alvo → JS no ancestral interativo → forçado.
  */
 export async function robustClick(target: Locator, timeoutMs = 5000): Promise<ClickOutcome> {
   const errors: string[] = [];
   const note = (label: string, e: unknown) => errors.push(`${label}: ${String((e as Error)?.message || e).slice(0, 300)}`);
+  const visibles = target.filter({ visible: true });
+  const visible = (await visibles.count().catch(() => 0)) > 0;
+  const el = visible ? visibles.first() : target.first();
   try {
-    await target.click({ timeout: timeoutMs });
-    return { ok: true, method: 'click', errors };
+    await el.click({ timeout: timeoutMs });
+    return { ok: true, method: 'click', visible, errors };
   } catch (e) {
     note('click', e);
   }
   try {
-    await target.click({ timeout: timeoutMs, force: true });
-    return { ok: true, method: 'force', errors };
-  } catch (e) {
-    note('force', e);
-  }
-  try {
-    await target.evaluate((el) => (el as HTMLElement).click());
-    return { ok: true, method: 'js', errors };
+    await el.evaluate((node) => (node as HTMLElement).click());
+    return { ok: true, method: 'js', visible, errors };
   } catch (e) {
     note('js', e);
   }
   try {
-    const clicked = await target.evaluate((el) => {
-      const anc = (el as HTMLElement).closest('button, [role="button"], summary, a') as HTMLElement | null;
+    const clicked = await el.evaluate((node) => {
+      const anc = (node as HTMLElement).closest('button, [role="button"], summary, a') as HTMLElement | null;
       if (!anc) return false;
       anc.click();
       return true;
     });
-    if (clicked) return { ok: true, method: 'js-ancestor', errors };
+    if (clicked) return { ok: true, method: 'js-ancestor', visible, errors };
     errors.push('js-ancestor: nenhum ancestral clicável');
   } catch (e) {
     note('js-ancestor', e);
   }
-  return { ok: false, method: null, errors };
+  try {
+    await el.click({ timeout: timeoutMs, force: true });
+    return { ok: true, method: 'force', visible, errors };
+  } catch (e) {
+    note('force', e);
+  }
+  return { ok: false, method: null, visible, errors };
 }
 
 export async function acceptCookies(page: Page): Promise<void> {
