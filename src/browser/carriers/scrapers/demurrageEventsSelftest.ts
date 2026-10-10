@@ -86,6 +86,13 @@ function main(): void {
   for (const [status, esperado] of zim) {
     check(`"${status}" → ${esperado}`, classifyEvent(status) === esperado, classifyEvent(status));
   }
+  // --- Evergreen: termos REAIS do popup "Container Move Detail" (EGLV010600577145). ---
+  console.log('[selftest] classifyEvent — termos reais da Evergreen');
+  check('"Pick-up by merchant haulage" (destino) → gate_out', classifyEvent('Pick-up by merchant haulage') === 'gate_out', classifyEvent('Pick-up by merchant haulage'));
+  check('"Empty pick-up by merchant haulage" (origem) → other', classifyEvent('Empty pick-up by merchant haulage') === 'other', classifyEvent('Empty pick-up by merchant haulage'));
+  check('"Discharged and waiting for transshipping" → other', classifyEvent('Discharged and waiting for transshipping') === 'other', classifyEvent('Discharged and waiting for transshipping'));
+  check('"Full import container received at inland depot" → gate_out', classifyEvent('Full import container received at inland depot') === 'gate_out');
+  check('"Loaded (FCL) on vessel" → other', classifyEvent('Loaded (FCL) on vessel') === 'other');
   // Guarda do vazio na ORIGEM tem de continuar valendo COM hífen também.
   check('"Gate-Out Empty" (origem, com hífen) → other', classifyEvent('Gate-Out Empty') === 'other', classifyEvent('Gate-Out Empty'));
   check('"Empty Container Released to Shipper" → other', classifyEvent('Empty Container Released to Shipper') === 'other');

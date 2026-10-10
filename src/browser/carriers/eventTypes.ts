@@ -33,7 +33,11 @@ const RULES: Array<[NormalizedEventType, RegExp]> = [
     // received at inland depot", Santos, 1 dia após a descarga) = o contêiner
     // cheio SAIU do terminal portuário — na prática, a retirada (comum em DTA /
     // porto seco). Exige cheio/importação/laden: vazio no depósito é outra coisa.
-    /gated?[\s-]*out|to consignee|delivered to|picked up|full.*out|out\s?gate|import.*deliver|entregue|sa[ií]da.*cheio|(?:full|import|laden)\b.*\b(?:inland depot|dry port|porto seco)/i,
+    //
+    // "Pick-up by merchant haulage" (Evergreen, NO DESTINO, 3 dias após a descarga):
+    // o caminhão do importador buscando o CHEIO = retirada. O "Empty pick-up" da
+    // origem já foi descartado pela guarda lá embaixo.
+    /gated?[\s-]*out|to consignee|delivered to|picked up|\bpick[\s-]?up\b|full.*out|out\s?gate|import.*deliver|entregue|sa[ií]da.*cheio|(?:full|import|laden)\b.*\b(?:inland depot|dry port|porto seco)/i,
   ],
   // `releas` (e não `released`): a ZIM emite "Carrier Release", sem o D. A liberação
   // de VAZIO na origem já é descartada pelo guard lá embaixo, então afrouxar aqui
@@ -52,6 +56,10 @@ export function classifyEvent(status: string): NormalizedEventType {
   //  - "Empty Container Release(d) to Shipper" (liberação p/ estufagem);
   //  - "Gate out Empty" (o vazio saindo do depósito na origem).
   if (/empty\s+(?:container\s+)?releas/.test(s)) return 'other';
+  //  - "Empty pick-up by merchant haulage" (Evergreen, na ORIGEM): o vazio sendo
+  //    retirado para estufagem. Sem esta guarda, o "pick-up" abaixo o leria como
+  //    retirada do cheio.
+  if (/empty\s+(?:container\s+)?pick[\s-]?up/.test(s)) return 'other';
   if (/gate[\s-]*out\s+empty/.test(s)) return 'other';
   // Descarga/descida em porto de TRANSBORDO (T/S) — ex.: HMM "Feeder Discharged
   // at T/S Port", ONE "Unloaded from Vessel at Transshipment Port". NÃO é a

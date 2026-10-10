@@ -101,6 +101,12 @@ export const CARRIERS: CarrierMeta[] = [
     scac: ['HDMU', 'HMMU'],
     containerPrefixes: ['HDMU', 'HMMU'],
     trackingUrl: 'https://www.hmm21.com/e-service/general/trackNTrace/TrackNTrace.do',
+    // O campo de busca (srchBlNo1) aceita SÓ 12 caracteres: o BL vai SEM o prefixo
+    // HDMU. Visto ao vivo: "HDMUHKGM01285200" era cortado para "HDMUHKGM0128" e o
+    // portal respondia "B/L no. is invalid". Os 69 BLs da operação têm o prefixo e
+    // TODOS ficam com 12 caracteres sem ele (o único validado antes, SGNM68262800,
+    // já vinha sem prefixo — por isso o bug não aparecia).
+    searchRef: (ref) => ref.replace(/^(HDMU|HMMU)/i, ''),
     needsLoginForDemurrage: true,
     needsScrapingBrowser: true, // SPA form; render real (sem captcha, confirmado ao vivo).
     // Form-based, SEM captcha (confirmado ao vivo). O motor preenche srchBlNo1 +
@@ -170,7 +176,12 @@ export const CARRIERS: CarrierMeta[] = [
           )}`,
     needsLoginForDemurrage: true,
     needsScrapingBrowser: true, // Cloudflare interativo + SPA → precisa do navegador remoto.
-    notes: 'páginas track-by-container / track-by-booking (aceita B/L). Scraper de eventos (.hal-event) implementado e validado ao vivo via Scraping Browser.',
+    // Unblock (target_url + solve_captcha): no watchdog de 10/10 a Hapag caiu duas
+    // vezes no "Interactive Challenge" do Cloudflare com o residencial puro (uma
+    // página magra, outra o desafio com IP residencial russo). É a mesma parede
+    // que o Unblock derrubou na OOCL. Volume baixo (4 BLs), custo extra pequeno.
+    pool: 'residential_unblock',
+    notes: 'páginas track-by-container / track-by-booking (aceita B/L). Scraper de eventos (.hal-event) implementado e validado ao vivo. Cloudflare interativo intermitente → pool residential_unblock.',
   },
   {
     id: 'cosco',
