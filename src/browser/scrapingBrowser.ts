@@ -119,7 +119,11 @@ function withUnblockMode(wss: string, targetUrl?: string): string {
     const isScrapfly = u.searchParams.has('api_key') || /scrapfly/i.test(u.host);
     if (!isScrapfly) return wss;
     u.searchParams.set('unblock', 'true');
-    u.searchParams.set('solve_captcha', 'true');
+    // OOCL: o resolvedor é ligado POR PÁGINA (Antibot.captchaEnable, com eventos)
+    // em driveTrackingPage. Ligado também aqui, rodavam DOIS resolvedores no
+    // mesmo captcha (cada detecção chegava em dobro, com dois detectionId, os dois
+    // arrastando) — "rotation rejected after retries" (visto ao vivo em 10/10).
+    if (!/oocl\.com/i.test(targetUrl || '')) u.searchParams.set('solve_captcha', 'true');
     // O alvo do bypass. Sem ele o `unblock` não tem o que desbloquear.
     if (targetUrl) u.searchParams.set('target_url', targetUrl);
     return u.toString();
@@ -713,12 +717,14 @@ export async function driveTrackingPage(
   // na mesma sessão CDP) e trabalha sozinho depois da navegação; o nosso
   // resolvedor fica de reserva. Os eventos vão para o diag.
   const antibot: { enabled: boolean; error?: string; events: Array<Record<string, unknown>> } = { enabled: false, events: [] };
+  let antibotCdp: { send: (m: string, p?: Record<string, unknown>) => Promise<unknown> } | null = null;
   if (/oocl\.com/i.test(opts.url)) {
     try {
       const cdp = (await page.context().newCDPSession(page)) as unknown as {
         send: (m: string, p?: Record<string, unknown>) => Promise<unknown>;
         on: (e: string, f: (p: Record<string, unknown>) => void) => void;
       };
+      antibotCdp = cdp;
       for (const ev of ['captchaDetected', 'captchaSolvingStarted', 'captchaSolved', 'captchaError']) {
         cdp.on(`Antibot.${ev}`, (p) => {
           antibot.events.push({ ev, t: Date.now(), ...Object.fromEntries(Object.entries(p || {}).map(([k, v]) => [k, typeof v === 'string' ? v.slice(0, 120) : v])) });
@@ -821,13 +827,16 @@ export async function driveTrackingPage(
   if (sliderUp && antibot.enabled) {
     const t0 = Date.now();
     let outcome: 'resolvido' | 'erro' | 'sumiu' | 'tempo' = 'tempo';
+    // Só os eventos do captcha da CargoSmart (o Turnstile do Cloudflare também
+    // gera captchaSolved e enganava a espera).
+    const cs = (ev: string) => antibot.events.some((e) => e.ev === ev && e.type === 'cs_captcha_rotation');
     while (Date.now() - t0 < 75_000) {
       await page.waitForTimeout(1000);
-      if (antibot.events.some((e) => e.ev === 'captchaSolved')) {
+      if (cs('captchaSolved')) {
         outcome = 'resolvido';
         break;
       }
-      if (antibot.events.some((e) => e.ev === 'captchaError')) {
+      if (cs('captchaError')) {
         outcome = 'erro';
         break;
       }
@@ -843,8 +852,11 @@ export async function driveTrackingPage(
       attempts: [{ mode: 'scrapfly', result: outcome }],
       ms: Date.now() - t0,
     };
-    // Captcha ainda na tela depois do erro/tempo → o nosso resolvedor tenta.
+    // Captcha ainda na tela depois do erro/tempo → o nosso resolvedor tenta, com o
+    // da Scrapfly DESLIGADO (cada imagem nova seria uma detecção nova e os dois
+    // arrastariam juntos).
     if (!ok && (await page.locator('#cs_captcha .verify-move-block').first().isVisible().catch(() => false))) {
+      await antibotCdp?.send('Antibot.captchaDisable').catch(() => undefined);
       const own = await solveCargoSmartSlider(page, { captureImages: Boolean(opts.inventory) }).catch(() => null);
       if (own) sliderDiag = { ...own, attempts: [...sliderDiag.attempts, ...own.attempts] };
     }
