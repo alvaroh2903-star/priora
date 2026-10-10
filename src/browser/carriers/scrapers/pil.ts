@@ -13,6 +13,12 @@ import { parseDateToISO, extractRowsFromHtml, stripTags } from './hapag';
  *     TIMELINE completa: `Vessel | Voyage | Event Date | Event Name | Event
  *     Location`. O `id` amarra os eventos ao contêiner.
  *
+ * PREVISÕES: a PIL marca data ESTIMADA com asterisco ("* 03-Oct-2026 04:00:00";
+ * rodapé: "All fields marked with * are estimated"). Visto ao vivo (CKXC60038800,
+ * em 10/10): a descarga em Santos seguia "* 03-Oct" uma semana DEPOIS — previsão
+ * vencida que o portal não atualizou. Linha com "*" na data fica fora: a regra
+ * universal de data futura (carriers/estimates) não pegaria esse caso.
+ *
  * Preferimos o HISTÓRICO (tem descarga → retirada → devolução, tudo que o
  * demurrage precisa). Se o Trace não carregou, caímos no RESUMO (só o último
  * evento). Confirmado ao vivo: BL NNPL50072500, contêiner PCIU9028668 (descarga
@@ -24,6 +30,11 @@ const SIZE_RE = /\b\d{2}(?:GP|HC|HQ|DV|DC|RF|RH|OT|FR|TK|PL|BU)\b/i;
 const MOVE_RE =
   /discharg|gate|empty|load|deliver|return|pick|arriv|depart|received|released|shipped|customs|dispatch|stripp|devan|berth/i;
 const TRAFFIC_RE = /^(?:FCL|LCL|CY|CFS|DOOR)[\s/]/i;
+
+/** Data marcada como ESTIMADA pela PIL ("* 03-Oct-2026 04:00:00"). */
+export function isPilEstimate(dateCell: string): boolean {
+  return /^\s*\*/.test(dateCell || '');
+}
 
 /** Extrai as células (texto, sem vazias) de um bloco de <tr>. */
 function rowCells(rowHtml: string): string[] {
@@ -56,6 +67,7 @@ export function extractPilDetail(html: string): TrackingEvent[] {
       const cells = rowCells(r[1]);
       const dateIdx = cells.findIndex((c) => parseDateToISO(c));
       if (dateIdx < 0) continue; // cabeçalho ("Event Date"…) ou linha vazia.
+      if (isPilEstimate(cells[dateIdx])) continue; // previsão, não aconteceu
       const date = parseDateToISO(cells[dateIdx]);
       const before = cells.slice(0, dateIdx); // [Vessel?, Voyage?]
       const after = cells.slice(dateIdx + 1); // [Event Name, Event Location]
@@ -101,7 +113,7 @@ export function extractPilSummary(html: string): TrackingEvent[] {
     let dateCell = '';
     for (const c of cells) {
       if (c.includes(container)) continue;
-      const iso = parseDateToISO(c);
+      const iso = isPilEstimate(c) ? null : parseDateToISO(c);
       if (iso) {
         date = iso;
         dateCell = c;

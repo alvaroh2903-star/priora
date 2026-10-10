@@ -5,7 +5,7 @@ import { extractMaerskEvents } from './maersk';
 import { extractOneEvents } from './one';
 import { extractCoscoEvents } from './cosco';
 import { extractPilEvents } from './pil';
-import { extractOoclEvents } from './oocl';
+import { extractOoclEvents, OOCL_PORTAL_RE } from './oocl';
 import { extractCmaEvents } from './cma';
 import { extractHmmEvents } from './hmm';
 import { extractEvergreenEvents } from './evergreen';
@@ -41,27 +41,20 @@ export function extractCarrierEvents(html: string, apiJson?: string): TrackingEv
     const o = extractOneEvents(html);
     if (o.length) return o;
   }
-  // OOCL — SCCT em pbcontroltower.digital.oocl.com (mesmo grupo da COSCO, mas
-  // LAYOUT DIFERENTE: Event|Time|Location|Stage|Transport). Checado ANTES da COSCO
-  // porque ambos podem ter id="scct" — a OOCL tem seu parser próprio.
-  if (/oocl|pbcontroltower/i.test(html)) {
-    const oo = extractOoclEvents(html);
-    if (oo.length) return oo;
-  }
-  // COSCO — app SCCT (id="scct"): tabela "Transport Detail" com 1 linha/contêiner.
-  if (/id=["']scct["']|scct\/assets|CargoTrackingTransportDetail/i.test(html)) {
-    const c = extractCoscoEvents(html);
-    if (c.length) return c;
-  }
-  // PIL — "Container T&T" (a.trackinfo / container_info_sub): 1 linha/contêiner.
-  if (/container_info_sub|trackinfo/i.test(html)) {
+  // ORDEM: assinaturas de DOM/domínio EXCLUSIVAS do portal vêm ANTES de qualquer
+  // teste por NOME de armador. Nome de armador aparece em página de OUTRO armador
+  // o tempo todo — navio compartilhado na aliança ("OOCL BRISBANE" na lista de
+  // navios da PIL, "CMA CGM …" num BL da Evergreen, navio OOCL num BL da COSCO).
+  // Visto ao vivo (PIL CKXC60038800): o parser da OOCL leu a tabela da PIL —
+  // status "FCL/FCL"/"XSQ82231N", local "Vessel Loading", contêiner vazio — em vez
+  // do histórico completo que estava lá. A MESMA saída se reproduz offline só com
+  // um navio "OOCL …" na página (a assinatura antiga era a palavra /oocl/).
+
+  // PIL — "Container T&T": histórico em tbody#container_info_sub_<CONTÊINER> e
+  // link "Trace" (name="trackinfo::job::<BL>::<CONTÊINER>"). Marcas exclusivas.
+  if (/container_info_sub_[A-Z]{4}\d{7}|trackinfo::/i.test(html)) {
     const p = extractPilEvents(html);
     if (p.length) return p;
-  }
-  // CMA CGM — "Tracking details" (Date|Moves|Location|Vessel), sem captcha.
-  if (/cma[-\s]?cgm/i.test(html)) {
-    const cm = extractCmaEvents(html);
-    if (cm.length) return cm;
   }
   // HMM — Track & Trace (#shipmentProgress: Date|Time|Location|Status|Mode).
   if (/hmm21|id="shipmentProgress"|id="thisCntr"/i.test(html)) {
@@ -83,6 +76,30 @@ export function extractCarrierEvents(html: string, apiJson?: string): TrackingEv
     }
     const ym = extractYangMingEvents(html);
     if (ym.length) return ym;
+  }
+  // OOCL — SCCT em pbcontroltower.digital.oocl.com (mesmo grupo da COSCO, mas
+  // LAYOUT DIFERENTE: Event|Time|Location|Stage|Transport). Checado ANTES da COSCO
+  // porque ambos podem ter id="scct". Pelo DOMÍNIO do portal, nunca pela palavra
+  // "OOCL" (navio OOCL aparece em BL da COSCO e na lista de navios da PIL).
+  if (OOCL_PORTAL_RE.test(html)) {
+    const oo = extractOoclEvents(html);
+    if (oo.length) return oo;
+  }
+  // COSCO — app SCCT (id="scct"): tabela "Transport Detail" com 1 linha/contêiner.
+  if (/id=["']scct["']|scct\/assets|CargoTrackingTransportDetail/i.test(html)) {
+    const c = extractCoscoEvents(html);
+    if (c.length) return c;
+  }
+  // PIL sem as marcas exclusivas (layout antigo): só a classe genérica.
+  if (/container_info_sub|trackinfo/i.test(html)) {
+    const p = extractPilEvents(html);
+    if (p.length) return p;
+  }
+  // CMA CGM — "Tracking details" (Date|Moves|Location|Vessel), sem captcha. Por
+  // ÚLTIMO entre os dedicados: "CMA CGM" é nome de navio em BL de outros armadores.
+  if (/cma[-\s]?cgm/i.test(html)) {
+    const cm = extractCmaEvents(html);
+    if (cm.length) return cm;
   }
   // Hapag (timeline .hal-event) → tabela genérica <tr>/<td> / grade ARIA.
   return extractHapagOrGeneric(html);

@@ -19,6 +19,13 @@ import { parseDateToISO, stripTags } from './hapag';
 
 const CONTAINER_RE = /\b[A-Z]{4}\d{7}\b/;
 
+/**
+ * Assinatura do PORTAL da OOCL (domínio do SCCT), não da palavra "OOCL": navios
+ * "OOCL …" aparecem em BLs da COSCO e na lista de navios da PIL — com a palavra
+ * solta, este parser lia a página de outro armador.
+ */
+export const OOCL_PORTAL_RE = /pbcontroltower|digital\.oocl\.com/i;
+
 /** Células (texto, sem vazias) de um bloco de <tr>. */
 function rowCells(rowHtml: string): string[] {
   const cells: string[] = [];
@@ -33,7 +40,7 @@ function rowCells(rowHtml: string): string[] {
 
 export function extractOoclEvents(html: string): TrackingEvent[] {
   const out: TrackingEvent[] = [];
-  if (!/oocl|pbcontroltower/i.test(html)) return out;
+  if (!OOCL_PORTAL_RE.test(html)) return out;
 
   const seen = new Set<string>();
   let current: string | null = null;
