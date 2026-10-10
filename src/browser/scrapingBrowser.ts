@@ -683,6 +683,13 @@ export async function driveTrackingPage(
         /* diagnóstico best-effort */
       }
     });
+    // Requisição do captcha que NEM chegou a ter resposta (conexão cortada pelo
+    // firewall da CargoSmart — visto com curl em 10/10: "Connection reset").
+    page.on('requestfailed', (q) => {
+      const u = q.url();
+      if (captchaNet.length >= 14 || !/captcha/i.test(u)) return;
+      captchaNet.push({ url: u.slice(0, 160), method: q.method(), failed: q.failure()?.errorText || 'falhou' });
+    });
   }
   // Onde a aba estava quando a recebemos (com Unblock, o Scrapfly já navegou):
   // é o que diz se o bypass entregou o alvo, uma página de erro ou nada.
