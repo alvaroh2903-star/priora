@@ -717,12 +717,16 @@ app.get('/health/scrape-sb-async', (req, res) => {
     }
   })();
 
+  // URL ABSOLUTA de poll (com `trust proxy` ligado, req.protocol já vem https no
+  // Render) — assim o link é clicável direto, sem precisar montar o host na mão.
+  const host = req.get('host');
+  const pollPath = `/health/job?token=${encodeURIComponent(token)}&id=${id}`;
   res.json({
     ok: true,
     jobId: id,
     pool: p.pool,
     url: p.url,
-    poll: `/health/job?token=${encodeURIComponent(token)}&id=${id}`,
+    poll: host ? `${req.protocol}://${host}${pollPath}` : pollPath,
   });
 });
 
