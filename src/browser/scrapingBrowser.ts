@@ -201,6 +201,16 @@ export interface SBScrapeOptions {
    * Pool de saída da sessão remota (ver ConnectOptions.pool). Default: 'datacenter'.
    */
   pool?: PoolMode;
+  /**
+   * Bloquear imagem/mídia/fonte (economia de banda e tempo). Default: true.
+   *
+   * `false` DESLIGA a interceptação por completo — e isso importa: para bloquear,
+   * instalamos `page.route('**\/*')`, que refaz TODA requisição via
+   * `route.continue()`. Em navegador remoto isso pode quebrar o carregamento de
+   * ES modules com `crossorigin` (caso suspeito da OOCL, cujo app Vue não monta:
+   * só vem a casca `<div id="scct">`). Diagnóstico: `?noblock=1`.
+   */
+  blockResources?: boolean;
 }
 
 /** Descrição de um elemento interativo para diagnóstico de formulário. */
@@ -523,7 +533,7 @@ export async function driveTrackingPage(
   const postWait = opts.postLoadWait ?? 8000;
 
   // Economia de banda/tempo: bloqueia imagens/mídia/fontes ANTES de navegar.
-  await blockHeavyResources(page);
+  if (opts.blockResources !== false) await blockHeavyResources(page);
 
   let navError: string | null = null;
   // Com o Unblock Mode, quem navega até o alvo é o PRÓPRIO Scrapfly (é assim que

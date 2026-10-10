@@ -571,6 +571,8 @@ interface SbDiagParams {
   find: string;
   htmlwin: number;
   ref: string;
+  /** `?noblock=1` desliga a interceptação de recursos (ver SBScrapeOptions). */
+  blockResources: boolean;
 }
 
 /**
@@ -619,7 +621,10 @@ function resolveSbDiagParams(req: Request): { params?: SbDiagParams; error?: { s
   const probe = ['1', 'true', 'yes'].includes(String(req.query.probe || '').toLowerCase());
   const find = String(req.query.find || '').trim();
   const htmlwin = Math.min(Math.max(parseInt(String(req.query.htmlwin || '0'), 10) || 0, 0), 20000);
-  return { params: { engine, url, searchReference, pool, probe, find, htmlwin, ref } };
+  // ?noblock=1: não instala page.route — testa se a interceptação é o que impede
+  // a SPA de montar (ES modules com crossorigin).
+  const blockResources = !['1', 'true', 'yes'].includes(String(req.query.noblock || '').toLowerCase());
+  return { params: { engine, url, searchReference, pool, probe, find, htmlwin, ref, blockResources } };
 }
 
 /**
@@ -633,11 +638,22 @@ async function runSbDiagnostic(p: SbDiagParams): Promise<{ payload: Record<strin
     p.engine === 'local'
       ? {
           ...(await withPage((page) =>
-            driveTrackingPage(page, { url: p.url, reference: p.searchReference, inventory: p.probe }),
+            driveTrackingPage(page, {
+              url: p.url,
+              reference: p.searchReference,
+              inventory: p.probe,
+              blockResources: p.blockResources,
+            }),
           )),
           ms: Date.now() - startedAt,
         }
-      : await scrapeViaSB({ url: p.url, reference: p.searchReference, inventory: p.probe, pool: p.pool });
+      : await scrapeViaSB({
+          url: p.url,
+          reference: p.searchReference,
+          inventory: p.probe,
+          pool: p.pool,
+          blockResources: p.blockResources,
+        });
 
   let events: unknown[] = [];
   let containers: unknown[] = [];
