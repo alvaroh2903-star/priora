@@ -26,6 +26,8 @@ export interface SliderAttempt {
   /** 'rotação/css' | 'rotação/canvas' | 'rotação/linear' | (vazio = encaixe lateral). */
   mode?: string;
   degPerPx?: number;
+  /** Passos do arrasto (posição × ângulo medido) — diagnóstico. */
+  trace?: string[];
   pieceX?: number;
   pieceW?: number;
   targetX?: number;
@@ -426,11 +428,26 @@ async function dragRotation(
   page: Page,
   theta: number,
   hb: { x: number; y: number; width: number; height: number },
-): Promise<{ rem: number; degPerPx: number; mode: string }> {
+): Promise<{ rem: number; degPerPx: number; mode: string; trace: string[] }> {
   const bar = await page.locator('#cs_captcha .verify-bar-area').first().boundingBox().catch(() => null);
   const travel = bar ? bar.width - hb.width : 294;
   const y0 = hb.y + hb.height / 2;
   const x0 = hb.x + hb.width / 2;
+  const trace: string[] = [];
+  // Mede o giro só depois de ele ASSENTAR: visto ao vivo (10/10), medir no meio
+  // da animação fazia o arrasto passar do ponto.
+  const settled = async (): Promise<{ angle: number; mode: string } | null> => {
+    let last = await page.evaluate(measureRotation).catch(() => null);
+    for (let k = 0; k < 8; k++) {
+      await sleep(70);
+      const m = await page.evaluate(measureRotation).catch(() => null);
+      if (!m || !last) return m;
+      const d = Math.abs(((m.angle - last.angle + 540) % 360) - 180);
+      last = m;
+      if (d < 0.3) break;
+    }
+    return last;
+  };
   let x = x0;
   await page.mouse.move(x - rand(30, 60), y0 + rand(-8, 8), { steps: 4 });
   await page.mouse.move(x, y0, { steps: 3 });
@@ -440,8 +457,8 @@ async function dragRotation(
   const probe = 16;
   x += probe;
   await page.mouse.move(x, y0 + rand(-1, 1), { steps: 3 });
-  await sleep(rand(60, 120));
-  const m1 = await page.evaluate(measureRotation).catch(() => null);
+  const m1 = await settled();
+  trace.push(`dx=${probe} ang=${m1 ? m1.angle.toFixed(1) : '?'}`);
   const moved1 = m1 ? Math.min(m1.angle, 360 - m1.angle) : 0;
   let dir = 1;
   let degPerPx = 360 / travel;
@@ -451,31 +468,51 @@ async function dragRotation(
     degPerPx = moved1 / probe;
     mode = m1.mode;
   }
-  const remOf = (ang: number) => (dir > 0 ? (theta - ang + 360) % 360 : (ang - theta + 360) % 360);
+  // Quanto falta girar, COM sinal (-180..180]: positivo = seguir em frente.
+  const remOf = (ang: number) => {
+    const raw = dir > 0 ? theta - ang : ang - theta;
+    return ((raw % 360) + 540) % 360 - 180;
+  };
   let rem = remOf(mode === 'linear' ? probe * degPerPx : (m1 as { angle: number }).angle);
-  for (let i = 0; i < 80; i++) {
-    if (rem <= 1.5 || rem >= 358.5) break;
-    let step = (rem / degPerPx) * rand(0.45, 0.7);
-    step = Math.max(1, Math.min(26, step));
-    if (x + step > x0 + travel) step = Math.max(0, x0 + travel - x);
-    if (step <= 0) break;
-    x += step;
-    await page.mouse.move(x, y0 + rand(-1.5, 1.5), { steps: 2 });
-    await sleep(rand(15, 45));
+  for (let i = 0; i < 90; i++) {
+    if (Math.abs(rem) <= 1.2) break;
+    // Perto do alvo, passos pequenos; pode VOLTAR se passou do ponto.
+    let step = (rem / degPerPx) * (Math.abs(rem) > 20 ? rand(0.5, 0.7) : rand(0.6, 0.85));
+    step = Math.max(-20, Math.min(26, step));
+    if (Math.abs(step) < 0.6) step = Math.sign(rem) * 0.6;
+    const nx = Math.max(x0, Math.min(x0 + travel, x + step));
+    if (Math.abs(nx - x) < 0.3) break; // bateu no fim/início da barra
+    x = nx;
+    await page.mouse.move(x, y0 + rand(-1.2, 1.2), { steps: 2 });
     if (mode === 'linear') {
+      await sleep(rand(20, 50));
       rem = remOf(((x - x0) * degPerPx) % 360);
     } else {
-      const m = await page.evaluate(measureRotation).catch(() => null);
+      const m = await settled();
       if (!m) break;
       rem = remOf(m.angle);
-      // Razão graus/px corrigida pelo caminho já andado (o componente pode não ser linear).
+      if (trace.length < 40) trace.push(`dx=${(x - x0).toFixed(1)} ang=${m.angle.toFixed(1)} falta=${rem.toFixed(1)}`);
       const done = dir > 0 ? m.angle : (360 - m.angle) % 360;
-      if (x - x0 > 20 && done > 2) degPerPx = done / (x - x0);
+      if (x - x0 > 20 && done > 2 && done < 350) degPerPx = done / (x - x0);
     }
   }
-  await sleep(rand(150, 350));
+  await sleep(rand(200, 400));
   await page.mouse.up();
-  return { rem: Math.round((rem > 180 ? rem - 360 : rem) * 10) / 10, degPerPx: Math.round(degPerPx * 1000) / 1000, mode };
+  return { rem: Math.round(rem * 10) / 10, degPerPx: Math.round(degPerPx * 1000) / 1000, mode, trace };
+}
+
+/** Assinatura rápida do fundo (para saber quando a imagem nova chegou). */
+function bgHash(): number {
+  const bg = document.getElementById('cs_captchaimgCanvas') as HTMLCanvasElement | null;
+  if (!bg) return 0;
+  try {
+    const d = bg.getContext('2d')!.getImageData(0, 0, bg.width, bg.height).data;
+    let h = 0;
+    for (let i = 0; i < d.length; i += 997) h = (h * 31 + d[i]) | 0;
+    return h;
+  } catch {
+    return 0;
+  }
 }
 
 export async function solveCargoSmartSlider(
@@ -532,6 +569,7 @@ export async function solveCargoSmartSlider(
       }
       const dr = await dragRotation(page, ar.theta, hbr);
       const attR: SliderAttempt = {
+        trace: dr.trace,
         mode: `rotação/${dr.mode}`,
         targetX: ar.theta,
         score: ar.cost,
@@ -559,8 +597,14 @@ export async function solveCargoSmartSlider(
         out.solved = !/\/error\b/i.test(page.url());
         break;
       }
+      // Espera a imagem NOVA (analisar a antiga/meio carregada errava o ângulo).
+      const h0 = await page.evaluate(bgHash).catch(() => 0);
       await page.locator('#cs_captcha .verify-refresh').first().click({ timeout: 3000 }).catch(() => undefined);
-      await sleep(1500);
+      for (let w = 0; w < 16; w++) {
+        await sleep(300);
+        if ((await page.evaluate(bgHash).catch(() => 0)) !== h0) break;
+      }
+      await sleep(600);
       continue;
     }
     // MODO ENCAIXE (peça lateral) — mantido para variações do componente.

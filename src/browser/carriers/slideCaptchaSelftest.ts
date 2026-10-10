@@ -66,11 +66,11 @@ window.addEventListener('mouseup',()=>{if(!down)return;down=false;const ok=Math.
 // 360°), redesenhando o canvas OU por CSS, conforme `how`.
 const img = (f: string) =>
   'data:image/png;base64,' + fs.readFileSync(path.join(__dirname, 'fixtures', f)).toString('base64');
-const ROT_PAGE = (how: 'canvas' | 'css') => `<!doctype html><html><body style="margin:40px">
+const ROT_PAGE = (how: 'canvas' | 'css' | 'css-anim') => `<!doctype html><html><body style="margin:40px">
 <div class="capture-box" style="display:block"><div id="cs_captcha" style="position:relative">
  <div class="verify-img-out"><div class="verify-img-panel" style="width:330px;height:160px;position:relative">
   <canvas id="cs_captchaimgCanvas" width="330" height="160"></canvas>
-  <canvas id="cs_captchabockCanvas" width="330" height="160" style="position:absolute;top:0;left:0;z-index:2;transform-origin:218px 72px"></canvas>
+  <canvas id="cs_captchabockCanvas" width="330" height="160" style="position:absolute;top:0;left:0;z-index:2;transform-origin:218px 72px;${how === 'css-anim' ? 'transition:transform .25s ease-out;' : ''}"></canvas>
  </div></div>
  <div class="verify-bar-area" style="width:332px;height:40px;position:relative;background:#eee">
   <span id="slider-text">Please slide to verify</span>
@@ -81,7 +81,7 @@ const ROT_PAGE = (how: 'canvas' | 'css') => `<!doctype html><html><body style="m
 const HOW='${how}', OK=171, CX=218, CY=72;
 const ib=new Image(), ip=new Image(); let ang=0;
 const bk=document.getElementById('cs_captchabockCanvas'), bc=bk.getContext('2d');
-function draw(){ if(HOW==='css'){ bk.style.transform='rotate('+ang+'deg)'; return; }
+function draw(){ if(HOW!=='canvas'){ bk.style.transform='rotate('+ang+'deg)'; return; }
  bc.clearRect(0,0,330,160); bc.save(); bc.translate(CX,CY); bc.rotate(ang*Math.PI/180); bc.translate(-CX,-CY); bc.drawImage(ip,0,0); bc.restore(); }
 ib.onload=()=>document.getElementById('cs_captchaimgCanvas').getContext('2d').drawImage(ib,0,0);
 ip.onload=()=>{ bc.drawImage(ip,0,0); };
@@ -123,7 +123,9 @@ async function main(): Promise<void> {
       await page.close();
     }
     console.log('[selftest] modo ROTAÇÃO com as imagens REAIS da OOCL (encaixe = 171°)');
-    for (const how of ['canvas', 'css'] as const) {
+    // css-anim: giro com transição de 0,25 s — medir no meio dela fazia o arrasto
+    // passar do ponto ao vivo (10/10).
+    for (const how of ['canvas', 'css', 'css-anim'] as const) {
       const page = await browser.newPage({ viewport: { width: 600, height: 400 } });
       await page.setContent(ROT_PAGE(how));
       await page.waitForTimeout(300);
