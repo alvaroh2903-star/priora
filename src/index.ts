@@ -884,11 +884,12 @@ app.get('/health/scrapfly-api-async', (req, res) => {
   } else if (carrier?.id === 'cmacgm') {
     url = q('url') || 'https://www.cma-cgm.com/ebusiness/tracking/search';
     jsScenario = [
-      { wait_for_selector: { selector: '#Reference', timeout: 20000 } },
+      // Teto da Scrapfly por etapa: 15 s (ERR::SCRAPE::CONFIG_ERROR acima disso).
+      { wait_for_selector: { selector: '#Reference', timeout: 15000 } },
       { fill: { selector: '#Reference', value: searchRef, clear: true } },
       { wait: 800 },
       { click: { selector: '#btnTracking' } },
-      { wait_for_navigation: { timeout: 20000 } },
+      { wait_for_navigation: { timeout: 15000 } },
       { wait: 3000 },
     ];
   }

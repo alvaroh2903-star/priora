@@ -91,13 +91,22 @@ export async function scrapflyScrape(opts: ScrapflyScrapeOptions): Promise<Scrap
     });
     const cost = Number(res.headers.get('x-scrapfly-api-cost')) || null;
     const json = (await res.json().catch(() => null)) as {
-      result?: { content?: string; format?: string; status_code?: number; url?: string; error?: unknown };
+      result?: {
+        content?: string;
+        format?: string;
+        status_code?: number;
+        url?: string;
+        error?: { code?: string; message?: string } | null;
+      };
       message?: string;
       code?: string;
     } | null;
     const r = json?.result;
     if (!res.ok || !r) {
-      return fail(`Scrapfly ${res.status}: ${json?.code || ''} ${json?.message || ''}`.trim(), { cost });
+      // O motivo pode vir no topo (erro de config) ou em result.error (falha do
+      // scrape/ASP — ex.: 422 quando o anti-bot não foi vencido).
+      const why = [json?.code, json?.message, r?.error?.code, r?.error?.message].filter(Boolean).join(' — ');
+      return fail(`Scrapfly ${res.status}: ${why || 'sem detalhe'}`, { cost, upstreamStatus: r?.status_code ?? null });
     }
     let html = r.content || '';
     // Página grande: a Scrapfly devolve uma URL para baixar o conteúdo.
