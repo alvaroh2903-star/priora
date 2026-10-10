@@ -74,10 +74,10 @@ Legenda **Anti-bot**: 🔴 Cloudflare interativo · 🟠 aceite/anti-bot leve ·
 
 | id | Armador | SCAC | Portal | Deep link | Anti-bot | Parser |
 |----|---------|------|--------|-----------|----------|--------|
-| `hapag` | Hapag-Lloyd | HLCU, HLXU, UACU | SPA "Tracking BETA" (Vue/Quasar) | `?booking=`/`?container=` | 🔴 | ✅ |
+| `hapag` | Hapag-Lloyd | HLCU, HLXU, UACU | SPA "Tracking BETA" (Vue/Quasar) | `?booking=`/`?container=` | 🔴 | ✅ (10/10: Online Business em manutenção programada até 21:30 UTC — o bot agora reconhece o aviso; retestar) |
 | `maersk` | Maersk | MAEU, MSKU, MRKU | SPA (layout novo "ocean-design"; motor volta ao antigo) | `/tracking/{ref}` | 🟠 cookies + botões duplicados | ✅ histórico completo pelo layout antigo (validado 10/10, 274142590) |
-| `one` | Ocean Network Express | ONEY | SPA | `?trakNoParam=&trakNoTpCdParam=` | 🟢 | ✅ (validado ao vivo, ONEYTA6RA1675800) |
-| `msc` | MSC | MSCU, MEDU | SPA Alpine.js (driver) + **JSON da API interna** | 🟢 | ✅ (validado ao vivo, MEDUY8275040) |
+| `one` | Ocean Network Express | ONEY | SPA (site novo www.one-line.com: resumo 1 linha/contêiner) | `?trakNoParam=<sem ONEY>&trakNoTpCdParam=B` | 🟢 | ✅ resumo + histórico por clique no contêiner (coletor `one`; validado 10/10, NB6IAM548300: 2 contêineres, 8 eventos cada, previsões "E" fora) |
+| `msc` | MSC | MSCU, MEDU | SPA Alpine.js (driver) — dado lido do **estado Alpine** (`results`); reserva: DOM por `x-text` | 🟢 | ✅ (validado 10/10, MEDUY6394819: descarga 16/09, retirada 24/09, devolução 29/09, sem IA) |
 | `cmacgm` | CMA CGM | CMDU, CMAU, APLU | SPA | a confirmar | ❔ | ⬜ |
 | `cosco` | COSCO | COSU | SPA SCCT (iframe Ant/Vue) | `scct/public/ct/base?trackingType=BILLOFLADING&number=` | 🟢 | ✅ só o evento atual por contêiner (não publica histórico, nem por contêiner) — compensado por cadência de 12h após a atracação |
 | `hmm` | HMM (Hyundai) | HDMU, HMMU, SGNM… | Formulário (srchBlNo1 + Retrieve) | form-based | 🟢 | ✅ (validado ao vivo; transbordo T/S ignorado) |
@@ -121,12 +121,12 @@ Hapag · Maersk · ONE · COSCO · PIL · HMM · Evergreen · MSC · Yang Ming
 |---|---|---|---|
 | Hapag | deep link (booking/container) | scraper próprio (`scrapeHapag`) | HTML `.hal-event` |
 | Maersk | deep link `/tracking/{ref}` | genérico | HTML `transport-plan` |
-| ONE | deep link `trakNoParam` | genérico | HTML `EventTable` |
+| ONE | deep link `trakNoParam` (sem ONEY) | genérico + coletor `one` (clica cada contêiner) | resumo `tnt-cargo-tracking-table-row` + HTML `EventTable` |
 | COSCO | deep link `scct/public/ct/base` (iframe) | genérico | HTML (iframe) |
 | PIL | deep link `refNo` | genérico + clique "Trace" | HTML (histórico completo) |
 | HMM | form (`srchBlNo1` + Retrieve) | genérico | HTML `#shipmentProgress` |
 | Evergreen | form dedicado (radio B/L + `#NO` + Submit) | `drivers.ts:shipmentlink` | HTML (tabela contêineres) |
-| MSC | form Alpine (ícone busca) | `drivers.ts:msc` | **JSON da API interna** (capturado da rede) |
+| MSC | form Alpine (ícone busca) | `drivers.ts:msc` | **JSON da API** — da rede ou, se não vier, do estado Alpine; reserva: DOM `x-text` |
 | Yang Ming | form (genérico já submete) | genérico | HTML `Container Status` |
 | CMA / OOCL | — | — | **API oficial** (scraping bloqueado) |
 | ZIM | — | `drivers.ts:zim` (parado) | — |
