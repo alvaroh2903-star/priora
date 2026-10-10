@@ -284,6 +284,63 @@ export async function driveShipmentLinkForm(
 }
 
 /**
+ * Driver DEDICADO da CMA CGM (cma-cgm.com/ebusiness/tracking).
+ *
+ * VALIDADO ao vivo (Scrapfly residential + Unblock Mode): o portal renderizou
+ * inteiro (1 MB de HTML, título "CMA CGM | Shipment Tracking") e **sem nenhum
+ * desafio do DataDome** — o bloqueio que nos travava era de ACESSO, não de form.
+ * O que faltava era o preenchimento: o form é server-rendered (Kendo UI) e o
+ * preenchedor genérico não o reconhecia (`mentionsRef:false`).
+ *
+ * Estrutura REAL (capturada com ?probe=1):
+ *  - `input#Reference` (name `SearchViewModel.Reference`, class `k-input-inner
+ *    duplicatecheck bookingCheck`, placeholder "Ex: ABCD1234567") — VISÍVEL;
+ *  - `button#btnTracking` (type=submit, "Search") — VISÍVEL;
+ *  - `<form action="/ebusiness/tracking/search">` + `input#SearchBy`
+ *    (`SearchViewModel.SearchBy`, oculto) = tipo de busca, que o portal resolve
+ *    sozinho a partir da referência (não chutamos valor);
+ *  - CUIDADO: existe `button.input-clear-btn` ("Clear reference") — nunca clicar.
+ *
+ * Como é um submit de form DE VERDADE (navegação server-side), esperamos a
+ * navegação — mais robusto que SPA. Kendo escuta `input`/`change`, então
+ * disparamos os dois após preencher.
+ */
+export async function driveCmaForm(
+  page: Page,
+  ref: string,
+): Promise<{ filled: boolean; valueAfterFill: string | null; submitted: boolean; urlAfter: string }> {
+  const input = page
+    .locator('#Reference, input[name="SearchViewModel.Reference"], input.bookingCheck')
+    .first();
+  if ((await input.count().catch(() => 0)) === 0) {
+    return { filled: false, valueAfterFill: null, submitted: false, urlAfter: page.url() };
+  }
+  await input.scrollIntoViewIfNeeded().catch(() => undefined);
+  await input.click().catch(() => undefined);
+  await input.fill(ref).catch(() => undefined);
+  // Kendo UI só registra o valor quando os eventos nativos disparam.
+  await input.dispatchEvent('input').catch(() => undefined);
+  await input.dispatchEvent('change').catch(() => undefined);
+  const valueAfterFill = await input.inputValue().catch(() => null);
+
+  // O submit navega (form server-rendered): aguardamos a navegação em vez de
+  // adivinhar um tempo fixo. Enter é o reforço se o botão não estiver clicável.
+  const submit = page.locator('#btnTracking, button[type="submit"]:has-text("Search")').first();
+  const navigation = page.waitForNavigation({ timeout: 30_000 }).catch(() => null);
+  let submitted = false;
+  if ((await submit.count().catch(() => 0)) > 0) {
+    await submit.click({ timeout: 8000 }).catch(() => undefined);
+    submitted = true;
+  } else {
+    await input.press('Enter').catch(() => undefined);
+    submitted = true;
+  }
+  await navigation;
+  await page.waitForLoadState('domcontentloaded', { timeout: 20_000 }).catch(() => undefined);
+  return { filled: true, valueAfterFill, submitted, urlAfter: page.url() };
+}
+
+/**
  * Preenche e submete o formulário de busca da ZIM (zim.com/tools/track-a-shipment).
  * Form simples: `input#shipment-main-search-2` (.chips-input) + submit
  * `.chips-search-button`. A busca é gated por hCaptcha — a RESOLUÇÃO do captcha e o

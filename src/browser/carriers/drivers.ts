@@ -1,5 +1,5 @@
 import { Page } from 'playwright';
-import { driveShipmentLinkForm, driveMscForm, driveZimForm } from './pageUtils';
+import { driveShipmentLinkForm, driveMscForm, driveZimForm, driveCmaForm } from './pageUtils';
 import { solveCaptchaIfPresent } from '../antiCaptcha';
 
 /**
@@ -72,6 +72,23 @@ export const CARRIER_DRIVERS: CarrierDriver[] = [
         diag: r.filled
           ? { driver: 'msc', apiJsonCaptured: Boolean(r.apiJson), apiJsonLen: r.apiJson?.length || 0 }
           : undefined,
+      };
+    },
+  },
+  {
+    id: 'cma', // Kendo/server-rendered — input#Reference + button#btnTracking; submit NAVEGA.
+    match: (u) => /cma-cgm\.com/i.test(u),
+    drive: async (page, ref) => {
+      const r = await driveCmaForm(page, ref);
+      if (!r.filled) return { filled: false };
+      return {
+        filled: true,
+        diag: {
+          driver: 'cma',
+          submitted: r.submitted,
+          valueAfterFill: r.valueAfterFill,
+          urlAfter: r.urlAfter,
+        },
       };
     },
   },

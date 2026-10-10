@@ -1,6 +1,7 @@
 import { Page } from 'playwright';
 import { ContainerInfo, NormalizedEventType, TrackingEvent } from '../types';
 import { classifyEvent } from '../eventTypes';
+import { isValidContainer } from '../detect';
 import { ScrapeContext, ScrapeOutput } from '../scraperTypes';
 import {
   acceptCookies,
@@ -251,10 +252,32 @@ export function extractHapagEvents(html: string): TrackingEvent[] {
   return dedupe(out);
 }
 
-/** Acha o 1º número de contêiner (padrão ISO: AAAA + 7 dígitos) no HTML, ou null. */
+/**
+ * Série claramente de EXEMPLO (placeholder de formulário), não um contêiner real:
+ * sequencial (1234567), todos os dígitos iguais (0000000) ou dono "ABCD". Alguns
+ * desses passam no dígito verificador por coincidência (ex.: ABCD0000000).
+ */
+function isExampleContainer(s: string): boolean {
+  const serial = s.slice(4);
+  return /^ABCD/.test(s) || /^(\d)\1{6}$/.test(serial) || '01234567890'.includes(serial);
+}
+
+/**
+ * Acha o 1º número de contêiner REAL no HTML, ou null.
+ *
+ * Não basta casar o padrão `AAAA+7 dígitos`: os formulários dos portais trazem
+ * PLACEHOLDERS no próprio HTML (CMA: "Ex: ABCD1234567"; ZIM: "ZCSU1234567") e nós
+ * os reportávamos como se fossem o contêiner do embarque — dado inventado, contra
+ * a regra da casa. Agora cada candidato passa pelo dígito verificador ISO 6346
+ * (`isValidContainer`) + filtro de série de exemplo, e varremos TODOS os matches
+ * até achar um válido (o placeholder costuma vir antes do dado real no HTML).
+ */
 export function firstContainerNo(html: string): string | null {
-  const m = html.match(/\b[A-Z]{4}\d{7}\b/);
-  return m ? m[0] : null;
+  for (const m of html.matchAll(/\b[A-Z]{4}\d{7}\b/g)) {
+    const cand = m[0];
+    if (isValidContainer(cand) && !isExampleContainer(cand)) return cand;
+  }
+  return null;
 }
 
 /** Extrai eventos de um HTML cru já renderizado (sem navegador). */
