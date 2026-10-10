@@ -669,9 +669,15 @@ export async function driveTrackingPage(
     page.on('response', async (r) => {
       try {
         const u = r.url();
-        if (captchaNet.length >= 14 || !/captcha/i.test(u) || /\.(css|js|png|jpe?g|svg|woff2?)(\?|$)/i.test(u)) return;
+        const t = r.request().resourceType();
+        // Chamadas do captcha E as do app (XHR/fetch) — depois do captcha resolvido
+        // o app caía em "This Page Has Expired": é a chamada seguinte que falha.
+        const interesting = /captcha/i.test(u) || t === 'xhr' || t === 'fetch';
+        if (captchaNet.length >= 24 || !interesting || /\.(css|js|png|jpe?g|svg|woff2?)(\?|$)/i.test(u)) return;
         const body = await r.text().catch(() => '');
         captchaNet.push({
+          at: Date.now(),
+          type: t,
           url: u.slice(0, 160),
           method: r.request().method(),
           status: r.status(),
@@ -687,13 +693,15 @@ export async function driveTrackingPage(
     // firewall da CargoSmart — visto com curl em 10/10: "Connection reset").
     page.on('requestfailed', (q) => {
       const u = q.url();
-      if (captchaNet.length >= 14 || !/captcha/i.test(u)) return;
-      captchaNet.push({ url: u.slice(0, 160), method: q.method(), failed: q.failure()?.errorText || 'falhou' });
+      const t = q.resourceType();
+      if (captchaNet.length >= 24 || !(/captcha/i.test(u) || t === 'xhr' || t === 'fetch')) return;
+      captchaNet.push({ at: Date.now(), type: t, url: u.slice(0, 160), method: q.method(), failed: q.failure()?.errorText || 'falhou' });
     });
   }
   // Onde a aba estava quando a recebemos (com Unblock, o Scrapfly já navegou):
   // é o que diz se o bypass entregou o alvo, uma página de erro ou nada.
   const initialUrl = page.url();
+  const navStartedAt = Date.now();
   lastAkamaiDiag = undefined;
   const preNavigated = alreadyOnTarget(initialUrl, opts.url);
   if (!preNavigated) {
@@ -957,7 +965,7 @@ export async function driveTrackingPage(
       preNavigated,
       ...(lastAkamaiDiag ? { akamai: lastAkamaiDiag } : {}),
       ...(sliderDiag ? { slider: sliderDiag } : {}),
-      ...(captchaNet.length ? { captchaNet } : {}),
+      ...(captchaNet.length ? { captchaNet, navStartedAt } : {}),
       landedUrl: activePage.url(),
       blockMode,
       ...(followDiag ? { follow: followDiag } : {}),

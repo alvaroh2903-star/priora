@@ -38,6 +38,9 @@ export interface SliderAttempt {
 }
 
 export interface SliderOutcome {
+  /** Início/fim (epoch ms) — para casar com a rede no diagnóstico. */
+  startedAt?: number;
+  endedAt?: number;
   found: boolean;
   solved: boolean;
   attempts: SliderAttempt[];
@@ -520,7 +523,7 @@ export async function solveCargoSmartSlider(
   opts: { maxAttempts?: number; captureImages?: boolean } = {},
 ): Promise<SliderOutcome> {
   const t0 = Date.now();
-  const out: SliderOutcome = { found: false, solved: false, attempts: [], ms: 0 };
+  const out: SliderOutcome = { startedAt: t0, found: false, solved: false, attempts: [], ms: 0 };
   if (!(await hasCargoSmartSlider(page))) {
     out.ms = Date.now() - t0;
     return out;
@@ -695,5 +698,6 @@ export async function solveCargoSmartSlider(
     await sleep(1500);
   }
   out.ms = Date.now() - t0;
+  out.endedAt = Date.now();
   return out;
 }
