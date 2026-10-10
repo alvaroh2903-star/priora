@@ -37,12 +37,19 @@ export const CARRIERS: CarrierMeta[] = [
     name: 'Ocean Network Express (ONE)',
     scac: ['ONEY'],
     containerPrefixes: ['ONEU', 'ONEY', 'NYKU', 'MOLU', 'MOAU', 'MOEU', 'KKLU', 'KKFU', 'TCKU'],
-    trackingUrl: 'https://ecomm.one-line.com/one-ecom/manage-shipment/cargo-tracking',
-    // Deep link confirmado pelo exemplo: ?trakNoParam={ref}&trakNoTpCdParam={B|C|R}.
+    trackingUrl: 'https://www.one-line.com/one-ecom/manage-shipment/cargo-tracking',
+    // A ONE MUDOU de site (ecomm.one-line.com → www.one-line.com, visto ao vivo em
+    // 10/10/2026) e a própria página avisa: o BL vai SEM o prefixo "ONEY" — ela
+    // redirecionava ONEYNB6IAM548300 → NB6IAM548300. Com o prefixo, a referência
+    // nunca aparecia na página (mentionsRef=false) e o motor achava que a busca
+    // não tinha rodado. Contêiner (C) segue inteiro.
+    searchRef: (ref, type) => (type === 'container' ? ref : ref.replace(/^ONEY/i, '')),
+    // Deep link: ?trakNoParam={ref}&trakNoTpCdParam={B|C|R}.
     buildTrackingUrl: (ref, type) => {
       const tp = type === 'container' ? 'C' : type === 'booking' ? 'R' : 'B';
-      return `https://ecomm.one-line.com/one-ecom/manage-shipment/cargo-tracking?trakNoParam=${encodeURIComponent(
-        ref,
+      const num = type === 'container' ? ref : ref.replace(/^ONEY/i, '');
+      return `https://www.one-line.com/one-ecom/manage-shipment/cargo-tracking?trakNoParam=${encodeURIComponent(
+        num,
       )}&trakNoTpCdParam=${tp}`;
     },
     needsLoginForDemurrage: true,
