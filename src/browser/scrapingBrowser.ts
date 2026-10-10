@@ -662,6 +662,28 @@ export async function driveTrackingPage(
   // queima o estado: a OOCL respondeu "This Page Has Expired" e jogou a sessão
   // para /scct/public/moc/error — depois de termos furado o Turnstile. Então, se
   // a aba já está no alvo, NÃO renavegamos (também economiza tempo de sessão).
+  // OOCL: registra a conversa do captcha da CargoSmart com o servidor (pedido da
+  // imagem, envio ao soltar a barra e resposta) — é o que diz POR QUE recusou.
+  const captchaNet: Array<Record<string, unknown>> = [];
+  if (/oocl\.com/i.test(opts.url)) {
+    page.on('response', async (r) => {
+      try {
+        const u = r.url();
+        if (captchaNet.length >= 14 || !/captcha/i.test(u) || /\.(css|js|png|jpe?g|svg|woff2?)(\?|$)/i.test(u)) return;
+        const body = await r.text().catch(() => '');
+        captchaNet.push({
+          url: u.slice(0, 160),
+          method: r.request().method(),
+          status: r.status(),
+          req: (r.request().postData() || '').slice(0, 1200),
+          // Imagens em base64 encurtadas (o resto da resposta é o que interessa).
+          res: body.replace(/"([A-Za-z0-9+/=]{200,})"/g, (_m, b64: string) => `"<base64 ${b64.length}>"`).slice(0, 2500),
+        });
+      } catch {
+        /* diagnóstico best-effort */
+      }
+    });
+  }
   // Onde a aba estava quando a recebemos (com Unblock, o Scrapfly já navegou):
   // é o que diz se o bypass entregou o alvo, uma página de erro ou nada.
   const initialUrl = page.url();
@@ -928,6 +950,7 @@ export async function driveTrackingPage(
       preNavigated,
       ...(lastAkamaiDiag ? { akamai: lastAkamaiDiag } : {}),
       ...(sliderDiag ? { slider: sliderDiag } : {}),
+      ...(captchaNet.length ? { captchaNet } : {}),
       landedUrl: activePage.url(),
       blockMode,
       ...(followDiag ? { follow: followDiag } : {}),
