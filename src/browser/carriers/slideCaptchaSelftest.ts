@@ -91,7 +91,8 @@ mb.addEventListener('mousedown',e=>{down=true;sx=e.clientX;});
 // Como a CargoSmart (visto ao vivo): o giro VISUAL usa 360°/largura da barra,
 // mas o "servidor" confere pela posição do botão com 360° = curso (barra − botão).
 let left=0;
-window.addEventListener('mousemove',e=>{ if(!down)return; left=Math.max(0,Math.min(332-38,e.clientX-sx)); mb.style.left=left+'px'; ang=left*360/332; draw(); });
+// E o botão anda MENOS que o mouse (visto ao vivo: faltavam 8–15 px no fim).
+window.addEventListener('mousemove',e=>{ if(!down)return; left=Math.max(0,Math.min(332-38,(e.clientX-sx)*0.9)); mb.style.left=left+'px'; ang=left*360/332; draw(); });
 window.addEventListener('mouseup',()=>{ if(!down)return; down=false; const srv=left*360/(332-38); const d=Math.abs(((srv-OK)%360+540)%360-180); const ok=d<=6;
  document.querySelector('.verify-msg').textContent=ok?'Validation successful':'Validation failed';
  if(ok) setTimeout(()=>{document.querySelector('.capture-box').style.display='none';},300);

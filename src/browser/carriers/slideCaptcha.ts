@@ -387,36 +387,47 @@ async function dragRotation(
   await page.mouse.down();
   await sleep(rand(80, 160));
   // Movimento CONTÍNUO, como gente: o servidor recebe o trajeto inteiro (x, y,
-  // horário de cada ponto). Acelera e desacelera (ease-out), com uma deriva leve
-  // em y — sem paradas para medir no meio (o arrasto "picotado" foi recusado; o
-  // contínuo foi aceito ao vivo).
-  const n = Math.round(rand(26, 36));
+  // horário de cada ponto) — o arrasto "picotado" foi recusado. Mas o BOTÃO anda
+  // MENOS que o mouse (visto ao vivo: faltavam 8–15 px no fim), então:
+  //  1) desliza até ~80% do caminho;  2) mede a proporção botão/mouse (uma
+  //  hesitação curta, natural);  3) desliza até o alvo corrigido;  4) ajuste fino.
   const drift = rand(-3, 3);
   const wob = rand(0.6, 1.4);
-  for (let i = 1; i <= n; i++) {
-    const p = i / n;
-    const ease = 1 - Math.pow(1 - p, 3);
-    const x = x0 + targetDx * ease + (i < n ? rand(-0.4, 0.4) : 0);
-    const y = y0 + drift * p + Math.sin(p * Math.PI * wob) * 1.2;
-    await page.mouse.move(x, y);
-    await sleep(rand(10, 26));
-  }
-  await sleep(rand(120, 260));
-  // UMA conferência no fim e correção curta se o botão não estiver no alvo.
+  let mx = x0;
+  const glide = async (toX: number, n: number, yFrom: number, yTo: number) => {
+    const from = mx;
+    for (let i = 1; i <= n; i++) {
+      const p = i / n;
+      const ease = 1 - Math.pow(1 - p, 3);
+      mx = from + (toX - from) * ease;
+      const y = y0 + yFrom + (yTo - yFrom) * p + Math.sin(p * Math.PI * wob) * 1.0;
+      await page.mouse.move(mx + (i < n ? rand(-0.3, 0.3) : 0), y);
+      await sleep(rand(10, 24));
+    }
+  };
+  await glide(x0 + targetDx * rand(0.74, 0.84), Math.round(rand(18, 26)), 0, drift * 0.8);
+  await sleep(rand(60, 140));
+  const d1 = await handleDx();
+  const k = d1 !== null && mx - x0 > 20 && d1 > 5 ? d1 / (mx - x0) : 1;
+  trace.push(`proporção botão/mouse=${k.toFixed(3)}`);
+  await glide(x0 + targetDx / k, Math.round(rand(8, 13)), drift * 0.8, drift);
+  await sleep(rand(110, 220));
   let rem = targetDx;
-  for (let k = 0; k < 3; k++) {
+  for (let c = 0; c < 3; c++) {
     const d = await handleDx();
     if (d === null) break;
     rem = targetDx - d;
     trace.push(`botão=${d.toFixed(1)} falta=${rem.toFixed(1)}`);
     if (Math.abs(rem) <= 0.6) break;
-    const cur = x0 + d;
-    const steps = Math.max(2, Math.min(6, Math.round(Math.abs(rem))));
+    const toX = mx + rem / k;
+    const steps = Math.max(2, Math.min(5, Math.round(Math.abs(rem / k))));
+    const from = mx;
     for (let j = 1; j <= steps; j++) {
-      await page.mouse.move(cur + (rem * j) / steps, y0 + drift + rand(-0.5, 0.5));
-      await sleep(rand(25, 55));
+      mx = from + ((toX - from) * j) / steps;
+      await page.mouse.move(mx, y0 + drift + rand(-0.5, 0.5));
+      await sleep(rand(28, 60));
     }
-    await sleep(rand(80, 160));
+    await sleep(rand(90, 170));
   }
   await sleep(rand(150, 300));
   await page.mouse.up();
