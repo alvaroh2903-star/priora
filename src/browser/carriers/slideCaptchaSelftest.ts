@@ -93,7 +93,9 @@ mb.addEventListener('mousedown',e=>{down=true;sx=e.clientX;});
 let left=0;
 // E o botão anda MENOS que o mouse (visto ao vivo: faltavam 8–15 px no fim).
 window.addEventListener('mousemove',e=>{ if(!down)return; left=Math.max(0,Math.min(332-38,(e.clientX-sx)*0.9)); mb.style.left=left+'px'; ang=left*360/332; draw(); });
-window.addEventListener('mouseup',()=>{ if(!down)return; down=false; const srv=left*360/(332-38); const d=Math.abs(((srv-OK)%360+540)%360-180); const ok=d<=6;
+// …e confere o giro no sentido CONTRÁRIO ao do desenho (hipótese de 10/10:
+// alvo na barra = 360° − θ; ver dragRotation).
+window.addEventListener('mouseup',()=>{ if(!down)return; down=false; const srv=left*360/(332-38); const d=Math.abs(((srv-(360-OK))%360+540)%360-180); const ok=d<=6;
  document.querySelector('.verify-msg').textContent=ok?'Validation successful':'Validation failed';
  if(ok) setTimeout(()=>{document.querySelector('.capture-box').style.display='none';},300);
  else setTimeout(()=>{mb.style.left='0px';ang=0;left=0;draw();document.querySelector('.verify-msg').textContent='';},500); });

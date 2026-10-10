@@ -356,13 +356,15 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const rand = (a: number, b: number) => a + Math.random() * (b - a);
 
 /**
- * Arrasto do modo ROTAÇÃO guiado pela POSIÇÃO DA BARRA. Descoberto ao vivo em
- * 10/10: o servidor da CargoSmart confere o ângulo pela posição da barra, com
- * 360° = curso inteiro (largura da barra − largura do botão); o giro VISUAL do
- * círculo usa outra escala (~360°/largura da barra). Alinhar pela imagem
- * (giro visual certo, 0,7° do encaixe) foi RECUSADO; pela barra, ACEITO.
- * Então: deslocamento alvo = θ/360 × curso, conferindo a posição real do botão
- * a cada passo (o botão segue o mouse; aqui garantimos o px exato).
+ * Arrasto do modo ROTAÇÃO guiado pela POSIÇÃO DA BARRA (360° = curso inteiro:
+ * largura da barra − botão), conferindo o botão a cada passo — é o que
+ * posiciona com precisão (0,2–0,4° ao vivo). O movimento "contínuo" testado em
+ * 10/10 deixou o botão errático (voltava a zero no meio do arrasto).
+ *
+ * SENTIDO: o alvo na barra é 360° − θ. Evidência ao vivo (10/10): todas as
+ * recusas com o botão EXATO em θ foram com ângulos longe de 180° (130°, 136°);
+ * a aprovação clara foi com θ = 178°, onde os dois sentidos quase coincidem.
+ * O servidor confere o giro no sentido contrário ao do desenho do círculo.
  */
 async function dragRotation(
   page: Page,
@@ -372,7 +374,7 @@ async function dragRotation(
   const bar = await page.locator('#cs_captcha .verify-bar-area').first().boundingBox().catch(() => null);
   const travel = bar ? bar.width - hb.width : 294;
   const degPerPx = 360 / travel;
-  const targetDx = theta / degPerPx;
+  const targetDx = ((360 - theta) % 360) / degPerPx;
   const y0 = hb.y + hb.height / 2;
   const x0 = hb.x + hb.width / 2;
   const handleDx = async (): Promise<number | null> => {
@@ -380,56 +382,28 @@ async function dragRotation(
     return b ? b.x + b.width / 2 - x0 : null;
   };
   const trace: string[] = [`curso=${travel.toFixed(1)} alvo=${targetDx.toFixed(1)}px`];
-  // Aproxima e pressiona.
-  await page.mouse.move(x0 - rand(25, 50), y0 + rand(-10, 10), { steps: 5 });
-  await page.mouse.move(x0, y0, { steps: 4 });
-  await sleep(rand(90, 200));
+  let x = x0;
+  await page.mouse.move(x - rand(30, 60), y0 + rand(-8, 8), { steps: 4 });
+  await page.mouse.move(x, y0, { steps: 3 });
+  await sleep(rand(80, 180));
   await page.mouse.down();
-  await sleep(rand(80, 160));
-  // Movimento CONTÍNUO, como gente: o servidor recebe o trajeto inteiro (x, y,
-  // horário de cada ponto) — o arrasto "picotado" foi recusado. Mas o BOTÃO anda
-  // MENOS que o mouse (visto ao vivo: faltavam 8–15 px no fim), então:
-  //  1) desliza até ~80% do caminho;  2) mede a proporção botão/mouse (uma
-  //  hesitação curta, natural);  3) desliza até o alvo corrigido;  4) ajuste fino.
-  const drift = rand(-3, 3);
-  const wob = rand(0.6, 1.4);
-  let mx = x0;
-  const glide = async (toX: number, n: number, yFrom: number, yTo: number) => {
-    const from = mx;
-    for (let i = 1; i <= n; i++) {
-      const p = i / n;
-      const ease = 1 - Math.pow(1 - p, 3);
-      mx = from + (toX - from) * ease;
-      const y = y0 + yFrom + (yTo - yFrom) * p + Math.sin(p * Math.PI * wob) * 1.0;
-      await page.mouse.move(mx + (i < n ? rand(-0.3, 0.3) : 0), y);
-      await sleep(rand(10, 24));
-    }
-  };
-  await glide(x0 + targetDx * rand(0.74, 0.84), Math.round(rand(18, 26)), 0, drift * 0.8);
   await sleep(rand(60, 140));
-  const d1 = await handleDx();
-  const k = d1 !== null && mx - x0 > 20 && d1 > 5 ? d1 / (mx - x0) : 1;
-  trace.push(`proporção botão/mouse=${k.toFixed(3)}`);
-  await glide(x0 + targetDx / k, Math.round(rand(8, 13)), drift * 0.8, drift);
-  await sleep(rand(110, 220));
   let rem = targetDx;
-  for (let c = 0; c < 3; c++) {
+  for (let i = 0; i < 60; i++) {
     const d = await handleDx();
     if (d === null) break;
     rem = targetDx - d;
-    trace.push(`botão=${d.toFixed(1)} falta=${rem.toFixed(1)}`);
-    if (Math.abs(rem) <= 0.6) break;
-    const toX = mx + rem / k;
-    const steps = Math.max(2, Math.min(5, Math.round(Math.abs(rem / k))));
-    const from = mx;
-    for (let j = 1; j <= steps; j++) {
-      mx = from + ((toX - from) * j) / steps;
-      await page.mouse.move(mx, y0 + drift + rand(-0.5, 0.5));
-      await sleep(rand(28, 60));
-    }
-    await sleep(rand(90, 170));
+    if (trace.length < 30) trace.push(`botão=${d.toFixed(1)} falta=${rem.toFixed(1)}`);
+    if (Math.abs(rem) <= 0.4) break;
+    // Rápido longe, devagar perto; corrige se passar.
+    let step = rem * (Math.abs(rem) > 15 ? rand(0.45, 0.7) : rand(0.7, 0.95));
+    step = Math.max(-15, Math.min(28, step));
+    if (Math.abs(step) < 0.3) step = Math.sign(rem) * 0.3;
+    x += step;
+    await page.mouse.move(x, y0 + rand(-1.2, 1.2), { steps: 2 });
+    await sleep(rand(18, 45));
   }
-  await sleep(rand(150, 300));
+  await sleep(rand(200, 400));
   await page.mouse.up();
   return { rem: Math.round(rem * degPerPx * 10) / 10, degPerPx: Math.round(degPerPx * 1000) / 1000, mode: 'barra', trace };
 }
