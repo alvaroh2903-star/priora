@@ -31,6 +31,7 @@ import { fetchViaUnblocker, isUnblockerConfigured } from './browser/webUnblocker
 import { fetchViaBrightData, isBrightDataConfigured } from './browser/brightData';
 import { scrapeViaSB, driveTrackingPage, isSBConfigured, scrapeBrowserProvider, isHeavyScrapeConfigured } from './browser/scrapingBrowser';
 import type { BlockMode } from './browser/scrapingBrowser';
+import { scrapflyScrape, getScrapflyKey } from './browser/scrapflyApi';
 import { deriveContainers, firstContainerNo } from './browser/carriers/scrapers/hapag';
 import { extractCarrierEvents, extractEventsWithDetails } from './browser/carriers/scrapers/dispatch';
 import { isAntiCaptchaConfigured } from './config';
@@ -847,6 +848,113 @@ app.get('/health/scrape-sb-async', (req, res) => {
     return { result: payload, html };
   });
   res.json(jobCreatedResponse(req, token, job, { pool: p.pool, url: p.url }));
+});
+
+/**
+ * Diagnóstico da API de SCRAPE da Scrapfly com ASP (gated por DIAG_TOKEN) — o
+ * caminho "próprio" para os portais cujo anti-bot derrubou o navegador remoto
+ * na 2ª camada (CMA/DataDome, ZIM/Akamai, OOCL/Cloudflare+sessão). Monta o
+ * cenário por armador, chama api.scrapfly.io/scrape e passa o HTML pelos MESMOS
+ * parsers da produção.
+ *
+ * Uso: /health/scrapfly-api-async?token=<DIAG_TOKEN>&ref=<BL>[&url=][&find=][&htmlwin=]
+ *      [&scenario=<base64url(JSON)>][&wait=<ms>][&country=br][&budget=<créditos>]
+ */
+app.get('/health/scrapfly-api-async', (req, res) => {
+  const token = requireDiagToken(req, res);
+  if (!token) return;
+  if (!getScrapflyKey()) return res.status(503).json({ error: 'Sem chave da Scrapfly.' });
+  const q = (k: string) => String(req.query[k] ?? '').trim();
+  const ref = q('ref');
+  const det = ref ? detectCarrier(ref) : null;
+  const carrier = det?.carrier || null;
+  const searchRef = carrier && det ? resolveSearchRef(carrier, ref, det.referenceType) : ref;
+  let url = q('url') || (ref ? detect(ref).carrier?.trackingUrl || '' : '');
+  if (!url) return res.status(400).json({ error: 'Informe ref= (armador conhecido) ou url=.' });
+
+  // Cenário por armador (preencher/clicar). `scenario=` (base64url de JSON) sobrescreve.
+  let jsScenario: unknown[] | undefined;
+  const custom = q('scenario');
+  if (custom) {
+    try {
+      jsScenario = JSON.parse(Buffer.from(custom, 'base64url').toString('utf8'));
+    } catch {
+      return res.status(400).json({ error: 'scenario inválido (JSON em base64url).' });
+    }
+  } else if (carrier?.id === 'cmacgm') {
+    url = q('url') || 'https://www.cma-cgm.com/ebusiness/tracking/search';
+    jsScenario = [
+      { wait_for_selector: { selector: '#Reference', timeout: 20000 } },
+      { fill: { selector: '#Reference', value: searchRef, clear: true } },
+      { wait: 800 },
+      { click: { selector: '#btnTracking' } },
+      { wait_for_navigation: { timeout: 20000 } },
+      { wait: 3000 },
+    ];
+  }
+  const wait = parseInt(q('wait') || '0', 10) || (jsScenario ? 0 : 8000);
+  const find = q('find');
+  const htmlwin = Math.min(Math.max(parseInt(q('htmlwin') || '0', 10) || 0, 0), 100_000);
+
+  const job = startDiagJob({ ref: ref || url, url, via: 'scrapfly-api' }, async () => {
+    const r = await scrapflyScrape({
+      url,
+      jsScenario,
+      renderingWait: wait || undefined,
+      country: q('country') || undefined,
+      costBudget: parseInt(q('budget') || '0', 10) || undefined,
+      timeoutMs: 150_000,
+    });
+    let events: unknown[] = [];
+    let containers: unknown[] = [];
+    try {
+      const parsed = extractCarrierEvents(r.html);
+      events = parsed;
+      containers = deriveContainers(parsed, firstContainerNo(r.html));
+    } catch {
+      /* best-effort */
+    }
+    const clean = r.html
+      .replace(/<script[\s\S]*?<\/script>/gi, '')
+      .replace(/<style[\s\S]*?<\/style>/gi, '')
+      .replace(/<svg[\s\S]*?<\/svg>/gi, '')
+      .replace(/\s+/g, ' ');
+    let off = 0;
+    let findMatched: string | null = null;
+    for (const alt of find.split('|').map((x) => x.trim()).filter(Boolean)) {
+      const at = clean.toUpperCase().indexOf(alt.toUpperCase());
+      if (at >= 0) {
+        off = Math.max(at - 800, 0);
+        findMatched = alt;
+        break;
+      }
+    }
+    const text = clean.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    return {
+      result: {
+        commit: BUILD_COMMIT,
+        carrier: carrier?.id || null,
+        url,
+        scenario: jsScenario || null,
+        ok: r.ok,
+        error: r.error,
+        upstreamStatus: r.upstreamStatus,
+        finalUrl: r.finalUrl,
+        cost: r.cost,
+        ms: r.ms,
+        htmlLen: r.html.length,
+        mentionsRef: ref ? text.toUpperCase().includes(searchRef.toUpperCase()) : null,
+        eventsCount: events.length,
+        events,
+        containers,
+        textSnippet: text.slice(0, 1500),
+        findMatched,
+        htmlSlice: htmlwin ? clean.slice(off, off + htmlwin) : undefined,
+      },
+      html: r.html,
+    };
+  });
+  res.json(jobCreatedResponse(req, token, job, { carrier: carrier?.id || null, url }));
 });
 
 /**
