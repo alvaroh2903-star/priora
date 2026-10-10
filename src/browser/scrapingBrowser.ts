@@ -3,6 +3,7 @@ import { acceptCookies, tryFillSearch } from './carriers/pageUtils';
 import { findCarrierDriver } from './carriers/drivers';
 import { solveCaptchaIfPresent } from './antiCaptcha';
 import { PoolMode } from './carriers/types';
+import { withRemoteSlot } from './remoteSlot';
 
 /**
  * Priora — Cliente do Bright Data Scraping Browser (CDP remoto).
@@ -214,6 +215,14 @@ export interface SBScrapeOptions {
    * Diagnóstico: `?block=all|media|none` (`?noblock=1` = 'none').
    */
   blockMode?: BlockMode;
+  /**
+   * DIAGNÓSTICO: seletor CSS de um elemento a CLICAR depois que o resultado
+   * carrega — e a página que abrir (popup ou mesma aba) passa a ser a capturada.
+   * Serve para pegar o DOM das páginas de DETALHE por contêiner (Yang Ming
+   * `a[href*="cargo_tracking_detail"]`, popup CntrMove da Evergreen) numa rodada
+   * só, sem chumbar fluxo por armador. Só o 1º elemento que casar é seguido.
+   */
+  follow?: string;
 }
 
 export type BlockMode = 'media' | 'all' | 'none';
@@ -676,6 +685,31 @@ export async function driveTrackingPage(
     }
   }
 
+  // DIAGNÓSTICO `follow`: clica no 1º elemento que casar e passa a ler a página
+  // que abrir (popup ou mesma aba). É como capturamos o DOM das páginas de detalhe
+  // por contêiner sem gastar uma rodada só para descobrir a URL.
+  let followDiag: Record<string, unknown> | undefined;
+  if (opts.follow) {
+    const target = activePage.locator(opts.follow).first();
+    const matched = (await target.count().catch(() => 0)) > 0;
+    followDiag = { selector: opts.follow, matched };
+    if (matched) {
+      followDiag.href = await target.getAttribute('href').catch(() => null);
+      followDiag.text = ((await target.innerText().catch(() => '')) || '').slice(0, 80);
+      const popupP = activePage.waitForEvent('popup', { timeout: 10_000 }).catch(() => null);
+      await target.click({ timeout: 8000 }).catch((e) => {
+        followDiag!.clickError = (e as Error).message.slice(0, 160);
+      });
+      const popup = await popupP;
+      if (popup) activePage = popup;
+      followDiag.popup = Boolean(popup);
+      await activePage.waitForLoadState('domcontentloaded', { timeout: 20_000 }).catch(() => undefined);
+      await activePage.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => undefined);
+      await activePage.waitForTimeout(2500); // folga p/ SPA hidratar o detalhe
+      followDiag.urlAfter = activePage.url();
+    }
+  }
+
   // Inventário do formulário (diagnóstico), coletado ENQUANTO a página vive.
   let inventory: DomInventory | undefined;
   if (opts.inventory) {
@@ -704,7 +738,13 @@ export async function driveTrackingPage(
     // `preNavigated`/`landedUrl` mostram se a aba já veio navegada pelo Unblock
     // (e onde ela parou) — é o que diferencia "o provedor entregou a página" de
     // "nós navegamos". Some junto do diag do driver, quando houver.
-    diag: { ...(diag || {}), preNavigated, landedUrl: activePage.url(), blockMode },
+    diag: {
+      ...(diag || {}),
+      preNavigated,
+      landedUrl: activePage.url(),
+      blockMode,
+      ...(followDiag ? { follow: followDiag } : {}),
+    },
     apiJson,
     error: navError || undefined,
   };
@@ -712,6 +752,11 @@ export async function driveTrackingPage(
 
 /** Uma tentativa de scrape via Scraping Browser remoto (conecta, pilota, fecha). */
 async function scrapeViaSBOnce(opts: SBScrapeOptions): Promise<SBScrapeResult> {
+  // Mesma vaga global do withRemotePage: o diagnóstico também entra na fila.
+  return withRemoteSlot(() => scrapeViaSBOnceInSlot(opts));
+}
+
+async function scrapeViaSBOnceInSlot(opts: SBScrapeOptions): Promise<SBScrapeResult> {
   const startedAt = Date.now();
   let browser: Browser | null = null;
   try {

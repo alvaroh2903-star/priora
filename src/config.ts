@@ -195,6 +195,23 @@ export const config = {
     // confiável (como os testes single, que funcionaram). Subir só com plano maior.
     concurrency: Math.max(1, parseInt(process.env.BOT_CONCURRENCY || '1', 10)),
     maxBatch: Math.max(1, parseInt(process.env.BOT_MAX_BATCH || '10', 10)),
+    /**
+     * DISPARO AUTOMÁTICO (autoSync): com a conta Microsoft vinculada, a Priora
+     * varre os e-mails e puxa os armadores SOZINHA, em segundo plano — sem botão,
+     * sem aba aberta. Ligado por padrão (é o objetivo do produto); AUTO_SYNC_ENABLED=0
+     * desliga. O custo fica contido pelo TTL adaptativo: a cada volta, BL fresco sai
+     * do cache sem abrir sessão no Scrapfly; só o que venceu é raspado.
+     */
+    autoSync: {
+      enabled: (process.env.AUTO_SYNC_ENABLED || '1').trim() !== '0',
+      // Intervalo entre voltas. 2h é folgado frente aos TTLs (12h ativo, 72h trânsito).
+      intervalMs: Math.max(15, parseInt(process.env.AUTO_SYNC_INTERVAL_MIN || '120', 10)) * 60_000,
+      // Primeira volta alguns minutos após o boot (deixa o processo assentar).
+      startDelayMs: Math.max(1, parseInt(process.env.AUTO_SYNC_START_DELAY_MIN || '3', 10)) * 60_000,
+      // Teto de refs por volta. Maior que o do botão (BOT_MAX_BATCH): aqui ninguém
+      // espera na tela, e o que está fresco no cache não gera sessão paga.
+      maxRefs: Math.max(1, parseInt(process.env.AUTO_SYNC_MAX_REFS || '30', 10)),
+    },
   },
   /**
    * Supabase — persistência multiusuário (contas Priora isoladas). Enquanto não

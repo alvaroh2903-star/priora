@@ -1,16 +1,11 @@
 import { Router } from 'express';
 import { requireAuth, AuthedRequest } from '../middleware/requireAuth';
-import { listCarriers, detect, trackShipment, TrackingResult } from '../browser/carriers';
+import { listCarriers, detect, trackShipment } from '../browser/carriers';
 import { withPage } from '../browser/browser';
 import { mapLimit } from '../browser/carriers/concurrency';
-import {
-  getBotResult,
-  saveBotResult,
-  isResolved,
-  scrapeIntervalMs,
-  getAllBotResults,
-} from '../demurrage/demurrageBotStore';
-import { trackingToDemurrageContainers } from '../demurrage/trackingMapper';
+import { getAllBotResults } from '../demurrage/demurrageBotStore';
+import { enrichOne } from '../demurrage/enrichService';
+import { getAutoSyncStatus, runAutoSyncOnce } from '../demurrage/autoSync';
 import { calculateDemurrage } from '../demurrage/calculator';
 import { getDefaultTariff } from '../demurrage/tariffs';
 import { config, hasProxy, isAntiCaptchaConfigured } from '../config';
@@ -44,7 +39,19 @@ demurrageBotRouter.get('/status', (_req: AuthedRequest, res) => {
     cacheTtlHours: config.bot.resultTtlMs / 3_600_000,
     transitTtlHours: config.bot.transitTtlMs / 3_600_000,
     concurrency: config.bot.concurrency,
+    // Disparo automático (e-mail vinculado → puxa sozinho): ligado? última volta?
+    autoSync: getAutoSyncStatus(),
   });
+});
+
+/**
+ * POST /api/demurrage/bot/auto-sync/run — roda uma volta do disparo automático
+ * AGORA, sem esperar o intervalo. Responde na hora (uma volta pode levar vários
+ * minutos raspando em sequência); o andamento aparece em /status → autoSync.
+ */
+demurrageBotRouter.post('/auto-sync/run', (_req: AuthedRequest, res) => {
+  void runAutoSyncOnce();
+  res.status(202).json({ started: true, autoSync: getAutoSyncStatus() });
 });
 
 /** Armadores suportados. */
@@ -117,63 +124,6 @@ demurrageBotRouter.get('/track', async (req: AuthedRequest, res, next) => {
  * organiza (IA, se veio texto cru) -> cache -> formato do módulo Demurrage.
  * É o que o botão "buscar no armador" e o disparo automático da aba chamam.
  * ------------------------------------------------------------------ */
-
-/** Resposta enxuta e pronta para o cálculo de demurrage. */
-function shapeEnrich(result: TrackingResult) {
-  return {
-    carrier: { id: result.carrierId, name: result.carrierName },
-    reference: result.reference,
-    referenceType: result.referenceType,
-    ok: result.ok,
-    needsLogin: result.needsLogin,
-    needsCaptcha: result.needsCaptcha,
-    message: result.message,
-    sourceUrl: result.sourceUrl,
-    events: result.events,
-    demurrageContainers: trackingToDemurrageContainers(result),
-  };
-}
-
-/** Enriquece UMA referência (usa cache fresco; senão raspa e, se preciso, IA). */
-async function enrichOne(
-  ref: string,
-  carrierId: string | undefined,
-  refresh: boolean,
-) {
-  const cached = refresh ? null : getBotResult(ref);
-  // ECONOMIA de crédito Scrapfly — TTL ADAPTATIVO ao estado do BL: serve do cache
-  // SEM abrir sessão enquanto dentro do intervalo (Infinity=resolvido nunca raspa;
-  // trânsito=espera dias até o navio chegar; ativo=12h p/ pegar retirada/devolução).
-  if (cached) {
-    const interval = scrapeIntervalMs(
-      cached.result,
-      config.bot.resultTtlMs,
-      config.bot.transitTtlMs,
-    );
-    const idadeMs = Date.now() - Date.parse(cached.at);
-    if (Number.isFinite(idadeMs) && idadeMs < interval) {
-      return {
-        ...shapeEnrich(cached.result),
-        cached: true,
-        resolved: isResolved(cached.result),
-        at: cached.at,
-        organizedByAI: false,
-      };
-    }
-  }
-
-  // A CAMADA DE RESILIÊNCIA (IA/Clara) já roda DENTRO do trackShipment quando o
-  // parser dedicado não reconhece o layout — então aqui não re-organiza (evita
-  // gastar IA em dobro). `result.organizedByAI` diz se os dados vieram da IA.
-  const result = await trackShipment(ref, { carrierId });
-  const rec = saveBotResult(ref, result);
-  return {
-    ...shapeEnrich(result),
-    cached: false,
-    at: rec.at,
-    organizedByAI: result.organizedByAI === true,
-  };
-}
 
 /** GET /api/demurrage/bot/enrich?ref=...[&carrier=][&refresh=1] — um BL. */
 demurrageBotRouter.get('/enrich', async (req: AuthedRequest, res, next) => {

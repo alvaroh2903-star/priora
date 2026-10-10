@@ -27,6 +27,8 @@
     "reconciliation:selftest": "ts-node src/demurrage/reconciliationSelftest.ts",
     "events:selftest": "ts-node src/browser/carriers/scrapers/demurrageEventsSelftest.ts",
     "watchdog:selftest": "ts-node src/browser/carriers/watchdogSelftest.ts",
+    "autosync:selftest": "ts-node src/demurrage/autoSyncSelftest.ts",
+    "remoteslot:selftest": "ts-node src/browser/remoteSlotSelftest.ts",
     "demurrage:calc": "ts-node src/demurrage/calculatorSelftest.ts",
     "auth:selftest": "ts-node src/auth/accountSwitchSelftest.ts",
     "rocket:selftest": "ts-node src/rocket/rocketSelftest.ts",

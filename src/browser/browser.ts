@@ -8,6 +8,7 @@ import {
 import { anonymizeProxy, closeAnonymizedProxy } from 'proxy-chain';
 import { config, hasProxy } from '../config';
 import { connectSB } from './scrapingBrowser';
+import { withRemoteSlot } from './remoteSlot';
 import { PoolMode } from './carriers/types';
 
 /**
@@ -176,20 +177,26 @@ export async function withRemotePage<T>(
   // residential_unblock) e `opts.targetUrl` é o alvo do bypass ASP no pool de
   // unblock (o Scrapfly navega ANTES de nos entregar a sessão).
   // Ver connectSB/ConnectOptions.
-  const browser = await connectSB(opts);
-  try {
-    // Reusa o contexto E a página que o provedor já entrega (Scrapfly/Bright Data
-    // gerenciam o fingerprint na sessão) — criar novos pode perdê-lo.
-    const ctx = browser.contexts()[0] || (await browser.newContext());
-    const page = ctx.pages()[0] || (await ctx.newPage());
-    ctx.setDefaultNavigationTimeout(config.browser.navigationTimeoutMs);
-    ctx.setDefaultTimeout(config.browser.navigationTimeoutMs);
-    return await fn(page, ctx);
-  } finally {
-    await browser.close().catch(() => {
-      /* fecha a sessão remota (para de faturar) */
-    });
-  }
+  //
+  // Ocupa uma VAGA global de navegador remoto (remoteSlot): botão, disparo
+  // automático e diagnósticos nunca abrem sessões em paralelo além do limite —
+  // duas ao mesmo tempo derrubavam a instância de 512 MB.
+  return withRemoteSlot(async () => {
+    const browser = await connectSB(opts);
+    try {
+      // Reusa o contexto E a página que o provedor já entrega (Scrapfly/Bright Data
+      // gerenciam o fingerprint na sessão) — criar novos pode perdê-lo.
+      const ctx = browser.contexts()[0] || (await browser.newContext());
+      const page = ctx.pages()[0] || (await ctx.newPage());
+      ctx.setDefaultNavigationTimeout(config.browser.navigationTimeoutMs);
+      ctx.setDefaultTimeout(config.browser.navigationTimeoutMs);
+      return await fn(page, ctx);
+    } finally {
+      await browser.close().catch(() => {
+        /* fecha a sessão remota (para de faturar) */
+      });
+    }
+  });
 }
 
 /** Encerra o Chromium (e o proxy local, se houver) — shutdown e testes. */

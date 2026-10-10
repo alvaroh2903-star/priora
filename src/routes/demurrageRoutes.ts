@@ -27,7 +27,7 @@ import {
   procKey,
 } from '../demurrage/demurrageStore';
 import { getAllBotResults, refKey } from '../demurrage/demurrageBotStore';
-import { detect } from '../browser/carriers';
+import { collectEmailRefs } from '../demurrage/emailRefs';
 import { config } from '../config';
 
 export const demurrageRouter = Router();
@@ -91,50 +91,9 @@ function mergePortalDates(
  */
 demurrageRouter.get('/sync-refs', async (req: AuthedRequest, res, next) => {
   try {
-    const keywords = config.logisticsKeywords;
-    let messages = await withTimeout(
-      searchLogisticsMessages(req.accessToken!, { keywords, top: 60 }),
-      20000,
-      'syncRefsSearch',
-    ).catch(() => [] as LogisticsSummary[]);
-    if (messages.length === 0) {
-      messages = await withTimeout(
-        listRecentSummaries(req.accessToken!, { top: 40 }),
-        20000,
-        'syncRefsInbox',
-      ).catch(() => [] as LogisticsSummary[]);
-    }
-    const refs = new Set<string>();
-    for (const m of messages) {
-      const text = [m.bodyPreview || '', m.body?.content || ''].join('\n');
-      const ev = evaluateDemurrageEmail({
-        id: m.id,
-        conversationId: m.conversationId || m.id,
-        subject: m.subject,
-        bodyPreview: m.bodyPreview,
-        bodyText: text,
-        senderAddress: m.from?.emailAddress.address,
-        receivedDateTime: m.receivedDateTime,
-      });
-      if (!ev.isCandidate) continue;
-      for (const bl of ev.extracted.blNumbers) refs.add(bl);
-      for (const ct of ev.extracted.containerNumbers) refs.add(ct);
-      // Varredura AMPLA: BLs com prefixo de porto (SGNM…, NBOZ…, QGD3…) e numéricos
-      // (COSCO 10díg, Maersk 9díg, Evergreen 12díg). O detect() — que já conhece
-      // esses formatos — é quem filtra o que é de fato ref de armador (o resto cai fora).
-      const up = (text + ' ' + (m.subject || '')).toUpperCase();
-      const cands = [
-        ...(up.match(/\b[A-Z]{3,4}[A-Z0-9]{5,15}\b/g) || []),
-        ...(up.match(/\b\d{9,12}\b/g) || []),
-      ];
-      for (const cand of cands) {
-        if (detect(cand).carrier) refs.add(cand);
-      }
-    }
-    // Só refs cujo armador é reconhecido (dupla checagem após normalizar).
-    const out = Array.from(refs)
-      .filter((r) => detect(r).carrier)
-      .slice(0, config.bot.maxBatch);
+    // Mesma coleta do disparo automático (emailRefs.ts); aqui com o teto do botão,
+    // porque cada ref vira uma chamada sequencial do front.
+    const out = await collectEmailRefs(req.accessToken!, config.bot.maxBatch);
     res.json({ refs: out, total: out.length });
   } catch (err) {
     next(err);

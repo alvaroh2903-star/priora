@@ -22,6 +22,8 @@ import { trackShipment, detect, detectCarrier, resolveSearchRef } from './browse
 import type { PoolMode } from './browser/carriers/types';
 import { mapLimit } from './browser/carriers/concurrency';
 import { runWatchdog } from './browser/carriers/watchdog';
+import { startAutoSync } from './demurrage/autoSync';
+import { remoteSlotStatus } from './browser/remoteSlot';
 import type { TrackingResult } from './browser/carriers';
 import { tryFillSearch } from './browser/carriers/pageUtils';
 import { getAntiCaptchaBalance, solveRecaptchaV2 } from './browser/antiCaptcha';
@@ -310,6 +312,8 @@ interface ScrapeJob {
   result?: unknown;
   html?: string;
   error?: string;
+  /** Build em que o job rodou — evita interpretar resultado de build errado. */
+  commit?: string | null;
 }
 const scrapeJobs = new Map<string, ScrapeJob>();
 
@@ -562,6 +566,9 @@ app.get('/health/scrape-now', async (req, res) => {
  * verdade, aceita cookies — funciona onde o Web Unlocker API falha (Hapag).
  * Uso: /health/scrape-sb?token=<DIAG_TOKEN>&ref=<BL>[&url=<URL>]
  */
+/** Commit do build em execução — vai em todo job, para nunca lermos resultado de build errado. */
+const BUILD_COMMIT = (process.env.RENDER_GIT_COMMIT || '').slice(0, 7) || null;
+
 /** Parâmetros resolvidos de um diagnóstico de raspagem (sync ou assíncrono). */
 interface SbDiagParams {
   engine: 'sb' | 'local';
@@ -569,32 +576,39 @@ interface SbDiagParams {
   searchReference: string;
   pool: PoolMode;
   probe: boolean;
+  /** Texto(s) que centram o htmlSlice; alternativas separadas por `|` (vale a 1ª que achar). */
   find: string;
   htmlwin: number;
   ref: string;
-  /** Modo de interceptação: `?block=all|media|none` (`?noblock=1` = none). Ver BlockMode. */
+  /** Modo de interceptação: `block=all|media|none` (`noblock=1` = none). Ver BlockMode. */
   blockMode?: BlockMode;
+  /** Seletor CSS a clicar após o resultado (captura a página de detalhe). Ver SBScrapeOptions.follow. */
+  follow?: string;
 }
 
+type DiagParamsResult = { params?: SbDiagParams; error?: { status: number; body: object } };
+
 /**
- * Resolve os parâmetros de /health/scrape-sb a partir da query. Compartilhado
- * pelas versões SÍNCRONA e ASSÍNCRONA, para as duas se comportarem igual
- * (mesma detecção de armador, mesmo pool, mesmos overrides).
+ * Resolve os parâmetros de um diagnóstico a partir de um objeto chave→valor (a
+ * query da URL, ou um item do lote). Compartilhado pelas versões SÍNCRONA,
+ * ASSÍNCRONA e em LOTE, para as três se comportarem igual (mesma detecção de
+ * armador, mesmo pool, mesmos overrides).
  */
-function resolveSbDiagParams(req: Request): { params?: SbDiagParams; error?: { status: number; body: object } } {
+function resolveSbDiagParamsFrom(q: Record<string, unknown>): DiagParamsResult {
+  const s = (k: string) => String(q[k] ?? '').trim();
   // via=local usa o Chromium LOCAL + IPRoyal (IGNORA robots.txt) — pros portais que
   // o Bright Data recusa por robots (HMM, Maersk…). via=sb (padrão) usa o remoto.
-  const engine: 'sb' | 'local' = String(req.query.via || 'sb').trim() === 'local' ? 'local' : 'sb';
+  const engine: 'sb' | 'local' = s('via') === 'local' ? 'local' : 'sb';
   if (engine === 'sb' && !isSBConfigured()) {
     return { error: { status: 503, body: { error: 'Scraping Browser não configurado (defina SCRAPE_BROWSER_WSS).' } } };
   }
 
-  const rawUrl = String(req.query.url || '').trim();
-  const ref = String(req.query.ref || '').trim();
+  const rawUrl = s('url');
+  const ref = s('ref');
   let url: string | undefined;
   if (rawUrl) url = rawUrl;
   else if (ref) url = detect(ref).carrier?.trackingUrl || undefined;
-  if (!url) return { error: { status: 400, body: { error: 'Informe ?url=<URL> ou ?ref=<BL|contêiner>.' } } };
+  if (!url) return { error: { status: 400, body: { error: 'Informe url=<URL> ou ref=<BL|contêiner>.' } } };
 
   // Ref a DIGITAR no form pode diferir da original (ex.: Evergreen tira o EGLV).
   // E já herda o POOL do armador detectado (datacenter/residential/+unblock).
@@ -607,58 +621,55 @@ function resolveSbDiagParams(req: Request): { params?: SbDiagParams; error?: { s
       pool = d.carrier.pool ?? 'residential';
     }
   }
-  // Override manual no diagnóstico: ?pool=datacenter|residential|residential_unblock
-  // (atalhos: dc|res|unblock; legado: ?heavy=1 → +unblock, ?heavy=0 → datacenter).
-  const poolQ = String(req.query.pool || '').trim().toLowerCase();
-  const heavyQ = String(req.query.heavy || '').trim();
+  // Override manual no diagnóstico: pool=datacenter|residential|residential_unblock
+  // (atalhos: dc|res|unblock; legado: heavy=1 → +unblock, heavy=0 → datacenter).
+  const poolQ = s('pool').toLowerCase();
+  const heavyQ = s('heavy');
   if (poolQ === 'datacenter' || poolQ === 'dc') pool = 'datacenter';
   else if (poolQ === 'residential' || poolQ === 'res') pool = 'residential';
   else if (poolQ === 'residential_unblock' || poolQ === 'unblock' || poolQ === 'resu') pool = 'residential_unblock';
   if (heavyQ === '1') pool = 'residential_unblock';
   if (heavyQ === '0') pool = 'datacenter';
 
-  // ?probe=1 coleta o inventário de inputs/selects/botões da página (revela os
+  // probe=1 coleta o inventário de inputs/selects/botões da página (revela os
   // seletores REAIS do form — COSCO/HMM — sem chutar num teste ao vivo só).
-  const probe = ['1', 'true', 'yes'].includes(String(req.query.probe || '').toLowerCase());
-  const find = String(req.query.find || '').trim();
-  const htmlwin = Math.min(Math.max(parseInt(String(req.query.htmlwin || '0'), 10) || 0, 0), 20000);
-  // ?block=all|media|none escolhe o modo de interceptação (default: media, no
-  // motor). ?noblock=1 continua valendo como atalho para 'none'. Valor inválido é
-  // ignorado (cai no default) em vez de virar erro — é rota de diagnóstico.
-  const blockQ = String(req.query.block || '').trim().toLowerCase();
+  const truthy = (v: string) => ['1', 'true', 'yes'].includes(v.toLowerCase());
+  const probe = truthy(s('probe'));
+  const find = s('find');
+  const htmlwin = Math.min(Math.max(parseInt(s('htmlwin') || '0', 10) || 0, 0), 20000);
+  // block=all|media|none escolhe o modo de interceptação (default: media, no motor).
+  // noblock=1 continua valendo como atalho para 'none'. Valor inválido é ignorado
+  // (cai no default) em vez de virar erro — é rota de diagnóstico.
+  const blockQ = s('block').toLowerCase();
   let blockMode: BlockMode | undefined =
     blockQ === 'all' || blockQ === 'media' || blockQ === 'none' ? blockQ : undefined;
-  if (['1', 'true', 'yes'].includes(String(req.query.noblock || '').toLowerCase())) blockMode = 'none';
-  return { params: { engine, url, searchReference, pool, probe, find, htmlwin, ref, blockMode } };
+  if (truthy(s('noblock'))) blockMode = 'none';
+  const follow = s('follow') || undefined;
+  return { params: { engine, url, searchReference, pool, probe, find, htmlwin, ref, blockMode, follow } };
+}
+
+function resolveSbDiagParams(req: Request): DiagParamsResult {
+  return resolveSbDiagParamsFrom(req.query as Record<string, unknown>);
 }
 
 /**
  * Executa o diagnóstico de raspagem e monta o payload. Isolado da rota para que
- * a versão ASSÍNCRONA (job em background) devolva EXATAMENTE o mesmo resultado
- * da síncrona — sem duplicar lógica.
+ * as versões assíncrona e em lote devolvam EXATAMENTE o mesmo resultado da
+ * síncrona — sem duplicar lógica.
  */
 async function runSbDiagnostic(p: SbDiagParams): Promise<{ payload: Record<string, unknown>; html: string }> {
   const startedAt = Date.now();
+  const opts = {
+    url: p.url,
+    reference: p.searchReference,
+    inventory: p.probe,
+    blockMode: p.blockMode,
+    follow: p.follow,
+  };
   const sb =
     p.engine === 'local'
-      ? {
-          ...(await withPage((page) =>
-            driveTrackingPage(page, {
-              url: p.url,
-              reference: p.searchReference,
-              inventory: p.probe,
-              blockMode: p.blockMode,
-            }),
-          )),
-          ms: Date.now() - startedAt,
-        }
-      : await scrapeViaSB({
-          url: p.url,
-          reference: p.searchReference,
-          inventory: p.probe,
-          pool: p.pool,
-          blockMode: p.blockMode,
-        });
+      ? { ...(await withPage((page) => driveTrackingPage(page, opts))), ms: Date.now() - startedAt }
+      : await scrapeViaSB({ ...opts, pool: p.pool });
 
   let events: unknown[] = [];
   let containers: unknown[] = [];
@@ -671,6 +682,7 @@ async function runSbDiagnostic(p: SbDiagParams): Promise<{ payload: Record<strin
   }
 
   let htmlSlice: string | undefined;
+  let findMatched: string | null = null;
   if (p.find || p.htmlwin) {
     const clean = sb.html
       .replace(/<style[\s\S]*?<\/style>/gi, '')
@@ -678,8 +690,17 @@ async function runSbDiagnostic(p: SbDiagParams): Promise<{ payload: Record<strin
       .replace(/\s+/g, ' ');
     let off = 0;
     if (p.find) {
-      const at = clean.toUpperCase().indexOf(p.find.toUpperCase());
-      off = at >= 0 ? Math.max(at - 800, 0) : 0;
+      // Alternativas `A|B|C`: centra na 1ª que existir — útil em página de detalhe
+      // cujo texto exato ainda não conhecemos.
+      const up = clean.toUpperCase();
+      for (const alt of p.find.split('|').map((x) => x.trim()).filter(Boolean)) {
+        const at = up.indexOf(alt.toUpperCase());
+        if (at >= 0) {
+          off = Math.max(at - 800, 0);
+          findMatched = alt;
+          break;
+        }
+      }
     }
     htmlSlice = clean.slice(off, off + (p.htmlwin || 6000));
   }
@@ -688,6 +709,7 @@ async function runSbDiagnostic(p: SbDiagParams): Promise<{ payload: Record<strin
     html: sb.html,
     payload: {
       ok: sb.ok,
+      commit: BUILD_COMMIT,
       via: p.engine,
       pool: p.engine === 'sb' ? p.pool : 'local',
       url: p.url,
@@ -701,6 +723,7 @@ async function runSbDiagnostic(p: SbDiagParams): Promise<{ payload: Record<strin
         events,
         containers,
         textSnippet: sb.textContent.slice(0, 3000),
+        findMatched,
         htmlSlice,
         inventory: sb.inventory || undefined,
         diag: sb.diag || undefined,
@@ -713,42 +736,30 @@ async function runSbDiagnostic(p: SbDiagParams): Promise<{ payload: Record<strin
 }
 
 /**
- * Versão ASSÍNCRONA do /health/scrape-sb (gated por DIAG_TOKEN). Uma raspagem
- * leva ~90–150 s e o gateway do Render derruba a requisição longa com 502 antes
- * de ela terminar — perdendo o resultado mesmo quando o scrape deu certo. Aqui
- * devolvemos um `jobId` NA HORA e rodamos em background; o resultado (idêntico
- * ao da rota síncrona) sai em /health/job?id=. Os jobs são gravados em disco,
- * então o poll sobrevive a reinício do processo.
- *
- * Uso: /health/scrape-sb-async?token=<DIAG_TOKEN>&ref=<BL>[&probe=1][&htmlwin=4000]
+ * Cria um job de diagnóstico e o executa em BACKGROUND (não aguarda — por isso
+ * não há timeout de gateway). O resultado vai para o store de jobs (memória +
+ * disco) e sai em /health/job?id=. Base comum de scrape-sb-async, watchdog-async
+ * e capture-batch-async.
  */
-app.get('/health/scrape-sb-async', (req, res) => {
-  const token = (process.env.DIAG_TOKEN || '').trim();
-  if (!token) return res.status(404).json({ error: 'Desativado (defina DIAG_TOKEN).' });
-  if (String(req.query.token || '') !== token) return res.status(401).json({ error: 'token inválido.' });
+function startDiagJob(
+  meta: { ref: string; url: string; via: string },
+  work: () => Promise<{ result: unknown; html?: string }>,
+): ScrapeJob {
   pruneScrapeJobs();
-
-  const { params, error } = resolveSbDiagParams(req);
-  if (error) return res.status(error.status).json(error.body);
-  const p = params!;
-
-  const id = crypto.randomBytes(6).toString('hex');
   const job: ScrapeJob = {
-    id,
+    id: crypto.randomBytes(6).toString('hex'),
     status: 'pending',
-    ref: p.ref || p.url,
-    url: p.url,
-    via: `sb:${p.pool}`,
+    ...meta,
+    commit: BUILD_COMMIT,
     startedAt: Date.now(),
   };
-  scrapeJobs.set(id, job);
+  scrapeJobs.set(job.id, job);
   persistJob(job);
-  // Background: NÃO aguardamos aqui — por isso não há timeout de gateway.
   void (async () => {
     try {
-      const { payload, html } = await runSbDiagnostic(p);
-      job.result = payload;
-      job.html = html.length > JOB_HTML_CAP ? html.slice(0, JOB_HTML_CAP) : html;
+      const { result, html } = await work();
+      job.result = result;
+      if (html) job.html = html.length > JOB_HTML_CAP ? html.slice(0, JOB_HTML_CAP) : html;
       job.status = 'done';
     } catch (e) {
       job.status = 'error';
@@ -758,18 +769,137 @@ app.get('/health/scrape-sb-async', (req, res) => {
       persistJob(job);
     }
   })();
+  return job;
+}
 
-  // URL ABSOLUTA de poll (com `trust proxy` ligado, req.protocol já vem https no
-  // Render) — assim o link é clicável direto, sem precisar montar o host na mão.
+/** Resposta padrão de criação de job: id + link ABSOLUTO de poll + build em execução. */
+function jobCreatedResponse(req: Request, token: string, job: ScrapeJob, extra: Record<string, unknown> = {}) {
+  // Com `trust proxy` ligado, req.protocol já vem https no Render.
   const host = req.get('host');
-  const pollPath = `/health/job?token=${encodeURIComponent(token)}&id=${id}`;
-  res.json({
+  const pollPath = `/health/job?token=${encodeURIComponent(token)}&id=${job.id}`;
+  return {
     ok: true,
-    jobId: id,
-    pool: p.pool,
-    url: p.url,
+    jobId: job.id,
+    commit: BUILD_COMMIT,
+    ...extra,
     poll: host ? `${req.protocol}://${host}${pollPath}` : pollPath,
+  };
+}
+
+/** Checagem do DIAG_TOKEN comum às rotas de diagnóstico. Devolve o token ou null (já respondeu). */
+function requireDiagToken(req: Request, res: Response): string | null {
+  const token = (process.env.DIAG_TOKEN || '').trim();
+  if (!token) {
+    res.status(404).json({ error: 'Desativado (defina DIAG_TOKEN).' });
+    return null;
+  }
+  if (String(req.query.token || '') !== token) {
+    res.status(401).json({ error: 'token inválido.' });
+    return null;
+  }
+  return token;
+}
+
+/**
+ * Versão ASSÍNCRONA do /health/scrape-sb (gated por DIAG_TOKEN). Uma raspagem
+ * leva ~90–150 s e o gateway do Render derruba a requisição longa com 502 antes
+ * de ela terminar. Devolve um `jobId` NA HORA; o resultado (idêntico ao da rota
+ * síncrona) sai em /health/job?id=.
+ *
+ * Uso: /health/scrape-sb-async?token=<DIAG_TOKEN>&ref=<BL>[&probe=1][&htmlwin=4000]
+ *      [&find=A|B][&follow=<css>][&block=all|media|none][&url=<urlencoded>]
+ */
+app.get('/health/scrape-sb-async', (req, res) => {
+  const token = requireDiagToken(req, res);
+  if (!token) return;
+  const { params, error } = resolveSbDiagParams(req);
+  if (error) return res.status(error.status).json(error.body);
+  const p = params!;
+  const job = startDiagJob({ ref: p.ref || p.url, url: p.url, via: `sb:${p.pool}` }, async () => {
+    const { payload, html } = await runSbDiagnostic(p);
+    return { result: payload, html };
   });
+  res.json(jobCreatedResponse(req, token, job, { pool: p.pool, url: p.url }));
+});
+
+/**
+ * Várias capturas num job só (gated por DIAG_TOKEN), em SEQUÊNCIA — uma sessão
+ * remota por vez (instância de 512 MB). Troca N rodadas de "dispara → espera →
+ * cola" por uma. `items` é um JSON em base64url: lista de objetos com as mesmas
+ * chaves da query do scrape-sb (ref, url, find, htmlwin, follow, block, pool…).
+ * Para ler um item isolado: /health/job?id=<id>&item=<n>.
+ *
+ * Uso: /health/capture-batch-async?token=<DIAG_TOKEN>&items=<base64url(JSON)>
+ */
+app.get('/health/capture-batch-async', (req, res) => {
+  const token = requireDiagToken(req, res);
+  if (!token) return;
+  let items: Array<Record<string, unknown>>;
+  try {
+    const raw = Buffer.from(String(req.query.items || ''), 'base64url').toString('utf8');
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed) || parsed.length === 0) throw new Error('lista vazia');
+    items = parsed.slice(0, 8).filter((x) => x && typeof x === 'object');
+  } catch (e) {
+    return res.status(400).json({ error: `items inválido (JSON em base64url): ${(e as Error).message}` });
+  }
+  const resolved = items.map((it) => ({ input: it, ...resolveSbDiagParamsFrom(it) }));
+  const firstError = resolved.find((r) => r.error);
+  if (firstError) return res.status(firstError.error!.status).json({ ...firstError.error!.body, item: firstError.input });
+
+  const job = startDiagJob(
+    { ref: resolved.map((r) => r.params!.ref).join(','), url: '(lote)', via: `batch:${resolved.length}` },
+    async () => {
+      const out: Array<Record<string, unknown>> = [];
+      for (const r of resolved) {
+        try {
+          const { payload } = await runSbDiagnostic(r.params!);
+          out.push({ input: r.input, ...payload });
+        } catch (e) {
+          out.push({ input: r.input, ok: false, error: (e as Error).message });
+        }
+      }
+      return { result: { commit: BUILD_COMMIT, count: out.length, items: out } };
+    },
+  );
+  res.json(jobCreatedResponse(req, token, job, { count: resolved.length }));
+});
+
+/**
+ * Watchdog ASSÍNCRONO (gated por DIAG_TOKEN). A versão síncrona puxa os armadores
+ * em sequência (~1–2 min cada) e passa fácil do timeout do gateway; esta devolve
+ * o jobId na hora. Como o disco do Render é apagado a cada deploy, o cache de
+ * canários costuma estar vazio — passe as refs em `refs=carrier:ref,...`.
+ *
+ * Uso: /health/watchdog-async?token=<DIAG_TOKEN>&refs=maersk:276437739,msc:MEDU...
+ *      [&carriers=a,b][&ai=0]
+ */
+app.get('/health/watchdog-async', (req, res) => {
+  const token = requireDiagToken(req, res);
+  if (!token) return;
+  const carrierIds = String(req.query.carriers || '')
+    .split(/[,\s]+/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+  const overrides: Record<string, string> = {};
+  for (const pair of String(req.query.refs || '').split(/[,\s]+/)) {
+    const i = pair.indexOf(':');
+    if (i > 0) {
+      const cid = pair.slice(0, i).trim();
+      const ref = pair.slice(i + 1).trim();
+      if (cid && ref) overrides[cid] = ref;
+    }
+  }
+  const aiFallback = String(req.query.ai ?? '1') !== '0';
+  const job = startDiagJob({ ref: Object.values(overrides).join(',') || '(cache)', url: '(watchdog)', via: 'watchdog' }, async () => ({
+    result: await runWatchdog({
+      carrierIds: carrierIds.length ? carrierIds : undefined,
+      overrides: Object.keys(overrides).length ? overrides : undefined,
+      concurrency: 1,
+      aiFallback,
+    }),
+  }));
+  res.json(jobCreatedResponse(req, token, job, { refs: overrides }));
 });
 
 app.get('/health/scrape-sb', async (req, res) => {
@@ -944,6 +1074,8 @@ app.get('/health/jobs', (req, res) => {
   }
   res.json({
     ttlHoras: JOB_TTL_MS / 3_600_000,
+    // Vagas de navegador remoto: quantas em uso e quantas raspagens na fila.
+    remoteBrowser: remoteSlotStatus(),
     // Tempo desde que ESTE processo subiu: se for baixo e a lista estiver vazia,
     // o serviço reiniciou (foi isso que levou os jobs, não o TTL).
     processoDePeSeg: Math.round(process.uptime()),
@@ -959,15 +1091,24 @@ app.get('/health/job', (req, res) => {
   if (String(req.query.token || '') !== token) return res.status(401).json({ error: 'token inválido.' });
   const job = getJob(String(req.query.id || ''));
   if (!job) return res.status(404).json({ error: 'job não encontrado (expirou ou o serviço reiniciou).' });
+  // ?item=N devolve só um item de um job em lote (resultado inteiro pode ser grande).
+  let result: unknown = job.result || null;
+  const itemQ = String(req.query.item ?? '').trim();
+  const items = (result as { items?: unknown[] } | null)?.items;
+  if (itemQ !== '' && Array.isArray(items)) {
+    const n = parseInt(itemQ, 10);
+    result = Number.isInteger(n) && n >= 0 && n < items.length ? { item: n, of: items.length, ...(items[n] as object) } : { error: `item fora do intervalo 0..${items.length - 1}` };
+  }
   res.json({
     id: job.id,
     status: job.status,
+    commit: job.commit ?? null,
     ref: job.ref,
     via: job.via,
     url: job.url,
     render: job.render !== false,
     ms: (job.finishedAt || Date.now()) - job.startedAt,
-    result: job.result || null,
+    result,
     error: job.error || null,
   });
 });
@@ -1489,6 +1630,8 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
 
 app.listen(config.port, () => {
   console.log(`Priora rodando em http://localhost:${config.port}`);
+  // Disparo automático do rastreio: e-mail vinculado → armadores puxados sozinhos.
+  startAutoSync();
 });
 
 // Ping interno periódico ao Supabase, enquanto o processo estiver acordado, para
