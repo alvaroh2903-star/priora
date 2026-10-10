@@ -666,7 +666,9 @@ export async function driveTrackingPage(
   // imagem, envio ao soltar a barra e resposta) — é o que diz POR QUE recusou.
   const captchaNet: Array<Record<string, unknown>> = [];
   if (/oocl\.com/i.test(opts.url)) {
-    page.on('response', async (r) => {
+    // No CONTEXTO (não só na aba): o app pode chamar a API por service worker,
+    // que não aparece nos eventos da página.
+    page.context().on('response', async (r) => {
       try {
         const u = r.url();
         const t = r.request().resourceType();
@@ -691,7 +693,7 @@ export async function driveTrackingPage(
     });
     // Requisição do captcha que NEM chegou a ter resposta (conexão cortada pelo
     // firewall da CargoSmart — visto com curl em 10/10: "Connection reset").
-    page.on('requestfailed', (q) => {
+    page.context().on('requestfailed', (q) => {
       const u = q.url();
       const t = q.resourceType();
       if (captchaNet.length >= 24 || !(/captcha/i.test(u) || t === 'xhr' || t === 'fetch')) return;
@@ -724,7 +726,21 @@ export async function driveTrackingPage(
   // EXPIRA. Era o "This Page Has Expired": o motor esperava resultado enquanto o
   // captcha vencia. Resolve na hora, antes de qualquer outra espera.
   let sliderDiag: SliderOutcome | undefined;
-  if (/oocl\.com/i.test(opts.url) && (await waitForCargoSmartSlider(page, 20_000))) {
+  // Esperando o captcha aparecer, também mexe o mouse: o timer de inatividade da
+  // OOCL corre desde o carregamento da página.
+  let sliderUp = false;
+  if (/oocl\.com/i.test(opts.url)) {
+    const vp0 = page.viewportSize() || { width: 1280, height: 800 };
+    for (let i = 0; i < 14 && !sliderUp; i++) {
+      sliderUp = await waitForCargoSmartSlider(page, 1500);
+      if (!sliderUp) {
+        await page.mouse
+          .move(vp0.width * (0.2 + Math.random() * 0.6), vp0.height * (0.2 + Math.random() * 0.6), { steps: 3 })
+          .catch(() => undefined);
+      }
+    }
+  }
+  if (sliderUp) {
     sliderDiag = await solveCargoSmartSlider(page, { captureImages: Boolean(opts.inventory) }).catch((e) => ({
       found: true,
       solved: false,
@@ -732,6 +748,22 @@ export async function driveTrackingPage(
       ms: 0,
       error: String((e as Error).message).slice(0, 200),
     }));
+  }
+  // Depois do captcha, a OOCL expira a sessão por INATIVIDADE ("no activity for
+  // a while") — visto ao vivo: captcha resolvido e, na espera parada pelo
+  // resultado, a página caía em /moc/error. Mexe o mouse de leve (como quem olha
+  // a tela) até o resultado aparecer, a página de erro vir ou 40 s.
+  if (sliderDiag?.solved) {
+    const vp = page.viewportSize() || { width: 1280, height: 800 };
+    for (let i = 0; i < 26; i++) {
+      await page.mouse
+        .move(vp.width * (0.3 + Math.random() * 0.4), vp.height * (0.3 + Math.random() * 0.4), { steps: 3 })
+        .catch(() => undefined);
+      await page.waitForTimeout(1500);
+      const body = (await page.innerText('body').catch(() => '')) || '';
+      if (/has expired/i.test(body) || /\/error\b/.test(page.url())) break;
+      if (/\b[A-Z]{4}\d{7}\b/.test(body) || /container no/i.test(body)) break;
+    }
   }
   // Captcha INTERATIVO (reCAPTCHA/hCaptcha/Turnstile) na entrada: resolve via
   // anti-captcha se configurado (no-op rápido quando não há widget). Beneficia

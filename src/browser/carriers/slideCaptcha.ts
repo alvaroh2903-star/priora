@@ -460,15 +460,24 @@ async function dragRotation(
   const probe = 16;
   x += probe;
   await page.mouse.move(x, y0 + rand(-1, 1), { steps: 3 });
-  const m1 = await settled();
-  trace.push(`dx=${probe} ang=${m1 ? m1.angle.toFixed(1) : '?'}`);
+  let m1 = await settled();
+  // Medida falhou ou não mexeu (visto ao vivo: caía no modo "linear" e errava):
+  // anda mais um pouco e mede de novo antes de desistir da medição.
+  for (let k = 0; k < 2 && (!m1 || Math.min(m1.angle, 360 - m1.angle) < 3); k++) {
+    x += 10;
+    await page.mouse.move(x, y0 + rand(-1, 1), { steps: 2 });
+    await sleep(250);
+    m1 = await settled();
+  }
+  const probeDone = x - x0;
+  trace.push(`dx=${probeDone} ang=${m1 ? m1.angle.toFixed(1) : '?'}`);
   const moved1 = m1 ? Math.min(m1.angle, 360 - m1.angle) : 0;
   let dir = 1;
   let degPerPx = 360 / travel;
   let mode = 'linear';
   if (m1 && moved1 >= 3) {
     dir = m1.angle < 180 ? 1 : -1;
-    degPerPx = moved1 / probe;
+    degPerPx = moved1 / probeDone;
     mode = m1.mode;
   }
   // Quanto falta girar, COM sinal (-180..180]: positivo = seguir em frente.
@@ -476,7 +485,7 @@ async function dragRotation(
     const raw = dir > 0 ? theta - ang : ang - theta;
     return ((raw % 360) + 540) % 360 - 180;
   };
-  let rem = remOf(mode === 'linear' ? probe * degPerPx : (m1 as { angle: number }).angle);
+  let rem = remOf(mode === 'linear' ? probeDone * degPerPx : (m1 as { angle: number }).angle);
   for (let i = 0; i < 90; i++) {
     if (Math.abs(rem) <= 1.2) break;
     // Perto do alvo, passos pequenos; pode VOLTAR se passou do ponto.
