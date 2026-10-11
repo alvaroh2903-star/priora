@@ -230,11 +230,10 @@ export const CARRIERS: CarrierMeta[] = [
       return `https://www.oocl.com/Pages/ExpressLink.aspx?eltype=ct&businessType=${bt}&businessNumber=${encodeURIComponent(num)}&language=en`;
     },
     needsLoginForDemurrage: true,
-    needsScrapingBrowser: true, // SPA SCCT + captcha slider → navegador remoto (Scrapfly).
-    scrapeBlocked: true, // Cloudflare + captcha de slider (CargoSmart/AJ-Captcha) comportamental — economiza crédito.
-    pool: 'residential_unblock', // quando abre sessão (diagnóstico): residential + Unblock (Cloudflare+slider).
+    needsScrapingBrowser: true, // SPA SCCT + captcha de girar → navegador remoto (Scrapfly).
+    pool: 'residential_unblock', // residential + Unblock (Cloudflare) + resolvedor nativo do captcha (cs_captcha_rotation).
     proxyCountry: 'us', // sorteado, o pool já saiu em Moscou — barrado pelo Cloudflare da OOCL.
-    notes: 'SCCT em pbcontroltower.digital.oocl.com. Parser DEDICADO scrapers/oocl.ts (Event|Time|Location|Stage|Transport). BLOQUEIO: Cloudflare + slider CargoSmart (comportamental) — scrapeBlocked (produção não abre sessão). API oficial recomendada.',
+    notes: 'Entrada pelo ExpressLink do oocl.com (emite o ticket) → pbcontroltower → captcha de girar resolvido pelo resolvedor nativo da Scrapfly (Antibot CDP, ~5 s) → histórico completo lido do store do app (extractOoclStoreEvents). Validado ao vivo em 11/10 (B/L 2335731403, ~35 s).',
   },
 ];
 

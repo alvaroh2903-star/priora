@@ -36,6 +36,7 @@ async function main(): Promise<void> {
   // Import DEPOIS de ajustar o ambiente (config lê process.env na carga).
   const { runAutoSyncOnce, getAutoSyncStatus } = await import('./autoSync');
   const { enrichOne } = await import('./enrichService');
+  const { getCarrier } = await import('../browser/carriers/registry');
 
   console.log('[selftest] autoSync sem conta vinculada');
   const a = runAutoSyncOnce();
@@ -53,9 +54,10 @@ async function main(): Promise<void> {
   check('intervalo e teto configurados', st.intervalMin >= 15 && st.maxRefsPerRun >= 1);
 
   console.log('[selftest] enrichOne compartilha raspagem simultânea do mesmo BL');
-  // OOCL está em scrapeBlocked → trackShipment devolve na hora, SEM abrir sessão
-  // remota. Serve para exercitar o caminho de raspagem offline. (Era o CMA até
-  // 10/10, quando ele passou a ser raspado pela API da Scrapfly.)
+  // Marca o OOCL como scrapeBlocked SÓ neste teste → trackShipment devolve na
+  // hora, SEM abrir sessão remota (caminho de raspagem offline). Nenhum armador
+  // real segue bloqueado: o OOCL saiu em 11/10 (ExpressLink + captcha nativo).
+  getCarrier('oocl')!.scrapeBlocked = true;
   const ref = 'OOLU2335731403';
   const p1 = enrichOne(ref, undefined, true);
   const p2 = enrichOne(ref, undefined, true);

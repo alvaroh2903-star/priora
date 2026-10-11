@@ -106,8 +106,9 @@ expectHealth(
 );
 // scrapeBlocked (independe do resultado).
 expectHealth('scrapeBlocked => blocked_by_design', cma, null, { blocked: true }, 'blocked_by_design');
-// (OOCL: segue scrapeBlocked — CMA e ZIM saíram em 10/10, via API da Scrapfly.)
-expectHealth('scrapeBlocked pelo flag do carrier', getCarrier('oocl') as CarrierMeta, mkResult({ ok: true, events: [evt] }), {}, 'blocked_by_design');
+// Nenhum armador real segue em scrapeBlocked (o OOCL saiu em 11/10): usa uma
+// cópia marcada para provar que o flag do carrier manda, independe do resultado.
+expectHealth('scrapeBlocked pelo flag do carrier', { ...(getCarrier('oocl') as CarrierMeta), scrapeBlocked: true }, mkResult({ ok: true, events: [evt] }), {}, 'blocked_by_design');
 // Sem referência.
 expectHealth('sem canário => no_ref', maersk, null, {}, 'no_ref');
 // Exceção.

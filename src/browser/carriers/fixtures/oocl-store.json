@@ -1,0 +1,220 @@
+{
+ "ooclStore": {
+  "query": {
+   "type": "blNumber",
+   "businessNumber": "2335731403"
+  },
+  "summaryList": [
+   {
+    "bookingNumber": "2335731403",
+    "por": "Yantian",
+    "fnd": "Santos",
+    "routes": [
+     {
+      "facilityCode": "YAT01",
+      "locationType": "POR",
+      "vesselInfo": null
+     },
+     {
+      "facilityCode": "YAT01",
+      "locationType": "POL",
+      "vesselInfo": {
+       "vesselName": "COSCO SHIPPING RHINE",
+       "externalVoyage": "042W"
+      }
+     },
+     {
+      "facilityCode": "SSZ06",
+      "locationType": "POD",
+      "vesselInfo": {
+       "vesselName": "COSCO SHIPPING RHINE",
+       "externalVoyage": "042W"
+      }
+     },
+     {
+      "facilityCode": "SSZ06",
+      "locationType": "FND",
+      "vesselInfo": null
+     }
+    ],
+    "containerList": [
+     {
+      "containerNumber": "CSGU779649",
+      "containerNumberWithCheckDigit": "CSGU7796499",
+      "cntrSizeType": "40HQ",
+      "milestoneEventList": [
+       {
+        "eventName": "Empty Return",
+        "eventDateTime": "06 Oct 2026 12:22 BRT",
+        "facilityName": "LECHMAN TERMINAIS EIRELLI",
+        "facilityCode": "SSZ19",
+        "portName": null,
+        "city": "Santos,Sao Paulo, Brazil",
+        "stage": "Inbound",
+        "transportMode": "Truck"
+       },
+       {
+        "eventName": "Gate Out",
+        "eventDateTime": "20 Sep 2026 13:22 BRT",
+        "facilityName": "Santos Brazil",
+        "facilityCode": "SSZ06",
+        "portName": null,
+        "city": "Santos,Sao Paulo, Brazil",
+        "stage": "Inbound",
+        "transportMode": "Truck"
+       },
+       {
+        "eventName": "Discharged",
+        "eventDateTime": "19 Sep 2026 20:47 BRT",
+        "facilityName": "Santos Brazil",
+        "facilityCode": "SSZ06",
+        "portName": "Porto de Santos",
+        "city": "Santos",
+        "stage": "Ocean",
+        "transportMode": "Vessel"
+       },
+       {
+        "eventName": "Arrival",
+        "eventDateTime": "19 Sep 2026 11:34 BRT",
+        "facilityName": "Santos Brazil",
+        "facilityCode": "SSZ06",
+        "portName": "Porto de Santos",
+        "city": "Santos",
+        "stage": "Ocean",
+        "transportMode": "Vessel"
+       },
+       {
+        "eventName": "Departure",
+        "eventDateTime": "21 Aug 2026 15:34 CST",
+        "facilityName": "Yantian Port",
+        "facilityCode": "YAT01",
+        "portName": "Yantian",
+        "city": "Yantian",
+        "stage": "Ocean",
+        "transportMode": "Vessel"
+       },
+       {
+        "eventName": "Loaded",
+        "eventDateTime": "21 Aug 2026 11:04 CST",
+        "facilityName": "Yantian Port",
+        "facilityCode": "YAT01",
+        "portName": "Yantian",
+        "city": "Yantian",
+        "stage": "Ocean",
+        "transportMode": "Vessel"
+       },
+       {
+        "eventName": "Gate In",
+        "eventDateTime": "13 Aug 2026 10:33 CST",
+        "facilityName": "Yantian Port",
+        "facilityCode": "YAT01",
+        "portName": "Yantian",
+        "city": "Yantian,Shenzhen, Guangdong, China",
+        "stage": "Outbound",
+        "transportMode": "Truck"
+       },
+       {
+        "eventName": "Empty Pick Up",
+        "eventDateTime": "11 Aug 2026 11:02 CST",
+        "facilityName": "Shenzhen Yu Peng Container Service Co., Ltd, Yantian Depot",
+        "facilityCode": "YAT13",
+        "portName": "Yantian",
+        "city": "Yantian,Shenzhen, Guangdong, China",
+        "stage": "Outbound",
+        "transportMode": "Truck"
+       }
+      ]
+     },
+     {
+      "containerNumber": "CSGU779110",
+      "containerNumberWithCheckDigit": "CSGU7791100",
+      "cntrSizeType": "40HQ",
+      "milestoneEventList": [
+       {
+        "eventName": "Empty Return",
+        "eventDateTime": "06 Oct 2026 17:23 BRT",
+        "facilityName": "LECHMAN TERMINAIS EIRELLI",
+        "facilityCode": "SSZ19",
+        "portName": null,
+        "city": "Santos,Sao Paulo, Brazil",
+        "stage": "Inbound",
+        "transportMode": "Truck"
+       },
+       {
+        "eventName": "Gate Out",
+        "eventDateTime": "20 Sep 2026 17:43 BRT",
+        "facilityName": "Santos Brazil",
+        "facilityCode": "SSZ06",
+        "portName": null,
+        "city": "Santos,Sao Paulo, Brazil",
+        "stage": "Inbound",
+        "transportMode": "Truck"
+       },
+       {
+        "eventName": "Discharged",
+        "eventDateTime": "19 Sep 2026 15:53 BRT",
+        "facilityName": "Santos Brazil",
+        "facilityCode": "SSZ06",
+        "portName": "Porto de Santos",
+        "city": "Santos",
+        "stage": "Ocean",
+        "transportMode": "Vessel"
+       },
+       {
+        "eventName": "Arrival",
+        "eventDateTime": "19 Sep 2026 11:34 BRT",
+        "facilityName": "Santos Brazil",
+        "facilityCode": "SSZ06",
+        "portName": "Porto de Santos",
+        "city": "Santos",
+        "stage": "Ocean",
+        "transportMode": "Vessel"
+       },
+       {
+        "eventName": "Departure",
+        "eventDateTime": "21 Aug 2026 15:34 CST",
+        "facilityName": "Yantian Port",
+        "facilityCode": "YAT01",
+        "portName": "Yantian",
+        "city": "Yantian",
+        "stage": "Ocean",
+        "transportMode": "Vessel"
+       },
+       {
+        "eventName": "Loaded",
+        "eventDateTime": "21 Aug 2026 12:40 CST",
+        "facilityName": "Yantian Port",
+        "facilityCode": "YAT01",
+        "portName": "Yantian",
+        "city": "Yantian",
+        "stage": "Ocean",
+        "transportMode": "Vessel"
+       },
+       {
+        "eventName": "Gate In",
+        "eventDateTime": "13 Aug 2026 08:09 CST",
+        "facilityName": "Yantian Port",
+        "facilityCode": "YAT01",
+        "portName": "Yantian",
+        "city": "Yantian,Shenzhen, Guangdong, China",
+        "stage": "Outbound",
+        "transportMode": "Truck"
+       },
+       {
+        "eventName": "Empty Pick Up",
+        "eventDateTime": "11 Aug 2026 12:32 CST",
+        "facilityName": "Shenzhen Yu Peng Container Service Co., Ltd, Yantian Depot",
+        "facilityCode": "YAT13",
+        "portName": "Yantian",
+        "city": "Yantian,Shenzhen, Guangdong, China",
+        "stage": "Outbound",
+        "transportMode": "Truck"
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "containerList": []
+ }
+}

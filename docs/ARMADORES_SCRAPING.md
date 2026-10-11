@@ -96,7 +96,7 @@ Legenda **Anti-bot**: 🔴 Cloudflare interativo · 🟠 aceite/anti-bot leve ·
 | `evergreen` | Evergreen (ShipmentLink) | EGLV, EVGL, EMCU | Servlet (driver dedicado: radio B/L + input#NO + Submit) | 🟠 | ✅ histórico completo via popup "Container Move Detail" por contêiner (validado 10/10, EGSU8138081) |
 | `zim` | ZIM | ZIMU | SPA React (cartões em DIV) | `?consnumber=` (BL ou contêiner) | 🔴 Akamai | ✅ **API de Scrape da Scrapfly com ASP** (`fetchVia: scrapfly_api`, 260–470 créditos, ~1–4 min) + parser `zim.ts`; validado 10/10 (ZIMUTRT938698) |
 | `pil` | Pacific Int. Lines | PABV, NNPL, PILU | Página + form | `?...&refNo=` | 🟢 | ✅ (histórico completo via Trace, validado ao vivo; data com `*` = previsão, descartada) |
-| `oocl` | OOCL | OOLU | SCCT (Vue) + Cloudflare + slider CargoSmart | `?trackingType=BILLOFLADING&number=` | 🔴 | ⬜ pela API da Scrapfly o Cloudflare passa e a sessão abre; falta o captcha de arrastar (cs_captcha, 2 canvas) |
+| `oocl` | OOCL | OOLU | SCCT (Vue) + Cloudflare + captcha de girar CargoSmart | `www.oocl.com/Pages/ExpressLink.aspx?eltype=ct&businessType=blNumber&businessNumber=` (emite o ticket) | 🔴 | ✅ navegador remoto (saída `us`) + resolvedor nativo da Scrapfly (`cs_captcha_rotation`, ~5 s) + histórico completo lido do store do app; validado 11/10 (B/L 2335731403, ~35 s) |
 
 > Detecção (ref → armador) e a URL de rastreio **já funcionam para os 12**. O que
 > falta nos ⬜ é só o tradutor do DOM — capturado quando tivermos um nº real.
@@ -116,9 +116,19 @@ Hapag · Maersk · ONE · COSCO · PIL · HMM · Evergreen · MSC · Yang Ming
 - **CMA (DataDome):** o DataDome **não apareceu** — portal renderizou inteiro (1 MB,
   "CMA CGM | Shipment Tracking"). Driver do form escrito (`drivers.ts:cma`:
   `#Reference` + `#btnTracking`). Falta uma rodada limpa p/ tirar o `scrapeBlocked`.
-- **OOCL (Cloudflare Turnstile):** **furado** com `target_url` + `solve_captcha`
-  (title virou "OOCL - Control Tower", 208 KB do app Vue). Falta validar a correção
-  de não-renavegar (o `page.goto()` extra invalidava a sessão → `/moc/error`).
+- **OOCL — ✅ resolvido em 11/10.** Três descobertas, lidas no JS do próprio app:
+  1. A consulta (`/moc-cargo-tracking/summary`) manda dois cabeçalhos: `X-CT-Captcha`
+     (token do captcha) e **`X-CT-Ticket`**, que vem de `?ticket=` na URL. Quem emite o
+     ticket é o **ExpressLink do oocl.com** (o botão "Cargo Tracking" da home), que
+     redireciona para `pbcontroltower…/cargoTracking?ticket=…`; o servidor sabe QUAL BL
+     consultar pelo ticket (o corpo vai `{}`). Abrir o pbcontroltower direto = 400
+     "Missing ticket" → "This Page Has Expired", mesmo com o captcha resolvido.
+  2. O pool residencial sorteia o país e já saiu em **Moscou** → Cloudflare da OOCL
+     barrou ("Your IP is being restricted"). Agora `proxyCountry: 'us'`.
+  3. A tela mostra só o último evento por contêiner; a resposta inteira fica no store
+     Pinia (`mocCargoTrackingStore`) → `readOoclStore` → `extractOoclStoreEvents`.
+  O captcha de girar é resolvido pelo resolvedor nativo da Scrapfly, ligado pela página
+  (`Antibot.captchaEnable`), uma vez só (dois resolvedores juntos brigavam).
 
 > **A descoberta que destravou os dois** (lendo a fonte do `scrapfly-sdk`): `unblock=true`
 > sozinho é **no-op**. O bypass ASP é uma navegação que o PRÓPRIO Scrapfly faz no setup
@@ -139,7 +149,8 @@ Hapag · Maersk · ONE · COSCO · PIL · HMM · Evergreen · MSC · Yang Ming
 | Evergreen | form dedicado (radio B/L + `#NO` + Submit) | `drivers.ts:shipmentlink` | HTML (tabela contêineres) |
 | MSC | form Alpine (ícone busca) | `drivers.ts:msc` | **JSON da API** — da rede ou, se não vier, do estado Alpine; reserva: DOM `x-text` |
 | Yang Ming | form (genérico já submete) | genérico | HTML `Container Status` |
-| CMA / OOCL | — | — | **API oficial** (scraping bloqueado) |
+| CMA | — | cenário da API da Scrapfly | HTML (parser `cma`) |
+| OOCL | ExpressLink (ticket) | captcha nativo Scrapfly | **store do app** (`extractOoclStoreEvents`) |
 | ZIM | — | `drivers.ts:zim` (parado) | — |
 
 > **Regra geral de custo:** deep link (1 navegação, resultado auto-carregado) é mais
@@ -166,7 +177,8 @@ Logo, gastar menos = **menos sessões**, **sessões mais curtas** e **menos band
      (`BOT_RESULT_TTL_HOURS`) p/ pegar retirada/devolução.
    - **Resolvido** (todos devolvidos, `isResolved`): **nunca mais raspa** (cache
      eterno). Maior corte numa carteira com muitos embarques fechados.
-3. **`scrapeBlocked`** (CMA/OOCL/ZIM): a produção **nem abre sessão** — "use API".
+3. **`scrapeBlocked`**: a produção **nem abre sessão** — "use API". (Nenhum armador
+   segue marcado: CMA/ZIM saíram em 10/10, OOCL em 11/10.)
    **Zero crédito** em falha garantida.
 4. **Bloqueio de recursos pesados** (`blockHeavyResources`): aborta **imagens/mídia/
    fontes** no navegador — corta **banda** E encurta a sessão (menos blocos de 30s).

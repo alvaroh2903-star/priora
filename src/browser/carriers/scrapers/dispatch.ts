@@ -5,7 +5,7 @@ import { extractMaerskEvents } from './maersk';
 import { extractOneEvents, extractOneSummaryEvents, ONE_SUMMARY_RE } from './one';
 import { extractCoscoEvents } from './cosco';
 import { extractPilEvents } from './pil';
-import { extractOoclEvents, OOCL_PORTAL_RE } from './oocl';
+import { extractOoclEvents, extractOoclStoreEvents, OOCL_PORTAL_RE } from './oocl';
 import { extractCmaEvents } from './cma';
 import { extractHmmEvents } from './hmm';
 import { extractEvergreenEvents } from './evergreen';
@@ -26,6 +26,12 @@ import { extractYangMingEvents, extractYangMingDetailEvents, isYangMingDetailPag
  * fonte mais limpa/robusta ("nossa própria API").
  */
 export function extractCarrierEvents(html: string, apiJson?: string): TrackingEvent[] {
+  // OOCL — store do app (resposta da consulta inteira, com o histórico de cada
+  // contêiner). Assinatura: a chave `ooclStore` que o readOoclStore embrulha.
+  if (apiJson && apiJson.includes('"ooclStore"')) {
+    const o = extractOoclStoreEvents(apiJson);
+    if (o.length) return o;
+  }
   // MSC — JSON da API interna (Data.BillOfLadings[].ContainersInfo[].Events[]).
   // Preferido ao DOM Alpine, que é só template.
   if (apiJson) {

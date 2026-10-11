@@ -1,5 +1,8 @@
-import { extractOoclEvents } from './oocl';
+import { readFileSync } from 'fs';
+import { join } from 'path';
+import { extractOoclEvents, extractOoclStoreEvents } from './oocl';
 import { deriveContainers } from './hapag';
+import { extractCarrierEvents } from './dispatch';
 
 /**
  * Priora — Self-test OFFLINE do parser DEDICADO da OOCL (SCCT pbcontroltower).
@@ -56,6 +59,34 @@ function main(): void {
   check('descarga = 2026-08-18', c?.dischargeDate === '2026-08-18', c?.dischargeDate);
   check('retirada = 2026-08-26', c?.gateOut === '2026-08-26', c?.gateOut);
   check('devolução = 2026-08-28', c?.emptyReturn === '2026-08-28', c?.emptyReturn);
+
+  // Store REAL do app (11/10, B/L 2335731403 pelo ExpressLink): resposta da
+  // consulta inteira, 2 contêineres com o histórico completo.
+  console.log('[selftest] extractOoclStoreEvents — store do app (JSON real)');
+  const store = readFileSync(join(__dirname, '..', 'fixtures', 'oocl-store.json'), 'utf8');
+  const se = extractOoclStoreEvents(store);
+  check('16 eventos (8 por contêiner)', se.length === 16, se.length);
+  check('dispatcher escolhe o store', extractCarrierEvents('<html></html>', store).length === 16);
+  const byCnt = (n: string) => se.filter((e) => e.container === n);
+  check('CSGU7796499 e CSGU7791100', byCnt('CSGU7796499').length === 8 && byCnt('CSGU7791100').length === 8);
+  check('tipo 40HQ', se.every((e) => e.tipo === '40HQ'));
+  const sdisc = se.find((e) => e.container === 'CSGU7796499' && e.type === 'discharge');
+  check('navio na descarga = COSCO SHIPPING RHINE 042W', sdisc?.vessel === 'COSCO SHIPPING RHINE' && sdisc?.voyage === '042W', sdisc);
+  check('Empty Pick Up (origem) NÃO é retirada', se.filter((e) => e.type === 'gate_out').every((e) => /Santos/.test(e.location || '')));
+  const cs = deriveContainers(se, null);
+  const c1 = cs.find((c) => c.numero === 'CSGU7796499');
+  const c2 = cs.find((c) => c.numero === 'CSGU7791100');
+  console.log('    contêineres:', JSON.stringify(cs));
+  check('CSGU7796499: descarga 19/09, retirada 20/09, devolução 06/10',
+    c1?.dischargeDate === '2026-09-19' && c1?.gateOut === '2026-09-20' && c1?.emptyReturn === '2026-10-06', c1);
+  check('CSGU7791100: descarga 19/09, retirada 20/09, devolução 06/10',
+    c2?.dischargeDate === '2026-09-19' && c2?.gateOut === '2026-09-20' && c2?.emptyReturn === '2026-10-06', c2);
+  check('store vazio → 0 eventos', extractOoclStoreEvents('{"ooclStore":{"summaryList":[]}}').length === 0);
+  check('JSON inválido → 0 eventos', extractOoclStoreEvents('{nao é json').length === 0);
+
+  console.log('[selftest] tabela "B/L Information" não vira evento');
+  const blInfo = '<span>pbcontroltower</span><h2>B/L Information</h2><table><tr><td>2335731403</td><td>Held at 21 Aug 2026 07:55 GMT</td><td>Not Cleared</td><td>COSCO SHIPPING RHINE 042 W</td></tr></table>';
+  check('0 eventos da tabela de liberação', extractOoclEvents(blInfo).length === 0, extractOoclEvents(blInfo));
 
   console.log('[selftest] guarda de assinatura — HTML não-OOCL → vazio');
   check('sem oocl/pbcontroltower → 0 eventos', extractOoclEvents('<table><tr><td>Discharged</td><td>18 Aug 2026</td></tr></table>').length === 0);

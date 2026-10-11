@@ -38,9 +38,84 @@ function rowCells(rowHtml: string): string[] {
   return cells;
 }
 
+/** Um evento de `milestoneEventList` do store da OOCL (só os campos que usamos). */
+interface OoclMilestone {
+  eventName?: string | null;
+  eventDateTime?: string | null;
+  facilityName?: string | null;
+  facilityCode?: string | null;
+  portName?: string | null;
+  city?: string | null;
+  stage?: string | null;
+  transportMode?: string | null;
+}
+
+interface OoclVesselInfo {
+  vesselName?: string | null;
+  externalVoyage?: string | null;
+}
+
+/**
+ * Eventos a partir do store do app (`{ ooclStore: { summaryList } }`, lido por
+ * readOoclStore no navegador). É a resposta da consulta inteira:
+ * `summaryList[].containerList[].milestoneEventList[]` (eventName, eventDateTime
+ * "19 Sep 2026 20:47 BRT", facilityName, city, stage, transportMode) — histórico
+ * COMPLETO por contêiner, que a tela só mostra atrás de "Expand". Navio/viagem
+ * saem de `routes[].vesselInfo`, casados pelo terminal (facilityCode) do evento.
+ * Visto ao vivo em 11/10 (B/L 2335731403, CSGU7796499/CSGU7791100).
+ */
+export function extractOoclStoreEvents(apiJson: string): TrackingEvent[] {
+  const out: TrackingEvent[] = [];
+  let summaries: Array<Record<string, unknown>> = [];
+  try {
+    summaries = (JSON.parse(apiJson) as { ooclStore?: { summaryList?: Array<Record<string, unknown>> } }).ooclStore?.summaryList || [];
+  } catch {
+    return out;
+  }
+  const seen = new Set<string>();
+  for (const s of summaries) {
+    // Terminal → navio/viagem da perna marítima (só eventos de navio recebem).
+    const vesselByFacility = new Map<string, OoclVesselInfo>();
+    for (const r of (s.routes as Array<{ facilityCode?: string | null; vesselInfo?: OoclVesselInfo | null }>) || []) {
+      if (r.facilityCode && r.vesselInfo?.vesselName) vesselByFacility.set(r.facilityCode, r.vesselInfo);
+    }
+    const containers = (s.containerList as Array<Record<string, unknown>>) || [];
+    for (const c of containers) {
+      const numero = String(c.containerNumberWithCheckDigit || c.containerNumber || '').toUpperCase() || null;
+      const tipo = (c.cntrSizeType as string) || null;
+      for (const e of (c.milestoneEventList as OoclMilestone[]) || []) {
+        const status = (e.eventName || '').trim();
+        const date = parseDateToISO(e.eventDateTime || '');
+        if (!status || !date) continue;
+        const location = [e.facilityName, e.city].filter(Boolean).join(' — ') || e.portName || null;
+        const vi = /vessel/i.test(e.transportMode || '') && e.facilityCode ? vesselByFacility.get(e.facilityCode) : undefined;
+        const key = `${numero}|${date}|${status}|${location}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({
+          date,
+          status,
+          location,
+          vessel: vi?.vesselName || null,
+          voyage: vi?.externalVoyage || null,
+          type: classifyEvent(status),
+          container: numero,
+          tipo,
+        });
+      }
+    }
+  }
+  return out;
+}
+
 export function extractOoclEvents(html: string): TrackingEvent[] {
   const out: TrackingEvent[] = [];
   if (!OOCL_PORTAL_RE.test(html)) return out;
+  // A tabela "B/L Information" (liberação/alfândega: "Held at 21 Aug 2026 …")
+  // NÃO é de eventos — lida como tal, virava um evento falso com o navio no
+  // lugar do status (visto ao vivo em 11/10). Corta a página antes dela.
+  const blInfo = html.search(/B\/L\s*Information/i);
+  if (blInfo > 0) html = html.slice(0, blInfo);
 
   const seen = new Set<string>();
   let current: string | null = null;
