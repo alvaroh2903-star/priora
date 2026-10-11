@@ -947,6 +947,9 @@ export async function driveTrackingPage(
   // a while") — visto ao vivo: captcha resolvido e, na espera parada pelo
   // resultado, a página caía em /moc/error. Mexe o mouse de leve (como quem olha
   // a tela) até o resultado aparecer, a página de erro vir ou 40 s.
+  // OOCL "No results found" = a consulta foi feita (pelo ticket) e o portal
+  // respondeu que não tem o BL — resposta final, não há o que esperar.
+  let ooclNoResults = false;
   if (sliderDiag?.solved) {
     const vp = page.viewportSize() || { width: 1280, height: 800 };
     for (let i = 0; i < 26; i++) {
@@ -957,8 +960,12 @@ export async function driveTrackingPage(
       const body = (await page.innerText('body').catch(() => '')) || '';
       if (/has expired/i.test(body) || /\/error\b/.test(page.url())) break;
       if (/\b[A-Z]{4}\d{7}\b/.test(body) || /container no/i.test(body)) break;
+      if (isOocl && /no results found/i.test(body)) {
+        ooclNoResults = true;
+        break;
+      }
     }
-    mark('pos-captcha');
+    mark(`pos-captcha${ooclNoResults ? ' sem-resultado' : ''}`);
   }
   // Captcha INTERATIVO (reCAPTCHA/hCaptcha/Turnstile) na entrada: resolve via
   // anti-captcha se configurado (no-op rápido quando não há widget). Beneficia
@@ -968,9 +975,11 @@ export async function driveTrackingPage(
   if (findCarrierDriver(page.url())?.entrySolve !== false) {
     await solveCaptchaIfPresent(page, opts.url).catch(() => undefined);
   }
-  await page.waitForSelector(RESULT_SELECTOR, { timeout: 25_000 }).catch(() => {});
-  await page.waitForLoadState('networkidle', { timeout: postWait }).catch(() => {});
-  await page.waitForTimeout(2000); // folga p/ Vue/React hidratar
+  if (!ooclNoResults) {
+    await page.waitForSelector(RESULT_SELECTOR, { timeout: 25_000 }).catch(() => {});
+    await page.waitForLoadState('networkidle', { timeout: postWait }).catch(() => {});
+    await page.waitForTimeout(2000); // folga p/ Vue/React hidratar
+  }
   mark('resultado-esperado');
 
   // A partir daqui os resultados podem estar em OUTRA página (popup) — ex.: o
@@ -984,7 +993,11 @@ export async function driveTrackingPage(
   // Alguns portais desenham a referência como SVG/imagem (ex.: COSCO desenha o BL),
   // então "ref não achada no texto" NÃO significa "sem resultado": se já há um
   // número de contêiner no corpo, os resultados carregaram — pula o retrabalho.
-  if (opts.reference) {
+  // OOCL: a consulta é a do ticket do ExpressLink — a página pública não tem
+  // ticket para buscar de novo pelo formulário (preencher só gastava ~100 s até o
+  // timeout num BL sem resultado, visto em 11/10). Resultado ou "No results
+  // found": em ambos não há o que preencher.
+  if (opts.reference && !ooclNoResults && !isOocl) {
     const body0 = await collectFramesText(page); // varre todos os frames
     const refSeen = body0.toUpperCase().includes(opts.reference.toUpperCase());
     const containerSeen = /\b[A-Z]{4}\d{7}\b/.test(body0);
@@ -1017,6 +1030,8 @@ export async function driveTrackingPage(
     // Espera DETERMINÍSTICA pelos resultados (agnóstico de provedor): só segue
     // quando o conteúdo real apareceu (ref/contêiner) — não por tempo fixo. Vale
     // tanto p/ deep link que auto-carrega quanto p/ form submetido.
+    await waitForResults(activePage, opts.reference).catch(() => undefined);
+  } else if (opts.reference && isOocl && !ooclNoResults) {
     await waitForResults(activePage, opts.reference).catch(() => undefined);
   }
 
