@@ -216,16 +216,18 @@ export const CARRIERS: CarrierMeta[] = [
     scac: ['OOLU'],
     containerPrefixes: ['OOLU', 'OOCU'],
     trackingUrl: 'https://pbcontroltower.digital.oocl.com/scct/public/moc/cargoTracking?language=en',
-    // Deep-link do SCCT da OOCL (mesmo grupo COSCO, domínio pbcontroltower). A
-    // OOCL usa só a PARTE NUMÉRICA do BL (ex.: OOLU2038860350 → 2038860350).
-    // trackingType/number a confirmar ao vivo; layout tem captcha de slider na
-    // entrada (resolvido por CÓDIGO: Scrapfly solve_captcha / anti-captcha).
+    // Entrada pelo ExpressLink do site oocl.com — é o que o botão "Cargo
+    // Tracking" da home chama (DoFindCT_EX, CargoSmart.min.js). Ele EMITE o
+    // "ticket" da consulta e redireciona para pbcontroltower…/cargoTracking?ticket=…;
+    // o app manda o ticket no cabeçalho X-CT-Ticket e o servidor sabe QUAL BL
+    // consultar por ele (o corpo da consulta vai vazio, `{}`). Abrir o
+    // pbcontroltower direto dava 400 "Missing ticket" → "This Page Has Expired",
+    // mesmo com o captcha resolvido (lido no JS do app em 11/10).
+    // BL: só a PARTE NUMÉRICA (OOLU2038860350 → 2038860350), como na home.
     buildTrackingUrl: (ref, type) => {
-      const num = ref.replace(/^OOLU/i, '');
-      const tt = type === 'container' ? 'CONTAINER' : 'BILLOFLADING';
-      return `https://pbcontroltower.digital.oocl.com/scct/public/moc/cargoTracking?language=en&trackingType=${tt}&number=${encodeURIComponent(
-        num,
-      )}`;
+      const bt = type === 'container' ? 'containerNumber' : type === 'booking' ? 'bookingNumber' : 'blNumber';
+      const num = type === 'container' ? ref.toUpperCase() : ref.replace(/^OOLU/i, '');
+      return `https://www.oocl.com/Pages/ExpressLink.aspx?eltype=ct&businessType=${bt}&businessNumber=${encodeURIComponent(num)}&language=en`;
     },
     needsLoginForDemurrage: true,
     needsScrapingBrowser: true, // SPA SCCT + captcha slider → navegador remoto (Scrapfly).
