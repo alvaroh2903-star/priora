@@ -17,6 +17,10 @@ import {
   processarAvisosFallbackManualPendentes, AvisoFallbackManualTransport,
 } from '../demurrage-engine/registro/avisosFallbackManual';
 import { criarAvisoFallbackManualTransportGraph } from './avisoFallbackManualTransportGraph';
+import {
+  processarAvisosPendenciaPendentes, AvisoPendenciaTransport,
+} from '../demurrage-engine/registro/notificacaoPendencia';
+import { criarAvisoPendenciaTransportGraph } from './avisoPendenciaTransportGraph';
 
 export interface TickDeps {
   pool: Pool;
@@ -28,12 +32,16 @@ export interface TickDeps {
   workerId?: string;
   /** D10 v1.3 — transporte dos avisos de fallback manual (ausente → entregas ficam PENDING, reprocessáveis). */
   fallbackAvisoTransport?: AvisoFallbackManualTransport;
-  /** D10 v1.3 — limites por ciclo das duas etapas de manutenção. */
-  limites?: { posCommit?: number; avisosFallback?: number };
+  /** D15-B v1.1 — transporte dos avisos de pendência (R07/R08; ausente → entregas ficam PENDING, reprocessáveis). */
+  avisoPendenciaTransport?: AvisoPendenciaTransport;
+  /** D10 v1.3 / D15-B v1.1 — limites por ciclo das etapas de manutenção. */
+  limites?: { posCommit?: number; avisosFallback?: number; avisosPendencia?: number };
   /** SÓ TESTE: substitui o consumidor da etapa (ex.: simular falha da etapa inteira). */
   processarPosCommit?: typeof processarPosCommitOutboxPendentes;
   /** SÓ TESTE: substitui o consumidor da etapa (ex.: simular falha da etapa inteira). */
   processarAvisosFallback?: typeof processarAvisosFallbackManualPendentes;
+  /** SÓ TESTE: substitui o consumidor da etapa (ex.: simular falha da etapa inteira). */
+  processarAvisosPendencia?: typeof processarAvisosPendenciaPendentes;
 }
 
 /** Contadores da etapa de reparo automático do pós-commit do registro (D10 v1.3). */
@@ -50,6 +58,19 @@ export interface EtapaPosCommitResultado {
 
 /** Contadores da etapa de envio dos avisos de fallback manual (D10 v1.3). */
 export interface EtapaAvisosFallbackResultado {
+  reivindicadas: number;
+  enviadas: number;
+  falhadas: number;
+  possePerdida: number;
+  restantes: number | null;
+  esgotadas: number | null;
+  /** true quando nenhum transporte foi configurado (entregas seguem PENDING). */
+  semTransporte: boolean;
+  erro: string | null;
+}
+
+/** Contadores da etapa de envio dos avisos de pendência — R07/R08 (D15-B v1.1). */
+export interface EtapaAvisosPendenciaResultado {
   reivindicadas: number;
   enviadas: number;
   falhadas: number;
@@ -106,6 +127,32 @@ async function etapaAvisosFallback(deps: TickDeps, workerId: string): Promise<Et
   }
 }
 
+/**
+ * D15-B v1.1 — consumo automático da fila de avisos de PENDÊNCIA (R07/R08).
+ * Mesma forma e mesmo isolamento de `etapaAvisosFallback`: roda DEPOIS das
+ * etapas pré-existentes (incluindo `etapaAvisosFallback`), com a própria
+ * fronteira de erro — uma falha aqui nunca impede tracking, calendário,
+ * claims nem qualquer outra etapa/outbox deste tick.
+ */
+async function etapaAvisosPendencia(deps: TickDeps, workerId: string): Promise<EtapaAvisosPendenciaResultado> {
+  const vazio = { reivindicadas: 0, enviadas: 0, falhadas: 0, possePerdida: 0 };
+  if (!deps.avisoPendenciaTransport) {
+    return { ...vazio, restantes: null, esgotadas: null, semTransporte: true, erro: null };
+  }
+  try {
+    const r = await (deps.processarAvisosPendencia ?? processarAvisosPendenciaPendentes)({
+      pool: deps.pool, transport: deps.avisoPendenciaTransport, workerId, limite: deps.limites?.avisosPendencia ?? 50,
+    });
+    return {
+      reivindicadas: r.reivindicadas, enviadas: r.enviadas, falhadas: r.falhadas, possePerdida: r.possePerdida,
+      restantes: r.restantes, esgotadas: r.esgotadas, semTransporte: false, erro: null,
+    };
+  } catch (e) {
+    console.error('[demurrage-scheduler] etapa avisos-pendencia falhou (isolada):', mensagemErro(e));
+    return { ...vazio, restantes: null, esgotadas: null, semTransporte: false, erro: mensagemErro(e) };
+  }
+}
+
 export interface TickResultado {
   /** A ÚNICA data civil operacional usada por TODAS as etapas do tick. */
   hoje: CivilDate;
@@ -131,6 +178,8 @@ export interface TickResultado {
   posCommit: EtapaPosCommitResultado;
   /** D10 v1.3 — avisos de fallback manual aos gestores. */
   avisosFallback: EtapaAvisosFallbackResultado;
+  /** D15-B v1.1 — avisos de pendência aos gestores (R07/R08). */
+  avisosPendencia: EtapaAvisosPendenciaResultado;
 }
 
 /**
@@ -143,7 +192,7 @@ export async function executarTickDemurrage(deps: TickDeps, hojeInjetado?: Civil
   const hoje = hojeInjetado ?? hojeOperacional(); // fuso local, nunca UTC.
   const workerId = deps.workerId ?? `tick-${process.pid}`;
   // Etapas existentes: INALTERADAS (mesma ordem, mesma propagação de erro).
-  let base: Omit<TickResultado, 'posCommit' | 'avisosFallback'> | null = null;
+  let base: Omit<TickResultado, 'posCommit' | 'avisosFallback' | 'avisosPendencia'> | null = null;
   let erroBase: unknown = null;
   try {
     const cal = await passagemDoCalendario(deps.pool, hoje);
@@ -167,13 +216,16 @@ export async function executarTickDemurrage(deps: TickDeps, hojeInjetado?: Civil
   } catch (e) {
     erroBase = e;
   }
-  // D10 v1.3 — manutenção das filas do registro: SEMPRE roda, mesmo se uma
-  // etapa anterior (ex.: tracking) falhou neste tick; cada etapa é isolada e
-  // nunca lança. Reparo recebe o MESMO `hoje` do tick.
+  // D10 v1.3 / D15-B v1.1 — manutenção das filas do registro: SEMPRE roda,
+  // mesmo se uma etapa anterior (ex.: tracking) falhou neste tick; cada
+  // etapa é isolada e nunca lança. Reparo recebe o MESMO `hoje` do tick.
+  // `avisosPendencia` roda DEPOIS das etapas pré-existentes, com sua própria
+  // fronteira de erro (Achado bloqueante 1, D15-B v1.1).
   const posCommit = await etapaPosCommit(deps, hoje, workerId);
   const avisosFallback = await etapaAvisosFallback(deps, workerId);
+  const avisosPendencia = await etapaAvisosPendencia(deps, workerId);
   if (erroBase) throw erroBase; // comportamento pré-existente preservado: o tick reporta o erro ao laço
-  return { ...base!, posCommit, avisosFallback };
+  return { ...base!, posCommit, avisosFallback, avisosPendencia };
 }
 
 /** Linha de log de um tick (inclui os contadores das etapas da D10 v1.3). */
@@ -190,7 +242,11 @@ export function formatarLogTick(t: TickResultado): string {
       `avisos-fallback: reivindicadas=${t.avisosFallback.reivindicadas} enviadas=${t.avisosFallback.enviadas} ` +
       `falhadas=${t.avisosFallback.falhadas} possePerdida=${t.avisosFallback.possePerdida} ` +
       `restantes=${t.avisosFallback.restantes ?? '?'} esgotadas=${t.avisosFallback.esgotadas ?? '?'}` +
-      `${t.avisosFallback.erro ? ` ERRO=${t.avisosFallback.erro}` : ''}`
+      `${t.avisosFallback.erro ? ` ERRO=${t.avisosFallback.erro}` : ''} | ` +
+      `avisos-pendencia: reivindicadas=${t.avisosPendencia.reivindicadas} enviadas=${t.avisosPendencia.enviadas} ` +
+      `falhadas=${t.avisosPendencia.falhadas} possePerdida=${t.avisosPendencia.possePerdida} ` +
+      `restantes=${t.avisosPendencia.restantes ?? '?'} esgotadas=${t.avisosPendencia.esgotadas ?? '?'}` +
+      `${t.avisosPendencia.erro ? ` ERRO=${t.avisosPendencia.erro}` : ''}`
   );
 }
 
@@ -219,9 +275,10 @@ export function iniciarSchedulerDemurrage(opts: { intervalMs?: number } = {}): S
   const transport = criarGraphAlertTransport({ resolverDestinatarios: resolverDestinatariosPorEnv() });
   const avisoTransport = criarAvisoDivergenciaTransportGraph();
   const fallbackAvisoTransport = criarAvisoFallbackManualTransportGraph();
+  const avisoPendenciaTransport = criarAvisoPendenciaTransportGraph();
 
   const tick = async (): Promise<void> => {
-    const t = await executarTickDemurrage({ pool, port, transport, avisoTransport, fallbackAvisoTransport });
+    const t = await executarTickDemurrage({ pool, port, transport, avisoTransport, fallbackAvisoTransport, avisoPendenciaTransport });
     console.log(formatarLogTick(t));
   };
 
