@@ -231,6 +231,7 @@ export const CARRIERS: CarrierMeta[] = [
     needsScrapingBrowser: true, // SPA SCCT + captcha slider → navegador remoto (Scrapfly).
     scrapeBlocked: true, // Cloudflare + captcha de slider (CargoSmart/AJ-Captcha) comportamental — economiza crédito.
     pool: 'residential_unblock', // quando abre sessão (diagnóstico): residential + Unblock (Cloudflare+slider).
+    proxyCountry: 'us', // sorteado, o pool já saiu em Moscou — barrado pelo Cloudflare da OOCL.
     notes: 'SCCT em pbcontroltower.digital.oocl.com. Parser DEDICADO scrapers/oocl.ts (Event|Time|Location|Stage|Transport). BLOQUEIO: Cloudflare + slider CargoSmart (comportamental) — scrapeBlocked (produção não abre sessão). API oficial recomendada.',
   },
 ];

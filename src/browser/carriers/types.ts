@@ -175,6 +175,12 @@ export interface CarrierMeta {
    */
   pool?: PoolMode;
   /**
+   * País (ISO de 2 letras) da saída do proxy da Scrapfly para ESTE armador.
+   * Ausente = o pool sorteia — e já saiu IP de Moscou, que a OOCL barra de cara
+   * ("Your IP is being restricted", 10/10). Diagnóstico aceita override `?country=`.
+   */
+  proxyCountry?: string;
+  /**
    * Como buscar a página: 'browser' (padrão — navegador remoto + motor próprio)
    * ou 'scrapfly_api' (API de Scrape da Scrapfly com ASP, a navegação inteira do
    * lado dela). Para portais cujo anti-bot barra o navegador na 2ª camada (ZIM).

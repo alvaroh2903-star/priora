@@ -89,6 +89,24 @@ function withResidentialPool(wss: string): string {
   }
 }
 
+/**
+ * Fixa o PAÍS da saída do proxy numa URL wss:// da Scrapfly (`country=`). Sem
+ * isso o pool residencial sorteia o país — e a OOCL barrou um IP de Moscou.
+ * Só mexe em URL da Scrapfly e só com código ISO de 2 letras.
+ */
+function withCountry(wss: string, country?: string): string {
+  if (!country || !/^[a-z]{2}$/i.test(country)) return wss;
+  try {
+    const u = new URL(wss);
+    const isScrapfly = u.searchParams.has('api_key') || u.searchParams.has('proxy_pool') || /scrapfly/i.test(u.host);
+    if (!isScrapfly) return wss;
+    u.searchParams.set('country', country.toLowerCase());
+    return u.toString();
+  } catch {
+    return wss;
+  }
+}
+
 /** Nome do provedor CDP ativo (p/ diagnóstico). */
 export function scrapeBrowserProvider(): string {
   if (getGenericWss() || getGenericWssHeavy()) return 'custom-wss';
@@ -178,6 +196,8 @@ export interface ConnectOptions {
   targetUrl?: string;
   /** Onde ligar o resolvedor de captcha da Scrapfly (ver AntibotMode). */
   antibotMode?: AntibotMode;
+  /** País (ISO 2 letras) da saída do proxy da Scrapfly (ver withCountry). */
+  country?: string;
 }
 
 /**
@@ -203,7 +223,8 @@ export async function connectSB(opts: ConnectOptions = {}): Promise<Browser> {
   if (!isSBConfigured()) {
     throw new Error('Cloud browser não configurado (defina SCRAPE_BROWSER_WSS ou BRIGHTDATA_SB_AUTH).');
   }
-  return chromium.connectOverCDP(buildWSEndpoint(opts.pool, opts.targetUrl, opts.antibotMode), { timeout: 30_000 });
+  const wss = withCountry(buildWSEndpoint(opts.pool, opts.targetUrl, opts.antibotMode), opts.country);
+  return chromium.connectOverCDP(wss, { timeout: 30_000 });
 }
 
 export interface SBScrapeOptions {
@@ -253,6 +274,8 @@ export interface SBScrapeOptions {
   collectDetails?: boolean;
   /** DIAGNÓSTICO: onde ligar o resolvedor de captcha da Scrapfly (ver AntibotMode). */
   antibotMode?: AntibotMode;
+  /** País (ISO 2 letras) da saída do proxy da Scrapfly (ver ConnectOptions.country). */
+  country?: string;
 }
 
 export type BlockMode = 'media' | 'all' | 'none';
@@ -1113,6 +1136,7 @@ export async function driveTrackingPage(
       ...(lastAkamaiDiag ? { akamai: lastAkamaiDiag } : {}),
       ...(sliderDiag ? { slider: sliderDiag } : {}),
       ...(isOocl ? { antibotMode } : {}),
+      ...(opts.country ? { country: opts.country } : {}),
       ...(antibot.enabled || antibot.error ? { antibot } : {}),
       ...(captchaNet.length ? { captchaNet, navStartedAt } : {}),
       landedUrl: activePage.url(),
@@ -1138,7 +1162,7 @@ async function scrapeViaSBOnceInSlot(opts: SBScrapeOptions): Promise<SBScrapeRes
   try {
     // `targetUrl` = a URL que vamos abrir: no pool de unblock é o ALVO do bypass
     // ASP que o Scrapfly faz ANTES de nos devolver a sessão (ver withUnblockMode).
-    browser = await connectSB({ pool: opts.pool, targetUrl: opts.url, antibotMode: opts.antibotMode });
+    browser = await connectSB({ pool: opts.pool, targetUrl: opts.url, antibotMode: opts.antibotMode, country: opts.country });
     // Reusa o contexto E a página que o provedor já entrega (Scrapfly gerencia o
     // fingerprint na sessão) — criar contexto/página novos pode perdê-lo.
     const context = browser.contexts()[0] || (await browser.newContext());

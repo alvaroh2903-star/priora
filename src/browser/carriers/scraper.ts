@@ -171,7 +171,7 @@ export async function scrapeCarrier(
     // `targetUrl` arma o bypass ASP do Scrapfly no pool de unblock (CMA/OOCL/ZIM):
     // é o Scrapfly que navega até o portal e vence o anti-bot ANTES de nos
     // entregar a sessão. Nos outros pools é ignorado.
-    useRemote ? withRemotePage(fn, { pool, targetUrl: sourceUrl }) : withPage(fn);
+    useRemote ? withRemotePage(fn, { pool, targetUrl: sourceUrl, country: carrier.proxyCountry }) : withPage(fn);
   const specific = SCRAPERS[carrier.id];
 
   try {

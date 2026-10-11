@@ -603,6 +603,8 @@ interface SbDiagParams {
   follow?: string;
   /** Onde ligar o resolvedor de captcha da Scrapfly: `antibot=cdp|url|off`. Ver AntibotMode. */
   antibotMode?: AntibotMode;
+  /** País da saída do proxy da Scrapfly (herda do armador; override `country=xx`). */
+  country?: string;
 }
 
 type DiagParamsResult = { params?: SbDiagParams; error?: { status: number; body: object } };
@@ -633,13 +635,19 @@ function resolveSbDiagParamsFrom(q: Record<string, unknown>): DiagParamsResult {
   // E já herda o POOL do armador detectado (datacenter/residential/+unblock).
   let searchReference = ref || rawUrl;
   let pool: PoolMode = 'datacenter';
+  let country: string | undefined;
   if (ref) {
     const d = detectCarrier(ref);
     if (d.carrier) {
       searchReference = resolveSearchRef(d.carrier, ref, d.referenceType);
       pool = d.carrier.pool ?? 'residential';
+      country = d.carrier.proxyCountry;
     }
   }
+  // country=xx (ISO 2 letras) troca o país da saída; country=any deixa o pool sortear.
+  const countryQ = s('country').toLowerCase();
+  if (/^[a-z]{2}$/.test(countryQ)) country = countryQ;
+  else if (countryQ === 'any') country = undefined;
   // Override manual no diagnóstico: pool=datacenter|residential|residential_unblock
   // (atalhos: dc|res|unblock; legado: heavy=1 → +unblock, heavy=0 → datacenter).
   const poolQ = s('pool').toLowerCase();
@@ -669,7 +677,7 @@ function resolveSbDiagParamsFrom(q: Record<string, unknown>): DiagParamsResult {
   const antibotQ = s('antibot').toLowerCase();
   const antibotMode: AntibotMode | undefined =
     antibotQ === 'cdp' || antibotQ === 'url' || antibotQ === 'off' ? antibotQ : undefined;
-  return { params: { engine, url, searchReference, pool, probe, find, htmlwin, ref, blockMode, follow, antibotMode } };
+  return { params: { engine, url, searchReference, pool, probe, find, htmlwin, ref, blockMode, follow, antibotMode, country } };
 }
 
 function resolveSbDiagParams(req: Request): DiagParamsResult {
@@ -690,6 +698,7 @@ async function runSbDiagnostic(p: SbDiagParams): Promise<{ payload: Record<strin
     blockMode: p.blockMode,
     follow: p.follow,
     antibotMode: p.antibotMode,
+    country: p.country,
   };
   const sb =
     p.engine === 'local'

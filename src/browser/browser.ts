@@ -171,7 +171,7 @@ export async function withPage<T>(
  */
 export async function withRemotePage<T>(
   fn: (page: Page, ctx: BrowserContext) => Promise<T>,
-  opts: { pool?: PoolMode; targetUrl?: string } = {},
+  opts: { pool?: PoolMode; targetUrl?: string; country?: string } = {},
 ): Promise<T> {
   // `opts.pool` escolhe o pool da sessão remota (datacenter/residential/
   // residential_unblock) e `opts.targetUrl` é o alvo do bypass ASP no pool de
