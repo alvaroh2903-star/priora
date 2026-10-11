@@ -693,6 +693,34 @@ function alreadyOnTarget(current: string, target: string): boolean {
   }
 }
 
+/**
+ * Lê do app Vue da OOCL (pbcontroltower) o resultado da consulta guardado no
+ * store `mocCargoTrackingStore`: `cargoTrackingData` (summaryList) e
+ * `cargoTrackingContainerList` (contêineres, com os eventos). Embrulha em
+ * `{ ooclStore: … }` — é a assinatura que o dispatcher usa para reconhecer.
+ */
+async function readOoclStore(page: Page): Promise<string | undefined> {
+  const json = await page.evaluate(() => {
+    const els = [document.querySelector('#scct'), document.querySelector('#app'), ...Array.from(document.querySelectorAll('body > div'))];
+    for (const el of els) {
+      const app = (el as unknown as { __vue_app__?: { config: { globalProperties: Record<string, unknown> } } } | null)?.__vue_app__;
+      const pinia = app?.config.globalProperties.$pinia as { state?: { value?: Record<string, Record<string, unknown>> } } | undefined;
+      const st = pinia?.state?.value?.mocCargoTrackingStore;
+      if (st) {
+        return JSON.stringify({
+          ooclStore: {
+            query: st.cargoTrackingQuery ?? null,
+            summaryList: st.cargoTrackingData ?? [],
+            containerList: st.cargoTrackingContainerList ?? [],
+          },
+        });
+      }
+    }
+    return null;
+  });
+  return json && json.length > 30 ? json : undefined;
+}
+
 export async function driveTrackingPage(
   page: Page,
   opts: SBScrapeOptions,
@@ -1108,6 +1136,15 @@ export async function driveTrackingPage(
       await activePage.waitForTimeout(2500); // folga p/ SPA hidratar o detalhe
       followDiag.urlAfter = activePage.url();
     }
+  }
+
+  // OOCL: o resumo na tela só mostra o ÚLTIMO evento de cada contêiner; o
+  // histórico inteiro já veio na resposta da consulta, que o app guarda no store
+  // (Pinia `mocCargoTrackingStore`). Lê de lá — sem clicar em "Expand" contêiner
+  // por contêiner e sem depender da captura de rede.
+  if (isOocl && !apiJson) {
+    apiJson = await readOoclStore(activePage).catch(() => undefined);
+    mark(`store ${apiJson ? apiJson.length + ' chars' : 'vazio'}`);
   }
 
   // Inventário do formulário (diagnóstico), coletado ENQUANTO a página vive.

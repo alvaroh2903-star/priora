@@ -762,7 +762,7 @@ async function runSbDiagnostic(p: SbDiagParams): Promise<{ payload: Record<strin
         htmlSlice,
         inventory: sb.inventory || undefined,
         diag: sb.diag || undefined,
-        apiJson: sb.apiJson ? sb.apiJson.slice(0, 16000) : undefined,
+        apiJson: sb.apiJson ? sb.apiJson.slice(0, 60000) : undefined,
         apiJsonLen: sb.apiJson ? sb.apiJson.length : undefined,
         error: sb.error || null,
       },
