@@ -508,6 +508,8 @@ async function findAkamaiBehavioralFrame(page: Page): Promise<import('playwright
 
 /** Diagnóstico da última tentativa no desafio do Akamai (vai para o `diag`). */
 let lastAkamaiDiag: Record<string, unknown> | undefined;
+/** Trilha de etapas do último driveTrackingPage (sobrevive a erro/aba fechada). */
+let lastDriveTrace: string[] | undefined;
 
 /**
  * Faz o que uma pessoa faz no desafio do Akamai: marca a caixinha, espera o botão
@@ -786,7 +788,28 @@ export async function driveTrackingPage(
   const initialUrl = page.url();
   const navStartedAt = Date.now();
   lastAkamaiDiag = undefined;
-  const preNavigated = alreadyOnTarget(initialUrl, opts.url);
+  // Trilha de etapas que SOBREVIVE a erro (vai no diag mesmo se a aba fechar).
+  const trace: string[] = [];
+  lastDriveTrace = trace;
+  const mark = (s: string) => {
+    let u = '';
+    try {
+      u = page.url().slice(0, 110);
+    } catch {
+      /* aba fechada */
+    }
+    if (trace.length < 60) trace.push(`${Math.round((Date.now() - navStartedAt) / 100) / 10}s ${s} ${u}`);
+  };
+  page.on('close', () => mark('aba-fechou'));
+  page.on('crash', () => mark('aba-travou'));
+  page.context().on('page', (p) => mark(`aba-nova ${p.url().slice(0, 80)}`));
+  page.context().browser()?.on('disconnected', () => mark('navegador-desconectou'));
+  mark(`inicio initial=${initialUrl.slice(0, 80)}`);
+  // OOCL: o ExpressLink (oocl.com) redireciona para o pbcontroltower com o
+  // ticket. Se o Unblock já fez esse caminho, a aba chega no pbcontroltower —
+  // renavegar gastaria outro ticket e recomeçaria o captcha.
+  const preNavigated =
+    alreadyOnTarget(initialUrl, opts.url) || (isOocl && /pbcontroltower\.digital\.oocl\.com\/scct\/public\/moc\/cargoTracking/i.test(initialUrl));
   if (!preNavigated) {
     try {
       // 'commit' retorna assim que a navegação começa — não trava em SPAs pesadas
@@ -797,10 +820,12 @@ export async function driveTrackingPage(
       navError = (e as Error).message;
     }
   }
+  mark(`navegou${navError ? ' erro=' + navError.slice(0, 60) : ''}`);
 
   // Portais atrás de Cloudflare (ex.: OOCL) mostram um interstitial antes do
   // conteúdo: dá tempo do Scraping Browser resolver o desafio e navegar.
   await waitOutChallenge(page).catch(() => undefined);
+  mark('desafio-ok');
 
   await acceptCookies(page);
   // OOCL (CargoSmart): captcha de ARRASTAR a peça antes do resultado — e ele
@@ -820,6 +845,7 @@ export async function driveTrackingPage(
           .catch(() => undefined);
       }
     }
+    mark(`captcha ${sliderUp ? 'na tela' : 'não apareceu'}`);
   }
   // Com o resolvedor da Scrapfly armado: NÃO mexe — espera ele resolver (ou
   // errar). Mexer o mouse aqui competia com o arrasto dele.
@@ -851,6 +877,7 @@ export async function driveTrackingPage(
       attempts: [{ mode: 'scrapfly', result: outcome }],
       ms: Date.now() - t0,
     };
+    mark(`scrapfly ${outcome}`);
     // Captcha ainda na tela depois do erro/tempo → o nosso resolvedor tenta, com o
     // da Scrapfly DESLIGADO (cada imagem nova seria uma detecção nova e os dois
     // arrastariam juntos).
@@ -874,6 +901,7 @@ export async function driveTrackingPage(
     }
     const ok = gone && !/\/error\b/.test(page.url());
     sliderDiag = { found: true, solved: ok, attempts: [{ mode: 'scrapfly-url', result: gone ? 'sumiu' : 'tempo' }], ms: Date.now() - t0 };
+    mark(`scrapfly-url ${gone ? 'sumiu' : 'tempo'}`);
     if (!gone) {
       const own = await solveCargoSmartSlider(page, { captureImages: Boolean(opts.inventory) }).catch(() => null);
       if (own) sliderDiag = { ...own, attempts: [...sliderDiag.attempts, ...own.attempts] };
@@ -902,6 +930,7 @@ export async function driveTrackingPage(
       if (/has expired/i.test(body) || /\/error\b/.test(page.url())) break;
       if (/\b[A-Z]{4}\d{7}\b/.test(body) || /container no/i.test(body)) break;
     }
+    mark('pos-captcha');
   }
   // Captcha INTERATIVO (reCAPTCHA/hCaptcha/Turnstile) na entrada: resolve via
   // anti-captcha se configurado (no-op rápido quando não há widget). Beneficia
@@ -914,6 +943,7 @@ export async function driveTrackingPage(
   await page.waitForSelector(RESULT_SELECTOR, { timeout: 25_000 }).catch(() => {});
   await page.waitForLoadState('networkidle', { timeout: postWait }).catch(() => {});
   await page.waitForTimeout(2000); // folga p/ Vue/React hidratar
+  mark('resultado-esperado');
 
   // A partir daqui os resultados podem estar em OUTRA página (popup) — ex.: o
   // servlet legado da Evergreen. `activePage` aponta p/ onde ler o resultado.
@@ -1139,6 +1169,7 @@ export async function driveTrackingPage(
       ...(opts.country ? { country: opts.country } : {}),
       ...(antibot.enabled || antibot.error ? { antibot } : {}),
       ...(captchaNet.length ? { captchaNet, navStartedAt } : {}),
+      trace,
       landedUrl: activePage.url(),
       blockMode,
       ...(followDiag ? { follow: followDiag } : {}),
@@ -1159,6 +1190,7 @@ async function scrapeViaSBOnce(opts: SBScrapeOptions): Promise<SBScrapeResult> {
 async function scrapeViaSBOnceInSlot(opts: SBScrapeOptions): Promise<SBScrapeResult> {
   const startedAt = Date.now();
   let browser: Browser | null = null;
+  lastDriveTrace = undefined;
   try {
     // `targetUrl` = a URL que vamos abrir: no pool de unblock é o ALVO do bypass
     // ASP que o Scrapfly faz ANTES de nos devolver a sessão (ver withUnblockMode).
@@ -1173,6 +1205,8 @@ async function scrapeViaSBOnceInSlot(opts: SBScrapeOptions): Promise<SBScrapeRes
     return {
       ok: false, html: '', textContent: '', title: '', mentionsRef: false, rowCount: 0,
       ms: Date.now() - startedAt, error: (e as Error).message,
+      // Onde parou (a aba/navegador pode ter fechado no meio).
+      ...(lastDriveTrace ? { diag: { trace: lastDriveTrace } } : {}),
     };
   } finally {
     if (browser) await browser.close().catch(() => {});
