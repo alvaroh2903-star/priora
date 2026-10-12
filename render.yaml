@@ -2,6 +2,15 @@
 # Passo a passo: crie uma conta no Render, "New +" -> "Blueprint", conecte o repositório
 # e selecione a branch. O Render lê este arquivo e cria o serviço. Depois preencha os
 # segredos marcados como "sync: false" no painel do Render (Environment).
+#
+# ATENÇÃO — estado real (12/10/2026):
+#  - PRODUÇÃO = serviço "priora-1" (https://priora-1.onrender.com), plano pago
+#    Starter (0,5 CPU / 512 MB), criado no PAINEL — NÃO por este Blueprint. Branch:
+#    claude/demurrage-api-playwright-5q2lqq. 512 MB => REMOTE_BROWSER_MAX=1.
+#  - O serviço "priora" abaixo (plan: free) é o deste Blueprint e está SUSPENSO.
+#    Não sincronize nem mude o plano aqui sem revisar: trocar para starter passaria
+#    a cobrar por ele, e reativá-lo duplicaria o watchdog/disparo automático
+#    (créditos da Scrapfly em dobro).
 services:
   - type: web
     name: priora

@@ -29,6 +29,8 @@ leia-o para o desenho pretendido. Este arquivo resume o **estado atual** e as
   `tariffs.ts`) — reproduz o exemplo do blueprint §6. Endpoint `POST /calc`.
 - **Deploy Docker** (`Dockerfile` base Node + `playwright install --with-deps`)
   + `render.yaml` (runtime docker). Diagnóstico: `/health/browser`, `/bot/ip`.
+  **Produção = serviço `priora-1`** (Starter pago, 0,5 CPU/512 MB → `REMOTE_BROWSER_MAX=1`),
+  criado no painel; o serviço `priora` do `render.yaml` (free) está suspenso.
 - Testes de fumaça: `npm run browser:smoke | carriers:detect | carriers:selftest | demurrage:calc`.
 - **CI** (`.github/workflows/ci.yml`): typecheck + build + `npm run selftest:all` (descobre
   sozinho todo script `:selftest`) a cada push. Self-test novo = só nomear `xxx:selftest`.
