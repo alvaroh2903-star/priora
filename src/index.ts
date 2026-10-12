@@ -44,6 +44,8 @@ import { generateStructured, isAiConfigured } from './ai/geminiClient';
 import { isMistralOcrConfigured } from './config';
 import { rodarSelfTestMistralOcr } from './ai/mistralOcrSelftest';
 import { z } from 'zod/v4';
+import { createLimiter, rateLimit, tokenMatches } from './middleware/rateLimit';
+import { isAllowedDiagUrl, DIAG_URL_REFUSED } from './browser/carriers/diagUrlPolicy';
 
 const app = express();
 
@@ -84,6 +86,36 @@ app.use(express.static(PUBLIC_DIR));
 // em /Priora.dc.html (servido estático).
 app.get('/', (_req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, 'Landing.dc.html'));
+});
+
+// Força bruta no login/cadastro: 10 tentativas por IP a cada 15 min (o
+// Supabase também limita, mas por projeto — aqui é por quem está tentando).
+const authLimit = rateLimit({
+  windowMs: 15 * 60_000,
+  max: 10,
+  message: 'Muitas tentativas. Aguarde alguns minutos e tente de novo.',
+});
+app.post(['/api/priora/login', '/api/priora/signup', '/api/priora/assinar'], authLimit);
+
+// Rotas de DIAGNÓSTICO (/health/*): limite de uso por IP e bloqueio de quem
+// erra o DIAG_TOKEN repetidamente. O /health puro (health check do Render)
+// fica de fora.
+const diagRate = createLimiter({ windowMs: 60_000, max: 60 });
+const diagBadToken = createLimiter({ windowMs: 15 * 60_000, max: 10 });
+app.use('/health', (req, res, next) => {
+  if (req.path === '/' || req.path === '') return next();
+  const ip = req.ip || 'sem-ip';
+  const tooMany = (retryAfterSec: number, error: string) => {
+    res.setHeader('Retry-After', String(retryAfterSec));
+    return res.status(429).json({ error, retryAfterSec });
+  };
+  if (diagBadToken.count(ip) >= 10) return tooMany(900, 'Muitas tentativas com token inválido. Aguarde 15 min.');
+  const r = diagRate.hit(ip);
+  if (!r.ok) return tooMany(r.retryAfterSec, 'Muitas requisições de diagnóstico. Aguarde um pouco.');
+  const expected = (process.env.DIAG_TOKEN || '').trim();
+  const sent = req.query.token ?? (req.body as { token?: unknown } | undefined)?.token;
+  if (expected && sent !== undefined && !tokenMatches(String(sent), expected)) diagBadToken.hit(ip);
+  next();
 });
 
 // Rotas de autenticação e de e-mail.
@@ -128,6 +160,10 @@ app.get('/health', (_req, res) =>
     // responder "token inválido", é porque o token= da URL difere do DIAG_TOKEN.
     config: {
       diagToken: Boolean((process.env.DIAG_TOKEN || '').trim()),
+      // Token curto = adivinhável. Troque por um de 32+ caracteres aleatórios.
+      diagTokenWeak: Boolean((process.env.DIAG_TOKEN || '').trim()) && (process.env.DIAG_TOKEN || '').trim().length < 24,
+      // /health/fix-login (cria conta/troca senha) só com DIAG_FIX_LOGIN_ENABLED=true.
+      diagFixLogin: process.env.DIAG_FIX_LOGIN_ENABLED === 'true',
       brightData: isBrightDataConfigured(),
       // Detalhe do Bright Data p/ saber QUAL var falta (sem vazar segredo):
       // - brightDataKeyLen: só o TAMANHO da API key (0 = não setada);
@@ -198,7 +234,7 @@ app.post('/health/mistral-selftest', async (req, res) => {
   const token = (process.env.DIAG_TOKEN || '').trim();
   if (!token) return res.status(404).json({ error: 'Desativado (defina DIAG_TOKEN).' });
   const enviado = String(req.query.token ?? (req.body && (req.body as { token?: unknown }).token) ?? '');
-  if (enviado !== token) return res.status(401).json({ error: 'token inválido.' });
+  if (!tokenMatches(enviado, token)) return res.status(401).json({ error: 'token inválido.' });
   if (!config.mistralOcr.selftestEnabled) {
     return res.status(403).json({ error: 'Desativado (defina MISTRAL_SELFTEST_ENABLED=true para liberar esta chamada paga).' });
   }
@@ -227,7 +263,12 @@ app.get('/health/fix-login', async (req, res, next) => {
   try {
     const token = (process.env.DIAG_TOKEN || '').trim();
     if (!token) return res.status(404).json({ error: 'Desativado (defina DIAG_TOKEN).' });
-    if (String(req.query.token || '') !== token) return res.status(401).json({ error: 'token inválido.' });
+    if (!tokenMatches(String(req.query.token || ''), token)) return res.status(401).json({ error: 'token inválido.' });
+    // Cria conta / TROCA A SENHA de qualquer e-mail: só o token não basta — fica
+    // desligado até o operador ligar de propósito (e desligar depois).
+    if (process.env.DIAG_FIX_LOGIN_ENABLED !== 'true') {
+      return res.status(403).json({ error: 'Desativado (defina DIAG_FIX_LOGIN_ENABLED=true só enquanto precisar).' });
+    }
     if (!isSupabaseConfigured()) return res.status(503).json({ error: 'Supabase não configurado.' });
 
     const email = String(req.query.email || '').trim().toLowerCase();
@@ -520,10 +561,11 @@ async function runScrapeJob(job: ScrapeJob): Promise<void> {
 app.get('/health/scrape-async', (req, res) => {
   const token = (process.env.DIAG_TOKEN || '').trim();
   if (!token) return res.status(404).json({ error: 'Desativado (defina DIAG_TOKEN).' });
-  if (String(req.query.token || '') !== token) return res.status(401).json({ error: 'token inválido.' });
+  if (!tokenMatches(String(req.query.token || ''), token)) return res.status(401).json({ error: 'token inválido.' });
   pruneScrapeJobs();
 
   const rawUrl = String(req.query.url || '').trim();
+  if (rawUrl && !isAllowedDiagUrl(rawUrl)) return res.status(400).json({ error: DIAG_URL_REFUSED });
   const ref = String(req.query.ref || '').trim();
   const via = String(req.query.via || 'bright').trim(); // bright | unblock
   // render=1 (padrão) executa o JS na Bright Data (necessário p/ SPA); render=0 desliga.
@@ -554,9 +596,10 @@ app.get('/health/scrape-async', (req, res) => {
 app.get('/health/scrape-now', async (req, res) => {
   const token = (process.env.DIAG_TOKEN || '').trim();
   if (!token) return res.status(404).json({ error: 'Desativado (defina DIAG_TOKEN).' });
-  if (String(req.query.token || '') !== token) return res.status(401).json({ error: 'token inválido.' });
+  if (!tokenMatches(String(req.query.token || ''), token)) return res.status(401).json({ error: 'token inválido.' });
 
   const rawUrl = String(req.query.url || '').trim();
+  if (rawUrl && !isAllowedDiagUrl(rawUrl)) return res.status(400).json({ error: DIAG_URL_REFUSED });
   const ref = String(req.query.ref || '').trim();
   const via = String(req.query.via || 'bright').trim();
   const render = String(req.query.render ?? '1').trim() !== '0';
@@ -625,6 +668,7 @@ function resolveSbDiagParamsFrom(q: Record<string, unknown>): DiagParamsResult {
   }
 
   const rawUrl = s('url');
+  if (rawUrl && !isAllowedDiagUrl(rawUrl)) return { error: { status: 400, body: { error: DIAG_URL_REFUSED } } };
   const ref = s('ref');
   let url: string | undefined;
   if (rawUrl) url = rawUrl;
@@ -838,7 +882,7 @@ function requireDiagToken(req: Request, res: Response): string | null {
     res.status(404).json({ error: 'Desativado (defina DIAG_TOKEN).' });
     return null;
   }
-  if (String(req.query.token || '') !== token) {
+  if (!tokenMatches(String(req.query.token || ''), token)) {
     res.status(401).json({ error: 'token inválido.' });
     return null;
   }
@@ -886,6 +930,7 @@ app.get('/health/scrapfly-api-async', (req, res) => {
   const det = ref ? detectCarrier(ref) : null;
   const carrier = det?.carrier || null;
   const searchRef = carrier && det ? resolveSearchRef(carrier, ref, det.referenceType) : ref;
+  if (q('url') && !isAllowedDiagUrl(q('url'))) return res.status(400).json({ error: DIAG_URL_REFUSED });
   let url = q('url') || (ref ? detect(ref).carrier?.trackingUrl || '' : '');
   if (!url) return res.status(400).json({ error: 'Informe ref= (armador conhecido) ou url=.' });
 
@@ -1055,7 +1100,7 @@ app.get('/health/watchdog-async', (req, res) => {
 app.get('/health/scrape-sb', async (req, res) => {
   const token = (process.env.DIAG_TOKEN || '').trim();
   if (!token) return res.status(404).json({ error: 'Desativado (defina DIAG_TOKEN).' });
-  if (String(req.query.token || '') !== token) return res.status(401).json({ error: 'token inválido.' });
+  if (!tokenMatches(String(req.query.token || ''), token)) return res.status(401).json({ error: 'token inválido.' });
   const resolved = resolveSbDiagParams(req);
   if (resolved.error) return res.status(resolved.error.status).json(resolved.error.body);
   const p = resolved.params!;
@@ -1107,7 +1152,7 @@ function trackSummary(ref: string, result: TrackingResult, ms: number) {
 app.get('/health/track', async (req, res) => {
   const token = (process.env.DIAG_TOKEN || '').trim();
   if (!token) return res.status(404).json({ error: 'Desativado (defina DIAG_TOKEN).' });
-  if (String(req.query.token || '') !== token) return res.status(401).json({ error: 'token inválido.' });
+  if (!tokenMatches(String(req.query.token || ''), token)) return res.status(401).json({ error: 'token inválido.' });
   const carrierId = req.query.carrier ? String(req.query.carrier).trim() : undefined;
   // Camada de resiliência (IA): LIGADA por padrão (= produção). ?ai=0 desliga p/
   // ver só o parser dedicado cru.
@@ -1165,7 +1210,7 @@ app.get('/health/track', async (req, res) => {
 app.get('/health/watchdog', async (req, res) => {
   const token = (process.env.DIAG_TOKEN || '').trim();
   if (!token) return res.status(404).json({ error: 'Desativado (defina DIAG_TOKEN).' });
-  if (String(req.query.token || '') !== token) return res.status(401).json({ error: 'token inválido.' });
+  if (!tokenMatches(String(req.query.token || ''), token)) return res.status(401).json({ error: 'token inválido.' });
 
   const carrierIds = String(req.query.carriers || '')
     .split(/[,\s]+/)
@@ -1206,7 +1251,7 @@ app.get('/health/watchdog', async (req, res) => {
 app.get('/health/jobs', (req, res) => {
   const token = (process.env.DIAG_TOKEN || '').trim();
   if (!token) return res.status(404).json({ error: 'Desativado (defina DIAG_TOKEN).' });
-  if (String(req.query.token || '') !== token) return res.status(401).json({ error: 'token inválido.' });
+  if (!tokenMatches(String(req.query.token || ''), token)) return res.status(401).json({ error: 'token inválido.' });
   const now = Date.now();
   const emMemoria = [...scrapeJobs.values()].map((j) => ({
     id: j.id,
@@ -1238,7 +1283,7 @@ app.get('/health/jobs', (req, res) => {
 app.get('/health/job', (req, res) => {
   const token = (process.env.DIAG_TOKEN || '').trim();
   if (!token) return res.status(404).json({ error: 'Desativado (defina DIAG_TOKEN).' });
-  if (String(req.query.token || '') !== token) return res.status(401).json({ error: 'token inválido.' });
+  if (!tokenMatches(String(req.query.token || ''), token)) return res.status(401).json({ error: 'token inválido.' });
   const job = getJob(String(req.query.id || ''));
   if (!job) return res.status(404).json({ error: 'job não encontrado (expirou ou o serviço reiniciou).' });
   // ?item=N devolve só um item de um job em lote (resultado inteiro pode ser grande).
@@ -1272,7 +1317,7 @@ app.get('/health/job', (req, res) => {
 app.get('/health/job-html', (req, res) => {
   const token = (process.env.DIAG_TOKEN || '').trim();
   if (!token) return res.status(404).json({ error: 'Desativado (defina DIAG_TOKEN).' });
-  if (String(req.query.token || '') !== token) return res.status(401).json({ error: 'token inválido.' });
+  if (!tokenMatches(String(req.query.token || ''), token)) return res.status(401).json({ error: 'token inválido.' });
   const job = getJob(String(req.query.id || ''));
   if (!job) return res.status(404).json({ error: 'job não encontrado (expirou ou o serviço reiniciou).' });
   const html = job.html || '';
@@ -1530,7 +1575,7 @@ app.get('/health/anticaptcha', async (_req, res) => {
 app.get('/health/anticaptcha-solve', async (req, res) => {
   const token = (process.env.DIAG_TOKEN || '').trim();
   if (!token) return res.status(404).json({ error: 'Desativado (defina DIAG_TOKEN).' });
-  if (String(req.query.token || '') !== token) return res.status(401).json({ error: 'token inválido.' });
+  if (!tokenMatches(String(req.query.token || ''), token)) return res.status(401).json({ error: 'token inválido.' });
   if (!isAntiCaptchaConfigured()) return res.json({ antiCaptcha: 'not_configured' });
   const startedAt = Date.now();
   try {
@@ -1564,7 +1609,7 @@ app.get('/health/scrape', async (req, res, next) => {
         .status(404)
         .json({ error: 'Diagnóstico de scraping desativado (defina DIAG_TOKEN no ambiente).' });
     }
-    if (String(req.query.token || '') !== token) {
+    if (!tokenMatches(String(req.query.token || ''), token)) {
       return res.status(401).json({ error: 'token inválido.' });
     }
     const ref = String(req.query.ref || '').trim();
@@ -1597,12 +1642,13 @@ app.get('/health/scrape-debug', async (req, res, next) => {
   try {
     const token = (process.env.DIAG_TOKEN || '').trim();
     if (!token) return res.status(404).json({ error: 'Debug desativado (defina DIAG_TOKEN).' });
-    if (String(req.query.token || '') !== token) return res.status(401).json({ error: 'token inválido.' });
+    if (!tokenMatches(String(req.query.token || ''), token)) return res.status(401).json({ error: 'token inválido.' });
     if (scrapeLocked()) return res.status(429).json({ error: 'Já há uma raspagem em andamento.' });
 
     // Aceita ?url=<URL crua> (útil quando a referência não auto-detecta o armador)
     // OU ?ref=<BL> (resolve a URL do armador pela detecção).
     const rawUrl = String(req.query.url || '').trim();
+    if (rawUrl && !isAllowedDiagUrl(rawUrl)) return res.status(400).json({ error: DIAG_URL_REFUSED });
     const ref = String(req.query.ref || '').trim();
     let url: string | undefined;
     let carrierName: string | null = null;
@@ -1695,12 +1741,13 @@ app.get('/health/unblock', async (req, res, next) => {
   try {
     const token = (process.env.DIAG_TOKEN || '').trim();
     if (!token) return res.status(404).json({ error: 'Debug desativado (defina DIAG_TOKEN).' });
-    if (String(req.query.token || '') !== token) return res.status(401).json({ error: 'token inválido.' });
+    if (!tokenMatches(String(req.query.token || ''), token)) return res.status(401).json({ error: 'token inválido.' });
     if (!isUnblockerConfigured()) return res.json({ unblocker: 'not_configured' });
 
     // Aceita ?url=<URL crua> (para testar o encanamento com uma página leve) OU
     // ?ref=<BL> (resolve a URL do armador).
     const rawUrl = String(req.query.url || '').trim();
+    if (rawUrl && !isAllowedDiagUrl(rawUrl)) return res.status(400).json({ error: DIAG_URL_REFUSED });
     const ref = String(req.query.ref || '').trim();
     let url: string | undefined;
     let carrierName: string | null = null;
