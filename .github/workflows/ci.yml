@@ -1,0 +1,41 @@
+name: CI
+
+# Roda a cada push e pull request: typecheck, build (o mesmo `tsc` do Docker) e
+# TODOS os self-tests offline (parsers de cada armador com páginas reais,
+# watchdog, travas de segurança, calculadora…). Um push que quebra um parser
+# fica VERMELHO aqui — e, com o Render em "Auto-Deploy: After CI Checks Pass",
+# não chega à produção.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch: {}
+
+jobs:
+  testes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Dependências
+        run: npm ci
+
+      # Chromium da MESMA versão do playwright do package.json (o self-test do
+      # captcha e o smoke do navegador rodam num Chromium local).
+      - name: Chromium do Playwright
+        run: npx playwright install --with-deps chromium
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Self-tests
+        run: npm run selftest:all

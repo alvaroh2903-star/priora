@@ -12,6 +12,7 @@
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
     "test": "node -r ts-node/register --test src/auditoria/preAlerta/*.test.ts src/auditoria/ceMercante/*.test.ts",
+    "selftest:all": "node scripts/selftest-all.mjs",
     "browser:smoke": "ts-node src/browser/smoke.ts",
     "carriers:detect": "ts-node src/browser/carriers/detectCli.ts",
     "carriers:selftest": "ts-node src/browser/carriers/scrapers/hapagSelftest.ts",
