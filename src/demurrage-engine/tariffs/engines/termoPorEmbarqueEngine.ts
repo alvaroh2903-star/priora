@@ -49,6 +49,24 @@ export function calcularTermoPorEmbarque(input: TermoPorEmbarqueInput): MotorRes
       faixasAplicadas: [], motivo: `sem tarifa para o equipamento ${input.equipamentoNormalizado}`,
     };
   }
+  // D16 — achado bloqueante: Termo por Embarque não usa bracketEngine, então
+  // nunca passava pelo guard de moeda mista (R29/D15-C) que o Termo Único e a
+  // Exposição Rocket já têm. Uma tabela com mais de uma faixa por equipamento
+  // em moedas diferentes pegava `doEquip[0]` cegamente e produzia um valor
+  // ESTIMATED que ignorava as demais faixas — podendo fechar um FINAL com
+  // valor errado. Mesma regra, mesmo motivo literal do bracketEngine: falha
+  // LOCALIZADA (UNAVAILABLE), nunca uma exceção, nunca uma moeda escolhida
+  // arbitrariamente.
+  const moeda = doEquip[0].moeda;
+  for (const f of doEquip) {
+    if (f.moeda !== moeda) {
+      return {
+        ...base, confirmationStatus: 'UNAVAILABLE', total: null, moeda: null, diasCobrados: null,
+        faixasAplicadas: [],
+        motivo: `MOEDA_MISTA_NA_TABELA: faixas com moedas diferentes (${moeda} e ${f.moeda}) na mesma tabela/equipamento`,
+      };
+    }
+  }
   // Termo por Embarque é tarifa única por equipamento (uma faixa aberta).
   const faixa = doEquip[0];
   const total = (Math.round(faixa.valorDia * 100) * input.diasDemurrageCliente) / 100;
