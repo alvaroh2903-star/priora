@@ -30,6 +30,16 @@ leia-o para o desenho pretendido. Este arquivo resume o **estado atual** e as
 - **Deploy Docker** (`Dockerfile` base Node + `playwright install --with-deps`)
   + `render.yaml` (runtime docker). Diagnóstico: `/health/browser`, `/bot/ip`.
 - Testes de fumaça: `npm run browser:smoke | carriers:detect | carriers:selftest | demurrage:calc`.
+- **CI** (`.github/workflows/ci.yml`): typecheck + build + `npm run selftest:all` (descobre
+  sozinho todo script `:selftest`) a cada push. Self-test novo = só nomear `xxx:selftest`.
+- **Watchdog automático** (`watchdogScheduler.ts`): 1 volta/dia (06:00 UTC), avisa quando
+  armador quebra/volta (`WATCHDOG_ALERT_TO` e-mail via Graph, `WATCHDOG_ALERT_WEBHOOK`).
+  Status: `/health/watchdog-auto` (diag) e `/api/demurrage/bot/watchdog` (painel).
+- **Travas do diagnóstico**: `/health/*` com limite por IP e bloqueio por token errado;
+  `?url=` só portais de armador (`diagUrlPolicy.ts`, extra via `DIAG_URL_ALLOW`);
+  `/health/fix-login` só com `DIAG_FIX_LOGIN_ENABLED=true`. Login: 10 tentativas/15 min.
+- **Lotes em duas pistas** (`enrichMany`/`mapLanes`): CMA/ZIM (API da Scrapfly) em paralelo
+  (`BOT_API_CONCURRENCY`, 3) junto da pista de navegador (`BOT_CONCURRENCY`, 1).
 
 ## Decisões / deltas em relação ao blueprint
 - **Express (não Fastify):** o blueprint permite Express (§3); o app já é Express
