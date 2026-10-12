@@ -3,9 +3,8 @@ import express, { NextFunction, Request, Response } from 'express';
 import session from 'express-session';
 import { config } from './config';
 import { createFileSessionStore } from './auth/fileSessionStore';
-import { getActiveAccount } from './auth/activeAccount';
 import { inicializarPersistenciaAuth } from './auth/persistenciaAuth';
-import { authRouter } from './auth/authRoutes';
+import { authRouter, criarRotaMe } from './auth/authRoutes';
 import { emailRouter } from './routes/emailRoutes';
 import { analysisRouter } from './routes/analysisRoutes';
 import { parseRouter } from './routes/parseRoutes';
@@ -69,18 +68,8 @@ app.use('/api/demurrage', demurrageRouter);
 app.use('/api/auditoria', auditoriaRouter);
 app.use('/api/captura', capturaRouter);
 
-/** Estado de autenticação do usuário atual (para a UI). */
-app.get('/api/me', (req, res) => {
-  const homeAccountId = req.session.homeAccountId;
-  const active = getActiveAccount();
-  // Só está "autenticado" se a sessão pertence à conta Microsoft ATIVA. Uma
-  // sessão de uma conta trocada/desconectada conta como não autenticada — o
-  // front abre a tela "Entrar com a Microsoft".
-  if (!homeAccountId || !active || homeAccountId !== active.homeAccountId) {
-    return res.json({ authenticated: false });
-  }
-  res.json({ authenticated: true, username: req.session.username });
-});
+/** Estado de autenticação do usuário atual (para a UI): sessão de pessoa (S4) ou legada. */
+app.get('/api/me', criarRotaMe());
 
 /** Health check. */
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));

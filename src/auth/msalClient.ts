@@ -1,4 +1,4 @@
-import { ConfidentialClientApplication, ICachePlugin, LogLevel } from '@azure/msal-node';
+import { Configuration, ConfidentialClientApplication, ICachePlugin, LogLevel } from '@azure/msal-node';
 import { config, authority, isAzureConfigured } from '../config';
 import { cachePlugin } from './tokenCache';
 
@@ -55,6 +55,27 @@ export function getMsalClient(): ConfidentialClientApplication {
     });
   }
   return cachedClient;
+}
+
+/**
+ * S4 — opções do cliente MSAL que só IDENTIFICA a pessoa (`/auth/entrar`):
+ * mesmo aplicativo Azure, SEM plugin de cache — o cache é o da memória da
+ * própria instância, que é criada por login e descartada. Nenhum token da
+ * pessoa vai para o cache durável da caixa monitorada.
+ */
+export function opcoesMsalIdentidade(): Configuration {
+  return {
+    auth: { clientId: config.azure.clientId, authority, clientSecret: config.azure.clientSecret },
+    system: { loggerOptions: { loggerCallback() { /* sem log */ }, piiLoggingEnabled: false, logLevel: LogLevel.Warning } },
+  };
+}
+
+/** Cliente MSAL isolado e descartável para identificar a pessoa (um por login). */
+export function criarMsalClientIdentidade(): ConfidentialClientApplication {
+  if (!isAzureConfigured()) {
+    throw new Error('Login com a Microsoft não configurado. Defina AZURE_CLIENT_ID e AZURE_CLIENT_SECRET no .env.');
+  }
+  return new ConfidentialClientApplication(opcoesMsalIdentidade());
 }
 
 /**

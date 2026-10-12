@@ -1,19 +1,20 @@
 import { Pool } from 'pg';
 import { AuthedRequest } from '../middleware/requireAuth';
-import { getActiveAccount } from '../auth/activeAccount';
+import { ActiveAccount, getActiveAccount } from '../auth/activeAccount';
 import { getPool } from '../demurrage-engine/db/pool';
-import { ResultadoContexto, fatosDuraveisHabilitados, resolverContextoOperacional } from './contexto';
+import { IdentidadeHumana, ResultadoContexto, fatosDuraveisHabilitados, resolverContextoOperacional } from './contexto';
 
 /**
  * Porta das rotas (Courier, Auditoria) para os fatos duráveis S1/S2. Tudo
  * injetável nos testes; o padrão é o runtime real.
  *
- * Runtime atual: a pessoa só se autentica com a própria conta Microsoft, e
- * `requireAuth` exige que ela SEJA a conta ativa — a mesma caixa monitorada.
- * A pessoa não é distinguível da caixa, então o contexto resolve para
- * ATOR_INDISTINGUIVEL_DA_CAIXA e nada durável é gravado, mesmo com a chave
- * ligada. Quando o S4 trouxer a identidade da pessoa separada, só `pessoa`
- * muda aqui.
+ * Quem é a pessoa (S4):
+ *  - sessão de PESSOA (`/auth/entrar`): a identidade validada pelo
+ *    `requireAuth` nesta requisição (`req.pessoa`) — a autora dos fatos;
+ *  - sessão legada: a conta Microsoft da sessão, que É a caixa monitorada →
+ *    o contexto resolve para ATOR_INDISTINGUIVEL_DA_CAIXA e nada durável é
+ *    gravado (nenhuma autoria falsa).
+ * A organização e a caixa vêm sempre do servidor (conta ativa → `email_caixas`).
  */
 export interface FatosDuraveisDeps {
   habilitado: () => boolean;
@@ -21,13 +22,25 @@ export interface FatosDuraveisDeps {
   contexto: (req: AuthedRequest) => Promise<ResultadoContexto>;
 }
 
-export function fatosDuraveisPadrao(): FatosDuraveisDeps {
+/** A pessoa da requisição: só a validada pelo `requireAuth` (nunca o conteúdo cru da sessão). */
+export function pessoaDaRequisicao(req: AuthedRequest): IdentidadeHumana | null {
+  if (req.pessoa) return { homeAccountId: req.pessoa.homeAccountId };
+  return req.session?.homeAccountId ? { homeAccountId: req.session.homeAccountId } : null;
+}
+
+export function fatosDuraveisPadrao(opcoes: {
+  habilitado?: () => boolean;
+  pool?: () => Pool;
+  contaAtiva?: () => ActiveAccount | null;
+} = {}): FatosDuraveisDeps {
+  const pool = opcoes.pool ?? getPool;
+  const contaAtiva = opcoes.contaAtiva ?? getActiveAccount;
   return {
-    habilitado: () => fatosDuraveisHabilitados(),
-    pool: getPool,
-    contexto: (req) => resolverContextoOperacional(getPool(), {
-      caixaHomeAccountId: getActiveAccount()?.homeAccountId ?? null,
-      pessoa: req.session?.homeAccountId ? { homeAccountId: req.session.homeAccountId } : null,
+    habilitado: opcoes.habilitado ?? (() => fatosDuraveisHabilitados()),
+    pool,
+    contexto: (req) => resolverContextoOperacional(pool(), {
+      caixaHomeAccountId: contaAtiva()?.homeAccountId ?? null,
+      pessoa: pessoaDaRequisicao(req),
     }),
   };
 }
