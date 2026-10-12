@@ -6,6 +6,7 @@ import { mapLimit } from '../browser/carriers/concurrency';
 import { getAllBotResults } from '../demurrage/demurrageBotStore';
 import { enrichOne } from '../demurrage/enrichService';
 import { getAutoSyncStatus, runAutoSyncOnce } from '../demurrage/autoSync';
+import { getWatchdogAutoStatus } from '../browser/carriers/watchdogScheduler';
 import { calculateDemurrage } from '../demurrage/calculator';
 import { getDefaultTariff } from '../demurrage/tariffs';
 import { config, hasProxy, isAntiCaptchaConfigured } from '../config';
@@ -52,6 +53,14 @@ demurrageBotRouter.get('/status', (_req: AuthedRequest, res) => {
 demurrageBotRouter.post('/auto-sync/run', (_req: AuthedRequest, res) => {
   void runAutoSyncOnce();
   res.status(202).json({ started: true, autoSync: getAutoSyncStatus() });
+});
+
+/**
+ * GET /api/demurrage/bot/watchdog — saúde dos armadores na última volta
+ * automática do watchdog (para o painel mostrar "MSC quebrou ontem às 03:00").
+ */
+demurrageBotRouter.get('/watchdog', (_req: AuthedRequest, res) => {
+  res.json(getWatchdogAutoStatus());
 });
 
 /** Armadores suportados. */

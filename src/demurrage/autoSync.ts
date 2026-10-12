@@ -47,7 +47,7 @@ let lastRun: AutoSyncRun | null = null;
 let nextRunAt: number | null = null;
 
 /** Token do Graph para a conta ATIVA, sem requisição HTTP. null = sem conta/token. */
-async function getBackgroundGraphToken(): Promise<string | null> {
+export async function getBackgroundGraphToken(): Promise<string | null> {
   if (!isAzureConfigured()) return null;
   const homeAccountId = getActiveHomeAccountId();
   if (!homeAccountId) return null;

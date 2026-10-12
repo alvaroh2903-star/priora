@@ -22,6 +22,7 @@ import { trackShipment, detect, detectCarrier, resolveSearchRef } from './browse
 import type { PoolMode } from './browser/carriers/types';
 import { mapLimit } from './browser/carriers/concurrency';
 import { runWatchdog } from './browser/carriers/watchdog';
+import { startWatchdogScheduler, runWatchdogAutoOnce, getWatchdogAutoStatus, deliverAlert, watchdogAutoConfig } from './browser/carriers/watchdogScheduler';
 import { startAutoSync } from './demurrage/autoSync';
 import { remoteSlotStatus } from './browser/remoteSlot';
 import type { TrackingResult } from './browser/carriers';
@@ -1248,6 +1249,28 @@ app.get('/health/watchdog', async (req, res) => {
  * um poll devolve "job não encontrado", isto diz se o serviço perdeu TUDO
  * (reinício/deploy → lista vazia) ou se só aquele id expirou (lista com outros).
  */
+/**
+ * Watchdog AUTOMÁTICO (gated por DIAG_TOKEN): agenda, última volta, último
+ * alerta. `?run=1` roda uma volta agora (em segundo plano; gasta créditos como
+ * a da madrugada). `?test=1` manda só um ALERTA DE TESTE pelos canais
+ * configurados — confere e-mail/webhook sem raspar nada.
+ *   /health/watchdog-auto?token=<DIAG_TOKEN>[&run=1|&test=1]
+ */
+app.get('/health/watchdog-auto', async (req, res) => {
+  const token = requireDiagToken(req, res);
+  if (!token) return;
+  if (String(req.query.test || '') === '1') {
+    const cfg = watchdogAutoConfig();
+    if (!cfg.alertTo.length && !cfg.webhook) {
+      return res.status(400).json({ error: 'Nenhum canal configurado (defina WATCHDOG_ALERT_TO e/ou WATCHDOG_ALERT_WEBHOOK).' });
+    }
+    const r = await deliverAlert('Priora — watchdog: alerta de TESTE', 'Se você recebeu isto, o alerta do watchdog está funcionando. Nada foi raspado.', cfg);
+    return res.json({ test: r });
+  }
+  if (String(req.query.run || '') === '1') void runWatchdogAutoOnce();
+  res.json(getWatchdogAutoStatus());
+});
+
 app.get('/health/jobs', (req, res) => {
   const token = (process.env.DIAG_TOKEN || '').trim();
   if (!token) return res.status(404).json({ error: 'Desativado (defina DIAG_TOKEN).' });
@@ -1829,6 +1852,8 @@ app.listen(config.port, () => {
   console.log(`Priora rodando em http://localhost:${config.port}`);
   // Disparo automático do rastreio: e-mail vinculado → armadores puxados sozinhos.
   startAutoSync();
+  // Watchdog diário (madrugada) + alerta quando um armador quebra/volta.
+  startWatchdogScheduler();
 });
 
 // Ping interno periódico ao Supabase, enquanto o processo estiver acordado, para
