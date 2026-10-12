@@ -520,6 +520,12 @@ test('v1.2 migração 0033 → 0034: decisões existentes preservadas; dias/per�
         'cronologia_retorno_antes_gate_out', 'condicao_comercial_ausente',
         'conflito_mesma_fonte', 'fallback_manual_superado', 'free_time_ausente'
       ))`);
+    // D15-C (migration 0037, muito depois de 0033): `tariffTableService.
+    // ativar` (chamado por `seedRocketTermoPorEmbarque`, usado por `cenario`
+    // no cenário "MIGDIV" abaixo) agora exige a coluna `ativada_em` — alheia
+    // ao que este teste verifica, só precisa existir para `cenario`
+    // funcionar neste schema congelado em 0033.
+    await pool.query(`ALTER TABLE tariff_tables ADD COLUMN ativada_em TIMESTAMPTZ`);
 
     const rk = await cenario(pool, 'MIGRK', { discharge: '2026-03-01', houseFT: 10, masterFT: 3, effective: '2026-03-05' });
     const dRk = await decidir(pool, rk, { status: 'CONFIRMADA_ROCKET', base: 'RELOGIO_ROCKET', periodos: [{ lado: 'ROCKET', inicio: '2026-03-04', fim: '2026-03-04' }] });
@@ -553,8 +559,12 @@ test('v1.2 migração 0033 → 0034: decisões existentes preservadas; dias/per�
     // definitiva (com índice/triggers) — remove o scaffold antes para não
     // colidir com o CREATE TABLE da própria migration.
     await pool.query('DROP TABLE free_time_tentativas');
+    // Mesmo motivo: o scaffold de `ativada_em` (acima) existiu só para o
+    // trecho congelado em 0033; a migration 0037 real adiciona a coluna
+    // definitiva (sem IF NOT EXISTS) — remove o scaffold antes para não colidir.
+    await pool.query('ALTER TABLE tariff_tables DROP COLUMN ativada_em');
     const r = await runMigrations(pool);
-    assert.deepEqual(r.applied, ['0034_responsabilidade_v1_2_agregado.sql', '0035_d15a_integridade_final_reabertura.sql', '0036_d15b_integridade_dados_excecoes.sql', '0037_d15c_integridade_tarifaria_e_filas.sql']);
+    assert.deepEqual(r.applied, ['0034_responsabilidade_v1_2_agregado.sql', '0035_d15a_integridade_final_reabertura.sql', '0036_d15b_integridade_dados_excecoes.sql', '0037_d15c_integridade_tarifaria_e_filas.sql', '0038_d15c_v1_1_publicacao_tarifaria.sql']);
     // A migração não reescreve nem revalida retroativamente nada existente.
     assert.deepEqual(await snapshot(), antes);
 

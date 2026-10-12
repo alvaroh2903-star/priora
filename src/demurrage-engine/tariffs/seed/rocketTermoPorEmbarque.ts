@@ -1,5 +1,6 @@
 import { Pool, PoolClient } from 'pg';
 import { CivilDate } from '../../temporal/civilDate';
+import { ativar } from '../tariffTableService';
 
 /**
  * Tabelas Rocket×cliente — Termo por Embarque (Cap. 24.1) e Termo Único
@@ -76,6 +77,9 @@ async function seedRocket(
       [tabelaId, d.equipamento, d.valorDia, TERMO_ROCKET_MOEDA],
     );
   }
+  // D15-C v1.1: ativa só DEPOIS de todas as faixas inseridas com sucesso —
+  // publica a tabela para selecionarVigente passar a enxergá-la.
+  await ativar(db, tabelaId);
   return tabelaId;
 }
 

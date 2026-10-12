@@ -11,22 +11,29 @@ import { DayCountBasis, Moeda, QualidadeFonte } from './types';
  * profundidade, nunca o único lugar onde a regra existe (o banco continua
  * barrando SQL direto, mesmo sem passar por este serviço).
  *
- * `ativada_em` não é um controle de VISIBILIDADE (nunca filtrado por
- * `selecionarVigente`/`buscarPorId` — a seleção de versão vigente é
- * exatamente a mesma regra de data/dimensão de sempre). É um controle de
- * MUTABILIDADE opcional e antecipado: todo INSERT (seed, SQL direto, ou
- * `criarRascunho` abaixo) nasce com `ativada_em = NULL` — ainda não travada
- * explicitamente, mas já plenamente selecionável/usável. A versão fica
- * IMUTÁVEL no primeiro dos dois eventos que ocorrer:
- *   (a) alguém chama `ativar()` explicitamente (travamento antecipado,
- *       antes de qualquer cálculo — útil para "publicar" uma tabela
- *       revisada e impedir qualquer edição futura, mesmo que nada a tenha
- *       usado ainda); OU
- *   (b) um ValorApurado passa a referenciá-la (`tabela_id`) — o caso comum,
- *       estruturalmente seguro: nenhum cálculo roda no meio da sequência
- *       "insere a tabela, insere as faixas" de um seed/correção, então
- *       nunca há uma janela em que o travamento por uso aconteça antes da
- *       última faixa ser gravada.
+ * Ciclo de vida (D15-C v1.1, corretiva — achado bloqueante #1): `ativada_em`
+ * AGORA é também um controle de VISIBILIDADE, não só de mutabilidade.
+ * `criarRascunho` nasce com `ativada_em = NULL` — um RASCUNHO: editável
+ * (`substituirFaixas`) e INVISÍVEL a `selecionarVigente` (o fluxo normal de
+ * cálculo nunca o encontra; só `buscarPorId`, usado por administração/
+ * revisão e pela condição "Termo por Embarque", que fixa a tabela por ID,
+ * continua a enxergá-lo). Antes desta correção, um rascunho já era
+ * selecionável desde a criação — um erro de digitação podia entrar num
+ * cálculo real ANTES de qualquer revisão, e só então ficar imutável (por
+ * USO), sem nunca ter passado por aprovação explícita. A versão fica
+ * IMUTÁVEL e VISÍVEL (ATIVADA) no primeiro dos dois eventos que ocorrer:
+ *   (a) alguém chama `ativar()` explicitamente, DEPOIS de revisar o
+ *       conteúdo completo (tabela + todas as faixas já inseridas) — o único
+ *       caminho que publica um rascunho para o cálculo real passar a
+ *       enxergá-lo; OU
+ *   (b) um ValorApurado passa a referenciá-la (`tabela_id`) — só possível
+ *       hoje via `buscarPorId` (Termo por Embarque, fixado por ID) ou sobre
+ *       uma versão já ativada; nenhum cálculo por data (`selecionarVigente`)
+ *       pode mais usar um rascunho, então este caminho nunca mais congela
+ *       "imutável mas invisível" por vigência/data.
+ * USADA implica imutável (igual a ativada), mas não implica, por si só,
+ * visível a `selecionarVigente` — só `ativada_em IS NOT NULL` concede
+ * visibilidade por data; ver `tariffTableRepository.selecionarVigente`.
  * Correção de conteúdo depois de travada: só `criarVersaoCorrigida` (nova
  * linha, nova versão) — nunca uma edição da antiga.
  */
@@ -102,9 +109,11 @@ async function inserirTabelaEFaixas(db: PoolClient, dados: DadosTabela, versao: 
 }
 
 /**
- * Cria uma versão nova (tabela + faixas, mesma transação), ainda não
- * travada (`ativada_em = NULL`) — já selecionável/usável normalmente;
- * `ativar()` em seguida é só quem quer travá-la antes do primeiro uso.
+ * Cria uma versão nova (tabela + faixas, mesma transação) como RASCUNHO
+ * (`ativada_em = NULL`): editável por `substituirFaixas`, mas INVISÍVEL a
+ * `selecionarVigente` (D15-C v1.1) — só depois de revisado o conteúdo
+ * completo (todas as faixas já inseridas) é que `ativar()` o publica para o
+ * cálculo real passar a enxergá-lo.
  */
 export async function criarRascunho(pool: Pool, dados: DadosTabela & { versao: number }): Promise<TabelaCriada> {
   const client = await pool.connect();
@@ -150,17 +159,33 @@ export async function substituirFaixas(pool: Pool, tabelaId: string, faixas: Fai
 }
 
 /**
- * Trava explicitamente uma versão — a partir daqui, IMUTÁVEL para sempre
- * (igual a já ter sido usada por um cálculo). Idempotente: ativar de novo
- * uma versão já ativada é NO-OP silencioso (a 1ª ativação é que fica
- * registrada), nunca uma segunda escrita que o trigger rejeitaria.
+ * Publica (ATIVA) explicitamente uma versão — a partir daqui, IMUTÁVEL e
+ * VISÍVEL a `selecionarVigente` para sempre. D15-C v1.1 (concorrência de
+ * ativação) — a transição é um ÚNICO `UPDATE` condicional
+ * (`WHERE ativada_em IS NULL`), atômico no próprio Postgres: sob N chamadas
+ * concorrentes para o MESMO ID, o lock de linha do primeiro `UPDATE` a
+ * chegar serializa as demais, e cada uma delas, ao reavaliar sua própria
+ * cláusula `WHERE` já contra o estado committado pela vencedora, afeta ZERO
+ * linhas — o trigger de imutabilidade nem chega a disparar para quem perdeu
+ * a corrida (triggers de linha só correm sobre linhas de fato afetadas).
+ * Resultado: exatamente UMA chamada transiciona (`ativada: true`); todas as
+ * demais leem o estado real (já ativado pela vencedora) e devolvem
+ * `ativada: false` — um NO-OP idempotente, nunca um erro escapando só
+ * porque outra chamada venceu a corrida.
  */
-export async function ativar(pool: Pool, tabelaId: string): Promise<{ ativada: boolean; ativadaEm: string | null }> {
-  const { rows } = await pool.query(`SELECT ativada_em FROM tariff_tables WHERE id = $1`, [tabelaId]);
+export async function ativar(db: Pool | PoolClient, tabelaId: string): Promise<{ ativada: boolean; ativadaEm: string | null }> {
+  const upd = await db.query(
+    `UPDATE tariff_tables SET ativada_em = now() WHERE id = $1 AND ativada_em IS NULL RETURNING ativada_em`,
+    [tabelaId],
+  );
+  if (upd.rowCount) {
+    return { ativada: true, ativadaEm: upd.rows[0].ativada_em };
+  }
+  // Nenhuma transição: a tabela não existe, ou já estava ativada (por esta
+  // mesma chamada em uma corrida anterior ou por outra) — lê o estado real.
+  const { rows } = await db.query(`SELECT ativada_em FROM tariff_tables WHERE id = $1`, [tabelaId]);
   if (!rows.length) throw new TariffTableNaoEncontradaError(tabelaId);
-  if (rows[0].ativada_em) return { ativada: false, ativadaEm: rows[0].ativada_em };
-  const upd = await pool.query(`UPDATE tariff_tables SET ativada_em = now() WHERE id = $1 RETURNING ativada_em`, [tabelaId]);
-  return { ativada: true, ativadaEm: upd.rows[0].ativada_em };
+  return { ativada: false, ativadaEm: rows[0].ativada_em };
 }
 
 /**
@@ -209,7 +234,7 @@ export async function criarVersaoCorrigida(
     await client.query('BEGIN');
     const id = await inserirTabelaEFaixas(client, dados, novaVersao);
     if (ativarImediatamente) {
-      await client.query(`UPDATE tariff_tables SET ativada_em = now() WHERE id = $1`, [id]);
+      await ativar(client, id);
     }
     await client.query('COMMIT');
     return { id, versao: novaVersao, ativada: ativarImediatamente };

@@ -53,6 +53,8 @@ async function seedArmadorTabelaNormalizada(pool: Pool, codigoArmador: string, o
     `INSERT INTO tariff_brackets (tariff_table_id, tipo_equipamento, dia_inicial, dia_final, valor_dia, moeda) VALUES ($1, '40HC', 1, NULL, $2, 'USD')`,
     [tab[0].id, opts.valorDia],
   );
+  // D15-C v1.1: selecionarVigente agora exige ativada_em preenchido.
+  await pool.query(`UPDATE tariff_tables SET ativada_em = now() WHERE id = $1`, [tab[0].id]);
   return tab[0].id as string;
 }
 

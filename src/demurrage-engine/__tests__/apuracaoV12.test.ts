@@ -160,6 +160,8 @@ test('gap4 rocket: exposição ativa → evidência retroativa (0 dias) → nenh
       [arm],
     )).rows[0].id;
     await pool.query(`INSERT INTO tariff_brackets (tariff_table_id, tipo_equipamento, dia_inicial, dia_final, valor_dia, moeda) VALUES ($1,'20DV',1,NULL,200,'USD')`, [tab]);
+    // D15-C v1.1: selecionarVigente agora exige ativada_em preenchido.
+    await pool.query(`UPDATE tariff_tables SET ativada_em = now() WHERE id = $1`, [tab]);
     await pool.query(`UPDATE processos SET armador_id = $2 WHERE id = $1`, [p.id, arm]);
     // Rocket em demurrage (masterFT curto), cliente fora (houseFT alto).
     const c = await novoContainer(pool, o.id, p.id, 'ZRKT000001', { discharge: '2026-09-01', houseFT: 100, masterFT: 5 });
@@ -211,6 +213,9 @@ test('gap5: termo único sem versão comprovada → UNAVAILABLE com tabelaId/ver
       [o.id],
     )).rows[0].id;
     await pool.query(`INSERT INTO tariff_brackets (tariff_table_id, tipo_equipamento, dia_inicial, dia_final, valor_dia, moeda) VALUES ($1,'20DV',1,NULL,150,'USD')`, [tab]);
+    // D15-C v1.1: selecionarVigente agora exige ativada_em preenchido (a data de
+    // verificação — não a ativação — é o que decide TARIFF_VERSION_NOT_PROVEN aqui).
+    await pool.query(`UPDATE tariff_tables SET ativada_em = now() WHERE id = $1`, [tab]);
     await condicao(pool, o.id, p.id, 'unico', null);
     // 1º dia de demurrage 06/09 (< 24/09 verificação) → versão não comprovada.
     const c = await novoContainer(pool, o.id, p.id, 'NP00000001', { discharge: '2026-09-01', houseFT: 5, masterFT: 100 });

@@ -15,6 +15,23 @@ import { DayCountBasis, Faixa, QualidadeFonte } from '../tariffs/types';
  * retroativo. Prioridade da versão com vigência conhecida que cubra a data;
  * se nada é comprovadamente aplicável, o resultado é TARIFF_VERSION_NOT_PROVEN
  * (jamais zero).
+ *
+ * D15-C v1.1 (corretiva, achado bloqueante #1) — `selecionarVigente` NUNCA
+ * devolve uma versão com `ativada_em IS NULL` (rascunho): um rascunho é
+ * editável, mas invisível à seleção de produção até ser ativado
+ * explicitamente (`tariffTableService.ativar`) — nunca "selecionável desde a
+ * criação" como antes desta correção, o que permitia um rascunho entrar num
+ * cálculo real e só então ficar imutável por USO, sem nunca ter passado por
+ * revisão. `buscarPorId` permanece SEM esse filtro — administração/revisão de
+ * um rascunho antes de ativá-lo precisa conseguir lê-lo pelo ID.
+ *
+ * D15-C v1.1 (achado bloqueante #2) — a ordenação de prioridade entre
+ * candidatas (vigência conhecida mais recente; versão mais alta em caso de
+ * empate de vigência; ID como desempate final defensivo — e o mesmo padrão
+ * para `verificada_em` no caso de vigência desconhecida) é feita INTEIRAMENTE
+ * em SQL (`ORDER BY ... LIMIT 1`), nunca um resultado desordenado seguido de
+ * comparador em JavaScript — a ordem de inserção/consulta nunca influencia o
+ * resultado.
  */
 
 export interface TabelaResolvida {
@@ -95,43 +112,73 @@ export class TariffTableRepository {
   /**
    * Escolhe a versão aplicável na data de referência, seguindo a governança de
    * vigência desconhecida. Datas civis comparadas como strings 'AAAA-MM-DD'.
+   * Só considera versões ATIVADAS (`ativada_em IS NOT NULL`) — um rascunho
+   * nunca é candidato, mesmo que suas datas o tornassem aplicável (D15-C
+   * v1.1, achado bloqueante #1). A existência de QUALQUER linha da dimensão
+   * (ativada ou rascunho) ainda decide `TARIFF_TABLE_NOT_FOUND` vs.
+   * `TARIFF_VERSION_NOT_PROVEN` — a identidade da tabela já existe mesmo em
+   * rascunho; o que falta é uma versão comprovadamente aplicável.
    */
   async selecionarVigente(sel: SelecaoTabela): Promise<SelecaoResultado> {
-    const { rows } = await this.pool.query<CandidatoRow>(
-      `SELECT id, tipo, versao, day_count_basis, qualidade_fonte,
-              vigencia_inicio, vigencia_fim,
-              to_char(verificada_em AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS verificada_data
+    const dims = [sel.tipo, sel.organizationId ?? null, sel.armadorId ?? null, sel.termoComercial ?? null];
+    const filtroDimensao = `tipo = $1 AND organization_id IS NOT DISTINCT FROM $2
+          AND armador_id IS NOT DISTINCT FROM $3 AND termo_comercial IS NOT DISTINCT FROM $4`;
+    const colunas = `id, tipo, versao, day_count_basis, qualidade_fonte, vigencia_inicio, vigencia_fim,
+              to_char(verificada_em AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS verificada_data`;
+
+    // (1) Vigência CONHECIDA que cobre a data: a mais recente vence; empate de
+    // vigência quebrado pela versão mais alta; ID só como desempate final
+    // defensivo (determinismo, sem significado de negócio).
+    const conhecida = await this.pool.query<CandidatoRow>(
+      `SELECT ${colunas}
          FROM tariff_tables
-        WHERE tipo = $1
-          AND organization_id IS NOT DISTINCT FROM $2
-          AND armador_id IS NOT DISTINCT FROM $3
-          AND termo_comercial IS NOT DISTINCT FROM $4`,
-      [sel.tipo, sel.organizationId ?? null, sel.armadorId ?? null, sel.termoComercial ?? null],
+        WHERE ${filtroDimensao}
+          AND ativada_em IS NOT NULL
+          AND vigencia_inicio IS NOT NULL AND vigencia_inicio <= $5
+          AND (vigencia_fim IS NULL OR vigencia_fim >= $5)
+        ORDER BY vigencia_inicio DESC, versao DESC, id ASC
+        LIMIT 1`,
+      [...dims, sel.referenceDate],
     );
-
-    if (rows.length === 0) return { tabela: null, motivo: 'TARIFF_TABLE_NOT_FOUND' };
-    const ref = sel.referenceDate;
-
-    // (1) Vigência conhecida que cobre a data tem prioridade (a mais recente).
-    const conhecidasCobrindo = rows
-      .filter((r) => r.vigencia_inicio !== null && r.vigencia_inicio <= ref && (r.vigencia_fim === null || r.vigencia_fim >= ref))
-      .sort((a, b) => (a.vigencia_inicio! < b.vigencia_inicio! ? 1 : -1));
-    if (conhecidasCobrindo.length > 0) {
-      return { tabela: await this.resolver(conhecidasCobrindo[0]), motivo: null };
+    if (conhecida.rows.length > 0) {
+      return { tabela: await this.resolver(conhecida.rows[0]), motivo: null };
     }
 
-    // (2) Início desconhecido: só a partir da data civil de verificada_em.
-    const desconhecidasElegiveis = rows
-      .filter((r) => r.vigencia_inicio === null && ref >= r.verificada_data)
-      .sort((a, b) => (a.verificada_data < b.verificada_data ? 1 : -1));
-    if (desconhecidasElegiveis.length > 0) {
-      return { tabela: await this.resolver(desconhecidasElegiveis[0]), motivo: null };
+    // (2) Início desconhecido: só a partir da data civil de verificada_em; a
+    // verificação mais recente vence; mesmo desempate (versão, depois ID).
+    const desconhecida = await this.pool.query<CandidatoRow>(
+      `SELECT ${colunas}
+         FROM tariff_tables
+        WHERE ${filtroDimensao}
+          AND ativada_em IS NOT NULL
+          AND vigencia_inicio IS NULL
+          AND to_char(verificada_em AT TIME ZONE 'UTC', 'YYYY-MM-DD') <= $5
+        ORDER BY to_char(verificada_em AT TIME ZONE 'UTC', 'YYYY-MM-DD') DESC, versao DESC, id ASC
+        LIMIT 1`,
+      [...dims, sel.referenceDate],
+    );
+    if (desconhecida.rows.length > 0) {
+      return { tabela: await this.resolver(desconhecida.rows[0]), motivo: null };
     }
 
-    // (4) Existe tabela, mas nenhuma versão é comprovadamente aplicável.
+    // (3) Nenhuma ativada é aplicável — decide se a identidade da tabela
+    // existe (mesmo só em rascunho) ou se nada foi cadastrado para ela.
+    const existe = await this.pool.query(
+      `SELECT 1 FROM tariff_tables WHERE ${filtroDimensao} LIMIT 1`,
+      dims,
+    );
+    if (existe.rows.length === 0) return { tabela: null, motivo: 'TARIFF_TABLE_NOT_FOUND' };
     return { tabela: null, motivo: 'TARIFF_VERSION_NOT_PROVEN' };
   }
 
+  /**
+   * Busca direta por ID — usada pela condição "Termo por Embarque" (versão
+   * FIXADA na condição comercial, nunca por data) e por administração/
+   * revisão. Deliberadamente SEM o filtro de `ativada_em`: um rascunho
+   * precisa continuar legível pelo ID para quem o está revisando antes de
+   * ativá-lo (D15-C v1.1) — só `selecionarVigente` (fluxo normal de cálculo
+   * por data) exige ativação.
+   */
   async buscarPorId(tabelaId: string): Promise<TabelaResolvida | null> {
     const { rows } = await this.pool.query<CandidatoRow>(
       `SELECT id, tipo, versao, day_count_basis, qualidade_fonte,

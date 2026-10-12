@@ -182,7 +182,7 @@ test('migration 0006: compatibilidade com registros existentes do vínculo antig
       '0033_responsabilidade_v1_1_corretiva.sql',
       '0034_responsabilidade_v1_2_agregado.sql',
       '0035_d15a_integridade_final_reabertura.sql',
-      '0036_d15b_integridade_dados_excecoes.sql', '0037_d15c_integridade_tarifaria_e_filas.sql',
+      '0036_d15b_integridade_dados_excecoes.sql', '0037_d15c_integridade_tarifaria_e_filas.sql', '0038_d15c_v1_1_publicacao_tarifaria.sql',
     ]);
 
     const processos = new ProcessoRepository(pool);

@@ -120,6 +120,14 @@ test('auditoria read-only: herança da 0033 → lista as decisões que violam o 
   try {
     await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
     await runMigrations(pool, { until: '0033_responsabilidade_v1_1_corretiva.sql' });
+    // D15-C (migration 0037, muito depois de 0033): `tariffTableRepository.
+    // selecionarVigente` e `tariffTableService.ativar` (usado por
+    // `seedRocketTermoPorEmbarque`, chamado por `cenario` abaixo) agora
+    // exigem a coluna `ativada_em` — alheia ao que este teste verifica, só
+    // precisa existir para `cenario` funcionar neste schema congelado em
+    // 0033. Scaffold idêntico ao `ALTER` de 0037 (sem o backfill/triggers,
+    // irrelevantes aqui — nenhuma linha pré-existente neste schema vazio).
+    await pool.query(`ALTER TABLE tariff_tables ADD COLUMN ativada_em TIMESTAMPTZ`);
     // D15-B (R05, migration 0036, muito depois de 0033): `applyObservation` agora
     // grava uma tentativa em `free_time_tentativas` sempre que House/Master Free
     // Time é aceito de uma fonte real. Essa tabela é alheia ao que este teste
@@ -212,8 +220,12 @@ test('auditoria read-only: herança da 0033 → lista as decisões que violam o 
     // índice/triggers) — remove o scaffold antes para não colidir com o CREATE
     // TABLE da própria migration.
     await pool.query('DROP TABLE free_time_tentativas');
+    // Mesmo motivo: o scaffold de `ativada_em` (acima) existiu só para o
+    // trecho congelado em 0033; a migration 0037 real adiciona a coluna
+    // definitiva (sem IF NOT EXISTS) — remove o scaffold antes para não colidir.
+    await pool.query('ALTER TABLE tariff_tables DROP COLUMN ativada_em');
     const r = await runMigrations(pool);
-    assert.deepEqual(r.applied, ['0034_responsabilidade_v1_2_agregado.sql', '0035_d15a_integridade_final_reabertura.sql', '0036_d15b_integridade_dados_excecoes.sql', '0037_d15c_integridade_tarifaria_e_filas.sql']);
+    assert.deepEqual(r.applied, ['0034_responsabilidade_v1_2_agregado.sql', '0035_d15a_integridade_final_reabertura.sql', '0036_d15b_integridade_dados_excecoes.sql', '0037_d15c_integridade_tarifaria_e_filas.sql', '0038_d15c_v1_1_publicacao_tarifaria.sql']);
 
     const antes = (await pool.query(IMPRESSAO)).rows[0].h;
     const avisos = await executarAuditoria(pool);

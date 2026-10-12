@@ -204,6 +204,8 @@ async function cenarioDemurrageConfirmada(pool: Pool, numero: string, opts: { eq
       [org.id],
     );
     await pool.query(`INSERT INTO tariff_brackets (tariff_table_id, tipo_equipamento, dia_inicial, dia_final, valor_dia, moeda) VALUES ($1,'20DV',1,NULL,150,'USD')`, [rows[0].id]);
+    // D15-C v1.1: selecionarVigente agora exige ativada_em preenchido.
+    await pool.query(`UPDATE tariff_tables SET ativada_em = now() WHERE id = $1`, [rows[0].id]);
   } else {
     await seedRocketTermoUnico(pool, { organizationId: org.id, versao: 1, vigenciaInicio: '2026-01-01' });
   }

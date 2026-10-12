@@ -94,6 +94,8 @@ async function tabelaArmador(pool: Pool, armadorId: string, diarias: Array<{ equ
       [tabelaId, d.equip, d.valorDia, d.moeda],
     );
   }
+  // D15-C v1.1: selecionarVigente agora exige ativada_em preenchido.
+  await pool.query(`UPDATE tariff_tables SET ativada_em = now() WHERE id = $1`, [tabelaId]);
   return tabelaId;
 }
 
@@ -506,6 +508,8 @@ async function cenarioMoedaMista(pool: Pool, slug: string) {
   await pool.query(`INSERT INTO tariff_brackets (tariff_table_id, tipo_equipamento, dia_inicial, dia_final, valor_dia, moeda) VALUES ($1,'20DV',11,NULL,200,'BRL')`, [tabelaId]);
   // Equipamento SAUDÁVEL (moeda única) na MESMA tabela — usado pelo contêiner B.
   await pool.query(`INSERT INTO tariff_brackets (tariff_table_id, tipo_equipamento, dia_inicial, dia_final, valor_dia, moeda) VALUES ($1,'40DV',1,NULL,250,'USD')`, [tabelaId]);
+  // D15-C v1.1: selecionarVigente agora exige ativada_em preenchido.
+  await pool.query(`UPDATE tariff_tables SET ativada_em = now() WHERE id = $1`, [tabelaId]);
 
   const arm = await armador(pool, `${slug}-armador`);
   const tabelaArmadorId = await tabelaArmador(pool, arm, [{ equip: '20DV', valorDia: 120, moeda: 'USD' }, { equip: '40DV', valorDia: 240, moeda: 'USD' }]);
@@ -841,24 +845,27 @@ async function comBancoTemporario<T>(fn: (pool: Pool) => Promise<T>): Promise<T>
   }
 }
 
-test('D15-C #25: migrations aplicam-se tanto num banco NOVO quanto num banco já em 0036 (upgrade limpo); violação legada é detectada e abortada, nunca resolvida silenciosamente', { skip: !url }, async (t) => {
-  await t.test('banco novo: todas as migrations (incluindo 0037) aplicam de uma vez, idempotente ao reexecutar', async () => {
+test('D15-C #25: migrations aplicam-se tanto num banco NOVO quanto num banco já em 0036/0037 (upgrade limpo); violação legada é detectada e abortada, nunca resolvida silenciosamente', { skip: !url }, async (t) => {
+  await t.test('banco novo: todas as migrations (incluindo 0037 e 0038) aplicam de uma vez, idempotente ao reexecutar', async () => {
     await comBancoTemporario(async (pool) => {
       const r1 = await runMigrations(pool);
       assert.ok(r1.applied.includes('0037_d15c_integridade_tarifaria_e_filas.sql'));
+      assert.ok(r1.applied.includes('0038_d15c_v1_1_publicacao_tarifaria.sql'));
       const r2 = await runMigrations(pool);
       assert.equal(r2.applied.length, 0, 'reexecutar não reaplica nada');
       assert.ok(r2.alreadyApplied.includes('0037_d15c_integridade_tarifaria_e_filas.sql'));
+      assert.ok(r2.alreadyApplied.includes('0038_d15c_v1_1_publicacao_tarifaria.sql'));
     });
   });
 
-  await t.test('banco já em 0036 (sem violação legada): upgrade para 0037 aplica limpo', async () => {
+  await t.test('banco já em 0036 (sem violação legada): upgrade para 0037+0038 aplica limpo', async () => {
     await comBancoTemporario(async (pool) => {
       const r36 = await runMigrations(pool, { until: '0036_d15b_integridade_dados_excecoes.sql' });
       assert.ok(r36.applied.includes('0036_d15b_integridade_dados_excecoes.sql'));
-      assert.ok(!r36.applied.some((f) => f.startsWith('0037')));
+      assert.ok(!r36.applied.some((f) => f.startsWith('0037') || f.startsWith('0038')));
       const r37 = await runMigrations(pool);
       assert.ok(r37.applied.includes('0037_d15c_integridade_tarifaria_e_filas.sql'));
+      assert.ok(r37.applied.includes('0038_d15c_v1_1_publicacao_tarifaria.sql'));
     });
   });
 
@@ -891,6 +898,52 @@ test('D15-C #25: migrations aplicam-se tanto num banco NOVO quanto num banco já
       await pool.query(`UPDATE tariff_tables SET versao = 2 WHERE id = $1`, [dup[0].id]);
       const r = await runMigrations(pool);
       assert.ok(r.applied.includes('0037_d15c_integridade_tarifaria_e_filas.sql'), 'resolvida a violação, a MESMA migration aplica normalmente');
+      assert.ok(r.applied.includes('0038_d15c_v1_1_publicacao_tarifaria.sql'), '0038 segue normalmente depois');
+    });
+  });
+
+  await t.test('banco em 0037 com versão legada JÁ USADA mas nunca ativada: 0038 a publica com ativada_em = now() da migration, nunca uma data inventada; rascunho genuíno nunca usado permanece intocado', async () => {
+    await comBancoTemporario(async (pool) => {
+      await runMigrations(pool, { until: '0037_d15c_integridade_tarifaria_e_filas.sql' });
+      const org = await novaOrg(pool, 'd15c25-usada-legado');
+      const proc = await novoProcesso(pool, org.id, 'D15C25-USADA');
+      const containerId = (await new ContainerRepository(pool).create(org.id, proc.id, 'D15C25USA001')).id;
+
+      // Simula exatamente o que a 0037, sem a correção de aplicação desta
+      // fase, podia deixar: uma versão JÁ REFERENCIADA por um ValorApurado,
+      // mas nunca travada por `ativar()` — ativada_em permanece NULL.
+      const usada = (await pool.query(
+        `INSERT INTO tariff_tables (organization_id, tipo, termo_comercial, versao, vigencia_inicio, qualidade_fonte, day_count_basis, fonte, verificada_em)
+         VALUES ($1,'rocket_cliente','unico',1,'2026-01-01','OFICIAL_VALIDADA','since_discharge_absolute','legado usado',now()) RETURNING id, criado_em`,
+        [org.id],
+      )).rows[0];
+      await pool.query(`INSERT INTO tariff_brackets (tariff_table_id, tipo_equipamento, dia_inicial, dia_final, valor_dia, moeda) VALUES ($1,'20DV',1,NULL,100,'USD')`, [usada.id]);
+      await pool.query(
+        `INSERT INTO valores_apurados (container_id, relogio_tipo, motor_comercial, tabela_id, versao_tabela, total, dias_cobrados, moeda, confirmation_status, engine_version, input_hash)
+         VALUES ($1,'cliente','termo_unico',$2,1,100,1,'USD','ESTIMATED','teste','hash-legado-usado')`,
+        [containerId, usada.id],
+      );
+
+      // Rascunho GENUÍNO: nunca usado, nunca ativado — não deve ser tocado.
+      const rascunho = (await pool.query(
+        `INSERT INTO tariff_tables (organization_id, tipo, termo_comercial, versao, vigencia_inicio, qualidade_fonte, day_count_basis, fonte, verificada_em)
+         VALUES ($1,'rocket_cliente','embarque',1,'2026-01-01','OFICIAL_VALIDADA','since_discharge_absolute','rascunho nunca usado',now()) RETURNING id`,
+        [org.id],
+      )).rows[0];
+
+      const antes = (await pool.query(`SELECT ativada_em FROM tariff_tables WHERE id = $1`, [usada.id])).rows[0];
+      assert.equal(antes.ativada_em, null, 'pré-condição: a versão usada ainda não está ativada antes da 0038');
+
+      const r = await runMigrations(pool);
+      assert.ok(r.applied.includes('0038_d15c_v1_1_publicacao_tarifaria.sql'));
+
+      const depoisUsada = (await pool.query(`SELECT ativada_em, criado_em FROM tariff_tables WHERE id = $1`, [usada.id])).rows[0];
+      assert.ok(depoisUsada.ativada_em, 'a versão já USADA foi publicada (ativada) pela 0038');
+      assert.ok(new Date(depoisUsada.ativada_em).getTime() >= new Date(depoisUsada.criado_em).getTime(), 'ativada_em é o momento da migration, nunca anterior a criado_em (nenhuma data histórica inventada)');
+      assert.ok(Date.now() - new Date(depoisUsada.ativada_em).getTime() < 5 * 60_000, 'ativada_em é o momento REAL em que esta migration correu — truthful, não fabricado');
+
+      const depoisRascunho = (await pool.query(`SELECT ativada_em FROM tariff_tables WHERE id = $1`, [rascunho.id])).rows[0];
+      assert.equal(depoisRascunho.ativada_em, null, 'um rascunho genuíno, nunca usado, permanece intocado — continua invisível a selecionarVigente até ser revisado e ativado de verdade');
     });
   });
 });

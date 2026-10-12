@@ -1,5 +1,6 @@
 import { Pool, PoolClient } from 'pg';
 import { DayCountBasis, QualidadeFonte } from '../types';
+import { ativar } from '../tariffTableService';
 
 /**
  * As tabelas de armador do Blueprint (Cap. 24.3.1), valores LITERAIS. São
@@ -199,6 +200,10 @@ export async function seedArmadorTables(
         [tab.id, fx.equipamento, fx.diaInicial, fx.diaFinal, fx.valorDia, t.moeda],
       );
     }
+    // D15-C v1.1: ativa só DEPOIS de todas as faixas inseridas com sucesso —
+    // publica a tabela para o cálculo real (selecionarVigente) passar a
+    // enxergá-la; sem isto, ficaria presa como rascunho invisível.
+    await ativar(db, tab.id);
     ids.set(t.armadorCodigo, tab.id);
   }
   return ids;

@@ -630,6 +630,13 @@ test('v1.1 migração 0032 → 0033: decisões existentes preservadas; a nova re
         detalhe JSONB NOT NULL DEFAULT '{}'::jsonb,
         tentativa_em TIMESTAMPTZ NOT NULL DEFAULT now()
       )`);
+    // D15-C (migration 0037, muito depois de 0032): `tariffTableService.
+    // ativar` (chamado por `seedRocketTermoPorEmbarque`, usado por `cenario`
+    // abaixo) agora exige a coluna `ativada_em` — alheia ao que este teste
+    // verifica, só precisa existir para `cenario` funcionar neste schema
+    // congelado em 0032; este teste nunca avança além de 0033, então não há
+    // "undo" (a migration 0037 real nunca roda aqui).
+    await pool.query(`ALTER TABLE tariff_tables ADD COLUMN ativada_em TIMESTAMPTZ`);
 
     // Decisões criadas ANTES da 0033 (serviço vigente na 0032).
     const cli = await cenario(pool, 'MIGCLI', { discharge: '2026-01-01', houseFT: 5, masterFT: 100, effective: '2026-01-10', diaria: 150 });
