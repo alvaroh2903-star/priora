@@ -16,16 +16,18 @@ test('S6 migration 0100: aditiva, idempotente, com as guardas de identidade no b
       const org = (await pool.query(`INSERT INTO organizations (nome, slug) VALUES ('Rocket', 'rocket') RETURNING id`)).rows[0].id;
       await pool.query(`INSERT INTO processos (organization_id, numero_processo, mbl) VALUES ($1, 'IM-LEGADO', 'MEDU1')`, [org]);
       const r = await runMigrations(pool);
-      assert.deepEqual(r.applied, [S6]);
+      // Até a 0100: só ela. As migrations de frentes posteriores (0101+, Vertical 1 S1/S2) aplicam depois.
+      assert.deepEqual(r.applied.filter((f) => f <= S6), [S6]);
       const { rows } = await pool.query(`SELECT numero_processo, mbl, apuracao_status FROM processos`);
       assert.deepEqual(rows, [{ numero_processo: 'IM-LEGADO', mbl: 'MEDU1', apuracao_status: 'OPEN' }]);
       assert.deepEqual((await runMigrations(pool)).applied, [], 'reexecutar não reaplica');
     });
 
-    await t.test('banco novo: 0100 é a última aplicada; PostgreSQL 15+ (NULLS NOT DISTINCT)', async () => {
+    await t.test('banco novo: 0100 é a última aplicada até a faixa S6; PostgreSQL 15+ (NULLS NOT DISTINCT)', async () => {
       await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
       const r = await runMigrations(pool);
-      assert.equal(r.applied[r.applied.length - 1], S6);
+      const ateS6 = r.applied.filter((f) => f <= S6);
+      assert.equal(ateS6[ateS6.length - 1], S6);
       const versao = Number((await pool.query(`SHOW server_version_num`)).rows[0].server_version_num);
       assert.ok(versao >= 150000, `PostgreSQL ${versao}`);
       const { rows: [forma] } = await pool.query(

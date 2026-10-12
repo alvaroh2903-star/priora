@@ -17,6 +17,8 @@
  * NÃO consulta rede, NÃO usa IA. Puro e determinístico (100% testável).
  */
 
+import { capturarReferenciasProcesso } from '../identidade/captura';
+
 export type RefType = 'HBL' | 'MBL' | 'BOOKING' | 'CONTAINER' | 'UNKNOWN';
 
 export interface RefToken {
@@ -51,10 +53,6 @@ export interface Resolution {
  * Extração
  * ------------------------------------------------------------------ */
 
-/** Processo Rocket: IM1826, IM1826-26, IM 1826 etc. */
-const RE_PROCESS = /\bIM\s*[-:]?\s*(\d{3,6})(-\d{2})?\b/i;
-const RE_PROCESS_G = new RegExp(RE_PROCESS.source, 'gi');
-
 /** Referências ROTULADAS (o rótulo vem antes do formato). Captura o código. */
 const LABELLED: Array<{ type: RefType; re: RegExp }> = [
   { type: 'MBL', re: /\b(?:O?MBL|MASTER\s*B\/?L)\b\s*(?:NO\.?|NUMBER|#)?\s*[:.\-]?\s*([A-Z0-9][A-Z0-9/\-]{5,24})\b/gi },
@@ -85,11 +83,6 @@ function hasLetter(s: string): boolean {
 /** Normaliza a referência para servir de chave (só alfanumérico, maiúsculo). */
 export function normalizeRef(s: string): string {
   return String(s || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
-}
-
-/** Normaliza o processo (mantém o sufixo -NN quando houver). */
-function normalizeProcess(m: RegExpMatchArray): string {
-  return `IM${m[1]}${m[2] || ''}`.toUpperCase();
 }
 
 /**
@@ -160,9 +153,9 @@ export function tokenize(subject: string, body: string): Tokenized {
   };
 
   lines.forEach((line, i) => {
-    // processos
-    for (const m of line.matchAll(RE_PROCESS_G)) {
-      processes.push({ codigo: normalizeProcess(m), line: i });
+    // processos: o token inteiro, com a gramática do S6 (nunca truncado nem reduzido à base)
+    for (const c of capturarReferenciasProcesso(line)) {
+      processes.push({ codigo: c.limpa, line: i });
     }
 
     // referências ROTULADAS (prioridade máxima) — capturadas SEMPRE, mesmo que

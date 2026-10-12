@@ -581,7 +581,7 @@ class Component extends DCLogic {
     // Multi-conversa: manda as demais threads ligadas ao courier (por processo)
     // para a Clara analisar o envelope inteiro, não só a thread principal.
     var extra=(courier.conversationIds||[]).filter(function(x){ return x && x!==cid; });
-    var qs=extra.length ? ('?ids='+encodeURIComponent(extra.join(','))) : '';
+    var qs='?tracking='+encodeURIComponent(courier.tracking||'')+(extra.length ? ('&ids='+encodeURIComponent(extra.join(','))) : '');
     fetch('/api/couriers/'+encodeURIComponent(cid)+'/analysis'+qs, { credentials:'same-origin' })
       .then(function(r){ return r.json().catch(function(){return null;}).then(function(j){ if(!r.ok) throw new Error((j&&j.error)||('HTTP '+r.status)); return j; }); })
       .then(function(a){ var an=Object.assign({}, self.state.analysis); an[cid]=a; var s2=Object.assign({}, self.state.aStatus); s2[cid]='done'; self.setState({ analysis:an, aStatus:s2 }); })
@@ -619,9 +619,13 @@ class Component extends DCLogic {
     var st={ conf:conf };
     if (newVal==='nao_recebido') st.expandedRow=courier.tracking+'|'+proc;
     this.setState(st);
+    // "linha": identificador opaco emitido pelo servidor para esta linha (a
+    // proveniência é decidida no servidor; a tela só devolve o identificador).
+    var an=this.state.analysis[courier.conversationId]||{};
+    var linha=((courier.linhas||{})[proc]) || ((an.linhasClara||{})[proc]) || null;
     fetch('/api/couriers/'+encodeURIComponent(courier.tracking)+'/conferencia', {
       method:'POST', credentials:'same-origin', headers:{ 'Content-Type':'application/json' },
-      body:JSON.stringify({ processo:proc, documento:docKey, status:newVal })
+      body:JSON.stringify({ processo:proc, documento:docKey, status:newVal, linha:linha })
     }).catch(function(){});
   }
 
@@ -841,14 +845,12 @@ class Component extends DCLogic {
 
     // Lista EFETIVA de processos: a lista rápida só lê o bodyPreview (corta a
     // tabela); quando a Clara lê o corpo inteiro, pega todos. Fazemos a união.
-    var procBase=function(p){ return String(p).toUpperCase().replace(/-\d{2}$/,''); };
-    var procs=(courier.processos||[]).map(function(p){ return String(p).toUpperCase(); });
-    // União com o que a Clara leu no corpo inteiro — deduplicando por BASE:
-    // "IM2404" e "IM2404-26" são o MESMO processo (o "-26" é o ano). Sem isto a
-    // Clara reintroduz a forma sem ano e o envelope passa a mostrar o dobro.
-    if (a && a.processNumbers) a.processNumbers.forEach(function(p){
-      var u=String(p).toUpperCase(), b=procBase(u);
-      if (!procs.some(function(x){ return procBase(x)===b; })) procs.push(u);
+    // Uma linha por referência EXATA (N-3): IM2151, IM2151-26 e IM2151-026 são
+    // linhas distintas. Os códigos já chegam na forma exata do servidor; da Clara
+    // só entram os que estão escritos por inteiro nas conversas (processosClara).
+    var procs=(courier.processos||[]).map(function(p){ return String(p); });
+    if (a && a.processosClara) a.processosClara.forEach(function(p){
+      if (procs.indexOf(p)<0) procs.push(p);
     });
 
     // Resolução por REFERÊNCIA (backend): processos achados via HBL/MBL/Booking.

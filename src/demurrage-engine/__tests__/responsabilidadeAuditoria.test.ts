@@ -112,7 +112,9 @@ test('auditoria read-only: o arquivo do repositório é só leitura por constru�
   assert.match(sql.trimEnd(), /ROLLBACK;$/);
   assert.doesNotMatch(sql.replace(/--.*$/gm, ''), /\b(INSERT|UPDATE|DELETE|TRUNCATE|ALTER|DROP|CREATE)\b/i);
   const migrations = fs.readdirSync(path.resolve(__dirname, '../db/migrations'));
-  assert.ok(!migrations.some((f) => f.includes('auditoria')), 'o script não está no diretório de migrations');
+  // O próprio script (não o termo "auditoria", que a 0102 — fatos da Auditoria documental — também usa).
+  const script = path.basename(SCRIPT, '.sql');
+  assert.ok(!migrations.some((f) => f.includes(script)), 'o script não está no diretório de migrations');
 });
 
 test('auditoria read-only: herança da 0033 → lista as decisões que violam o agregado, com motivo e situação, sem escrever nada', { skip: !url }, async () => {

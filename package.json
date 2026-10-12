@@ -15,7 +15,9 @@
     "db:migrate:demurrage": "ts-node src/demurrage-engine/db/migrate.ts",
     "test:demurrage-engine": "node --test-concurrency=1 -r ts-node/register --test src/demurrage-engine/__tests__/*.test.ts",
     "test:identidade": "node --test-concurrency=1 -r ts-node/register --test src/identidade/__tests__/*.test.ts",
-    "test:liberacao": "node -r ts-node/register --test src/liberacao/dominio/__tests__/*.test.ts"
+    "test:liberacao": "node -r ts-node/register --test src/liberacao/dominio/__tests__/*.test.ts",
+    "test:courier-fatos": "TS_NODE_PREFER_TS_EXTS=true node --test-concurrency=1 -r ts-node/register --test src/couriers/fatos/__tests__/*.test.ts",
+    "test:auditoria-fatos": "TS_NODE_PREFER_TS_EXTS=true node --test-concurrency=1 -r ts-node/register --test src/auditoria/fatos/__tests__/*.test.ts"
   },
   "keywords": [
     "outlook",

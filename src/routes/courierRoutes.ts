@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { RequestHandler, Router } from 'express';
 import { requireAuth, AuthedRequest } from '../middleware/requireAuth';
 import {
   searchLogisticsMessages,
@@ -22,9 +22,30 @@ import {
   trackingKey,
   ESTADOS_VALIDOS,
   CourierEstado,
+  CourierEstadoRegistro,
+  CourierConferencia,
   DocKey,
   DocStatus,
 } from '../couriers/courierStore';
+import { getActiveAccount } from '../auth/activeAccount';
+import { capturarReferenciasProcesso, codigosDistintos } from '../identidade/captura';
+import { limparCodigoProcesso } from '../identidade';
+import { FatosDuraveisDeps, contextoDaRequisicao, fatosDuraveisPadrao } from '../operacional/requisicao';
+import { ErroContextoOperacional } from '../operacional/contexto';
+import {
+  AssociacaoLinha,
+  emitirLinha,
+  segredoLinhaPadrao,
+  verificarLinha,
+} from '../couriers/fatos/linha';
+import {
+  ErroFatoCourier,
+  ProjecaoCourierTela,
+  ResultadoFatoCourier,
+  projecaoCourierParaTela,
+  registrarConferenciaCourier,
+  registrarEstadoEnvelope,
+} from '../couriers/fatos/courierFatos';
 import {
   evaluateCourierEmail,
   CourierFilterResult,
@@ -38,9 +59,26 @@ import {
 } from '../couriers/referenceResolver';
 import { config } from '../config';
 
-export const courierRouter = Router();
+/** Leitura do Microsoft Graph usada pelo Courier (injetável nos testes; o padrão é o Graph real). */
+export interface GraphCourier {
+  searchLogisticsMessages: typeof searchLogisticsMessages;
+  listRecentSummaries: typeof listRecentSummaries;
+  getItemAttachmentTexts: typeof getItemAttachmentTexts;
+  getConversationFull: typeof getConversationFull;
+  getConversation: typeof getConversation;
+  getMyAddresses: typeof getMyAddresses;
+  createReplyDraft: typeof createReplyDraft;
+}
 
-courierRouter.use(requireAuth);
+const GRAPH_PADRAO: GraphCourier = {
+  searchLogisticsMessages,
+  listRecentSummaries,
+  getItemAttachmentTexts,
+  getConversationFull,
+  getConversation,
+  getMyAddresses,
+  createReplyDraft,
+};
 
 /** Normaliza o carrier detectado pelo filtro para exibição no card. */
 function displayCarrier(c: string | null): string {
@@ -52,23 +90,19 @@ function displayCarrier(c: string | null): string {
   return c;
 }
 
-/** Base do processo, sem o sufixo de ano (-NN). "IM2151-26" e "IM2151" são o mesmo. */
+/**
+ * Base do processo, sem o sufixo de ano (-NN). Uso SÓ de apresentação/
+ * enriquecimento (texto e conversas ligadas ao card, processos "sem courier",
+ * estatística). Nunca define a linha de conferência nem o assunto de um fato:
+ * IM2151, IM2151-26 e IM2151-026 são identidades distintas (N-3).
+ */
 function processBase(p: string): string {
   return p.replace(/-\d{2}$/, '');
 }
 
-/**
- * Deduplica processos que são o MESMO (IM2151 e IM2151-26). Mantém a variante
- * COM o sufixo de ano (mais específica) quando ambas aparecem.
- */
-function dedupeProcessos(procs: string[]): string[] {
-  const byBase = new Map<string, string>();
-  for (const p of procs) {
-    const base = processBase(p);
-    const cur = byBase.get(base);
-    if (!cur || (/-\d{2}$/.test(p) && !/-\d{2}$/.test(cur))) byBase.set(base, p);
-  }
-  return Array.from(byBase.values());
+/** Linhas do envelope: uma por referência EXATA (forma limpa do S6), na ordem de chegada. */
+function exatos(procs: string[]): string[] {
+  return Array.from(new Set(procs));
 }
 
 // Citação de documento nos e-mails (define a EXPECTATIVA documental do envelope).
@@ -284,9 +318,47 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
  * confirmado pelo operador (Identificado por padrão). Nada é inventado: o que
  * não estiver no e-mail não aparece.
  */
-async function buildCourierView(accessToken: string) {
+interface LinhaParaEmitir {
+  trackingChave: string;
+  processoRef: string;
+  associacao: AssociacaoLinha;
+  brutas: string[];
+}
+
+interface OpcoesVisao {
+  /** Emite o identificador opaco de cada linha (só com os fatos duráveis ativos). */
+  emitirLinha?: (linha: LinhaParaEmitir) => string;
+  /** Estado durável dos envelopes (S1), sobreposto ao JSON legado; null = sem fatos duráveis. */
+  carregarDuraveis?: (trackingChaves: string[]) => Promise<ProjecaoCourierTela | null>;
+}
+
+/** O estado confirmado durável (S1) prevalece sobre o JSON legado, envelope a envelope. */
+function sobreporEstados(
+  json: Record<string, CourierEstadoRegistro>, proj: ProjecaoCourierTela | null,
+): Record<string, CourierEstadoRegistro> {
+  return proj ? { ...json, ...proj.estados } : json;
+}
+
+/** Sobrepõe as marcas duráveis às do JSON legado; marca desmarcada no banco some da tela. */
+function sobreporConferencias(
+  json: CourierConferencia | undefined, duravel: ProjecaoCourierTela['conferencias'][string] | undefined,
+): CourierConferencia {
+  const out: CourierConferencia = {};
+  for (const [proc, docs] of Object.entries(json || {})) out[proc] = { ...docs };
+  for (const [proc, docs] of Object.entries(duravel || {})) {
+    const atual = { ...(out[proc] || {}) };
+    for (const [doc, marca] of Object.entries(docs) as Array<['mbl' | 'hbl', DocStatus | null]>) {
+      if (marca === null) delete atual[doc];
+      else atual[doc] = marca;
+    }
+    out[proc] = atual;
+  }
+  return out;
+}
+
+async function buildCourierView(accessToken: string, g: GraphCourier = GRAPH_PADRAO, opcoes: OpcoesVisao = {}) {
     let messages = await withTimeout(
-      searchLogisticsMessages(accessToken, {
+      g.searchLogisticsMessages(accessToken, {
         keywords: config.logisticsKeywords,
         top: 60,
       }),
@@ -296,7 +368,7 @@ async function buildCourierView(accessToken: string) {
     let source = 'logistica';
     if (messages.length === 0) {
       messages = await withTimeout(
-        listRecentSummaries(accessToken, { top: 40 }),
+        g.listRecentSummaries(accessToken, { top: 40 }),
         20000,
         'listInbox',
       );
@@ -313,7 +385,7 @@ async function buildCourierView(accessToken: string) {
     await Promise.all(
       withAtt.map(async (m) => {
         const texts = await withTimeout(
-          getItemAttachmentTexts(accessToken, m.id),
+          g.getItemAttachmentTexts(accessToken, m.id),
           8000,
           'itemAttachment',
         ).catch(() => [] as string[]);
@@ -363,6 +435,10 @@ async function buildCourierView(accessToken: string) {
     // VÁRIAS threads. Ligamos ao card toda conversa que cita um processo do
     // envelope, para a contagem e a análise da Clara cobrirem tudo.
     const convsByProcess = new Map<string, Set<string>>();
+    // Proveniência das linhas, por tracking → processo exato: formas brutas
+    // citadas e se alguma citação veio de conversa com UM só tracking (sem ela,
+    // o processo só aparece em conversas com vários envelopes: ambíguo).
+    const citacoes = new Map<string, Map<string, { brutas: Set<string>; unica: boolean }>>();
 
     // ÍNDICE GLOBAL de referências: alimentado por TODOS os e-mails que citam um
     // processo IMxxxx (os "elos"), inclusive os que não são candidatos a courier
@@ -435,6 +511,17 @@ async function buildCourierView(accessToken: string) {
 
       for (const p of processos) processosComCourier.add(p);
 
+      for (const number of trkMap.keys()) {
+        const porProc = citacoes.get(number) || new Map<string, { brutas: Set<string>; unica: boolean }>();
+        for (const ref of cand.flatMap((x) => x.ev.extracted.processReferences)) {
+          const info = porProc.get(ref.limpa) || { brutas: new Set<string>(), unica: false };
+          info.brutas.add(ref.bruta);
+          if (trkMap.size === 1) info.unica = true;
+          porProc.set(ref.limpa, info);
+        }
+        citacoes.set(number, porProc);
+      }
+
       for (const [number, carrierRaw] of trkMap) {
         const arr = textByTracking.get(number) || [];
         arr.push(convText);
@@ -493,24 +580,31 @@ async function buildCourierView(accessToken: string) {
       if (basesComCourier.has(processBase(p))) processosSemCourier.delete(p);
     }
 
-    const estados = getAllEstados();
+    // Estado confirmado pelo operador: JSON legado, sobreposto pelo durável (S1) quando ativo.
+    // Banco indisponível → a tela continua com o JSON legado (nunca quebra a visão).
+    const duraveis = opcoes.carregarDuraveis
+      ? await opcoes.carregarDuraveis(Array.from(byTracking.keys()).map(trackingKey)).catch((err) => {
+        console.error('[courier-fatos] estado durável indisponível; usando o JSON legado:', (err as Error).message);
+        return null;
+      })
+      : null;
+    const estados = sobreporEstados(getAllEstados(), duraveis);
     const conferencias = getAllConferencias();
     const followups = getAllFollowUps();
 
-    // Lookup REVERSO do índice de referências: processo (base) -> MBL/HBL
+    // Lookup REVERSO do índice de referências: processo (exato) -> MBL/HBL
     // conhecidos (vindos dos e-mails "elo"). Alimenta o e-mail de follow-up
     // ("Process: IMxxxx / MBL: 268821690"); quando não conhecido, omite-se.
-    const refsByProcBase = new Map<string, { mbl?: string; hbl?: string }>();
+    const refsByProc = new Map<string, { mbl?: string; hbl?: string }>();
     for (const entry of refIndex.values()) {
       const isMbl = entry.types.has('MBL');
       const isHbl = entry.types.has('HBL');
       if (!isMbl && !isHbl) continue;
       for (const p of entry.processes) {
-        const b = processBase(p);
-        const e = refsByProcBase.get(b) || {};
+        const e = refsByProc.get(p) || {};
         if (isMbl && !e.mbl) e.mbl = entry.raw;
         if (isHbl && !e.hbl) e.hbl = entry.raw;
-        refsByProcBase.set(b, e);
+        refsByProc.set(p, e);
       }
     }
 
@@ -531,11 +625,24 @@ async function buildCourierView(accessToken: string) {
         candidatos = r.candidatos.filter((x) => !autoSet.has(x.processo));
       }
       // Processos "efetivos": citados diretamente + resolvidos automaticamente.
-      // Deduplica IM2151 vs IM2151-26 (mesmo processo — o "-26" é o ano).
-      const processosEfetivos = dedupeProcessos([
+      // Uma linha por referência EXATA: IM2151, IM2151-26 e IM2151-026 são
+      // linhas distintas (N-3); nenhuma base/sufixo funde linhas.
+      const processosEfetivos = exatos([
         ...c.processos,
         ...resolvidos.map((x) => x.processo),
       ]);
+      // Proveniência de cada linha, decidida aqui (servidor) e entregue à tela
+      // só como identificador opaco assinado.
+      const porProc = citacoes.get(c.tracking);
+      const linhas = opcoes.emitirLinha
+        ? Object.fromEntries(processosEfetivos.map((p) => {
+          const info = porProc?.get(p);
+          const associacao: AssociacaoLinha = info ? (info.unica ? 'CITADA' : 'AMBIGUA') : 'INFERIDA';
+          return [p, opcoes.emitirLinha!({
+            trackingChave: trackingKey(c.tracking), processoRef: p, associacao, brutas: info ? Array.from(info.brutas) : [],
+          })];
+        }))
+        : null;
 
       // Expectativa documental do courier (o que os e-mails citam: OMBL/OHBL)
       // e a resolução detectada (Telex/Wave/destino/importador). Junta o texto
@@ -578,7 +685,7 @@ async function buildCourierView(accessToken: string) {
         tracking: c.tracking,
         agente: c.agente,
         processos: processosEfetivos,
-        processosDiretos: dedupeProcessos(c.processos),
+        processosDiretos: exatos(c.processos),
         referencias: c.referencias,
         docExpect,
         docResolution,
@@ -594,12 +701,15 @@ async function buildCourierView(accessToken: string) {
         conversationId: c.conversationId,
         estado,
         nota: reg?.nota || null,
-        conferencia: conferencias[trackingKey(c.tracking)] || {},
+        conferencia: sobreporConferencias(
+          conferencias[trackingKey(c.tracking)],
+          duraveis?.conferencias[trackingKey(c.tracking)],
+        ),
         followups: followups[trackingKey(c.tracking)] || {},
         // MBL/HBL conhecidos por processo (dos e-mails) — para o follow-up.
         refsPorProcesso: Object.fromEntries(
           processosEfetivos
-            .map((p) => [p, refsByProcBase.get(processBase(p))])
+            .map((p) => [p, refsByProc.get(p)])
             .filter(([, v]) => v) as Array<[string, { mbl?: string; hbl?: string }]>,
         ),
         score: c.score,
@@ -610,6 +720,9 @@ async function buildCourierView(accessToken: string) {
         // Revisão humana: nenhum processo (direto ou auto-resolvido). Um courier
         // com apenas candidatos 1:N também precisa de revisão.
         precisaRevisao: processosEfetivos.length === 0,
+        // Identificador opaco por linha (só com fatos duráveis ativos): a tela
+        // o devolve na conferência; quem decide a proveniência é o servidor.
+        ...(linhas ? { linhas } : {}),
       };
     });
 
@@ -651,6 +764,8 @@ async function buildCourierView(accessToken: string) {
       couriers,
       // Lista completa (inclui Concluídos) — usada só pelas KPIs de /stats.
       couriersAll,
+      // Estados confirmados (JSON legado + durável) — internos, só para /stats.
+      estadosConfirmados: estados,
       processosSemCourier: Array.from(processosSemCourier.values()).sort((a, b) =>
         a.data < b.data ? 1 : -1,
       ),
@@ -663,26 +778,15 @@ type CourierView = Awaited<ReturnType<typeof buildCourierView>>;
 type CourierRow = CourierView['couriersAll'][number];
 
 /**
- * GET /api/couriers — visão operacional dos couriers a partir do Outlook.
- * (couriersAll é interno — não vai para o cliente aqui.)
- */
-courierRouter.get('/', async (req: AuthedRequest, res, next) => {
-  try {
-    const { couriersAll, ...payload } = await buildCourierView(req.accessToken!);
-    void couriersAll;
-    res.json(payload);
-  } catch (err) {
-    next(err);
-  }
-});
-
-/**
  * Calcula as KPIs de gestão a partir da MESMA lista de couriers (couriersAll,
  * inclui Concluídos). Tudo derivado do que existe — nada inventado. Métricas
  * sem base suficiente (ex.: tempo médio sem couriers concluídos) voltam null.
  */
-function computeCourierStats(couriers: CourierRow[], concluidosCount: number) {
-  const estados = getAllEstados();
+function computeCourierStats(
+  couriers: CourierRow[],
+  concluidosCount: number,
+  estados: Record<string, CourierEstadoRegistro>,
+) {
   const now = new Date();
   const monthKey = (d: Date) =>
     `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
@@ -809,23 +913,11 @@ function computeCourierStats(couriers: CourierRow[], concluidosCount: number) {
 }
 
 /**
- * GET /api/couriers/stats — KPIs de gestão (aba Gestão → Relatórios) derivadas
- * da MESMA lista de couriers, para os números baterem com a aba Couriers.
- */
-courierRouter.get('/stats', async (req: AuthedRequest, res, next) => {
-  try {
-    const view = await buildCourierView(req.accessToken!);
-    res.json(computeCourierStats(view.couriersAll, view.concluidos));
-  } catch (err) {
-    next(err);
-  }
-});
-
-/**
  * Mapeia, LINHA A LINHA (Regra 4 do Manual), qual documento cada processo
  * espera. Nas listas dos agentes cada linha traz ...OMBL/OHBL... IMxxxx, então
  * dá para saber, por processo, se o esperado é o MBL (master) e/ou o HBL (house).
  * Detecta OHBL/HBL e OMBL/MBL de forma independente (OMBL não casa com HBL).
+ * A chave é a referência EXATA da linha (IM2151-26 não herda o que se diz de IM2151).
  */
 function mapProcessDocs(
   messages: Awaited<ReturnType<typeof getConversationFull>>,
@@ -833,15 +925,13 @@ function mapProcessDocs(
   const text = messages
     .map((m) => m.body?.content || m.bodyPreview || '')
     .join('\n');
-  const RE_IM = /\bIM\d{3,6}\b/gi;
   const map = new Map<string, { mbl: boolean; hbl: boolean }>();
   for (const line of text.split(/\r?\n/)) {
-    const procs = line.match(RE_IM);
-    if (!procs) continue;
+    const procs = codigosDistintos(capturarReferenciasProcesso(line));
+    if (!procs.length) continue;
     const hbl = /\bO?HBL\b/i.test(line);
     const mbl = /\bO?MBL\b/i.test(line);
-    for (const p of procs) {
-      const k = p.toUpperCase();
+    for (const k of procs) {
       const e = map.get(k) || { mbl: false, hbl: false };
       if (mbl) e.mbl = true;
       if (hbl) e.hbl = true;
@@ -920,113 +1010,14 @@ function derivarExpectativa(a: Awaited<ReturnType<typeof parseThread>>) {
 }
 
 /**
- * GET /api/couriers/:conversationId/analysis — a Clara lê o courier INTEIRO e
- * devolve a expectativa documental do envelope, com evidências e confiança.
- *
- * Multi-conversa: um mesmo courier costuma se espalhar por várias threads. O
- * front passa as demais conversas em `?ids=cid2,cid3` (as ligadas por processo)
- * e aqui mesclamos todas as mensagens numa única análise. Sob demanda (ao
- * expandir o courier). 1 chamada de IA, cobrindo todas as threads.
- */
-courierRouter.get(
-  '/:conversationId/analysis',
-  async (req: AuthedRequest, res, next) => {
-    try {
-      if (!isAiConfigured()) {
-        return res.status(503).json({
-          error: 'Recursos de IA indisponíveis. Defina GEMINI_API_KEY no servidor.',
-        });
-      }
-
-      // Conversa principal + as ligadas por processo (multi-thread). Limita para
-      // não estourar tempo/tokens: no máx. 6 threads por courier.
-      const extraIds = String(req.query.ids || '')
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean);
-      const convIds = Array.from(
-        new Set([req.params.conversationId, ...extraIds]),
-      ).slice(0, 6);
-
-      const perThread = await Promise.all(
-        convIds.map((cid) =>
-          withTimeout(
-            getConversationFull(req.accessToken!, cid, { top: 50 }),
-            15000,
-            'getConversationFull',
-          ).catch(() => []),
-        ),
-      );
-      // Mescla e deduplica por id de mensagem; ordena cronologicamente.
-      const byId = new Map<string, (typeof perThread)[number][number]>();
-      for (const thread of perThread)
-        for (const m of thread) if (!byId.has(m.id)) byId.set(m.id, m);
-      const messages = Array.from(byId.values()).sort((a, b) =>
-        (a.receivedDateTime || '') < (b.receivedDateTime || '') ? -1 : 1,
-      );
-      if (messages.length === 0) {
-        return res.status(404).json({ error: 'Conversa não encontrada.' });
-      }
-
-      // E-mails encaminhados como ANEXO: injeta o conteúdo do e-mail aninhado no
-      // corpo, para a Clara ler o que foi encaminhado (senão fica invisível).
-      await Promise.all(
-        messages
-          .filter((m) => m.hasAttachments)
-          .map(async (m) => {
-            const texts = await withTimeout(
-              getItemAttachmentTexts(req.accessToken!, m.id),
-              8000,
-              'itemAttachment',
-            ).catch(() => [] as string[]);
-            if (texts.length) {
-              const extra =
-                '\n\n--- E-mail encaminhado (anexo) ---\n' + texts.join('\n\n');
-              m.body = {
-                contentType: m.body?.contentType || 'text',
-                content: (m.body?.content || '') + extra,
-              };
-            }
-          }),
-      );
-
-      const analysis = await parseThread(messages);
-      res.json({
-        ...analysis,
-        expectativa: derivarExpectativa(analysis),
-        processosDetalhe: mapProcessDocs(messages),
-      });
-    } catch (err) {
-      next(err);
-    }
-  },
-);
-
-/**
- * POST /api/couriers/:tracking/estado — o OPERADOR confirma um estado do courier
- * (ex.: "Recebido", "Concluído"). Persistido separadamente das conclusões da
- * Clara, preservando a fonte da verdade (Outlook x Operador).
- */
-courierRouter.post('/:tracking/estado', (req: AuthedRequest, res) => {
-  const estado = String(req.body?.estado || '') as CourierEstado;
-  if (!ESTADOS_VALIDOS.includes(estado)) {
-    return res.status(400).json({
-      error: `Estado inválido. Use um de: ${ESTADOS_VALIDOS.join(', ')}.`,
-    });
-  }
-  const registro = setEstado(req.params.tracking, estado, req.body?.nota);
-  res.json({ tracking: req.params.tracking, ...registro });
-});
-
-/**
  * Escolhe, na thread, a mensagem a responder: a MAIS RECENTE que não foi
  * enviada pelo próprio analista (ou seja, a última do agente). Se todas forem
  * do analista, usa a mais recente mesmo. Retorna null se a thread está vazia.
  */
-async function pickReplyTarget(accessToken: string, conversationId: string) {
+async function pickReplyTarget(g: GraphCourier, accessToken: string, conversationId: string) {
   const [msgs, myAddrs] = await Promise.all([
-    getConversation(accessToken, conversationId, { top: 50 }),
-    getMyAddresses(accessToken),
+    g.getConversation(accessToken, conversationId, { top: 50 }),
+    g.getMyAddresses(accessToken),
   ]);
   if (msgs.length === 0) return null;
   const mine = new Set(myAddrs);
@@ -1038,109 +1029,377 @@ async function pickReplyTarget(accessToken: string, conversationId: string) {
   return pool[pool.length - 1]; // getConversation devolve em ordem cronológica
 }
 
-/**
- * GET /api/couriers/:conversationId/reply-info — dados para o modal "Responder
- * ao Agente": assunto EXATO da thread e destinatário (o agente). Nada é criado
- * nem enviado aqui; é só leitura para pré-visualização.
- */
-courierRouter.get(
-  '/:conversationId/reply-info',
-  async (req: AuthedRequest, res, next) => {
+/** Dependências do router (todas injetáveis nos testes; o padrão é o runtime real). */
+export interface CourierRouterDeps {
+  auth?: RequestHandler;
+  graph?: Partial<GraphCourier>;
+  ia?: { configurada?: () => boolean; analisar?: typeof parseThread };
+  /** Fatos duráveis S1 (chave desligada por padrão). */
+  fatos?: FatosDuraveisDeps;
+  /** Conta Microsoft da caixa monitorada que gera a visão (liga o identificador da linha à caixa). */
+  caixaMonitorada?: () => string | null;
+  segredoLinha?: () => string | null;
+}
+
+/** Resposta de uma escrita durável, sem expor nada além do resultado. */
+function resumoDuravel(r: ResultadoFatoCourier) {
+  return r.status === 'REGISTRADO'
+    ? { gravado: true, fatoId: r.fatoId, identidade: r.identidade.tipo }
+    : { gravado: false, motivo: 'SEM_MUDANCA', fatoId: r.fatoId };
+}
+
+/** Erro de entrada/contexto de uma escrita durável → 4xx; o resto segue para o handler de erro. */
+function erroDuravel(err: unknown): { status: number; error: string } | null {
+  if (err instanceof ErroFatoCourier) return { status: 400, error: err.codigo };
+  if (err instanceof ErroContextoOperacional) return { status: 403, error: err.motivo };
+  return null;
+}
+
+export function criarCourierRouter(deps: CourierRouterDeps = {}): Router {
+  const router = Router();
+  router.use(deps.auth ?? requireAuth);
+  const g: GraphCourier = { ...GRAPH_PADRAO, ...(deps.graph || {}) };
+  const iaConfigurada = deps.ia?.configurada ?? isAiConfigured;
+  const analisar = deps.ia?.analisar ?? parseThread;
+  const fatos = deps.fatos ?? fatosDuraveisPadrao();
+  const caixaMonitorada = deps.caixaMonitorada ?? (() => getActiveAccount()?.homeAccountId ?? null);
+  const segredoLinha = deps.segredoLinha ?? (() => segredoLinhaPadrao());
+
+  /**
+   * Opções da visão com os fatos duráveis ativos (chave ligada E contexto
+   * resolvido): linhas com identificador opaco e estado durável sobreposto.
+   * Sem isso, a visão é exatamente a de antes (JSON legado, sem identificador).
+   */
+  async function opcoesDaVisao(req: AuthedRequest): Promise<OpcoesVisao> {
+    const ctx = await contextoDaRequisicao(fatos, req);
+    if (!ctx.ok) return {};
+    const segredo = segredoLinha();
+    const caixa = caixaMonitorada();
+    const organizationId = ctx.contexto.organizationId;
+    return {
+      emitirLinha: segredo && caixa ? (linha) => emitirLinha(segredo, caixa, linha) : undefined,
+      carregarDuraveis: (chaves) => projecaoCourierParaTela(fatos.pool(), organizationId, chaves),
+    };
+  }
+
+  /**
+   * GET /api/couriers — visão operacional dos couriers a partir do Outlook.
+   * (couriersAll é interno — não vai para o cliente aqui.)
+   */
+  router.get('/', async (req: AuthedRequest, res, next) => {
     try {
-      const target = await pickReplyTarget(
-        req.accessToken!,
-        req.params.conversationId,
-      );
+      const { couriersAll, estadosConfirmados, ...payload } = await buildCourierView(req.accessToken!, g, await opcoesDaVisao(req));
+      void couriersAll;
+      void estadosConfirmados;
+      res.json(payload);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
+   * GET /api/couriers/stats — KPIs de gestão (aba Gestão → Relatórios) derivadas
+   * da MESMA lista de couriers, para os números baterem com a aba Couriers.
+   */
+  router.get('/stats', async (req: AuthedRequest, res, next) => {
+    try {
+      const view = await buildCourierView(req.accessToken!, g, await opcoesDaVisao(req));
+      res.json(computeCourierStats(view.couriersAll, view.concluidos, view.estadosConfirmados));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
+   * GET /api/couriers/:conversationId/analysis — a Clara lê o courier INTEIRO e
+   * devolve a expectativa documental do envelope, com evidências e confiança.
+   *
+   * Multi-conversa: um mesmo courier costuma se espalhar por várias threads. O
+   * front passa as demais conversas em `?ids=cid2,cid3` (as ligadas por processo)
+   * e aqui mesclamos todas as mensagens numa única análise. Sob demanda (ao
+   * expandir o courier). 1 chamada de IA, cobrindo todas as threads.
+   *
+   * `processosClara`: os processos que a Clara leu E que estão escritos, por
+   * inteiro, nas conversas analisadas (forma exata do S6). Um código que a IA
+   * devolve truncado ou reduzido à base não vira linha.
+   */
+  router.get(
+    '/:conversationId/analysis',
+    async (req: AuthedRequest, res, next) => {
+      try {
+        if (!iaConfigurada()) {
+          return res.status(503).json({
+            error: 'Recursos de IA indisponíveis. Defina GEMINI_API_KEY no servidor.',
+          });
+        }
+
+        // Conversa principal + as ligadas por processo (multi-thread). Limita para
+        // não estourar tempo/tokens: no máx. 6 threads por courier.
+        const extraIds = String(req.query.ids || '')
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean);
+        const convIds = Array.from(
+          new Set([req.params.conversationId, ...extraIds]),
+        ).slice(0, 6);
+
+        const perThread = await Promise.all(
+          convIds.map((cid) =>
+            withTimeout(
+              g.getConversationFull(req.accessToken!, cid, { top: 50 }),
+              15000,
+              'getConversationFull',
+            ).catch(() => []),
+          ),
+        );
+        // Mescla e deduplica por id de mensagem; ordena cronologicamente.
+        const byId = new Map<string, (typeof perThread)[number][number]>();
+        for (const thread of perThread)
+          for (const m of thread) if (!byId.has(m.id)) byId.set(m.id, m);
+        const messages = Array.from(byId.values()).sort((a, b) =>
+          (a.receivedDateTime || '') < (b.receivedDateTime || '') ? -1 : 1,
+        );
+        if (messages.length === 0) {
+          return res.status(404).json({ error: 'Conversa não encontrada.' });
+        }
+
+        // E-mails encaminhados como ANEXO: injeta o conteúdo do e-mail aninhado no
+        // corpo, para a Clara ler o que foi encaminhado (senão fica invisível).
+        await Promise.all(
+          messages
+            .filter((m) => m.hasAttachments)
+            .map(async (m) => {
+              const texts = await withTimeout(
+                g.getItemAttachmentTexts(req.accessToken!, m.id),
+                8000,
+                'itemAttachment',
+              ).catch(() => [] as string[]);
+              if (texts.length) {
+                const extra =
+                  '\n\n--- E-mail encaminhado (anexo) ---\n' + texts.join('\n\n');
+                m.body = {
+                  contentType: m.body?.contentType || 'text',
+                  content: (m.body?.content || '') + extra,
+                };
+              }
+            }),
+        );
+
+        const analysis = await analisar(messages);
+        const citados = capturarReferenciasProcesso(
+          messages.map((m) => `${m.subject || ''}\n${m.body?.content || m.bodyPreview || ''}`).join('\n'),
+        );
+        const literais = new Set(codigosDistintos(citados));
+        const processosClara = Array.from(new Set(
+          (analysis.processNumbers || []).map((p) => limparCodigoProcesso(p)),
+        )).filter((p) => literais.has(p));
+        // Identificador opaco das linhas que a Clara acrescenta (classe CLARA, nunca oficial).
+        let linhasClara: Record<string, string> | undefined;
+        const trackingChave = trackingKey(String(req.query.tracking || ''));
+        if (trackingChave && processosClara.length) {
+          const opcoes = await opcoesDaVisao(req);
+          if (opcoes.emitirLinha) {
+            linhasClara = Object.fromEntries(processosClara.map((p) => [p, opcoes.emitirLinha!({
+              trackingChave, processoRef: p, associacao: 'CLARA',
+              brutas: Array.from(new Set(citados.filter((c) => c.limpa === p).map((c) => c.bruta))),
+            })]));
+          }
+        }
+        res.json({
+          ...analysis,
+          expectativa: derivarExpectativa(analysis),
+          processosDetalhe: mapProcessDocs(messages),
+          processosClara,
+          ...(linhasClara ? { linhasClara } : {}),
+        });
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  /**
+   * POST /api/couriers/:tracking/estado — o OPERADOR confirma um estado do courier
+   * (ex.: "Recebido", "Concluído"). Persistido separadamente das conclusões da
+   * Clara, preservando a fonte da verdade (Outlook x Operador). Com os fatos
+   * duráveis ativos (S1), o estado vai para `courier_fatos` (sobrevive à troca de conta).
+   */
+  router.post('/:tracking/estado', async (req: AuthedRequest, res, next) => {
+    try {
+      const estado = String(req.body?.estado || '') as CourierEstado;
+      if (!ESTADOS_VALIDOS.includes(estado)) {
+        return res.status(400).json({
+          error: `Estado inválido. Use um de: ${ESTADOS_VALIDOS.join(', ')}.`,
+        });
+      }
+      const ctx = await contextoDaRequisicao(fatos, req);
+      if (!ctx.ok) {
+        const registro = setEstado(req.params.tracking, estado, req.body?.nota);
+        return res.json({
+          tracking: req.params.tracking, ...registro,
+          ...(ctx.motivo !== 'FATOS_DURAVEIS_DESLIGADOS' ? { duravel: { gravado: false, motivo: ctx.motivo } } : {}),
+        });
+      }
+      try {
+        const r = await registrarEstadoEnvelope(fatos.pool(), ctx.contexto, {
+          trackingBruto: req.params.tracking, estado, nota: req.body?.nota,
+        });
+        // O JSON legado acompanha o fato durável (cache para quando a chave for desligada).
+        const registro = setEstado(req.params.tracking, estado, req.body?.nota);
+        res.json({ tracking: req.params.tracking, ...registro, duravel: resumoDuravel(r) });
+      } catch (err) {
+        const e = erroDuravel(err);
+        if (e) return res.status(e.status).json({ error: e.error });
+        throw err;
+      }
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
+   * GET /api/couriers/:conversationId/reply-info — dados para o modal "Responder
+   * ao Agente": assunto EXATO da thread e destinatário (o agente). Nada é criado
+   * nem enviado aqui; é só leitura para pré-visualização.
+   */
+  router.get(
+    '/:conversationId/reply-info',
+    async (req: AuthedRequest, res, next) => {
+      try {
+        const target = await pickReplyTarget(
+          g,
+          req.accessToken!,
+          req.params.conversationId,
+        );
+        if (!target) {
+          return res.status(404).json({ error: 'Conversa não encontrada.' });
+        }
+        res.json({
+          messageId: target.id,
+          subject: target.subject || '(sem assunto)',
+          toName: target.from?.emailAddress.name || null,
+          toAddress: target.from?.emailAddress.address || null,
+        });
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  /**
+   * POST /api/couriers/reply-draft — cria o RASCUNHO de resposta na própria
+   * thread (mesmo assunto, mesmos destinatários, mesma conversa) com o corpo do
+   * follow-up. NÃO envia: devolve o webLink do rascunho para o analista revisar
+   * e enviar no Outlook. body: { conversationId, body }.
+   */
+  router.post('/reply-draft', async (req: AuthedRequest, res, next) => {
+    try {
+      const conversationId = String(req.body?.conversationId || '').trim();
+      const bodyText = String(req.body?.body || '').trim();
+      if (!conversationId || !bodyText) {
+        return res
+          .status(400)
+          .json({ error: 'Informe conversationId e o corpo do e-mail.' });
+      }
+      const target = await pickReplyTarget(g, req.accessToken!, conversationId);
       if (!target) {
         return res.status(404).json({ error: 'Conversa não encontrada.' });
       }
+      const draft = await g.createReplyDraft(req.accessToken!, target.id, bodyText);
       res.json({
-        messageId: target.id,
-        subject: target.subject || '(sem assunto)',
-        toName: target.from?.emailAddress.name || null,
-        toAddress: target.from?.emailAddress.address || null,
+        draftId: draft.id,
+        webLink: draft.webLink,
+        repliedTo: target.id,
       });
     } catch (err) {
       next(err);
     }
-  },
-);
+  });
 
-/**
- * POST /api/couriers/reply-draft — cria o RASCUNHO de resposta na própria
- * thread (mesmo assunto, mesmos destinatários, mesma conversa) com o corpo do
- * follow-up. NÃO envia: devolve o webLink do rascunho para o analista revisar
- * e enviar no Outlook. body: { conversationId, body }.
- */
-courierRouter.post('/reply-draft', async (req: AuthedRequest, res, next) => {
-  try {
-    const conversationId = String(req.body?.conversationId || '').trim();
-    const bodyText = String(req.body?.body || '').trim();
-    if (!conversationId || !bodyText) {
-      return res
-        .status(400)
-        .json({ error: 'Informe conversationId e o corpo do e-mail.' });
+  /**
+   * POST /api/couriers/:tracking/followup — registra que o analista JÁ realizou
+   * o follow-up de um documento não recebido (rascunho criado ou ação manual).
+   * NÃO resolve a divergência — o documento continua pendente. body: { processo,
+   * documento, via? } (via: "draft" | "manual"; null desfaz).
+   */
+  router.post('/:tracking/followup', (req: AuthedRequest, res) => {
+    const processo = String(req.body?.processo || '').trim();
+    const documento = String(req.body?.documento || '') as DocKey;
+    const rawVia = req.body?.via;
+    const via: 'draft' | 'manual' | null =
+      rawVia === 'draft' ? 'draft' : rawVia === null ? null : 'manual';
+    if (!processo) {
+      return res.status(400).json({ error: 'Informe o processo.' });
     }
-    const target = await pickReplyTarget(req.accessToken!, conversationId);
-    if (!target) {
-      return res.status(404).json({ error: 'Conversa não encontrada.' });
+    if (documento !== 'mbl' && documento !== 'hbl') {
+      return res.status(400).json({ error: 'Documento inválido (use "mbl" ou "hbl").' });
     }
-    const draft = await createReplyDraft(req.accessToken!, target.id, bodyText);
-    res.json({
-      draftId: draft.id,
-      webLink: draft.webLink,
-      repliedTo: target.id,
-    });
-  } catch (err) {
-    next(err);
-  }
-});
+    const followups = setFollowUp(req.params.tracking, processo, documento, via);
+    res.json({ tracking: req.params.tracking, followups });
+  });
 
-/**
- * POST /api/couriers/:tracking/followup — registra que o analista JÁ realizou
- * o follow-up de um documento não recebido (rascunho criado ou ação manual).
- * NÃO resolve a divergência — o documento continua pendente. body: { processo,
- * documento, via? } (via: "draft" | "manual"; null desfaz).
- */
-courierRouter.post('/:tracking/followup', (req: AuthedRequest, res) => {
-  const processo = String(req.body?.processo || '').trim();
-  const documento = String(req.body?.documento || '') as DocKey;
-  const rawVia = req.body?.via;
-  const via: 'draft' | 'manual' | null =
-    rawVia === 'draft' ? 'draft' : rawVia === null ? null : 'manual';
-  if (!processo) {
-    return res.status(400).json({ error: 'Informe o processo.' });
-  }
-  if (documento !== 'mbl' && documento !== 'hbl') {
-    return res.status(400).json({ error: 'Documento inválido (use "mbl" ou "hbl").' });
-  }
-  const followups = setFollowUp(req.params.tracking, processo, documento, via);
-  res.json({ tracking: req.params.tracking, followups });
-});
+  /**
+   * POST /api/couriers/:tracking/conferencia — o OPERADOR marca, na conferência,
+   * se um documento (MBL/HBL) de um processo chegou. body: { processo, documento,
+   * status, linha? }. status null desmarca. Só faz sentido após o courier ser
+   * "Recebido".
+   *
+   * Com os fatos duráveis ativos (S1): o fato vai para `courier_fatos` com a
+   * referência EXATA da linha, o autor (pessoa) e a caixa monitorada. A
+   * proveniência sai do identificador opaco `linha` emitido pelo servidor;
+   * qualquer campo de proveniência/organização enviado pelo navegador é ignorado.
+   */
+  router.post('/:tracking/conferencia', async (req: AuthedRequest, res, next) => {
+    try {
+      const processo = String(req.body?.processo || '').trim();
+      const documento = String(req.body?.documento || '') as DocKey;
+      const rawStatus = req.body?.status;
+      const status: DocStatus | null =
+        rawStatus === 'recebido' || rawStatus === 'nao_recebido' ? rawStatus : null;
 
-/**
- * POST /api/couriers/:tracking/conferencia — o OPERADOR marca, na conferência,
- * se um documento (MBL/HBL) de um processo chegou. body: { processo, documento,
- * status }. status null desmarca. Só faz sentido após o courier ser "Recebido".
- */
-courierRouter.post('/:tracking/conferencia', (req: AuthedRequest, res) => {
-  const processo = String(req.body?.processo || '').trim();
-  const documento = String(req.body?.documento || '') as DocKey;
-  const rawStatus = req.body?.status;
-  const status: DocStatus | null =
-    rawStatus === 'recebido' || rawStatus === 'nao_recebido' ? rawStatus : null;
+      if (!processo) {
+        return res.status(400).json({ error: 'Informe o processo.' });
+      }
+      if (documento !== 'mbl' && documento !== 'hbl') {
+        return res.status(400).json({ error: 'Documento inválido (use "mbl" ou "hbl").' });
+      }
+      const ctx = await contextoDaRequisicao(fatos, req);
+      if (!ctx.ok) {
+        const conferencia = setConferenciaDoc(req.params.tracking, processo, documento, status);
+        return res.json({
+          tracking: req.params.tracking, conferencia,
+          ...(ctx.motivo !== 'FATOS_DURAVEIS_DESLIGADOS' ? { duravel: { gravado: false, motivo: ctx.motivo } } : {}),
+        });
+      }
+      try {
+        const processoRef = limparCodigoProcesso(processo);
+        const proveniencia = verificarLinha(segredoLinha(), caixaMonitorada(), req.body?.linha, {
+          trackingChave: trackingKey(req.params.tracking), processoRef,
+        });
+        const r = await registrarConferenciaCourier(fatos.pool(), ctx.contexto, {
+          trackingBruto: req.params.tracking,
+          processoRef: processo,
+          documento: documento === 'mbl' ? 'MBL' : 'HBL_ORIGINAL',
+          valor: status === 'recebido' ? 'RECEBIDO' : status === 'nao_recebido' ? 'AUSENTE_NA_CONFERENCIA' : 'DESMARCADO',
+          proveniencia,
+        });
+        // O JSON legado acompanha o fato durável (cache para quando a chave for desligada).
+        const conferencia = setConferenciaDoc(req.params.tracking, processoRef, documento, status);
+        res.json({
+          tracking: req.params.tracking, conferencia,
+          duravel: { ...resumoDuravel(r), proveniencia: proveniencia.associacao },
+        });
+      } catch (err) {
+        const e = erroDuravel(err);
+        if (e) return res.status(e.status).json({ error: e.error });
+        throw err;
+      }
+    } catch (err) {
+      next(err);
+    }
+  });
 
-  if (!processo) {
-    return res.status(400).json({ error: 'Informe o processo.' });
-  }
-  if (documento !== 'mbl' && documento !== 'hbl') {
-    return res.status(400).json({ error: 'Documento inválido (use "mbl" ou "hbl").' });
-  }
-  const conferencia = setConferenciaDoc(
-    req.params.tracking,
-    processo,
-    documento,
-    status,
-  );
-  res.json({ tracking: req.params.tracking, conferencia });
-});
+  return router;
+}
+
+export const courierRouter = criarCourierRouter();

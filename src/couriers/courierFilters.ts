@@ -14,6 +14,7 @@
  */
 
 import courierFiltersJson from './courierFilters.json';
+import { CandidatoProcesso, capturarReferenciasProcesso } from '../identidade/captura';
 
 export type CourierCandidateLevel =
   | 'IGNORE'
@@ -44,7 +45,10 @@ export interface CourierFilterResult {
   normalizedText: string;
   signals: CourierFilterSignal[];
   extracted: {
+    /** Códigos de processo EXATOS (forma limpa do S6), nunca truncados nem reduzidos à base. */
     processNumbers: string[];
+    /** Cada citação como apareceu no texto (a forma bruta é preservada). */
+    processReferences: CandidatoProcesso[];
     containerNumbers: string[];
     trackingCandidates: Array<{
       carrier: string | null;
@@ -265,10 +269,10 @@ export function evaluateCourierEmail(
   const destination = findKeywords(normalizedText, keywords.destinationIssuance);
   const weakNoise = findKeywords(normalizedText, keywords.weakNoiseTerms);
 
-  const processNumbers = extractAll(
-    originalText,
-    courierFilters.regex.rocketProcess,
-  ).map((value) => value.replace(/\s+/g, '').toUpperCase());
+  // Referência de processo: o token inteiro, validado pela gramática do S6
+  // (IM2151, IM2151-26 e IM2151-026 são distintos; IM2151-2611 nunca vira IM2151).
+  const processReferences = capturarReferenciasProcesso(originalText);
+  const processNumbers = processReferences.map((c) => c.limpa);
 
   const containerNumbers = extractAll(
     originalText,
@@ -357,6 +361,7 @@ export function evaluateCourierEmail(
     signals,
     extracted: {
       processNumbers: unique(processNumbers),
+      processReferences,
       containerNumbers: unique(containerNumbers),
       trackingCandidates,
       bookingCandidates: unique(bookingCandidates),

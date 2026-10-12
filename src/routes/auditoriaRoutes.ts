@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { RequestHandler, Router } from 'express';
 import { requireAuth, AuthedRequest } from '../middleware/requireAuth';
 import {
   searchLogisticsMessages,
@@ -16,6 +16,13 @@ import {
   docIlegivelPreAlerta,
 } from '../auditoria/preAlerta/extracaoPreAlerta';
 import { executarPreAlerta, DocPreAlerta, TipoDoc } from '../auditoria/preAlerta';
+import { capturarReferenciasProcesso } from '../identidade/captura';
+import { FatosDuraveisDeps, contextoDaRequisicao, fatosDuraveisPadrao } from '../operacional/requisicao';
+import {
+  ExtracaoParaPersistir,
+  TipoDetectado,
+  persistirExtracoesAuditoria,
+} from '../auditoria/fatos/extracoes';
 
 /**
  * Módulo Auditoria Documental (Blueprint completo).
@@ -30,9 +37,14 @@ import { executarPreAlerta, DocPreAlerta, TipoDoc } from '../auditoria/preAlerta
  *   GET /processos                      → central de processos (sem OCR)
  *   GET /:processo/auditoria            → executa a auditoria do processo
  */
-export const auditoriaRouter = Router();
+/** Leitura do Microsoft Graph usada pela Auditoria (injetável nos testes; o padrão é o Graph real). */
+export interface GraphAuditoria {
+  searchLogisticsMessages: typeof searchLogisticsMessages;
+  listRecentSummaries: typeof listRecentSummaries;
+  getFullMessage: typeof getFullMessage;
+}
 
-auditoriaRouter.use(requireAuth);
+const GRAPH_PADRAO: GraphAuditoria = { searchLogisticsMessages, listRecentSummaries, getFullMessage };
 
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
@@ -125,6 +137,13 @@ interface DocRef {
   contentType: string;
   origem: string;
   data: string;
+  /* Proveniência (S2-mín), toda do próprio e-mail, guardada ANTES do agrupamento por processo. */
+  internetMessageId: string | null;
+  remetente: string | null;
+  /** Referências de processo do assunto+corpo, inteiras, como apareceram (nunca truncadas nem reduzidas à base). */
+  referenciasBrutas: string[];
+  /** CITADA: o e-mail cita processo; REFERENCIA_CRUZADA: associado por referência (inferência). */
+  associacao: 'CITADA' | 'REFERENCIA_CRUZADA';
 }
 interface ProcessoAuditoria {
   processo: string;
@@ -139,15 +158,17 @@ interface ProcessoAuditoria {
 }
 
 /** Constrói a central de processos a partir do Outlook (sem OCR). Reutilizada. */
-async function buildProcessos(accessToken: string): Promise<{ processos: ProcessoAuditoria[]; source: string }> {
+async function buildProcessos(
+  accessToken: string, g: GraphAuditoria = GRAPH_PADRAO,
+): Promise<{ processos: ProcessoAuditoria[]; source: string }> {
   let messages = await withTimeout(
-    searchLogisticsMessages(accessToken, { keywords: config.logisticsKeywords, top: 60 }),
+    g.searchLogisticsMessages(accessToken, { keywords: config.logisticsKeywords, top: 60 }),
     20000,
     'searchLogistics',
   );
   let source = 'logistica';
   if (messages.length === 0) {
-    messages = await withTimeout(listRecentSummaries(accessToken, { top: 40 }), 20000, 'listInbox');
+    messages = await withTimeout(g.listRecentSummaries(accessToken, { top: 40 }), 20000, 'listInbox');
     source = 'inbox';
   }
 
@@ -190,7 +211,7 @@ async function buildProcessos(accessToken: string): Promise<{ processos: Process
   const comAnexo = messages.filter((m) => m.hasAttachments).slice(0, 30);
   const fulls = await Promise.all(
     comAnexo.map((m) =>
-      withTimeout(getFullMessage(accessToken, m.id), 9000, 'getFull').catch(() => null),
+      withTimeout(g.getFullMessage(accessToken, m.id), 9000, 'getFull').catch(() => null),
     ),
   );
 
@@ -201,11 +222,15 @@ async function buildProcessos(accessToken: string): Promise<{ processos: Process
   for (const full of fulls) {
     if (!full) continue;
     const texto = `${full.subject || ''}\n${full.body?.content || full.bodyPreview || ''}`;
+    // Referências brutas do próprio e-mail (cada forma distinta, como apareceu), antes de qualquer agrupamento/normalização.
+    const referenciasBrutas = Array.from(new Set(capturarReferenciasProcesso(texto).map((c) => c.bruta)));
+    let associacao: DocRef['associacao'] = 'CITADA';
     let procs = extractProcesses(texto);
     if (procs.length === 0) {
       const resolvido = resolvePorReferencia(texto);
       if (!resolvido) continue; // sem IM e sem referência que resolva → ignora
       procs = [resolvido];
+      associacao = 'REFERENCIA_CRUZADA';
     }
     const atts = (full.attachments || []).filter((a) =>
       isDocumentAttachment(a.name, a.contentType, a.isInline),
@@ -244,6 +269,10 @@ async function buildProcessos(accessToken: string): Promise<{ processos: Process
           contentType: a.contentType,
           origem: agenteDe(full),
           data: full.receivedDateTime || '',
+          internetMessageId: full.internetMessageId || null,
+          remetente: full.from?.emailAddress.address || null,
+          referenciasBrutas,
+          associacao,
         });
       }
       if ((full.receivedDateTime || '') > entry.data) entry.data = full.receivedDateTime || '';
@@ -282,34 +311,6 @@ async function buildProcessos(accessToken: string): Promise<{ processos: Process
   return { processos, source };
 }
 
-/** GET /api/auditoria/processos — central de processos (sem OCR). */
-auditoriaRouter.get('/processos', async (req: AuthedRequest, res, next) => {
-  try {
-    const { processos, source } = await buildProcessos(req.accessToken!);
-    // Não vaza refs internas de anexo para o cliente.
-    const publicos = processos.map((p) => ({
-      processo: p.processo,
-      cliente: p.cliente,
-      qtdDocs: p.qtdDocs,
-      tiposPresentes: p.tiposPresentes,
-      auditorias: p.auditorias,
-      faltando: p.faltando,
-      status: p.status,
-      data: p.data,
-      docs: p.docs.map((d) => ({ nome: d.nome, tipo: d.tipo, tipoLabel: d.tipoLabel })),
-    }));
-    res.json({
-      source,
-      count: publicos.length,
-      processos: publicos,
-      totalDocumentos: publicos.reduce((s, p) => s + p.qtdDocs, 0),
-      prontos: publicos.filter((p) => p.auditorias.length > 0).length,
-    });
-  } catch (err) {
-    next(err);
-  }
-});
-
 /* ------------------------------------------------------------------ *
  * Execução da auditoria (OCR + Playbooks + Clara). Com cache por
  * processo+assinatura de documentos (10.11). "?refresh=1" força reprocessar.
@@ -318,223 +319,343 @@ interface CacheEntry {
   sig: string;
   at: number;
   payload: unknown;
+  /** O que a extração produziu nesta execução, pronto para persistir (S2-mín) — sem novo OCR. */
+  extracoes: ExtracaoParaPersistir[];
 }
-const auditCache = new Map<string, CacheEntry>();
 
 // Tipos que têm Playbook na V1 — só extraímos esses (economia de OCR, 9.17/10.11).
 const TIPOS_AUDITAVEIS: DocTipo[] = ['MBL', 'HBL', 'CE_MASTER', 'CE_HOUSE'];
 
-auditoriaRouter.get('/:processo/auditoria', async (req: AuthedRequest, res, next) => {
-  try {
-    if (!isAiConfigured()) {
-      return res.status(503).json({
-        error: 'A leitura de documentos (OCR) exige a IA. Defina GEMINI_API_KEY no servidor.',
+/**
+ * Ponte S2-mín: extração já feita → observação persistível. Só entra o que o
+ * OCR realmente devolveu (tipo detectado pelo conteúdo); timeout/falha do
+ * extrator não é resultado e não vira fato.
+ */
+function extracoesParaPersistir(
+  candidatos: DocRef[], extraidos: DocumentoExtraido[], ocrOk: boolean[], modelo: string, extraidaEm: Date,
+): ExtracaoParaPersistir[] {
+  const out: ExtracaoParaPersistir[] = [];
+  candidatos.forEach((d, i) => {
+    const x = extraidos[i];
+    if (!ocrOk[i] || !x || !x.tipoDetectado) return;
+    const recebida = d.data ? new Date(d.data) : null;
+    out.push({
+      proveniencia: {
+        messageId: d.emailId, internetMessageId: d.internetMessageId, attachmentId: d.attachmentId, attachmentNome: d.nome,
+        contentType: d.contentType || null, remetente: d.remetente,
+        recebidaEm: recebida && !Number.isNaN(recebida.getTime()) ? recebida : null,
+        referenciasBrutas: d.referenciasBrutas, associacao: d.associacao,
+      },
+      resultado: {
+        tipoPorNome: d.tipo, tipoDetectado: x.tipoDetectado as TipoDetectado, legivel: x.legivel, conhecimento: x.conhecimento,
+      },
+      modelo,
+      extraidaEm,
+    });
+  });
+  return out;
+}
+
+/** Dependências do router (todas injetáveis nos testes; o padrão é o runtime real). */
+export interface AuditoriaRouterDeps {
+  auth?: RequestHandler;
+  graph?: Partial<GraphAuditoria>;
+  extrair?: typeof extrairDocumento;
+  extrairPreAlerta?: typeof extrairDocPreAlerta;
+  resumir?: typeof resumirAuditoria;
+  iaConfigurada?: () => boolean;
+  modelo?: () => string;
+  /** Fatos duráveis S2-mín (chave desligada por padrão). */
+  fatos?: FatosDuraveisDeps;
+  /** Recebe a promessa da persistência, que nunca bloqueia a resposta (testes aguardam por aqui). */
+  aoPersistir?: (persistencia: Promise<unknown>) => void;
+}
+
+export function criarAuditoriaRouter(deps: AuditoriaRouterDeps = {}): Router {
+  const router = Router();
+  router.use(deps.auth ?? requireAuth);
+  const g: GraphAuditoria = { ...GRAPH_PADRAO, ...(deps.graph || {}) };
+  const extrair = deps.extrair ?? extrairDocumento;
+  const extrairPA = deps.extrairPreAlerta ?? extrairDocPreAlerta;
+  const resumir = deps.resumir ?? resumirAuditoria;
+  const iaConfigurada = deps.iaConfigurada ?? isAiConfigured;
+  const modelo = deps.modelo ?? (() => config.ai.model);
+  const fatos = deps.fatos ?? fatosDuraveisPadrao();
+  const auditCache = new Map<string, CacheEntry>();
+  const preAlertaCache = new Map<string, { sig: string; payload: unknown }>();
+
+  /**
+   * Persistência S2-mín, idempotente e fora do caminho da resposta: a
+   * Auditoria responde igual com o banco fora. O que não gravar agora é
+   * reenviado do cache na próxima execução (sem OCR).
+   */
+  function submeterPersistencia(req: AuthedRequest, itens: ExtracaoParaPersistir[]): void {
+    if (!itens.length) return;
+    const persistencia = (async () => {
+      const ctx = await contextoDaRequisicao(fatos, req);
+      if (!ctx.ok) return { persistido: false, motivo: ctx.motivo };
+      return { persistido: true, resultados: await persistirExtracoesAuditoria(fatos.pool(), ctx.contexto, itens) };
+    })().catch((err) => {
+      console.error('[auditoria-fatos] persistência adiada (refeita na próxima execução, sem novo OCR):', (err as Error).message);
+      return { persistido: false, motivo: 'ERRO' };
+    });
+    deps.aoPersistir?.(persistencia);
+  }
+
+  /** GET /api/auditoria/processos — central de processos (sem OCR). */
+  router.get('/processos', async (req: AuthedRequest, res, next) => {
+    try {
+      const { processos, source } = await buildProcessos(req.accessToken!, g);
+      // Não vaza refs internas de anexo para o cliente.
+      const publicos = processos.map((p) => ({
+        processo: p.processo,
+        cliente: p.cliente,
+        qtdDocs: p.qtdDocs,
+        tiposPresentes: p.tiposPresentes,
+        auditorias: p.auditorias,
+        faltando: p.faltando,
+        status: p.status,
+        data: p.data,
+        docs: p.docs.map((d) => ({ nome: d.nome, tipo: d.tipo, tipoLabel: d.tipoLabel })),
+      }));
+      res.json({
+        source,
+        count: publicos.length,
+        processos: publicos,
+        totalDocumentos: publicos.reduce((s, p) => s + p.qtdDocs, 0),
+        prontos: publicos.filter((p) => p.auditorias.length > 0).length,
       });
+    } catch (err) {
+      next(err);
     }
-    const alvoBase = processBase(String(req.params.processo || '').toUpperCase());
-    const { processos } = await buildProcessos(req.accessToken!);
-    const proc = processos.find((p) => processBase(p.processo) === alvoBase);
-    if (!proc) {
-      return res.status(404).json({ error: 'Processo não encontrado na caixa do Courier.' });
-    }
+  });
 
-    // Documentos com Playbook, classificados pelo NOME do arquivo (um por tipo).
-    const selecionados: DocRef[] = [];
-    for (const t of TIPOS_AUDITAVEIS) {
-      const d = proc.docs.find((x) => x.tipo === t);
-      if (d) selecionados.push(d);
-    }
-
-    // O nome do anexo "às vezes" indica o tipo. Quando falta algum tipo
-    // auditável, também lemos anexos genéricos (OUTRO/Invoice/Packing) e deixamos
-    // o CONTEÚDO (tipoDetectado do OCR) reclassificá-los — assim um "doc1.pdf"
-    // que é um HBL passa a ser auditado. Limitado para não estourar o OCR.
-    const jaSel = new Set(selecionados.map((d) => d.nome.toLowerCase()));
-    const faltaTipo = TIPOS_AUDITAVEIS.some((t) => !selecionados.some((d) => d.tipo === t));
-    const extras: DocRef[] = faltaTipo
-      ? proc.docs
-          .filter(
-            (d) =>
-              !jaSel.has(d.nome.toLowerCase()) &&
-              (d.tipo === 'OUTRO' || d.tipo === 'INVOICE' || d.tipo === 'PACKING') &&
-              isDocumentAttachment(d.nome, d.contentType, false),
-          )
-          .slice(0, 4)
-      : [];
-    const candidatos: DocRef[] = [...selecionados, ...extras].slice(0, 6);
-
-    const sig = candidatos.map((d) => `${d.tipo}:${d.nome}`).sort().join('|');
-    const refresh = String(req.query.refresh || '') === '1';
-    const cacheKey = `${alvoBase}`;
-    const cached = auditCache.get(cacheKey);
-    if (!refresh && cached && cached.sig === sig) {
-      return res.json(cached.payload);
-    }
-
-    const semDocsPayload = () => ({
-      processo: proc.processo,
-      cliente: proc.cliente,
-      semDocumentos: true,
-      docs: proc.docs.map((d) => ({ nome: d.nome, tipoLabel: d.tipoLabel })),
-      faltando: proc.faltando,
-      resultado: null,
-      clara: null,
-    });
-    if (candidatos.length === 0) {
-      return res.json(semDocsPayload());
-    }
-
-    const vazio = (nome: string, tipo: DocTipo): DocumentoExtraido => ({
-      nome,
-      tipo,
-      tipoDetectado: null,
-      conhecimento: null,
-      portoOrigem: null,
-      portoDestino: null,
-      navio: null,
-      shipper: null,
-      consignee: null,
-      notify: null,
-      freteValor: null,
-      freteMoeda: null,
-      thcValor: null,
-      cliente: null,
-      containers: [],
-      legivel: false,
-    });
-    const ehAuditavel = (t: string): t is DocTipo => (TIPOS_AUDITAVEIS as string[]).includes(t);
-
-    // OCR/extração em paralelo (cada doc é defensivo: falha vira "ilegível").
-    const extraidos: DocumentoExtraido[] = await Promise.all(
-      candidatos.map((d) => {
-        const hint: DocTipo = ehAuditavel(d.tipo) ? d.tipo : 'OUTRO';
-        return withTimeout(
-          extrairDocumento(req.accessToken!, d.emailId, d.attachmentId, d.nome, hint),
-          40000,
-          'ocr',
-        ).catch(() => vazio(d.nome, hint));
-      }),
-    );
-
-    // Reclassifica pelo CONTEÚDO os anexos cujo NOME não deu um tipo auditável.
-    for (const d of extraidos) {
-      if (!ehAuditavel(d.tipo) && d.tipoDetectado && ehAuditavel(d.tipoDetectado)) {
-        d.tipo = d.tipoDetectado;
+  router.get('/:processo/auditoria', async (req: AuthedRequest, res, next) => {
+    try {
+      if (!iaConfigurada()) {
+        return res.status(503).json({
+          error: 'A leitura de documentos (OCR) exige a IA. Defina GEMINI_API_KEY no servidor.',
+        });
       }
-    }
+      const alvoBase = processBase(String(req.params.processo || '').toUpperCase());
+      const { processos } = await buildProcessos(req.accessToken!, g);
+      const proc = processos.find((p) => processBase(p.processo) === alvoBase);
+      if (!proc) {
+        return res.status(404).json({ error: 'Processo não encontrado na caixa do Courier.' });
+      }
 
-    // Um documento por tipo auditável (prefere legível). Só esses vão ao Playbook.
-    const paraAuditar: DocumentoExtraido[] = [];
-    for (const t of TIPOS_AUDITAVEIS) {
-      const doTipo = extraidos.filter((d) => d.tipo === t);
-      const escolhido = doTipo.find((d) => d.legivel) || doTipo[0];
-      if (escolhido) paraAuditar.push(escolhido);
-    }
-    if (paraAuditar.length === 0) {
-      return res.json(semDocsPayload());
-    }
+      // Documentos com Playbook, classificados pelo NOME do arquivo (um por tipo).
+      const selecionados: DocRef[] = [];
+      for (const t of TIPOS_AUDITAVEIS) {
+        const d = proc.docs.find((x) => x.tipo === t);
+        if (d) selecionados.push(d);
+      }
 
-    const resultado = executarAuditoria(paraAuditar);
-    const clara = await resumirAuditoria(resultado);
+      // O nome do anexo "às vezes" indica o tipo. Quando falta algum tipo
+      // auditável, também lemos anexos genéricos (OUTRO/Invoice/Packing) e deixamos
+      // o CONTEÚDO (tipoDetectado do OCR) reclassificá-los — assim um "doc1.pdf"
+      // que é um HBL passa a ser auditado. Limitado para não estourar o OCR.
+      const jaSel = new Set(selecionados.map((d) => d.nome.toLowerCase()));
+      const faltaTipo = TIPOS_AUDITAVEIS.some((t) => !selecionados.some((d) => d.tipo === t));
+      const extras: DocRef[] = faltaTipo
+        ? proc.docs
+            .filter(
+              (d) =>
+                !jaSel.has(d.nome.toLowerCase()) &&
+                (d.tipo === 'OUTRO' || d.tipo === 'INVOICE' || d.tipo === 'PACKING') &&
+                isDocumentAttachment(d.nome, d.contentType, false),
+            )
+            .slice(0, 4)
+        : [];
+      const candidatos: DocRef[] = [...selecionados, ...extras].slice(0, 6);
 
-    // Cliente: primeiro que a extração conseguir ler (best-effort).
-    const cliente = extraidos.map((d) => d.cliente).find(Boolean) || proc.cliente || null;
+      const sig = candidatos.map((d) => `${d.tipo}:${d.nome}`).sort().join('|');
+      const refresh = String(req.query.refresh || '') === '1';
+      const cacheKey = `${alvoBase}`;
+      const cached = auditCache.get(cacheKey);
+      if (!refresh && cached && cached.sig === sig) {
+        // Cache: OCR zero vezes. A extração em cache pode ser reenviada à
+        // persistência idempotente (recupera falha anterior do banco).
+        submeterPersistencia(req, cached.extracoes);
+        return res.json(cached.payload);
+      }
 
-    const payload = {
-      processo: proc.processo,
-      cliente,
-      semDocumentos: false,
-      qtdDocs: proc.qtdDocs,
-      docsAuditados: paraAuditar.map((d) => TIPO_LABEL[d.tipo]),
-      ilegiveis: extraidos.filter((d) => !d.legivel).map((d) => d.nome),
-      resultado,
-      clara,
-      data: proc.data,
-    };
-    auditCache.set(cacheKey, { sig, at: Date.now(), payload });
-    res.json(payload);
-  } catch (err) {
-    next(err);
-  }
-});
-
-/* ------------------------------------------------------------------ *
- * Motor NOVO — PB-001 Pré-Alerta determinístico (multi-House). Rota
- * PARALELA à /:processo/auditoria: não altera o caminho antigo, permite
- * comparar old × new antes de aposentar o playbooks.ts.
- * ------------------------------------------------------------------ */
-const preAlertaCache = new Map<string, { sig: string; payload: unknown }>();
-
-auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, next) => {
-  try {
-    if (!isAiConfigured()) {
-      return res.status(503).json({
-        error: 'A leitura de documentos (OCR) exige a IA. Defina GEMINI_API_KEY no servidor.',
+      const semDocsPayload = () => ({
+        processo: proc.processo,
+        cliente: proc.cliente,
+        semDocumentos: true,
+        docs: proc.docs.map((d) => ({ nome: d.nome, tipoLabel: d.tipoLabel })),
+        faltando: proc.faltando,
+        resultado: null,
+        clara: null,
       });
+      if (candidatos.length === 0) {
+        return res.json(semDocsPayload());
+      }
+
+      const vazio = (nome: string, tipo: DocTipo): DocumentoExtraido => ({
+        nome,
+        tipo,
+        tipoDetectado: null,
+        conhecimento: null,
+        portoOrigem: null,
+        portoDestino: null,
+        navio: null,
+        shipper: null,
+        consignee: null,
+        notify: null,
+        freteValor: null,
+        freteMoeda: null,
+        thcValor: null,
+        cliente: null,
+        containers: [],
+        legivel: false,
+      });
+      const ehAuditavel = (t: string): t is DocTipo => (TIPOS_AUDITAVEIS as string[]).includes(t);
+
+      // OCR/extração em paralelo (cada doc é defensivo: falha vira "ilegível").
+      const ocrOk: boolean[] = candidatos.map(() => true);
+      const extraidos: DocumentoExtraido[] = await Promise.all(
+        candidatos.map((d, i) => {
+          const hint: DocTipo = ehAuditavel(d.tipo) ? d.tipo : 'OUTRO';
+          return withTimeout(
+            extrair(req.accessToken!, d.emailId, d.attachmentId, d.nome, hint),
+            40000,
+            'ocr',
+          ).catch(() => {
+            ocrOk[i] = false;
+            return vazio(d.nome, hint);
+          });
+        }),
+      );
+
+      // Reclassifica pelo CONTEÚDO os anexos cujo NOME não deu um tipo auditável.
+      for (const d of extraidos) {
+        if (!ehAuditavel(d.tipo) && d.tipoDetectado && ehAuditavel(d.tipoDetectado)) {
+          d.tipo = d.tipoDetectado;
+        }
+      }
+
+      // S2-mín: TODO resultado da extração é persistido aqui, antes de os
+      // candidatos não escolhidos serem descartados. Não bloqueia a resposta.
+      const extracoes = extracoesParaPersistir(candidatos, extraidos, ocrOk, modelo(), new Date());
+      submeterPersistencia(req, extracoes);
+
+      // Um documento por tipo auditável (prefere legível). Só esses vão ao Playbook.
+      const paraAuditar: DocumentoExtraido[] = [];
+      for (const t of TIPOS_AUDITAVEIS) {
+        const doTipo = extraidos.filter((d) => d.tipo === t);
+        const escolhido = doTipo.find((d) => d.legivel) || doTipo[0];
+        if (escolhido) paraAuditar.push(escolhido);
+      }
+      if (paraAuditar.length === 0) {
+        return res.json(semDocsPayload());
+      }
+
+      const resultado = executarAuditoria(paraAuditar);
+      const clara = await resumir(resultado);
+
+      // Cliente: primeiro que a extração conseguir ler (best-effort).
+      const cliente = extraidos.map((d) => d.cliente).find(Boolean) || proc.cliente || null;
+
+      const payload = {
+        processo: proc.processo,
+        cliente,
+        semDocumentos: false,
+        qtdDocs: proc.qtdDocs,
+        docsAuditados: paraAuditar.map((d) => TIPO_LABEL[d.tipo]),
+        ilegiveis: extraidos.filter((d) => !d.legivel).map((d) => d.nome),
+        resultado,
+        clara,
+        data: proc.data,
+      };
+      auditCache.set(cacheKey, { sig, at: Date.now(), payload, extracoes });
+      res.json(payload);
+    } catch (err) {
+      next(err);
     }
-    const alvoBase = processBase(String(req.params.processo || '').toUpperCase());
-    const { processos } = await buildProcessos(req.accessToken!);
-    const proc = processos.find((p) => processBase(p.processo) === alvoBase);
-    if (!proc) {
-      return res.status(404).json({ error: 'Processo não encontrado na caixa do Courier.' });
+  });
+
+  /* ------------------------------------------------------------------ *
+   * Motor NOVO — PB-001 Pré-Alerta determinístico (multi-House). Rota
+   * PARALELA à /:processo/auditoria: não altera o caminho antigo, permite
+   * comparar old × new antes de aposentar o playbooks.ts. Não é fonte do S2-mín.
+   * ------------------------------------------------------------------ */
+  router.get('/:processo/pre-alerta', async (req: AuthedRequest, res, next) => {
+    try {
+      if (!iaConfigurada()) {
+        return res.status(503).json({
+          error: 'A leitura de documentos (OCR) exige a IA. Defina GEMINI_API_KEY no servidor.',
+        });
+      }
+      const alvoBase = processBase(String(req.params.processo || '').toUpperCase());
+      const { processos } = await buildProcessos(req.accessToken!, g);
+      const proc = processos.find((p) => processBase(p.processo) === alvoBase);
+      if (!proc) {
+        return res.status(404).json({ error: 'Processo não encontrado na caixa do Courier.' });
+      }
+
+      // Candidatos: BLs por nome + genéricos (fallback p/ reclassificação por conteúdo).
+      const bls = proc.docs.filter((d) => d.tipo === 'MBL' || d.tipo === 'HBL');
+      const jaNomes = new Set(bls.map((d) => d.nome.toLowerCase()));
+      const genericos = proc.docs.filter(
+        (d) =>
+          !jaNomes.has(d.nome.toLowerCase()) &&
+          (d.tipo === 'OUTRO' || d.tipo === 'INVOICE' || d.tipo === 'PACKING') &&
+          isDocumentAttachment(d.nome, d.contentType, false),
+      );
+      const candidatos = [...bls, ...genericos].slice(0, 8); // permite multi-House
+
+      if (candidatos.length === 0) {
+        return res.json({ processo: proc.processo, cliente: proc.cliente, semDocumentos: true, resultado: null });
+      }
+
+      const sig = candidatos.map((d) => `${d.tipo}:${d.nome}`).sort().join('|');
+      const refresh = String(req.query.refresh || '') === '1';
+      const cached = preAlertaCache.get(alvoBase);
+      if (!refresh && cached && cached.sig === sig) {
+        return res.json(cached.payload);
+      }
+
+      // OCR + reclassificação (nome concreto MBL/HBL prevalece; senão, conteúdo).
+      const extraidos = await Promise.all(
+        candidatos.map(async (d) => {
+          const hint: TipoDoc = d.tipo === 'HBL' ? 'HBL' : 'MBL';
+          const { doc, tipoDetectado } = await withTimeout(
+            extrairPA(req.accessToken!, d.emailId, d.attachmentId, d.nome, hint),
+            40000,
+            'ocr',
+          ).catch(() => ({ doc: docIlegivelPreAlerta(d.nome, hint), tipoDetectado: null }));
+          let tipoFinal: TipoDoc | null = null;
+          if (d.tipo === 'MBL' || d.tipo === 'HBL') tipoFinal = d.tipo;
+          else if (tipoDetectado === 'MBL' || tipoDetectado === 'HBL') tipoFinal = tipoDetectado;
+          return tipoFinal ? ({ ...doc, tipo: tipoFinal } as DocPreAlerta) : null;
+        }),
+      );
+      const docs = extraidos.filter((d): d is DocPreAlerta => d !== null);
+
+      const op = montarOperacao(proc.processo, docs);
+      const resultado = executarPreAlerta(op);
+
+      const payload = {
+        processo: proc.processo,
+        cliente: proc.cliente,
+        master: op.master ? op.master.nome : null,
+        houses: op.houses.map((h) => h.nome),
+        ilegiveis: docs.filter((d) => !d.legivel).map((d) => d.nome),
+        resultado: resultado.resultado,
+        familias: resultado.familias,
+        evidencias: resultado.evidencias,
+        data: proc.data,
+      };
+      preAlertaCache.set(alvoBase, { sig, payload });
+      res.json(payload);
+    } catch (err) {
+      next(err);
     }
+  });
 
-    // Candidatos: BLs por nome + genéricos (fallback p/ reclassificação por conteúdo).
-    const bls = proc.docs.filter((d) => d.tipo === 'MBL' || d.tipo === 'HBL');
-    const jaNomes = new Set(bls.map((d) => d.nome.toLowerCase()));
-    const genericos = proc.docs.filter(
-      (d) =>
-        !jaNomes.has(d.nome.toLowerCase()) &&
-        (d.tipo === 'OUTRO' || d.tipo === 'INVOICE' || d.tipo === 'PACKING') &&
-        isDocumentAttachment(d.nome, d.contentType, false),
-    );
-    const candidatos = [...bls, ...genericos].slice(0, 8); // permite multi-House
+  return router;
+}
 
-    if (candidatos.length === 0) {
-      return res.json({ processo: proc.processo, cliente: proc.cliente, semDocumentos: true, resultado: null });
-    }
-
-    const sig = candidatos.map((d) => `${d.tipo}:${d.nome}`).sort().join('|');
-    const refresh = String(req.query.refresh || '') === '1';
-    const cached = preAlertaCache.get(alvoBase);
-    if (!refresh && cached && cached.sig === sig) {
-      return res.json(cached.payload);
-    }
-
-    // OCR + reclassificação (nome concreto MBL/HBL prevalece; senão, conteúdo).
-    const extraidos = await Promise.all(
-      candidatos.map(async (d) => {
-        const hint: TipoDoc = d.tipo === 'HBL' ? 'HBL' : 'MBL';
-        const { doc, tipoDetectado } = await withTimeout(
-          extrairDocPreAlerta(req.accessToken!, d.emailId, d.attachmentId, d.nome, hint),
-          40000,
-          'ocr',
-        ).catch(() => ({ doc: docIlegivelPreAlerta(d.nome, hint), tipoDetectado: null }));
-        let tipoFinal: TipoDoc | null = null;
-        if (d.tipo === 'MBL' || d.tipo === 'HBL') tipoFinal = d.tipo;
-        else if (tipoDetectado === 'MBL' || tipoDetectado === 'HBL') tipoFinal = tipoDetectado;
-        return tipoFinal ? ({ ...doc, tipo: tipoFinal } as DocPreAlerta) : null;
-      }),
-    );
-    const docs = extraidos.filter((d): d is DocPreAlerta => d !== null);
-
-    const op = montarOperacao(proc.processo, docs);
-    const resultado = executarPreAlerta(op);
-
-    const payload = {
-      processo: proc.processo,
-      cliente: proc.cliente,
-      master: op.master ? op.master.nome : null,
-      houses: op.houses.map((h) => h.nome),
-      ilegiveis: docs.filter((d) => !d.legivel).map((d) => d.nome),
-      resultado: resultado.resultado,
-      familias: resultado.familias,
-      evidencias: resultado.evidencias,
-      data: proc.data,
-    };
-    preAlertaCache.set(alvoBase, { sig, payload });
-    res.json(payload);
-  } catch (err) {
-    next(err);
-  }
-});
+export const auditoriaRouter = criarAuditoriaRouter();
