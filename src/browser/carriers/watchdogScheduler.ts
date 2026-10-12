@@ -17,12 +17,16 @@ import { runWatchdog, WatchdogCarrierReport, WatchdogReport } from './watchdog';
  *
  * Canais (todos opcionais; sem nenhum, o relatório fica só no status/log):
  *  - WATCHDOG_ALERT_TO: e-mails (vírgula) — enviados PELA conta Microsoft
- *    vinculada (Graph), a mesma que o disparo automático usa;
+ *    vinculada (Graph), a mesma que o disparo automático usa. Padrão:
+ *    prioracontato@gmail.com; definida VAZIA, desliga o e-mail;
  *  - WATCHDOG_ALERT_WEBHOOK: URL que recebe POST JSON {text, content} (Slack,
  *    Teams, Discord ou qualquer automação).
  * Agenda: WATCHDOG_AUTO (1/0; padrão ligado em produção), WATCHDOG_HOUR_UTC
  * (padrão 6 = 03:00 em Brasília).
  */
+
+/** Destinatário padrão do alerta (pedido do usuário em 12/10). */
+export const DEFAULT_ALERT_TO = 'prioracontato@gmail.com';
 
 export interface WatchdogAutoConfig {
   enabled: boolean;
@@ -36,7 +40,8 @@ export function watchdogAutoConfig(): WatchdogAutoConfig {
   return {
     enabled: (process.env.WATCHDOG_AUTO ?? (config.isProduction ? '1' : '0')).trim() !== '0',
     hourUtc: Number.isInteger(hour) && hour >= 0 && hour <= 23 ? hour : 6,
-    alertTo: (process.env.WATCHDOG_ALERT_TO || '')
+    // Sem a variável: o contato da Priora. Variável VAZIA desliga o e-mail.
+    alertTo: (process.env.WATCHDOG_ALERT_TO ?? DEFAULT_ALERT_TO)
       .split(',')
       .map((s) => s.trim())
       .filter((s) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s)),

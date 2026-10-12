@@ -1,6 +1,6 @@
 import http from 'http';
 import type { AddressInfo } from 'net';
-import { isDue, nextSlot, buildAlert, deliverAlert, WatchdogRowLite } from './watchdogScheduler';
+import { isDue, nextSlot, buildAlert, deliverAlert, watchdogAutoConfig, WatchdogRowLite } from './watchdogScheduler';
 
 /**
  * Priora — Self-test OFFLINE do watchdog AUTOMÁTICO:
@@ -42,6 +42,15 @@ async function main(): Promise<void> {
   check('serviço dormiu às 06:00 e acordou às 09:00 → roda', isDue(d('2026-10-12T09:00:00Z'), d('2026-10-11T06:05:00Z'), 6));
   check('próxima depois de rodar hoje = amanhã 06:00', nextSlot(d('2026-10-12T10:00:00Z'), d('2026-10-12T06:05:00Z'), 6).toISOString() === '2026-10-13T06:00:00.000Z');
   check('próxima antes do horário = hoje 06:00', nextSlot(d('2026-10-12T03:00:00Z'), d('2026-10-11T06:05:00Z'), 6).toISOString() === '2026-10-12T06:00:00.000Z');
+
+  console.log('[selftest] destinatário do alerta');
+  delete process.env.WATCHDOG_ALERT_TO;
+  check('padrão = prioracontato@gmail.com', JSON.stringify(watchdogAutoConfig().alertTo) === '["prioracontato@gmail.com"]', watchdogAutoConfig().alertTo);
+  process.env.WATCHDOG_ALERT_TO = 'a@b.com, c@d.com';
+  check('variável substitui o padrão', JSON.stringify(watchdogAutoConfig().alertTo) === '["a@b.com","c@d.com"]', watchdogAutoConfig().alertTo);
+  process.env.WATCHDOG_ALERT_TO = '';
+  check('variável vazia desliga o e-mail', watchdogAutoConfig().alertTo.length === 0);
+  delete process.env.WATCHDOG_ALERT_TO;
 
   console.log('[selftest] quando avisar');
   const ok = [row('msc', 'healthy', 'ok'), row('zim', 'healthy', 'ok')];
