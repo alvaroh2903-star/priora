@@ -1,10 +1,12 @@
 # D16 — Fechamento e auditoria final de release do backend Demurrage
 
+**Revisão D16 v1.1 (corretiva):** esta versão incorpora a correção de fencing do claim individual do tracking scheduler (seção 6) e três correções documentais (seções 6, 13 e `docs/demurrage-fase-d15-b.md`/`docs/demurrage-fase-d15-c.md`), todas descritas inline nas seções afetadas e resumidas no final desta seção.
+
 ## 1. Status executivo
 
 O backend do módulo Demurrage (motor V2, fases D10 a D15-C v1.2) foi auditado de ponta a ponta nesta fase: rastreabilidade com o Blueprint original (32 capítulos), prova de banco limpo, 22 cenários verticais fim a fim pelos contratos oficiais, inventário completo de filas/scheduler, evidência de isolamento multiempresa e segurança, invariantes financeiros/temporais, modelo de leitura/desempenho e fronteira com o frontend.
 
-**Um defeito bloqueante de release foi encontrado durante a construção dos cenários verticais finais, e corrigido de forma mínima e localizada antes do fechamento desta fase** (seção 5.1). Fora dessa correção pontual, nenhum outro defeito bloqueante foi encontrado. O motor está completo, testado e congelado nas fases D10–D15-C v1.2. A limitação mais relevante identificada além do defeito corrigido não é um defeito, e sim um fato arquitetural já documentado desde a fase D10: o contrato de entrada (`registrarProcessoDemurrage`) e algumas ações de Gestor (fechamento, reabertura, decisão de responsabilidade) existem como serviços internos completos e testados, mas **ainda não têm rota pública de produção** — aguardam a integração controlada (com o pré-alerta/Auditoria e com o frontend) que esta própria fase D16 está explicitamente proibida de construir. Isso é consistente com a frase de encerramento desta fase: o backend está **pronto para integração controlada**, não para tráfego público imediato sem essa integração.
+**Dois defeitos bloqueantes de release foram encontrados e corrigidos de forma mínima e localizada:** o primeiro durante a construção dos cenários verticais finais (seção 5.1, moeda mista no Termo por Embarque); o segundo numa revisão corretiva subsequente (D16 v1.1, seção 6) — uma corrida de posse real no claim individual do tracking scheduler (`tracking_schedule_claims`), em que um worker que perdia a janela por timeout ainda conseguia finalizar a posse de quem a retomou, corrompendo o estado da janela. Fora dessas duas correções pontuais, nenhum outro defeito bloqueante foi encontrado. O motor está completo, testado e congelado nas fases D10–D15-C v1.2. A limitação mais relevante identificada além dos defeitos corrigidos não é um defeito, e sim um fato arquitetural já documentado desde a fase D10: o contrato de entrada (`registrarProcessoDemurrage`) e algumas ações de Gestor (fechamento, reabertura, decisão de responsabilidade) existem como serviços internos completos e testados, mas **ainda não têm rota pública de produção** — aguardam a integração controlada (com o pré-alerta/Auditoria e com o frontend) que esta própria fase D16 está explicitamente proibida de construir. Isso é consistente com a frase de encerramento desta fase: o backend está **pronto para integração controlada**, não para tráfego público imediato sem essa integração.
 
 ## 2. Baseline congelado (verificado nesta auditoria)
 
@@ -17,8 +19,9 @@ O backend do módulo Demurrage (motor V2, fases D10 a D15-C v1.2) foi auditado d
 | `67acf84` | D15-C — integridade tarifária e recuperação de filas (R28/R29/R30/R57/R58/R59) |
 | `0a0ee9c` | D15-C v1.1 (corretiva) — publicação tarifária e seleção determinística |
 | `203dd23` | D15-C v1.2 (corretiva) — fecha bypass de rascunho no Termo por Embarque |
+| `8a76a87` | D16 — auditoria de fechamento + correção do defeito de moeda mista no Termo por Embarque (baseline desta corretiva D16 v1.1) |
 
-Todos os sete commits foram confirmados presentes no histórico do branch (`git log -1 <hash>`) antes do início desta auditoria. D10 a D15 são tratados como congelados a partir deste ponto, por declaração explícita desta fase D16.
+Todos os sete commits de D15 foram confirmados presentes no histórico do branch (`git log -1 <hash>`) antes do início da auditoria D16. D10 a D15 são tratados como congelados a partir deste ponto, por declaração explícita da fase D16. `8a76a87` é o candidato-base declarado para esta corretiva D16 v1.1.
 
 ## 3. Matriz de rastreabilidade — Blueprint × implementação (32 capítulos)
 
@@ -63,11 +66,11 @@ Todos os sete commits foram confirmados presentes no histórico do branch (`git 
 
 Script de evidência executado contra PostgreSQL 16 (banco descartável):
 
-- Banco novo → `runMigrations` aplicou as 38 migrations (0001–0038) em ordem; segunda chamada aplicou 0, confirmando idempotência.
+- Banco novo → `runMigrations` aplicou as 38 migrations (0001–0038) em ordem; segunda chamada aplicou 0, confirmando idempotência. **D16 v1.1 acrescenta a migration 39** (`0039_tracking_schedule_claims_fencing.sql`, seção 6) — reconfirmado em banco limpo e a partir de `0038` por teste dedicado (`schedulerClaimFencing.test.ts` #12), mesma disciplina aditiva.
 - Catálogo final: 68 tabelas, 85 triggers, 216 functions, 195 índices, 925 constraints no schema `public`.
 - Objetos nomeados-chave confirmados presentes: `forbid_tariff_table_mutation()`, `tariff_table_esta_congelada()`, triggers `tariff_tables_imutavel`/`tariff_brackets_imutavel`, constraint `tariff_tables_versao_unica` (NULLS NOT DISTINCT), constraint de exclusão GiST `tariff_brackets_sem_sobreposicao`, coluna `tariff_tables.ativada_em`.
 - Caminho 0036→0037→0038: banco parado exatamente em 0036 (36 migrations aplicadas, coluna `ativada_em` comprovadamente ainda ausente), depois continuado — aplicou exatamente `0037_d15c_integridade_tarifaria_e_filas.sql` e `0038_d15c_v1_1_publicacao_tarifaria.sql`, nessa ordem. Catálogo final idêntico (mesmos 68/85/216/195/925) ao caminho sequencial completo — o estado final não depende do caminho de aplicação.
-- Nenhuma migration fabrica dado de negócio: a única leitura preocupante (`0037`: `UPDATE tariff_tables SET ativada_em = criado_em` para todas as linhas pré-existentes) usa um timestamp **real já gravado na própria linha** (a própria criação), nunca uma data inventada — documentado explicitamente no cabeçalho da migration. A correção da `0038` (`UPDATE ... SET ativada_em = now() WHERE ativada_em IS NULL AND EXISTS (... usada por valores_apurados)`) é estreitamente qualificada (só linhas já em uso, nunca ativadas) e usa `now()` da própria migration, nunca uma data histórica — também documentado no próprio arquivo.
+- Nenhuma migration fabrica dado de negócio: a leitura mais sensível (`0037`: `UPDATE tariff_tables SET ativada_em = criado_em` para todas as linhas pré-existentes) é um **backfill de compatibilidade**, não a observação de um fato histórico. `criado_em` é reaproveitado como marcador de publicação legada **inferido** — porque não existe nenhum registro de uma ativação explícita anterior a esta migration —, nunca como evidência de que a ativação ocorreu de fato no momento da criação. **Correção D16 v1.1:** a redação anterior desta seção descrevia isso como "um timestamp real já gravado na própria linha" de um jeito que podia ser lido como prova de QUANDO a ativação ocorreu; corrigido aqui e em `docs/demurrage-fase-d15-c.md` §1. A correção da `0038` (`UPDATE ... SET ativada_em = now() WHERE ativada_em IS NULL AND EXISTS (... usada por valores_apurados)`) segue estreitamente qualificada (só linhas já em uso, nunca ativadas) e usa `now()` da própria migration, nunca uma data histórica — essa parte não mudou.
 - Pré-requisito manual conhecido: `0037` aborta com `RAISE EXCEPTION` se já existir violação da nova unicidade em dado legado anômalo — resolução manual, nunca silenciosa (nenhum outro pré-requisito manual identificado nas 38 migrations).
 
 ## 5. Cenários verticais finais
@@ -89,11 +92,19 @@ Onze estágios/filas inventariados (`tracking_schedule_claims`, `tracking_alert_
 
 **Isolamento cruzado confirmado:** as filas de manutenção/notificação não alteram cadência de tracking, seleção de alvo, claims de tracking, contagem de fetches nem consumo de crédito do armador — prova mais forte em `demurrageTickFilas.test.ts` v1.3 #14 (tick com e sem trabalho pendente nas filas novas, `chamadas`/`claims`/`fetches` idênticos), reforçada por `d15bV11.test.ts` #12, `d15b.test.ts:160` (R08) e `d15c.test.ts` #24.
 
-**Limitações conhecidas (não bloqueantes, documentadas para acompanhamento futuro):**
-1. `tracking_schedule_claims` (migration 0014, anterior ao D15-C) não tem fencing token/época — `concluirClaim` atualiza por `(tracking_target_id, janela)`, não por posse. Um worker "zumbi" que termina após a janela de obsolescência (30 min) poderia, em teoria, sobrescrever o resultado de quem já reivindicou de novo. O fix de fencing da D15-C (R59) foi deliberadamente escopado só para as 6 filas de outbox, não para esta tabela mais antiga. Nenhum teste reproduz essa corrida específica.
-2. `si_conversas_descobertas` (ingestão de conversas descobertas pelo pré-alerta) não tem claim/lease em nível de linha — depende inteiramente da idempotência downstream (`registrarConversaPreAlerta`/`ingerirShippingInstructions`) e da dedupe na descoberta. Nenhum teste exercita dois workers concorrentes processando a mesma linha já `registrada`.
+**Correção D16 v1.1 — fencing do claim individual do tracking scheduler (R60):** a limitação listada na auditoria original do D16 ("`tracking_schedule_claims` sem fencing token/época") foi um defeito bloqueante real, não apenas uma lacuna de robustez teórica — corrigida nesta fase corretiva. Protocolo final:
 
-Nenhuma das duas tem um teste que demonstre uma falha real (nenhum invariante comprovadamente violado) — por isso nenhuma correção foi feita nesta fase, em respeito ao limite de escopo do D16 (só corrigir mediante defeito demonstrado). Registradas aqui como limitação conhecida para uma fase futura, se o produto decidir que o risco justifica o esforço.
+- Migration aditiva `0039_tracking_schedule_claims_fencing.sql` adiciona `claim_token UUID` (não-nulo se e somente se `status = 'claimed'`, mesmo padrão de `tracking_alert_deliveries`/R59).
+- `SchedulerRepository.claimJanela` gera um `claim_token` novo (`gen_random_uuid()`) em TODA reivindicação — tanto a primeira quanto uma retomada de claim expirado — e o devolve ao chamador.
+- `SchedulerRepository.concluirClaim` agora exige esse `claimToken` como parâmetro obrigatório; só finaliza `WHERE tracking_target_id=$1 AND janela=$2 AND status='claimed' AND claim_token=$3`. Se outro worker já retomou a janela, zero linhas são afetadas e o método devolve `{ aplicado: false, motivo: 'posse_perdida' }` — nunca uma finalização silenciosa sobre a posse de outro worker.
+- `schedulerWorker.ts` passou a manter um mapa `(trackingTargetId → claimToken)` em vez de um `Set` de IDs vencidos — a prova de posse, não só "venci em algum momento", é o que a finalização exige.
+- O caminho de tracking compartilhado por VesselCall (`vesselRound.ts`) reivindica e finaliza através do MESMO `reivindicar`/`claimJanela`/`concluirClaim` do caminho individual — o fencing vale identicamente para os dois, comprovado por teste dedicado.
+- Backfill seguro: linhas pré-existentes em `claimed` recebem um token descartável só para satisfazer a invariante da coluna — nenhum worker real o detém, então ele nunca permite uma finalização indevida; a próxima reivindicação (nova ou por retomada) o substitui por um real.
+- Nenhuma mudança em cadência, seleção de target, cálculo de janela ou política de crédito.
+
+12 cenários determinísticos obrigatórios provam o protocolo (PostgreSQL real, sem dependência de tempo de parede): tomada de posse, token diferente na retomada, finalização tardia do worker antigo rejeitada (sucesso e falha), finalização do vencedor aceita, estado final pertence ao vencedor, concorrência comum ainda produz uma única consulta efetiva, retomada não produz fetch extra, o caminho compartilhado por VesselCall preserva o mesmo fencing, testes existentes de cadência/crédito permanecem verdes, e a migration funciona tanto em banco limpo quanto a partir de `0038` — ver `schedulerClaimFencing.test.ts`.
+
+**Limitação conhecida remanescente (não bloqueante):** `si_conversas_descobertas` (ingestão de conversas descobertas pelo pré-alerta) não tem claim/lease em nível de linha — depende inteiramente da idempotência downstream (`registrarConversaPreAlerta`/`ingerirShippingInstructions`) e da dedupe na descoberta. Nenhum teste reproduz uma falha real (nenhum invariante comprovadamente violado) — por isso nenhuma correção foi feita, em respeito ao limite de escopo desta fase corretiva (só corrigir mediante defeito demonstrado). A idempotência downstream já existente faz desta limitação, diferente da do fencing acima, genuinamente não-bloqueante.
 
 ## 7. Evidência de segurança e isolamento
 
@@ -139,11 +150,11 @@ Ver `docs/demurrage-runbook-operacional.md` (variáveis de ambiente, aplicação
 
 ## 12. Validação exigida (execução sequencial)
 
-Os passos 1 a 10 da validação exigida (migrations em banco limpo; D10; D11; D12; D14; D15-A; D15-B; D15-C; todos os testes verticais do D16; motor Demurrage completo) são, nesta base de código, uma única suíte (`src/demurrage-engine/__tests__/*.test.ts`, 70 arquivos) executada em um único comando — não há, e nunca houve neste projeto, uma forma de rodar cada fase isoladamente fora desse comando. Por isso são reportados como uma execução agregada, precedida (nesta própria auditoria, seção 4) pela prova dedicada de banco limpo em separado.
+**Atualizado em D16 v1.1** (com a correção de fencing e as migrations/testes novos — ver seção 6). Os passos 1 a 10 da validação exigida (migrations em banco limpo; D10; D11; D12; D14; D15-A; D15-B; D15-C; todos os testes verticais do D16; novos testes de fencing; motor Demurrage completo) são, nesta base de código, uma única suíte (`src/demurrage-engine/__tests__/*.test.ts`, 71 arquivos) executada em um único comando — não há, e nunca houve neste projeto, uma forma de rodar cada fase isoladamente fora desse comando. Por isso são reportados como uma execução agregada, precedida (nesta própria auditoria, seção 4) pela prova dedicada de banco limpo em separado. A primeira execução desta suíte após a correção do fencing revelou 5 testes com listas de migrations codificadas que terminavam em `0038` (não sabiam da nova `0039`) — corrigidos para incluir `0039_tracking_schedule_claims_fencing.sql` (`registroDemurrageV12.test.ts`, `responsabilidadeAuditoria.test.ts`, `responsabilidadeV12.test.ts`, `responsavelOperacional.test.ts`); a execução final abaixo já reflete essa correção.
 
 | # | Passo | Resultado |
 |---|---|---|
-| 1 | Testes de migration em banco limpo | Incluído na execução agregada (`migrate.test.ts`) + prova dedicada da seção 4 — ambos verdes |
+| 1 | Testes de migration em banco limpo (até `0039`) | Incluído na execução agregada (`migrate.test.ts`) + prova dedicada da seção 4 + `schedulerClaimFencing.test.ts` #12a/#12b — todos verdes |
 | 2 | D10 | Incluído na execução agregada (`registroDemurrage*.test.ts`, `demurrageVertical.test.ts`) — verde |
 | 3 | D11 | Incluído na execução agregada (`responsabilidade*.test.ts`) — verde |
 | 4 | D12 | Incluído na execução agregada (`leitura*.test.ts`, `demurrageV2Routes.test.ts`) — verde |
@@ -151,23 +162,24 @@ Os passos 1 a 10 da validação exigida (migrations em banco limpo; D10; D11; D1
 | 6 | D15-A | Incluído na execução agregada (`closingD15A*.test.ts`) — verde |
 | 7 | D15-B | Incluído na execução agregada (`d15b.test.ts`, `d15bV11.test.ts`) — verde |
 | 8 | D15-C | Incluído na execução agregada (`d15c.test.ts`, `d15cV11.test.ts`, `d15cV12.test.ts`) — verde |
-| 9 | Todos os testes verticais do D16 | `d16Vertical.test.ts` — **23/23 passam** (execução isolada, antes e depois da correção da seção 5.1) + incluído na agregada |
-| 10 | Motor Demurrage completo | **961 testes, 961 passam, 0 falham, 0 cancelados, 0 pulados, 0 todo** (70 arquivos, `node --test-concurrency=1`) |
-| 11 | V1 (`npm test`) | **25/25 passam, 0 falham** |
-| 12 | D13 UI (`npm run test:demurrage-ui`) | **66/66 passam, 0 falham, 0 pulados** (com variáveis de banco configuradas — os 2 testes que apareceriam pulados sem banco, Gates G7/G1, também passaram) |
-| 13 | `tsc --noEmit` | Limpo (sem saída, exit 0) |
-| 14 | Build de produção (`npm run build`) | Limpo |
+| 9 | Todos os testes verticais do D16 | `d16Vertical.test.ts` — 23/23 passam + incluído na agregada |
+| 10 | Novos testes de fencing (D16 v1.1) | `schedulerClaimFencing.test.ts` — 16/16 passam (7 testes de topo, 2 com subtestes para os 12 cenários exigidos) + incluído na agregada |
+| 11 | Motor Demurrage completo | **977 testes, 977 passam, 0 falham, 0 cancelados, 0 pulados, 0 todo** (71 arquivos, `node --test-concurrency=1`, execução isolada) |
+| 12 | V1 (`npm test`) | **25/25 passam, 0 falham** |
+| 13 | D13 UI (`npm run test:demurrage-ui`) | **66/66 passam, 0 falham, 0 pulados** (com variáveis de banco configuradas, execução isolada) |
+| 14 | `tsc --noEmit` | Limpo (sem saída, exit 0) |
+| 15 | Build de produção (`npm run build`) | Limpo |
 
-**Total consolidado desta auditoria: 961 (engine) + 25 (V1) + 66 (D13 UI) = 1.052 testes, 1.052 passam, 0 falham, 0 cancelados, 0 pulados, 0 todo.** Todos os números acima foram obtidos **depois** da correção do defeito da seção 5.1 — nenhuma regressão foi introduzida pela correção.
+**Total consolidado desta auditoria (D16 + D16 v1.1): 977 (engine) + 25 (V1) + 66 (D13 UI) = 1.068 testes, 1.068 passam, 0 falham, 0 cancelados, 0 pulados, 0 todo.** Todos os números acima foram obtidos **depois** das correções das seções 5.1 (moeda mista no Termo por Embarque) e 6 (fencing do claim individual) — nenhuma regressão foi introduzida por nenhuma das duas, além dos 5 ajustes de lista de migration já descritos acima (atualização de expectativa de teste, não uma correção de comportamento).
 
 ## 13. Limitações conhecidas
 
-1. `tracking_schedule_claims` sem fencing token/época (seção 6, item 1) — risco teórico, sem reprodução por teste, pré-existente a D15-C.
-2. `si_conversas_descobertas` sem claim/lease em nível de linha (seção 6, item 2) — depende de idempotência downstream, sem teste de concorrência dedicado.
+1. ~~`tracking_schedule_claims` sem fencing token/época~~ — **corrigido em D16 v1.1** (seção 6; migration `0039` + `claim_token`). Era um defeito bloqueante real (corrida de posse comprovada por teste determinístico), não apenas um risco teórico.
+2. `si_conversas_descobertas` sem claim/lease em nível de linha (seção 6) — depende de idempotência downstream, sem teste de concorrência dedicado. Permanece como limitação conhecida: a idempotência já existente faz dela genuinamente não-bloqueante.
 3. Nenhuma rota pública de produção chama `registrarProcessoDemurrage`, `ClosingService` (fechamento/reabertura) ou a escrita de `decidirResponsabilidade` — todos existem como serviços internos completos e testados, aguardando a integração controlada e/ou rotas futuras (Caps. 13, 17 [gatilho manual], 20, 26 [escrita], 29 [ações de Gestor]).
 4. Cap. 9 (tabela de equivalências de tipo de contêiner entre armadores) permanece uma pendência do próprio Blueprint, não da implementação.
 5. Nenhum código de produção grava o campo de porto de descarga (POD) — a condição de compartilhamento de tracking por VesselCall (Cap. 15, cenário #19) nunca é atingida em produção hoje; tudo cai no caminho individual (mais seguro, porém mais consultas). Descoberto durante a construção do cenário #19/#20, que precisou escrever a observação de POD diretamente (`FieldObservationRepository.insert`) por não existir caminho de produção que o faça.
-6. `docs/demurrage-fase-d15-b.md` descreve a pendência `fallback_manual_superado` (fonte mais forte chegando sobre um valor MANUAL_FALLBACK) como autorresolvível quando o valor correspondente chega; o código atual não implementa essa autorresolução — a pendência permanece aberta até revisão manual do Gestor. O cenário #14 testa o comportamento real do código, não o texto da documentação; a documentação da fase D15-B deveria ser corrigida numa fase futura para refletir o comportamento real (ou o comportamento implementado para refletir o texto), mas isso está fora do escopo do D16.
+6. **Corrigido em D16 v1.1:** `docs/demurrage-fase-d15-b.md` (R07) foi atualizada para deixar explícito que `fallback_manual_superado` permanece ABERTA até decisão humana do Gestor — nenhuma observação subsequente a resolve automaticamente, por mais forte ou coincidente que seja. O comportamento do código nunca mudou (sempre foi esse); só a redação da documentação, que podia ser lida como descrevendo uma autorresolução, foi corrigida.
 
 ## 14. Integrações deliberadamente adiadas
 

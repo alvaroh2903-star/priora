@@ -23,9 +23,9 @@ node -r ts-node/register src/demurrage-engine/db/migrate.ts
 ou, programaticamente, `runMigrations(pool)` (mesma função usada pela suíte de testes). O runner:
 - aplica `migrations/*.sql` em ordem lexical, cada arquivo em sua própria transação;
 - é idempotente — re-executar não reaplica o que já está em `schema_migrations`;
-- é **estritamente aditivo**: 0001–0038 nunca são reescritas; uma correção posterior sempre chega como um arquivo novo (`003N_...sql`), nunca como edição de um já entregue.
+- é **estritamente aditivo**: 0001–0039 nunca são reescritas; uma correção posterior sempre chega como um arquivo novo (`00NN_...sql`), nunca como edição de um já entregue.
 
-**Pré-requisito manual conhecido:** a migration `0037_d15c_integridade_tarifaria_e_filas.sql` aborta explicitamente (`RAISE EXCEPTION`) se `tariff_tables` já tiver versões duplicadas sob a nova unicidade (`NULLS NOT DISTINCT`). Isso só ocorreria num ambiente que já tivesse dado tarifário legado anômalo — a própria migration deixa claro que a resolução (qual versão é a verdadeira) é manual, nunca automática. Não há nenhum outro pré-requisito manual conhecido nas 38 migrations.
+**Pré-requisito manual conhecido:** a migration `0037_d15c_integridade_tarifaria_e_filas.sql` aborta explicitamente (`RAISE EXCEPTION`) se `tariff_tables` já tiver versões duplicadas sob a nova unicidade (`NULLS NOT DISTINCT`). Isso só ocorreria num ambiente que já tivesse dado tarifário legado anômalo — a própria migration deixa claro que a resolução (qual versão é a verdadeira) é manual, nunca automática. Não há nenhum outro pré-requisito manual conhecido nas 39 migrations (a `0039`, D16 v1.1, só faz backfill automático — ver seção 7.1).
 
 ## 3. Como o scheduler inicia
 
@@ -62,9 +62,22 @@ SELECT id, tentativas, status FROM demurrage_pendencia_avisos WHERE status = 'FA
 SELECT id, tentativas, status FROM ft_divergencia_entregas WHERE status = 'FAILED';
 -- alert outbox (falha de tracking)
 SELECT id, tentativas, status FROM tracking_alert_deliveries WHERE status = 'FAILED';
+-- claim individual do tracking scheduler (ver protocolo de posse abaixo)
+SELECT t.reference_value_canonical, c.janela, c.status, c.tentativas, c.claim_token
+  FROM tracking_schedule_claims c JOIN tracking_targets t ON t.id = c.tracking_target_id
+ WHERE c.status = 'failed';
 ```
 
 Um item `FAILED`/`falha` nunca é reivindicado automaticamente de novo — fica visível para intervenção manual.
+
+### 7.1 Protocolo de posse do claim individual (`tracking_schedule_claims`, D16 v1.1)
+
+Diferente das filas acima (fila de trabalho/outbox), `tracking_schedule_claims` é uma barreira de **uma reivindicação por `(tracking_target_id, janela)` por dia** — não existe "reprocessar", só reivindicar de novo quando elegível. Desde a migration `0039`:
+
+- `claim_token` (UUID) só existe enquanto `status = 'claimed'` — é a prova de posse ATUAL, renovada (um valor novo) a cada reivindicação OU retomada de claim expirado.
+- Uma linha `status = 'claimed'` com `claimed_em` mais velho que o `staleInterval` (default 30 min) é retomável por outro worker — a retomada emite um `claim_token` novo; o antigo, mesmo que um worker lento ainda o apresente depois, não finaliza mais nada (rejeição explícita, nada é alterado).
+- Uma linha `status = 'failed'` é retomável no próximo tick, sem limite de tentativas dedicado nesta tabela (diferente das filas de outbox, que têm teto de 5).
+- **Nunca** editar `claim_token`/`status` manualmente nesta tabela — ao contrário das filas de outbox (seção 8), não há aqui um fluxo de "reenviar manualmente": a única forma segura de uma janela ser retomada é o próprio mecanismo de obsolescência (`staleInterval`) ou ela virar `failed` e ser retentada no próximo tick.
 
 ## 8. Como reprocessar/resolver pendências com segurança
 

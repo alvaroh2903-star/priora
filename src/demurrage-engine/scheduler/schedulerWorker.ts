@@ -113,13 +113,19 @@ export async function runSchedulerOnce(input: RunSchedulerOnceInput): Promise<Ru
   // Barreira ÚNICA de claim individual (target, janela) — usada TANTO pela rodada
   // compartilhada quanto pelo fluxo individual, para que a consulta real da
   // referência atravesse a mesma barreira/fetch/incidente/ingestão.
-  const vencidos = new Set<string>();
+  //
+  // D16 v1.1 (fencing, R60): a finalização exige o `claimToken` vigente desta
+  // posse — por isso NUNCA um `Set` de IDs vencidos (que só diz "venci em
+  // algum momento", não "ainda detenho a posse AGORA"). Mapa (target →
+  // claimToken) guarda exatamente a prova de posse devolvida por
+  // `claimJanela`, usada depois para finalizar.
+  const vencidos = new Map<string, string>();
   const reivindicar = async (trackingTargetId: string): Promise<boolean> => {
-    const { venceu } = await repo.claimJanela(trackingTargetId, hoje, {
+    const { venceu, claimToken } = await repo.claimJanela(trackingTargetId, hoje, {
       workerId: input.workerId,
       staleInterval: input.staleInterval,
     });
-    if (venceu) vencidos.add(trackingTargetId);
+    if (venceu && claimToken) vencidos.set(trackingTargetId, claimToken);
     return venceu;
   };
 
@@ -143,9 +149,13 @@ export async function runSchedulerOnce(input: RunSchedulerOnceInput): Promise<Ru
     }
     // Janelas vencidas por este worker (rodada compartilhada + individual) foram
     // consumidas (sucesso OU falha já tratada como incidente) → marca 'done'.
-    for (const targetId of vencidos) await repo.concluirClaim(targetId, hoje, true);
+    // D16 v1.1: finaliza com o claimToken desta posse — se outro worker já
+    // retomou a janela (posse_perdida), nada é alterado por este worker.
+    for (const [targetId, claimToken] of vencidos) await repo.concluirClaim(targetId, hoje, claimToken, true);
   } catch (err: any) {
-    for (const targetId of vencidos) await repo.concluirClaim(targetId, hoje, false, err?.message ?? String(err));
+    for (const [targetId, claimToken] of vencidos) {
+      await repo.concluirClaim(targetId, hoje, claimToken, false, err?.message ?? String(err));
+    }
     throw err;
   }
   const compartilhados = plano.rodadas;

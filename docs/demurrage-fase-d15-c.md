@@ -36,9 +36,18 @@ não foi iniciado.**
 
 1. `tariff_tables.ativada_em` (`TIMESTAMPTZ`, **sem** `DEFAULT`) — ver §3 para
    a semântica exata e por que não tem valor padrão. Linhas pré-existentes
-   recebem `ativada_em = criado_em` (fato real já na própria linha — nunca
-   uma data inventada): todo o histórico anterior a esta fase é declarado
-   congelado a partir de agora.
+   recebem `ativada_em = criado_em` como backfill de COMPATIBILIDADE — um
+   marcador de publicação legada INFERIDO (nenhuma data é inventada no
+   sentido de "fabricada do nada"), não a observação direta de que a
+   ativação ocorreu historicamente no momento da criação. **Correção D16
+   v1.1:** evite descrever isto como "a ativação aconteceu na criação" —
+   o fato real e verificável é só que a linha existe desde `criado_em`; o
+   valor é reaproveitado como marcador de compatibilidade porque não há
+   nenhum registro histórico de uma ativação explícita anterior a esta
+   migration, não porque haja evidência de que a ativação em si ocorreu
+   naquele instante. Todo o histórico anterior a esta fase é declarado
+   congelado a partir de agora, de qualquer forma — a distinção importa só
+   para quem lê esta coluna como prova de QUANDO algo foi ativado.
 2. `tariff_tables_versao_unica`: estagiada — um bloco `DO $$ ... RAISE
    EXCEPTION $$` varre `tariff_tables` agrupando por
    `(organization_id, tipo, armador_id, termo_comercial, versao)`; se algum
