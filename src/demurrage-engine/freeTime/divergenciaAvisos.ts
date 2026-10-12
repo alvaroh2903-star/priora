@@ -121,6 +121,10 @@ export interface ProcessarAvisosResultado {
   falhadas: number;
   /** Envios cuja finalização foi recusada: a posse expirou e foi assumida por outro. */
   possePerdida: number;
+  /** Entregas ainda entregáveis ao fim da etapa (não SENT, abaixo do máximo de tentativas). */
+  restantes: number;
+  /** Entregas FAILED que atingiram o máximo de tentativas (não são mais reivindicadas automaticamente). */
+  esgotadas: number;
 }
 
 /**
@@ -143,7 +147,7 @@ export async function processarAvisosDivergenciaPendentes(input: ProcessarAvisos
   const max = input.maxTentativas ?? 5;
   const limite = input.limite ?? 50;
   const ttl = Math.max(1, Math.floor((input.ttlMs ?? 5 * 60_000) / 1000));
-  const out: ProcessarAvisosResultado = { reivindicadas: 0, enviadas: 0, falhadas: 0, possePerdida: 0 };
+  const out: ProcessarAvisosResultado = { reivindicadas: 0, enviadas: 0, falhadas: 0, possePerdida: 0, restantes: 0, esgotadas: 0 };
 
   // UMA entrega por ciclo interno: reivindica exatamente uma, envia, finaliza e
   // só então reivindica a próxima. Nenhuma entrega fica com posse antecipada
@@ -155,11 +159,10 @@ export async function processarAvisosDivergenciaPendentes(input: ProcessarAvisos
     const { rows: claims } = await input.pool.query(
       `UPDATE ft_divergencia_entregas e
           SET status = 'PROCESSING', claim_token = gen_random_uuid(), worker_id = $1,
-              expira_em = now() + ($2 || ' seconds')::interval, tentativas = e.tentativas + 1, atualizado_em = now()
+              expira_em = now() + ($2 || ' seconds')::interval, tentativas = LEAST(e.tentativas + 1, $3), atualizado_em = now()
         WHERE e.id = (
           SELECT id FROM ft_divergencia_entregas
-           WHERE tentativas < $3
-             AND (status = 'PENDING' OR status = 'FAILED' OR (status = 'PROCESSING' AND expira_em < now()))
+           WHERE (((status = 'PENDING' OR status = 'FAILED') AND tentativas < $3) OR (status = 'PROCESSING' AND expira_em < now()))
              AND NOT (id = ANY($4::uuid[]))
            ORDER BY criado_em, id
            FOR UPDATE SKIP LOCKED

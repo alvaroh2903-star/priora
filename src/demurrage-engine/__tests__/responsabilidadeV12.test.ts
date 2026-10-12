@@ -554,7 +554,7 @@ test('v1.2 migração 0033 → 0034: decisões existentes preservadas; dias/per�
     // colidir com o CREATE TABLE da própria migration.
     await pool.query('DROP TABLE free_time_tentativas');
     const r = await runMigrations(pool);
-    assert.deepEqual(r.applied, ['0034_responsabilidade_v1_2_agregado.sql', '0035_d15a_integridade_final_reabertura.sql', '0036_d15b_integridade_dados_excecoes.sql']);
+    assert.deepEqual(r.applied, ['0034_responsabilidade_v1_2_agregado.sql', '0035_d15a_integridade_final_reabertura.sql', '0036_d15b_integridade_dados_excecoes.sql', '0037_d15c_integridade_tarifaria_e_filas.sql']);
     // A migração não reescreve nem revalida retroativamente nada existente.
     assert.deepEqual(await snapshot(), antes);
 

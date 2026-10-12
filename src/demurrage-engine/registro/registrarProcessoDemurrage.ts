@@ -305,6 +305,8 @@ export interface OpcoesReparoPosCommit {
   ganchoTeste?: (containerId: string) => void | Promise<void>;
   /** Máximo de claims nesta chamada (v1.3 — limite por ciclo do scheduler). Default: sem limite. */
   limite?: number;
+  /** D15-C (R58) — teto de tentativas antes de considerar a linha esgotada (não mais reivindicada automaticamente). Default 5. */
+  maxTentativas?: number;
 }
 
 export interface ResultadoReparoPosCommit {
@@ -334,10 +336,26 @@ export interface ResultadoReparoPosCommit {
  *
  * `concluido` nunca é reivindicado (reexecutar quando tudo está completo é
  * NO-OP). Uma linha nunca fica presa: `processando` vence e é recuperada;
- * `falha`/`pendente` são reivindicadas pela próxima chamada. No intervalo
- * residual de um claim vencido ainda em execução, o recálculo é idempotente
- * (`input_hash`) e a fotografia é deduplicada por hash sob lock consultivo —
- * não há fotografia nem valor duplicado.
+ * `falha`/`pendente` são reivindicadas pela próxima chamada, até o teto de
+ * tentativas. No intervalo residual de um claim vencido ainda em execução,
+ * o recálculo é idempotente (`input_hash`) e a fotografia é deduplicada por
+ * hash sob lock consultivo — não há fotografia nem valor duplicado.
+ *
+ * D15-C (R58) — teto de tentativas (`maxTentativas`, default 5): uma linha
+ * `falha`/`pendente` só é reivindicada se `tentativas < maxTentativas`;
+ * esgotada o suficiente, fica parada em `falha` para sempre — estado
+ * terminal EXPLÍCITO e visível (a mesma convenção já usada nas demais
+ * filas: `estado='falha' AND tentativas>=maxTentativas`, nunca mais
+ * reivindicada automaticamente, nunca escondida — `restantes`/`esgotados`
+ * em `processarPosCommitOutboxPendentes` tornam isso auditável). Nenhum
+ * fato de negócio ou observação do ledger é perdido: o REGISTRO principal
+ * (processo/contêineres/ledger) já está comitado antes de qualquer claim —
+ * só o recálculo/fotografia pós-commit para de ser retentado.
+ *
+ * D15-C (R57) — a RECUPERAÇÃO de um `processando` vencido nunca é
+ * condicionada a `tentativas < maxTentativas`: a tentativa que crashou já
+ * foi contada no claim original. `LEAST(..., maxTentativas)` garante que a
+ * recuperação nunca incrementa além do teto.
  */
 export async function repararPosCommitOutbox(
   pool: Pool,
@@ -346,6 +364,7 @@ export async function repararPosCommitOutbox(
 ): Promise<ResultadoReparoPosCommit> {
   const workerId = opts.workerId ?? `registro:${process.pid}:${randomUUID()}`;
   const ttl = Math.max(1, Math.floor((opts.ttlMs ?? 10 * 60_000) / 1000));
+  const maxTentativas = opts.maxTentativas ?? 5;
   const out: ResultadoReparoPosCommit = { reivindicados: 0, reparados: [], falhas: [], possePerdida: [] };
   const tentados: string[] = [];
   const limite = opts.limite ?? Number.POSITIVE_INFINITY;
@@ -353,17 +372,17 @@ export async function repararPosCommitOutbox(
     const { rows } = await pool.query(
       `UPDATE demurrage_pos_commit_outbox o
           SET estado = 'processando', claim_token = gen_random_uuid(), worker_id = $2,
-              expira_em = now() + ($3 || ' seconds')::interval, tentativas = o.tentativas + 1, atualizado_em = now()
+              expira_em = now() + ($3 || ' seconds')::interval, tentativas = LEAST(o.tentativas + 1, $5), atualizado_em = now()
         WHERE o.id = (
           SELECT id FROM demurrage_pos_commit_outbox
            WHERE processo_id = $1
-             AND (estado IN ('pendente', 'falha') OR (estado = 'processando' AND expira_em < now()))
+             AND ((estado IN ('pendente', 'falha') AND tentativas < $5) OR (estado = 'processando' AND expira_em < now()))
              AND NOT (id = ANY($4::uuid[]))
            ORDER BY container_id, id
            FOR UPDATE SKIP LOCKED
            LIMIT 1)
         RETURNING o.id, o.container_id, o.claim_token, o.geracao`,
-      [processoId, workerId, String(ttl), tentados],
+      [processoId, workerId, String(ttl), tentados, maxTentativas],
     );
     const claim = rows[0];
     if (!claim) break;
@@ -410,32 +429,40 @@ export async function repararPosCommitOutbox(
  * reivindicável: `pendente`, `falha` ou `processando` vencido). v1.3: ligada ao
  * tick do scheduler da Demurrage como etapa própria de manutenção — não depende
  * de um novo registro do processo. `limite` é o orçamento de CLAIMS do ciclo
- * inteiro (somado entre processos). `restantes` = linhas ainda não concluídas
- * ao fim da etapa (contagem pelo índice parcial `estado <> 'concluido'`).
+ * inteiro (somado entre processos). `restantes` = linhas ainda entregáveis
+ * (não `concluido`, abaixo do teto de tentativas); `esgotados` (R58) = linhas
+ * `falha` que já atingiram o teto — estado terminal visível, nunca mais
+ * reivindicadas automaticamente.
  */
 export async function processarPosCommitOutboxPendentes(
   pool: Pool, opts: OpcoesReparoPosCommit & { limiteProcessos?: number },
-): Promise<ResultadoReparoPosCommit & { restantes: number }> {
+): Promise<ResultadoReparoPosCommit & { restantes: number; esgotados: number }> {
   const orcamento = opts.limite ?? 50;
+  const maxTentativas = opts.maxTentativas ?? 5;
   const { rows } = await pool.query(
     `SELECT processo_id FROM demurrage_pos_commit_outbox
-      WHERE estado IN ('pendente', 'falha') OR (estado = 'processando' AND expira_em < now())
+      WHERE (estado IN ('pendente', 'falha') AND tentativas < $2) OR (estado = 'processando' AND expira_em < now())
       GROUP BY processo_id ORDER BY min(atualizado_em)
       LIMIT $1`,
-    [opts.limiteProcessos ?? 100],
+    [opts.limiteProcessos ?? 100, maxTentativas],
   );
   const total: ResultadoReparoPosCommit = { reivindicados: 0, reparados: [], falhas: [], possePerdida: [] };
   for (const r of rows) {
     const saldo = orcamento - total.reivindicados;
     if (saldo <= 0) break;
-    const parcial = await repararPosCommitOutbox(pool, r.processo_id, { ...opts, limite: saldo });
+    const parcial = await repararPosCommitOutbox(pool, r.processo_id, { ...opts, limite: saldo, maxTentativas });
     total.reivindicados += parcial.reivindicados;
     total.reparados.push(...parcial.reparados);
     total.falhas.push(...parcial.falhas);
     total.possePerdida.push(...parcial.possePerdida);
   }
-  const { rows: rest } = await pool.query(`SELECT count(*)::int AS n FROM demurrage_pos_commit_outbox WHERE estado <> 'concluido'`);
-  return { ...total, restantes: rest[0].n };
+  const { rows: rest } = await pool.query(
+    `SELECT count(*) FILTER (WHERE estado <> 'concluido' AND tentativas < $1)::int AS restantes,
+            count(*) FILTER (WHERE estado = 'falha' AND tentativas >= $1)::int AS esgotados
+       FROM demurrage_pos_commit_outbox`,
+    [maxTentativas],
+  );
+  return { ...total, restantes: rest[0].restantes, esgotados: rest[0].esgotados };
 }
 
 async function aplicar(db: Db, reg: RegistroNormalizado, opcoes: OpcoesRegistro = {}): Promise<ResultadoRegistroDemurrage> {

@@ -219,8 +219,10 @@ export async function recalcularApuracaoContainerComClient(
       const diasCliente = clocksCliente.diasDemurrage;
       const primeiroDia = clocksCliente.primeiroDiaDemurrage;
       let res: MotorResult | null = null;
+      let tabelaResolvidaCliente: TabelaResolvida | null = null;
       if (termoTipo === 'embarque') {
         const tabela = condicaoTabelaId ? await tariffs.buscarPorId(condicaoTabelaId) : null;
+        tabelaResolvidaCliente = tabela;
         // Gap 5: sem tabela aplicável → UNAVAILABLE com tabelaId/versao NULL e motivo real (nunca ''/0).
         res = tabela
           ? calcularTermoPorEmbarque({
@@ -233,6 +235,7 @@ export async function recalcularApuracaoContainerComClient(
           tipo: 'rocket_cliente', organizationId: c.organization_id, termoComercial: 'unico', referenceDate: primeiroDia,
         });
         const t: TabelaResolvida | null = sel.tabela;
+        tabelaResolvidaCliente = t;
         res = t
           ? calcularTermoUnico({
               equipamentoNormalizado: equipamento, freeTimeDaysCliente: c.house_free_time_days ?? 0, diasDemurrageCliente: diasCliente,
@@ -242,7 +245,7 @@ export async function recalcularApuracaoContainerComClient(
       }
       if (res) {
         await persistir(client, valores, containerId, 'cliente', res, {
-          equipamento, freeTimeDays: c.house_free_time_days ?? null, diasDemurrage: diasCliente, finalDate,
+          equipamento, freeTimeDays: c.house_free_time_days ?? null, diasDemurrage: diasCliente, finalDate, tabela: tabelaResolvidaCliente,
         });
         // Clarificação B: só o motor atual do cliente fica ativo.
         await valores.supersederClienteDeOutroModelo(client, containerId, res.motorComercial);
@@ -267,7 +270,7 @@ export async function recalcularApuracaoContainerComClient(
           })
         : unavailable('exposicao_armador', sel.motivo ?? 'TARIFF_TABLE_NOT_FOUND');
       await persistir(client, valores, containerId, 'rocket', res, {
-        equipamento, freeTimeDays: c.master_free_time_days ?? null, diasDemurrage: clocks.rocket.diasDemurrage, finalDate,
+        equipamento, freeTimeDays: c.master_free_time_days ?? null, diasDemurrage: clocks.rocket.diasDemurrage, finalDate, tabela: t,
       });
     } else {
       // Gap 4: relógio Rocket sem exposição → nenhum valor positivo continua ativo.
@@ -311,12 +314,18 @@ export async function recalcularApuracaoContainer(
 
 async function persistir(
   client: any, valores: ValorApuradoRepository, containerId: string, relogioTipo: RelogioTipo, res: MotorResult,
-  ctx: { equipamento: string | null; freeTimeDays: number | null; diasDemurrage: number; finalDate: CivilDate },
+  ctx: { equipamento: string | null; freeTimeDays: number | null; diasDemurrage: number; finalDate: CivilDate; tabela: TabelaResolvida | null },
 ): Promise<void> {
+  // D15-C (R30): o conteúdo tarifário efetivo entra no hash — faixas já
+  // resolvidas pelo repositório (nenhuma lógica de seleção duplicada aqui),
+  // filtradas pelo equipamento deste cálculo.
+  const faixasTabela = ctx.tabela ? ctx.tabela.faixas.filter((f) => f.tipoEquipamento === ctx.equipamento) : [];
   const inputHash = calcularInputHashValor({
     motorComercial: res.motorComercial, relogioTipo, equipamentoNormalizado: ctx.equipamento,
     tabelaId: res.tabelaId, versaoTabela: res.versaoTabela, dayCountBasis: res.dayCountBasisAplicada,
+    vigenciaInicio: ctx.tabela?.vigenciaInicio ?? null, vigenciaFim: ctx.tabela?.vigenciaFim ?? null,
     freeTimeDays: ctx.freeTimeDays, diasDemurrage: ctx.diasDemurrage, dataFinalApuracao: ctx.finalDate,
+    faixasTabela,
   });
   await valores.registrarComClient(client, { containerId, relogioTipo, resultado: res, inputHash });
 }

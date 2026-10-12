@@ -86,6 +86,13 @@ export interface ProcessarAvisosPendenciaResultado {
  * segunda leitura não encontrar linha (papel mudou nesse intervalo, ou o
  * membership foi removido), a posse é devolvida a PENDING sem incrementar
  * nenhum contador de desfecho — nunca lança, nunca marca como enviada.
+ *
+ * D15-C (R57) — a RECUPERAÇÃO de um PROCESSING vencido nunca é condicionada
+ * a `tentativas < max`: a tentativa que crashou já foi contada no claim
+ * original. Sem isso, uma entrega reivindicada na ÚLTIMA tentativa permitida
+ * cujo worker morre antes de finalizar ficava presa em PROCESSING para
+ * sempre. `LEAST(..., max)` garante que a recuperação nunca incrementa além
+ * do teto.
  */
 export async function processarAvisosPendenciaPendentes(input: ProcessarAvisosPendenciaInput): Promise<ProcessarAvisosPendenciaResultado> {
   const max = input.maxTentativas ?? 5;
@@ -100,12 +107,11 @@ export async function processarAvisosPendenciaPendentes(input: ProcessarAvisosPe
     const { rows: claims } = await input.pool.query(
       `UPDATE demurrage_pendencia_avisos a
           SET status = 'PROCESSING', claim_token = gen_random_uuid(), worker_id = $1,
-              expira_em = now() + ($2 || ' seconds')::interval, tentativas = a.tentativas + 1, atualizado_em = now()
+              expira_em = now() + ($2 || ' seconds')::interval, tentativas = LEAST(a.tentativas + 1, $3), atualizado_em = now()
         WHERE a.id = (
           SELECT av.id FROM demurrage_pendencia_avisos av
             JOIN organization_memberships m ON m.id = av.destinatario_membership_id
-           WHERE av.tentativas < $3
-             AND (av.status IN ('PENDING', 'FAILED') OR (av.status = 'PROCESSING' AND av.expira_em < now()))
+           WHERE ((av.status IN ('PENDING', 'FAILED') AND av.tentativas < $3) OR (av.status = 'PROCESSING' AND av.expira_em < now()))
              AND NOT (av.id = ANY($4::uuid[]))
              AND m.papel::text = ANY($5::text[])
            ORDER BY av.criado_em, av.id

@@ -213,7 +213,7 @@ test('auditoria read-only: herança da 0033 → lista as decisões que violam o 
     // TABLE da própria migration.
     await pool.query('DROP TABLE free_time_tentativas');
     const r = await runMigrations(pool);
-    assert.deepEqual(r.applied, ['0034_responsabilidade_v1_2_agregado.sql', '0035_d15a_integridade_final_reabertura.sql', '0036_d15b_integridade_dados_excecoes.sql']);
+    assert.deepEqual(r.applied, ['0034_responsabilidade_v1_2_agregado.sql', '0035_d15a_integridade_final_reabertura.sql', '0036_d15b_integridade_dados_excecoes.sql', '0037_d15c_integridade_tarifaria_e_filas.sql']);
 
     const antes = (await pool.query(IMPRESSAO)).rows[0].h;
     const avisos = await executarAuditoria(pool);

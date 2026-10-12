@@ -23,6 +23,21 @@ import { DayCountBasis, Faixa, FaixaAplicada, Moeda } from './types';
  * Se algum dia cair fora de toda faixa (buraco na tabela ou além da última faixa
  * fechada), o resultado inteiro é UNAVAILABLE — nunca aproxima pela faixa mais
  * próxima.
+ *
+ * D15-C (R29) — moeda mista entre as faixas do mesmo equipamento/tabela é
+ * UNAVAILABLE (falha localizada a ESTE cálculo), nunca uma exceção lançada.
+ * Antes da correção, isso era um `throw`: como este motor roda dentro da
+ * MESMA transação que o relógio e o lado comercial OPOSTO (cliente × Rocket),
+ * um `throw` aqui desfaria a transação inteira — perdendo os dias já
+ * apurados e o cálculo do outro lado, e, quando chamado por
+ * `recalcularApuracaoProcessoComClient` (reabertura), apagando o cálculo
+ * BEM-SUCEDIDO de outros contêineres do mesmo processo. Devolver
+ * `UNAVAILABLE` com motivo é o MESMO caminho já usado para "buraco na
+ * tabela" — os chamadores (`calcularTermoUnico`/`calcularExposicaoRocket`)
+ * já tratam `status === 'UNAVAILABLE'` genericamente, sem nenhuma mudança
+ * nelas: a observação/relógio do lado afetado permanece intacta, o lado
+ * OPOSTO e os demais contêineres seguem calculados normalmente. Nunca
+ * combina, nunca converte, nunca zera.
  */
 
 export interface BracketEngineInput {
@@ -62,7 +77,10 @@ export function posicionarFaixas(input: BracketEngineInput): BracketEngineResult
   const moeda = input.faixas[0].moeda;
   for (const f of input.faixas) {
     if (f.moeda !== moeda) {
-      throw new Error(`bracketEngine: faixas com moedas diferentes (${moeda} e ${f.moeda}) na mesma tabela/equipamento.`);
+      return {
+        status: 'UNAVAILABLE',
+        motivo: `MOEDA_MISTA_NA_TABELA: faixas com moedas diferentes (${moeda} e ${f.moeda}) na mesma tabela/equipamento`,
+      };
     }
   }
 

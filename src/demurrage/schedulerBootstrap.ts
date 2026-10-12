@@ -52,6 +52,8 @@ export interface EtapaPosCommitResultado {
   possePerdida: number;
   /** Linhas ainda não concluídas ao fim da etapa (null se a etapa falhou). */
   restantes: number | null;
+  /** D15-C (R58) — linhas `falha` que atingiram o teto de tentativas (estado terminal, nunca mais reivindicadas; null se a etapa falhou). */
+  esgotados: number | null;
   /** Erro da etapa inteira (isolada — nunca derruba o tick). */
   erro: string | null;
 }
@@ -100,11 +102,11 @@ async function etapaPosCommit(deps: TickDeps, hoje: CivilDate, workerId: string)
     });
     return {
       reivindicados: r.reivindicados, reparados: r.reparados.length, falhos: r.falhas.length,
-      possePerdida: r.possePerdida.length, restantes: r.restantes, erro: null,
+      possePerdida: r.possePerdida.length, restantes: r.restantes, esgotados: r.esgotados, erro: null,
     };
   } catch (e) {
     console.error('[demurrage-scheduler] etapa pos-commit falhou (isolada):', mensagemErro(e));
-    return { reivindicados: 0, reparados: 0, falhos: 0, possePerdida: 0, restantes: null, erro: mensagemErro(e) };
+    return { reivindicados: 0, reparados: 0, falhos: 0, possePerdida: 0, restantes: null, esgotados: null, erro: mensagemErro(e) };
   }
 }
 
@@ -197,7 +199,7 @@ export async function executarTickDemurrage(deps: TickDeps, hojeInjetado?: Civil
   try {
     const cal = await passagemDoCalendario(deps.pool, hoje);
     const r = await runSchedulerOnce({ pool: deps.pool, port: deps.port, hoje });
-    const entregas = await processarEntregasPendentes({ pool: deps.pool, transport: deps.transport });
+    const entregas = await processarEntregasPendentes({ pool: deps.pool, transport: deps.transport, workerId });
     // Master Free Time: reaplica intenções já extraídas a contêineres novos e
     // consome o outbox de recálculo (relógio Rocket, exposição, lifecycle).
     const si = await reaplicarIntencoesShippingInstructions({ pool: deps.pool });
@@ -237,7 +239,8 @@ export function formatarLogTick(t: TickResultado): string {
       `masterFT: si=${t.siPromovidos} recalculos=${t.recalculosConcluidos}/${t.recalculosFalhados} ` +
       `avisos=${t.avisosEnviados}/${t.avisosFalhados} | ` +
       `registro-posCommit: reivindicados=${t.posCommit.reivindicados} reparados=${t.posCommit.reparados} ` +
-      `falhos=${t.posCommit.falhos} possePerdida=${t.posCommit.possePerdida} restantes=${t.posCommit.restantes ?? '?'}` +
+      `falhos=${t.posCommit.falhos} possePerdida=${t.posCommit.possePerdida} restantes=${t.posCommit.restantes ?? '?'} ` +
+      `esgotados=${t.posCommit.esgotados ?? '?'}` +
       `${t.posCommit.erro ? ` ERRO=${t.posCommit.erro}` : ''} | ` +
       `avisos-fallback: reivindicadas=${t.avisosFallback.reivindicadas} enviadas=${t.avisosFallback.enviadas} ` +
       `falhadas=${t.avisosFallback.falhadas} possePerdida=${t.avisosFallback.possePerdida} ` +

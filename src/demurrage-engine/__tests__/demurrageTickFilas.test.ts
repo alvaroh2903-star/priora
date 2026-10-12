@@ -503,7 +503,7 @@ test('v1.3 #15: os novos contadores aparecem no resultado e no log do tick; limi
     const t = await executarTickDemurrage(deps(pool, {
       fallbackAvisoTransport: transportFake().t, limites: { posCommit: 2, avisosFallback: 10 },
     }), HOJE);
-    assert.deepEqual(Object.keys(t.posCommit).sort(), ['erro', 'falhos', 'possePerdida', 'reivindicados', 'reparados', 'restantes']);
+    assert.deepEqual(Object.keys(t.posCommit).sort(), ['erro', 'esgotados', 'falhos', 'possePerdida', 'reivindicados', 'reparados', 'restantes']);
     assert.deepEqual(Object.keys(t.avisosFallback).sort(), ['enviadas', 'erro', 'esgotadas', 'falhadas', 'possePerdida', 'reivindicadas', 'restantes', 'semTransporte']);
     assert.equal(t.posCommit.reivindicados, 2, 'limite por ciclo');
     assert.equal(t.posCommit.restantes, 1, '3 falhos − 2 do limite (o registro com fallback já se reparou sozinho)');

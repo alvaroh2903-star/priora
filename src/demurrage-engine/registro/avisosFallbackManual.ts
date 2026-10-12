@@ -20,6 +20,14 @@ import { Pool } from 'pg';
  * entregas cujo destinatário ainda é gestor (MANAGER/ADMIN) são reivindicadas —
  * um membership rebaixado a CLIENT nunca recebe (a entrega fica parada, sem
  * envio, e volta a ser elegível só se o papel de gestor for restituído).
+ *
+ * D15-C (R57) — a RECUPERAÇÃO de um PROCESSING vencido nunca é condicionada a
+ * `tentativas < max`: a tentativa que crashou já foi contada no claim
+ * original. Sem isso, uma entrega reivindicada na ÚLTIMA tentativa permitida
+ * cujo worker morre antes de finalizar ficava presa em PROCESSING para
+ * sempre (nem recuperável — `tentativas < max` já falso —, nem FAILED —
+ * nunca chegou a finalizar). `LEAST(..., max)` garante que a recuperação
+ * nunca incrementa além do teto.
  */
 
 export interface AvisoFallbackManual {
@@ -79,12 +87,11 @@ export async function processarAvisosFallbackManualPendentes(input: ProcessarAvi
     const { rows: claims } = await input.pool.query(
       `UPDATE demurrage_fallback_manual_avisos a
           SET status = 'PROCESSING', claim_token = gen_random_uuid(), worker_id = $1,
-              expira_em = now() + ($2 || ' seconds')::interval, tentativas = a.tentativas + 1, atualizado_em = now()
+              expira_em = now() + ($2 || ' seconds')::interval, tentativas = LEAST(a.tentativas + 1, $3), atualizado_em = now()
         WHERE a.id = (
           SELECT av.id FROM demurrage_fallback_manual_avisos av
             JOIN organization_memberships m ON m.id = av.destinatario_membership_id
-           WHERE av.tentativas < $3
-             AND (av.status IN ('PENDING', 'FAILED') OR (av.status = 'PROCESSING' AND av.expira_em < now()))
+           WHERE ((av.status IN ('PENDING', 'FAILED') AND av.tentativas < $3) OR (av.status = 'PROCESSING' AND av.expira_em < now()))
              AND NOT (av.id = ANY($4::uuid[]))
              AND m.papel::text = ANY($5::text[])
            ORDER BY av.criado_em, av.id
