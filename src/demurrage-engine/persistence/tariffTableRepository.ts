@@ -22,8 +22,7 @@ import { DayCountBasis, Faixa, QualidadeFonte } from '../tariffs/types';
  * explicitamente (`tariffTableService.ativar`) — nunca "selecionável desde a
  * criação" como antes desta correção, o que permitia um rascunho entrar num
  * cálculo real e só então ficar imutável por USO, sem nunca ter passado por
- * revisão. `buscarPorId` permanece SEM esse filtro — administração/revisão de
- * um rascunho antes de ativá-lo precisa conseguir lê-lo pelo ID.
+ * revisão.
  *
  * D15-C v1.1 (achado bloqueante #2) — a ordenação de prioridade entre
  * candidatas (vigência conhecida mais recente; versão mais alta em caso de
@@ -32,6 +31,23 @@ import { DayCountBasis, Faixa, QualidadeFonte } from '../tariffs/types';
  * em SQL (`ORDER BY ... LIMIT 1`), nunca um resultado desordenado seguido de
  * comparador em JavaScript — a ordem de inserção/consulta nunca influencia o
  * resultado.
+ *
+ * D15-C v1.2 (corretiva, achado bloqueante — bypass residual do Termo por
+ * Embarque) — a v1.1 corrigiu `selecionarVigente`, mas o Termo por Embarque
+ * (versão FIXADA por ID na condição comercial, nunca por data) lia a tabela
+ * por `buscarPorId` — que, de propósito, NUNCA filtra por `ativada_em` (é a
+ * leitura de ADMINISTRAÇÃO/revisão, que precisa continuar enxergando um
+ * rascunho antes de ativá-lo). Isso deixava um bypass residual: uma condição
+ * comercial podia referenciar um rascunho, e a apuração de produção o usaria
+ * e o congelaria por USO, sem nunca ter passado pelo portão de publicação.
+ * Duas leituras agora coexistem, deliberadamente distintas:
+ *  - `buscarPorId` — ADMINISTRAÇÃO/revisão: pode devolver um rascunho; nunca
+ *    chamado pelo caminho de cálculo de produção a partir desta correção;
+ *  - `buscarAtivadaPorId` — leitura de PRODUÇÃO por ID (Termo por Embarque):
+ *    exige `ativada_em IS NOT NULL`; um rascunho (ID existe, mas não
+ *    ativado) devolve `{tabela: null, motivo: 'TARIFF_VERSION_NOT_ACTIVATED'}`
+ *    — nunca a tabela, nunca um valor convertido para zero, nunca persiste
+ *    um `ValorApurado` referenciando o rascunho.
  */
 
 export interface TabelaResolvida {
@@ -54,7 +70,7 @@ export interface SelecaoTabela {
   referenceDate: CivilDate;
 }
 
-export type MotivoIndisponivel = 'TARIFF_VERSION_NOT_PROVEN' | 'TARIFF_TABLE_NOT_FOUND';
+export type MotivoIndisponivel = 'TARIFF_VERSION_NOT_PROVEN' | 'TARIFF_TABLE_NOT_FOUND' | 'TARIFF_VERSION_NOT_ACTIVATED';
 
 export interface SelecaoResultado {
   tabela: TabelaResolvida | null;
@@ -172,12 +188,12 @@ export class TariffTableRepository {
   }
 
   /**
-   * Busca direta por ID — usada pela condição "Termo por Embarque" (versão
-   * FIXADA na condição comercial, nunca por data) e por administração/
-   * revisão. Deliberadamente SEM o filtro de `ativada_em`: um rascunho
-   * precisa continuar legível pelo ID para quem o está revisando antes de
-   * ativá-lo (D15-C v1.1) — só `selecionarVigente` (fluxo normal de cálculo
-   * por data) exige ativação.
+   * Busca direta por ID para ADMINISTRAÇÃO/revisão — deliberadamente SEM o
+   * filtro de `ativada_em`: um rascunho precisa continuar legível pelo ID
+   * para quem o está revisando antes de ativá-lo. D15-C v1.2 (corretiva) —
+   * NUNCA chamado pelo caminho de cálculo de produção; quem precisa de uma
+   * versão fixada por ID para um cálculo REAL (Termo por Embarque) usa
+   * `buscarAtivadaPorId`, nunca este método.
    */
   async buscarPorId(tabelaId: string): Promise<TabelaResolvida | null> {
     const { rows } = await this.pool.query<CandidatoRow>(
@@ -189,5 +205,37 @@ export class TariffTableRepository {
     );
     if (rows.length === 0) return null;
     return this.resolver(rows[0]);
+  }
+
+  /**
+   * Busca por ID para CÁLCULO DE PRODUÇÃO (D15-C v1.2, corretiva — achado
+   * bloqueante: a condição comercial "Termo por Embarque" fixa a versão por
+   * ID, nunca por data; antes desta correção, a apuração real lia essa
+   * versão por `buscarPorId`, que devolve rascunhos de propósito — um
+   * bypass residual do portão de publicação da v1.1: uma condição podia
+   * referenciar um rascunho, e a apuração o usaria e o congelaria por USO,
+   * sem nunca ter passado por `ativar()`).
+   *
+   * Exige `ativada_em IS NOT NULL`: o ID existir mas apontar para um
+   * rascunho devolve `{tabela: null, motivo: 'TARIFF_VERSION_NOT_ACTIVATED'}`
+   * — nunca a tabela, nunca um valor convertido para zero. O chamador
+   * (`recalcularApuracao.ts`) trata este `motivo` exatamente como trata
+   * `TARIFF_VERSION_NOT_PROVEN`/`TARIFF_TABLE_NOT_FOUND`: `UNAVAILABLE` com
+   * o motivo real, nunca um `ValorApurado` referenciando o rascunho. Depois
+   * que a mesma versão é ativada, a MESMA condição comercial (nada muda
+   * nela) volta a resolver normalmente na próxima apuração autorizada.
+   */
+  async buscarAtivadaPorId(tabelaId: string): Promise<{ tabela: TabelaResolvida | null; motivo: MotivoIndisponivel | null }> {
+    const { rows } = await this.pool.query<CandidatoRow & { ativada_em: string | null }>(
+      `SELECT id, tipo, versao, day_count_basis, qualidade_fonte,
+              vigencia_inicio, vigencia_fim,
+              to_char(verificada_em AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS verificada_data,
+              ativada_em
+         FROM tariff_tables WHERE id = $1`,
+      [tabelaId],
+    );
+    if (rows.length === 0) return { tabela: null, motivo: 'TARIFF_TABLE_NOT_FOUND' };
+    if (rows[0].ativada_em === null) return { tabela: null, motivo: 'TARIFF_VERSION_NOT_ACTIVATED' };
+    return { tabela: await this.resolver(rows[0]), motivo: null };
   }
 }

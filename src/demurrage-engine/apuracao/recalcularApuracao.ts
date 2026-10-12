@@ -221,7 +221,15 @@ export async function recalcularApuracaoContainerComClient(
       let res: MotorResult | null = null;
       let tabelaResolvidaCliente: TabelaResolvida | null = null;
       if (termoTipo === 'embarque') {
-        const tabela = condicaoTabelaId ? await tariffs.buscarPorId(condicaoTabelaId) : null;
+        // D15-C v1.2 (corretiva): leitura de PRODUÇÃO por ID —
+        // `buscarAtivadaPorId`, nunca `buscarPorId` (que devolve rascunhos
+        // de propósito, para administração/revisão). Um rascunho
+        // referenciado pela condição comercial nunca é usado nem congelado
+        // por um cálculo real; devolve UNAVAILABLE com o motivo explícito.
+        const selEmbarque = condicaoTabelaId
+          ? await tariffs.buscarAtivadaPorId(condicaoTabelaId)
+          : { tabela: null, motivo: 'TARIFF_TABLE_NOT_FOUND' as const };
+        const tabela = selEmbarque.tabela;
         tabelaResolvidaCliente = tabela;
         // Gap 5: sem tabela aplicável → UNAVAILABLE com tabelaId/versao NULL e motivo real (nunca ''/0).
         res = tabela
@@ -229,7 +237,7 @@ export async function recalcularApuracaoContainerComClient(
               equipamentoNormalizado: equipamento, diasDemurrageCliente: diasCliente,
               faixas: tabela.faixas, tabelaId: tabela.id, versaoTabela: tabela.versao,
             })
-          : unavailable('termo_embarque', 'TARIFF_TABLE_NOT_FOUND');
+          : unavailable('termo_embarque', selEmbarque.motivo ?? 'TARIFF_TABLE_NOT_FOUND');
       } else if (termoTipo === 'unico') {
         const sel = await tariffs.selecionarVigente({
           tipo: 'rocket_cliente', organizationId: c.organization_id, termoComercial: 'unico', referenceDate: primeiroDia,
