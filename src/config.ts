@@ -203,6 +203,10 @@ export const config = {
     // SPA a tempo (render "magro"). Uma por vez = cada sessão com recurso total =
     // confiável (como os testes single, que funcionaram). Subir só com plano maior.
     concurrency: Math.max(1, parseInt(process.env.BOT_CONCURRENCY || '1', 10)),
+    // Concorrência da pista "API da Scrapfly" (CMA/ZIM, fetchVia 'scrapfly_api'):
+    // cada consulta é uma chamada independente à API — NÃO usa o navegador remoto
+    // nem a vaga dele —, então roda em paralelo à pista de navegador.
+    apiConcurrency: Math.min(8, Math.max(1, parseInt(process.env.BOT_API_CONCURRENCY || '3', 10))),
     maxBatch: Math.max(1, parseInt(process.env.BOT_MAX_BATCH || '10', 10)),
     /**
      * DISPARO AUTOMÁTICO (autoSync): com a conta Microsoft vinculada, a Priora

@@ -34,6 +34,7 @@
     "watchdogauto:selftest": "ts-node src/browser/carriers/watchdogSchedulerSelftest.ts",
     "autosync:selftest": "ts-node src/demurrage/autoSyncSelftest.ts",
     "remoteslot:selftest": "ts-node src/browser/remoteSlotSelftest.ts",
+    "lanes:selftest": "ts-node src/browser/carriers/concurrencySelftest.ts",
     "detailhistory:selftest": "ts-node src/browser/carriers/scrapers/detailHistorySelftest.ts",
     "estimates:selftest": "ts-node src/browser/carriers/estimatesSelftest.ts",
     "security:selftest": "ts-node src/middleware/securitySelftest.ts",

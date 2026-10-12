@@ -2,7 +2,7 @@ import { getMsalClient } from '../auth/msalClient';
 import { getActiveHomeAccountId } from '../auth/microsoftAccount';
 import { config, isAzureConfigured } from '../config';
 import { collectEmailRefs } from './emailRefs';
-import { enrichOne } from './enrichService';
+import { enrichMany } from './enrichService';
 
 /**
  * Priora — DISPARO AUTOMÁTICO do rastreio (autoSync).
@@ -79,17 +79,17 @@ async function doRun(): Promise<AutoSyncRun> {
     }
     const refs = await collectEmailRefs(token, config.bot.autoSync.maxRefs);
     run.refsFound = refs.length;
-    // SEQUENCIAL de propósito: sessões residenciais em paralelo degradam e voltam
-    // com render "magro" (mesma razão do BOT_CONCURRENCY=1).
-    for (const ref of refs) {
-      try {
-        const r = await enrichOne(ref);
-        if (r.cached) run.fromCache++;
-        else run.scraped++;
-        if (!r.ok) run.failed++;
-      } catch {
+    // Navegador remoto SEQUENCIAL de propósito (sessões residenciais em paralelo
+    // degradam e voltam com render "magro" — mesma razão do BOT_CONCURRENCY=1);
+    // CMA/ZIM pela API da Scrapfly andam numa pista paralela (enrichMany).
+    for (const r of await enrichMany(refs)) {
+      if ('error' in r) {
         run.failed++;
+        continue;
       }
+      if (r.cached) run.fromCache++;
+      else run.scraped++;
+      if (!r.ok) run.failed++;
     }
     run.outcome = 'ok';
     run.message = `${refs.length} ref(s): ${run.fromCache} do cache, ${run.scraped} raspada(s), ${run.failed} sem dado.`;

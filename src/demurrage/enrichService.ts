@@ -1,4 +1,6 @@
-import { trackShipment, TrackingResult } from '../browser/carriers';
+import { trackShipment, TrackingResult, detectCarrier, getCarrier } from '../browser/carriers';
+import { canUseScrapflyApi } from '../browser/carriers/scrapflyFetch';
+import { mapLanes } from '../browser/carriers/concurrency';
 import {
   getBotResult,
   saveBotResult,
@@ -94,4 +96,34 @@ export async function enrichOne(
   const p = scrapeAndStore(ref, carrierId).finally(() => inFlight.delete(key));
   inFlight.set(key, p);
   return p;
+}
+
+/** Pista de uma referência: 'api' (CMA/ZIM pela API da Scrapfly) ou 'browser'. */
+export function enrichLane(ref: string, carrierId?: string): 'api' | 'browser' {
+  const carrier = carrierId ? getCarrier(carrierId) : detectCarrier(ref).carrier;
+  return carrier && canUseScrapflyApi(carrier) ? 'api' : 'browser';
+}
+
+/**
+ * Vários BLs de uma vez (lote do botão e disparo automático): pista da API
+ * (até BOT_API_CONCURRENCY em paralelo) e pista de navegador (BOT_CONCURRENCY,
+ * padrão 1 — a vaga do navegador remoto já serializa) andando JUNTAS. Ordem do
+ * resultado = ordem de `refs`. Erro de um BL não derruba os outros.
+ */
+export async function enrichMany(
+  refs: string[],
+  opts: { refresh?: boolean } = {},
+): Promise<Array<EnrichResult | { reference: string; ok: false; error: string }>> {
+  return mapLanes(
+    refs,
+    (ref) => enrichLane(ref),
+    { api: config.bot.apiConcurrency, browser: config.bot.concurrency },
+    async (ref) => {
+      try {
+        return await enrichOne(ref, undefined, opts.refresh === true);
+      } catch (err) {
+        return { reference: ref, ok: false as const, error: (err as Error).message };
+      }
+    },
+  );
 }

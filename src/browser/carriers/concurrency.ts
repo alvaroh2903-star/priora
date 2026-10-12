@@ -22,3 +22,32 @@ export async function mapLimit<T, R>(
   );
   return out;
 }
+
+/**
+ * PISTAS paralelas: cada item vai para uma pista (`laneOf`), cada pista anda com
+ * o SEU limite e todas andam ao mesmo tempo; o resultado sai na ordem original.
+ * Ex.: CMA/ZIM pela API da Scrapfly (não usam o navegador remoto) numa pista com
+ * 3 em paralelo, e os portais de navegador na outra, um por vez — antes um ZIM
+ * esperava atrás de cada OOCL do lote, e vice-versa.
+ */
+export async function mapLanes<T, R>(
+  items: T[],
+  laneOf: (item: T) => string,
+  limits: Record<string, number>,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  const lanes = new Map<string, number[]>();
+  items.forEach((item, i) => {
+    const lane = laneOf(item);
+    lanes.set(lane, [...(lanes.get(lane) || []), i]);
+  });
+  await Promise.all(
+    [...lanes.entries()].map(([lane, idxs]) =>
+      mapLimit(idxs, limits[lane] ?? 1, async (i) => {
+        out[i] = await fn(items[i], i);
+      }),
+    ),
+  );
+  return out;
+}

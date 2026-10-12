@@ -4,7 +4,7 @@ import { listCarriers, detect, trackShipment } from '../browser/carriers';
 import { withPage } from '../browser/browser';
 import { mapLimit } from '../browser/carriers/concurrency';
 import { getAllBotResults } from '../demurrage/demurrageBotStore';
-import { enrichOne } from '../demurrage/enrichService';
+import { enrichOne, enrichMany } from '../demurrage/enrichService';
 import { getAutoSyncStatus, runAutoSyncOnce } from '../demurrage/autoSync';
 import { getWatchdogAutoStatus } from '../browser/carriers/watchdogScheduler';
 import { calculateDemurrage } from '../demurrage/calculator';
@@ -40,6 +40,7 @@ demurrageBotRouter.get('/status', (_req: AuthedRequest, res) => {
     cacheTtlHours: config.bot.resultTtlMs / 3_600_000,
     transitTtlHours: config.bot.transitTtlMs / 3_600_000,
     concurrency: config.bot.concurrency,
+    apiConcurrency: config.bot.apiConcurrency,
     // Disparo automático (e-mail vinculado → puxa sozinho): ligado? última volta?
     autoSync: getAutoSyncStatus(),
   });
@@ -161,13 +162,9 @@ demurrageBotRouter.post('/enrich-batch', async (req: AuthedRequest, res, next) =
       return res.status(400).json({ error: 'Envie { refs: ["...", "..."] }.' });
     }
     const refresh = req.body?.refresh === true || req.body?.refresh === '1';
-    const results = await mapLimit(refs, config.bot.concurrency, async (ref) => {
-      try {
-        return await enrichOne(ref, undefined, refresh);
-      } catch (err) {
-        return { reference: ref, ok: false, error: (err as Error).message };
-      }
-    });
+    // Duas pistas juntas: CMA/ZIM (API da Scrapfly) em paralelo; portais de
+    // navegador um por vez. Ver enrichMany.
+    const results = await enrichMany(refs, { refresh });
     res.json({ count: results.length, results });
   } catch (err) {
     next(err);
