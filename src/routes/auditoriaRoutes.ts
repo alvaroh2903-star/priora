@@ -1,5 +1,6 @@
 import { RequestHandler, Router } from 'express';
 import { requireAuth, AuthedRequest } from '../middleware/requireAuth';
+import { GatilhosLiberacao, gatilhosLiberacaoPadrao } from '../liberacao/aplicacao';
 import {
   searchLogisticsMessages,
   listRecentSummaries,
@@ -369,6 +370,8 @@ export interface AuditoriaRouterDeps {
   fatos?: FatosDuraveisDeps;
   /** Recebe a promessa da persistência, que nunca bloqueia a resposta (testes aguardam por aqui). */
   aoPersistir?: (persistencia: Promise<unknown>) => void;
+  /** L2: recálculo da Liberação depois da persistência (vínculo ou processo criado). */
+  liberacao?: GatilhosLiberacao;
 }
 
 export function criarAuditoriaRouter(deps: AuditoriaRouterDeps = {}): Router {
@@ -381,6 +384,7 @@ export function criarAuditoriaRouter(deps: AuditoriaRouterDeps = {}): Router {
   const iaConfigurada = deps.iaConfigurada ?? isAiConfigured;
   const modelo = deps.modelo ?? (() => config.ai.model);
   const fatos = deps.fatos ?? fatosDuraveisPadrao();
+  const liberacao = deps.liberacao ?? gatilhosLiberacaoPadrao(() => fatos.pool());
   const auditCache = new Map<string, CacheEntry>();
   const preAlertaCache = new Map<string, { sig: string; payload: unknown }>();
 
@@ -394,7 +398,9 @@ export function criarAuditoriaRouter(deps: AuditoriaRouterDeps = {}): Router {
     const persistencia = (async () => {
       const ctx = await contextoDaRequisicao(fatos, req);
       if (!ctx.ok) return { persistido: false, motivo: ctx.motivo };
-      return { persistido: true, resultados: await persistirExtracoesAuditoria(fatos.pool(), ctx.contexto, itens) };
+      const resultados = await persistirExtracoesAuditoria(fatos.pool(), ctx.contexto, itens);
+      await liberacao.extracoesPersistidas(ctx.contexto.organizationId, resultados);
+      return { persistido: true, resultados };
     })().catch((err) => {
       console.error('[auditoria-fatos] persistência adiada (refeita na próxima execução, sem novo OCR):', (err as Error).message);
       return { persistido: false, motivo: 'ERRO' };

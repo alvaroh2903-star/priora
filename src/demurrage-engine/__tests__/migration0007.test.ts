@@ -128,7 +128,9 @@ test('0007 — organization_id imutável nas tabelas de tenant', { skip: !url },
       // Liberação S6 (0100_liberacao_s6_identidade): identidade central, mesma regra de organização imutável.
       'processo_referencias', 'masters', 'master_referencias', 'identidade_pendencias',
       // Vertical 1 S1 (0101_courier_fatos) e S2-mín (0102_auditoria_extracoes_vinculos): mesma regra.
-      'courier_fatos', 'auditoria_extracoes', 'processo_master_vinculos'];
+      'courier_fatos', 'auditoria_extracoes', 'processo_master_vinculos',
+      // Liberação L2 (0103_liberacao_projecao): projeção atual e histórico material, mesma regra.
+      'liberacao_avaliacoes', 'liberacao_avaliacao_eventos'];
     const { rows } = await pool.query(`
       SELECT c.table_name,
              EXISTS (SELECT 1 FROM pg_trigger tg

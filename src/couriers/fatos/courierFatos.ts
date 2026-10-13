@@ -231,6 +231,14 @@ export interface EnvelopeDoProcesso {
   estado: CourierEstado | null;
   recebido: boolean;
   desde: Date | null;
+  /** Linha do estado atual (null = sem estado confirmado). */
+  fatoId: string | null;
+  /**
+   * Início da sequência ATUAL de estados recebidos (Recebido → Em Conferência →
+   * …): a linha que confirmou a chegada e quando. Trocar de um estado recebido
+   * para outro não muda isso; voltar a "Identificado" encerra (null).
+   */
+  recebimento: { fatoId: string; desde: Date } | null;
 }
 
 export interface FatoNaoPublicado {
@@ -308,19 +316,39 @@ export async function fatosCourierDoProcesso(db: Db, organizationId: string, pro
 
   if (trackings.size) {
     const { rows: estados } = await db.query(
-      `SELECT DISTINCT ON (tracking_chave) tracking_chave, valor, registrado_em FROM courier_fatos
+      `SELECT id, tracking_chave, valor, registrado_em FROM courier_fatos
         WHERE organization_id = $1 AND tipo = 'ESTADO_ENVELOPE' AND tracking_chave = ANY($2::text[])
-        ORDER BY tracking_chave, sequencia DESC`,
+        ORDER BY tracking_chave, sequencia`,
       [organizationId, [...trackings]],
     );
-    const porTracking = new Map(estados.map((r) => [r.tracking_chave, r]));
+    const porTracking = new Map<string, Array<{ id: string; valor: CourierEstado; registrado_em: Date }>>();
+    for (const r of estados) porTracking.set(r.tracking_chave, [...(porTracking.get(r.tracking_chave) ?? []), r]);
     out.envelopes = [...trackings].sort().map((t) => {
-      const r = porTracking.get(t);
+      const linhas = porTracking.get(t) ?? [];
+      const r = linhas[linhas.length - 1];
+      let inicio: (typeof linhas)[number] | null = null;
+      for (let i = linhas.length - 1; i >= 0 && ESTADOS_RECEBIDOS.includes(linhas[i].valor); i--) inicio = linhas[i];
       return {
         trackingChave: t, estado: r?.valor ?? null, recebido: !!r && ESTADOS_RECEBIDOS.includes(r.valor),
-        desde: r ? new Date(r.registrado_em) : null,
+        desde: r ? new Date(r.registrado_em) : null, fatoId: r?.id ?? null,
+        recebimento: inicio ? { fatoId: inicio.id, desde: new Date(inicio.registrado_em) } : null,
       };
     });
   }
   return out;
+}
+
+/**
+ * Referências EXATAS de processo com conferência registrada neste envelope
+ * (qualquer proveniência). Só leitura: diz a quem uma mudança do estado do
+ * envelope pode interessar; a identidade continua sendo resolvida pelo S6.
+ */
+export async function referenciasConferidasNoEnvelope(db: Db, organizationId: string, trackingChave: string): Promise<string[]> {
+  const { rows } = await db.query(
+    `SELECT DISTINCT processo_ref FROM courier_fatos
+      WHERE organization_id = $1 AND tracking_chave = $2 AND tipo = 'CONFERENCIA_DOCUMENTO'
+      ORDER BY processo_ref`,
+    [organizationId, trackingChave],
+  );
+  return rows.map((r) => r.processo_ref);
 }

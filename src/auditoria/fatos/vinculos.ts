@@ -59,3 +59,36 @@ export async function vinculoDoProcesso(db: Db, organizationId: string, processo
     evidencia: primeira.evidencia, evidencias,
   };
 }
+
+export type VinculoPublicado = Extract<SituacaoVinculo, { tipo: 'VINCULADO' }>;
+
+/**
+ * Processos com vínculo VÁLIDO e PUBLICADO a este Master agora (cada um
+ * revalidado por `vinculoDoProcesso`: processo em CONFLITO não entra). Só
+ * leitura; serve para fatos de escopo Master chegarem aos processos vinculados.
+ */
+export async function processosVinculadosAoMaster(db: Db, organizationId: string, masterId: string): Promise<VinculoPublicado[]> {
+  const { rows } = await db.query(
+    `SELECT DISTINCT processo_id FROM processo_master_vinculos WHERE organization_id = $1 AND master_id = $2 ORDER BY processo_id`,
+    [organizationId, masterId],
+  );
+  const out: VinculoPublicado[] = [];
+  for (const { processo_id: processoId } of rows) {
+    const s = await vinculoDoProcesso(db, organizationId, processoId);
+    if (s.tipo === 'VINCULADO' && s.masterId === masterId) out.push(s);
+  }
+  return out;
+}
+
+/**
+ * Masters que aparecem em alguma linha de vínculo deste processo (válida ou
+ * não). Só leitura: quando o vínculo do processo muda (novo, conflito,
+ * invalidado), os processos desses Masters podem ser atingidos.
+ */
+export async function mastersCitadosPeloProcesso(db: Db, organizationId: string, processoId: string): Promise<string[]> {
+  const { rows } = await db.query(
+    `SELECT DISTINCT master_id FROM processo_master_vinculos WHERE organization_id = $1 AND processo_id = $2 ORDER BY master_id`,
+    [organizationId, processoId],
+  );
+  return rows.map((r) => r.master_id);
+}

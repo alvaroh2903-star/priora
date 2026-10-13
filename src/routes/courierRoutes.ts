@@ -1,5 +1,6 @@
 import { RequestHandler, Router } from 'express';
 import { requireAuth, AuthedRequest } from '../middleware/requireAuth';
+import { GatilhosLiberacao, gatilhosLiberacaoPadrao } from '../liberacao/aplicacao';
 import {
   searchLogisticsMessages,
   listRecentSummaries,
@@ -1039,6 +1040,8 @@ export interface CourierRouterDeps {
   /** Conta Microsoft da caixa monitorada que gera a visão (liga o identificador da linha à caixa). */
   caixaMonitorada?: () => string | null;
   segredoLinha?: () => string | null;
+  /** L2: recálculo da Liberação depois de um fato durável gravado (só no ramo durável). */
+  liberacao?: GatilhosLiberacao;
 }
 
 /** Resposta de uma escrita durável, sem expor nada além do resultado. */
@@ -1064,6 +1067,7 @@ export function criarCourierRouter(deps: CourierRouterDeps = {}): Router {
   const fatos = deps.fatos ?? fatosDuraveisPadrao();
   const caixaMonitorada = deps.caixaMonitorada ?? (() => getActiveAccount()?.homeAccountId ?? null);
   const segredoLinha = deps.segredoLinha ?? (() => segredoLinhaPadrao());
+  const liberacao = deps.liberacao ?? gatilhosLiberacaoPadrao(() => fatos.pool());
 
   /**
    * Opções da visão com os fatos duráveis ativos (chave ligada E contexto
@@ -1244,6 +1248,7 @@ export function criarCourierRouter(deps: CourierRouterDeps = {}): Router {
         const r = await registrarEstadoEnvelope(fatos.pool(), ctx.contexto, {
           trackingBruto: req.params.tracking, estado, nota: req.body?.nota,
         });
+        if (r.status === 'REGISTRADO') await liberacao.envelopeRegistrado(ctx.contexto.organizationId, r.fatoId);
         // O JSON legado acompanha o fato durável (cache para quando a chave for desligada).
         const registro = setEstado(req.params.tracking, estado, req.body?.nota);
         res.json({ tracking: req.params.tracking, ...registro, duravel: resumoDuravel(r) });
@@ -1383,6 +1388,7 @@ export function criarCourierRouter(deps: CourierRouterDeps = {}): Router {
           valor: status === 'recebido' ? 'RECEBIDO' : status === 'nao_recebido' ? 'AUSENTE_NA_CONFERENCIA' : 'DESMARCADO',
           proveniencia,
         });
+        if (r.status === 'REGISTRADO') await liberacao.conferenciaRegistrada(ctx.contexto.organizationId, r.fatoId);
         // O JSON legado acompanha o fato durável (cache para quando a chave for desligada).
         const conferencia = setConferenciaDoc(req.params.tracking, processoRef, documento, status);
         res.json({
