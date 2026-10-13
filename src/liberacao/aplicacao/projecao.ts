@@ -3,7 +3,8 @@ import { Pool, PoolClient } from 'pg';
 import { Db } from '../../identidade';
 import { mastersCitadosPeloProcesso, processosVinculadosAoMaster } from '../../auditoria/fatos/vinculos';
 import { AvaliacaoProcesso, avaliarProcesso } from '../dominio';
-import { FontesDaAvaliacao, FonteTerminal, SEM_PRODUTOR_TERMINAL, carregarEntrada } from './entrada';
+import { DivergenciaDeConferencia, divergenciasDoCourier } from './divergencias';
+import { EntradaCarregada, FontesDaAvaliacao, FonteTerminal, SEM_PRODUTOR_TERMINAL, carregarEntrada } from './entrada';
 
 /**
  * L2 — projeção persistida da Liberação. Fluxo único e reconstruível:
@@ -21,7 +22,21 @@ import { FontesDaAvaliacao, FonteTerminal, SEM_PRODUTOR_TERMINAL, carregarEntrad
  * Terminal (LIBERADO) nunca é reaberto: o recálculo devolve a projeção como está.
  */
 
-export const VERSAO_PROJECAO = 1;
+/** 2: a avaliação passa a levar as divergências do físico (L4). */
+export const VERSAO_PROJECAO = 2;
+
+/**
+ * Avaliação da Liberação de um processo: a saída da L1a (`avaliarProcesso`)
+ * mais as divergências do físico, também da L1a (`aplicarObservacao`). As
+ * divergências não mudam o fato oficial nem a etapa: só ficam registradas.
+ */
+export interface AvaliacaoLiberacao extends AvaliacaoProcesso {
+  divergencias: DivergenciaDeConferencia[];
+}
+
+export function avaliarLiberacao(c: EntradaCarregada): AvaliacaoLiberacao {
+  return { ...avaliarProcesso(c.entrada), divergencias: divergenciasDoCourier(c.conferencias, c.entrada.courier.fonte) };
+}
 
 export type GatilhoRecalculo =
   | 'COURIER_CONFERENCIA' | 'COURIER_ENVELOPE' | 'AUDITORIA_VINCULO' | 'IDENTIDADE_RESOLVIDA' | 'MASTER_COMPARTILHADO'
@@ -30,8 +45,8 @@ export type GatilhoRecalculo =
 export interface ProjecaoLiberacao {
   organizationId: string;
   processoId: string;
-  /** Saída da L1a, como ela devolveu (inclusive NAO_DETERMINAVEL / NAO_CONFIRMAVEL). */
-  avaliacao: AvaliacaoProcesso;
+  /** Saída da L1a, como ela devolveu (inclusive NAO_DETERMINAVEL / NAO_CONFIRMAVEL), com as divergências do físico. */
+  avaliacao: AvaliacaoLiberacao;
   fontes: FontesDaAvaliacao;
   impressaoMaterial: string;
   versaoProjecao: number;
@@ -133,7 +148,7 @@ async function emTransacao<T>(pool: Pool, fn: (c: PoolClient) => Promise<T>): Pr
 
 async function gravarLinha(
   c: PoolClient, organizationId: string, processoId: string,
-  l: { avaliacao: AvaliacaoProcesso; fontes: FontesDaAvaliacao; impressao: string; sequencia: number; avaliadoEm: Date; alteradoEm: Date },
+  l: { avaliacao: AvaliacaoLiberacao; fontes: FontesDaAvaliacao; impressao: string; sequencia: number; avaliadoEm: Date; alteradoEm: Date },
 ): Promise<ProjecaoLiberacao> {
   const { rows: [r] } = await c.query(
     `INSERT INTO liberacao_avaliacoes
@@ -189,7 +204,7 @@ export async function recalcularLiberacaoProcesso(
 
     const carregada = await carregarEntrada(c, organizationId, processoId, opcoes.terminal ?? SEM_PRODUTOR_TERMINAL);
     if (!carregada) return { status: 'PROCESSO_NAO_ENCONTRADO' };
-    const avaliacao = avaliarProcesso(carregada.entrada);
+    const avaliacao = avaliarLiberacao(carregada);
     const { fontes } = carregada;
     const impressao = impressaoMaterial(avaliacao);
     const { rows: [{ agora }] } = await c.query(`SELECT now() AS agora`);

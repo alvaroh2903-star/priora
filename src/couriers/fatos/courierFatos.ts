@@ -221,6 +221,8 @@ export async function projecaoCourierParaTela(db: Db, organizationId: string, tr
 export interface FatoConferenciaCourier {
   valor: 'RECEBIDO' | 'AUSENTE_NA_CONFERENCIA';
   vigenteDesde: Date;
+  /** Última marca oficial com o mesmo valor (frescor); igual a `vigenteDesde` quando não houve reconfirmação. */
+  confirmadoEm: Date;
   trackingChave: string;
   autorMembershipId: string;
   evidencia: { fonte: 'courier'; ref: string };
@@ -258,17 +260,51 @@ export interface FatosCourierDoProcesso {
   envelopes: EnvelopeDoProcesso[];
   /** Marcas preservadas como evidência, sem efeito de fato oficial (linha inferida, ambígua, Clara ou não verificada). */
   naoPublicados: FatoNaoPublicado[];
+  /** Todas as marcas de conferência deste processo (append-only), por assunto e em ordem: oficiais e não oficiais. */
+  historico: ConferenciaRegistrada[];
+}
+
+/** Uma marca de conferência como foi gravada: assunto (envelope, documento, referência exata), valor e proveniência. */
+export interface ConferenciaRegistrada {
+  fatoId: string;
+  trackingChave: string;
+  documento: DocumentoConferido;
+  processoRef: string;
+  valor: ValorConferencia;
+  associacao: AssociacaoVerificada;
+  autorMembershipId: string;
+  registradoEm: Date;
+}
+
+/**
+ * Fato oficial de UM assunto (envelope, documento, referência exata). Só as
+ * marcas CITADA são observação oficial: a última decide e desmarcar retrai.
+ * Marca não oficial nunca muda nem esconde o fato oficial (cap. 22): fica como
+ * evidência. Reconfirmar o mesmo valor só avança o frescor — o fato vale desde
+ * a primeira marca oficial da sequência atual com esse valor (N-16).
+ */
+function oficialDoAssunto(linhas: ConferenciaRegistrada[]): FatoConferenciaCourier | null {
+  const citadas = linhas.filter((l) => l.associacao === 'CITADA');
+  const ultima = citadas[citadas.length - 1];
+  if (!ultima || ultima.valor === 'DESMARCADO') return null;
+  let inicio = ultima;
+  for (let i = citadas.length - 1; i >= 0 && citadas[i].valor === ultima.valor; i--) inicio = citadas[i];
+  return {
+    valor: ultima.valor, vigenteDesde: inicio.registradoEm, confirmadoEm: ultima.registradoEm, trackingChave: ultima.trackingChave,
+    autorMembershipId: inicio.autorMembershipId, evidencia: { fonte: 'courier', ref: `courier_fato:${inicio.fatoId}` },
+  };
 }
 
 /**
  * Fatos oficiais do Courier para UM processo. A identidade é resolvida AGORA
  * pelo S6 (código exato ou alias vigente): uma pendência resolvida depois passa
  * a valer sem regravar nada; um alias invalidado deixa de valer. Por documento,
- * vale a última marca de cada envelope; recebido em algum envelope prevalece
- * sobre ausente em outro. Só linhas CITADA publicam.
+ * vale a última marca OFICIAL (CITADA) de cada envelope — uma marca não oficial
+ * posterior não a apaga (cap. 22) e segue em `historico` como evidência;
+ * recebido em algum envelope prevalece sobre ausente em outro.
  */
 export async function fatosCourierDoProcesso(db: Db, organizationId: string, processoId: string): Promise<FatosCourierDoProcesso> {
-  const out: FatosCourierDoProcesso = { processoId, mbl: null, hblOriginal: null, envelopes: [], naoPublicados: [] };
+  const out: FatosCourierDoProcesso = { processoId, mbl: null, hblOriginal: null, envelopes: [], naoPublicados: [], historico: [] };
   const { rows: refs } = await db.query(
     `SELECT numero_processo AS ref FROM processos WHERE id = $1 AND organization_id = $2 AND numero_processo IS NOT NULL
      UNION SELECT referencia FROM processo_referencias WHERE processo_id = $1 AND organization_id = $2`,
@@ -282,29 +318,35 @@ export async function fatosCourierDoProcesso(db: Db, organizationId: string, pro
   if (candidatas.length === 0) return out;
 
   const { rows } = await db.query(
-    `SELECT DISTINCT ON (tracking_chave, documento, processo_ref)
-            id, tracking_chave, documento, processo_ref, valor, associacao, autor_membership_id, registrado_em
+    `SELECT id, tracking_chave, documento, processo_ref, valor, associacao, autor_membership_id, registrado_em
        FROM courier_fatos
       WHERE organization_id = $1 AND tipo = 'CONFERENCIA_DOCUMENTO' AND processo_ref = ANY($2::text[])
-      ORDER BY tracking_chave, documento, processo_ref, sequencia DESC`,
+      ORDER BY tracking_chave, documento, processo_ref, sequencia`,
     [organizationId, candidatas],
   );
+  out.historico = rows.map((r) => ({
+    fatoId: r.id, trackingChave: r.tracking_chave, documento: r.documento, processoRef: r.processo_ref, valor: r.valor,
+    associacao: r.associacao, autorMembershipId: r.autor_membership_id, registradoEm: new Date(r.registrado_em),
+  }));
+  const porAssunto = new Map<string, ConferenciaRegistrada[]>();
+  for (const l of out.historico) {
+    const chave = `${l.trackingChave}|${l.documento}|${l.processoRef}`;
+    porAssunto.set(chave, [...(porAssunto.get(chave) ?? []), l]);
+  }
   const oficiais: Record<DocumentoConferido, FatoConferenciaCourier[]> = { MBL: [], HBL_ORIGINAL: [] };
   const trackings = new Set<string>();
-  for (const r of rows) {
-    if (r.valor === 'DESMARCADO') continue;
-    if (r.associacao !== 'CITADA') {
+  for (const linhas of porAssunto.values()) {
+    const ultima = linhas[linhas.length - 1];
+    if (ultima.valor !== 'DESMARCADO' && ultima.associacao !== 'CITADA') {
       out.naoPublicados.push({
-        fatoId: r.id, trackingChave: r.tracking_chave, documento: r.documento, valor: r.valor, associacao: r.associacao,
-        motivo: 'PROVENIENCIA_NAO_OFICIAL',
+        fatoId: ultima.fatoId, trackingChave: ultima.trackingChave, documento: ultima.documento, valor: ultima.valor,
+        associacao: ultima.associacao, motivo: 'PROVENIENCIA_NAO_OFICIAL',
       });
-      continue;
     }
-    trackings.add(r.tracking_chave);
-    oficiais[r.documento as DocumentoConferido].push({
-      valor: r.valor, vigenteDesde: new Date(r.registrado_em), trackingChave: r.tracking_chave,
-      autorMembershipId: r.autor_membership_id, evidencia: { fonte: 'courier', ref: `courier_fato:${r.id}` },
-    });
+    const oficial = oficialDoAssunto(linhas);
+    if (!oficial) continue;
+    trackings.add(oficial.trackingChave);
+    oficiais[ultima.documento].push(oficial);
   }
   const consolidar = (fatos: FatoConferenciaCourier[]): FatoConferenciaCourier | null => {
     const recebidos = fatos.filter((f) => f.valor === 'RECEBIDO');

@@ -2,9 +2,11 @@
 export { carregarEntrada, courierParaL1a, disponibilidadeDoCourier, SEM_PRODUTOR_TERMINAL } from './entrada';
 export type { EntradaCarregada, EstadoDisponibilidadeCourier, FontesDaAvaliacao, FonteTerminal } from './entrada';
 export {
-  VERSAO_PROJECAO, canonico, ehUuid, impressaoMaterial, obterLiberacaoDoProcesso, recalcularAfetadosPeloProcesso,
+  VERSAO_PROJECAO, avaliarLiberacao, canonico, ehUuid, impressaoMaterial, obterLiberacaoDoProcesso, recalcularAfetadosPeloProcesso,
   recalcularLiberacaoProcesso, vistaMaterial,
 } from './projecao';
-export type { GatilhoRecalculo, OpcoesRecalculo, ProjecaoLiberacao, ResultadoRecalculo } from './projecao';
+export type { AvaliacaoLiberacao, GatilhoRecalculo, OpcoesRecalculo, ProjecaoLiberacao, ResultadoRecalculo } from './projecao';
+export { divergenciasDoCourier } from './divergencias';
+export type { DivergenciaDeConferencia, ValorConferido } from './divergencias';
 export { gatilhosLiberacaoPadrao } from './gatilhos';
 export type { GatilhosLiberacao } from './gatilhos';
