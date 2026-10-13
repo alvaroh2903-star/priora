@@ -1,12 +1,13 @@
-import { ConferenciaRegistrada, DocumentoConferido } from '../../couriers/fatos/courierFatos';
+import { AssuntoConferencia, DocumentoConferido } from '../../couriers/fatos/courierFatos';
 import {
   ConferenciaHblOriginal, ConferenciaMbl, DisponibilidadeFonte, Divergencia, EstadoDoFato, FatoOficial, aplicarObservacao, estadoInicial,
 } from '../dominio';
 
 /**
  * L4 — divergência do físico (cap. 5, 22; N-14; N-16), com a máquina da L1a
- * (`aplicarObservacao`). Nenhuma regra nova: as marcas do S1 de cada assunto
- * (envelope, documento, referência exata) são reaplicadas em ordem:
+ * (`aplicarObservacao`). Nenhuma regra nova: as marcas de cada assunto do S1
+ * (organização + envelope + PROCESSO + documento — o mesmo assunto do fato
+ * oficial, com o código e os aliases vigentes juntos) são reaplicadas em ordem:
  *  - marca CITADA → observação OFICIAL (mesmo valor só avança o frescor;
  *    valor novo é mudança oficial e resolve a divergência que ele elimina);
  *    desmarcar CITADA retrai o fato oficial;
@@ -35,15 +36,10 @@ const VALOR: Record<DocumentoConferido, Record<'RECEBIDO' | 'AUSENTE_NA_CONFEREN
 };
 
 export function divergenciasDoCourier(
-  historico: ReadonlyArray<ConferenciaRegistrada>, fonte: DisponibilidadeFonte,
+  assuntos: ReadonlyArray<AssuntoConferencia>, fonte: DisponibilidadeFonte,
 ): DivergenciaDeConferencia[] {
-  const porAssunto = new Map<string, ConferenciaRegistrada[]>();
-  for (const l of historico) {
-    const chave = `${l.trackingChave}|${l.documento}|${l.processoRef}`;
-    porAssunto.set(chave, [...(porAssunto.get(chave) ?? []), l]);
-  }
   const out: DivergenciaDeConferencia[] = [];
-  for (const linhas of porAssunto.values()) {
+  for (const { linhas } of assuntos) {
     let estado: EstadoDoFato<ValorConferido> = estadoInicial(fonte);
     for (const l of linhas) {
       const observadoEm = l.registradoEm.toISOString();

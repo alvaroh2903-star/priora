@@ -1,6 +1,6 @@
 import { Db } from '../../identidade';
 import {
-  ConferenciaRegistrada, FatoConferenciaCourier, FatosCourierDoProcesso, fatosCourierDoProcesso,
+  AssuntoConferencia, FatoConferenciaCourier, FatosCourierDoProcesso, fatosCourierDoProcesso,
 } from '../../couriers/fatos/courierFatos';
 import { SituacaoVinculo, processosVinculadosAoMaster, vinculoDoProcesso } from '../../auditoria/fatos/vinculos';
 import {
@@ -56,8 +56,8 @@ export const SEM_PRODUTOR_TERMINAL: FonteTerminal = async () => null;
 export interface EntradaCarregada {
   entrada: EntradaAvaliacao;
   fontes: FontesDaAvaliacao;
-  /** Marcas de conferência do próprio processo (S1, append-only), para a divergência do físico (L4). */
-  conferencias: ConferenciaRegistrada[];
+  /** Assuntos de conferência do próprio processo (S1, append-only), para a divergência do físico (L4). */
+  assuntos: AssuntoConferencia[];
 }
 
 const iso = (d: Date): Instante => d.toISOString();
@@ -211,6 +211,6 @@ export async function carregarEntrada(
   return {
     entrada: { processoId, vinculo, fatosDoMaster, courier, liberado: await terminal(db, organizationId, processoId) },
     fontes: { vinculo: ponteirosDoVinculo(situacao), courier: ponteiros, masterFisico, caixaIds, disponibilidadeCourier },
-    conferencias: proprios.historico,
+    assuntos: proprios.assuntos,
   };
 }

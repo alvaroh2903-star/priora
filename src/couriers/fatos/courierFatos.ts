@@ -261,15 +261,17 @@ export interface FatosCourierDoProcesso {
   /** Marcas preservadas como evidência, sem efeito de fato oficial (linha inferida, ambígua, Clara ou não verificada). */
   naoPublicados: FatoNaoPublicado[];
   /** Todas as marcas de conferência deste processo (append-only), por assunto e em ordem: oficiais e não oficiais. */
-  historico: ConferenciaRegistrada[];
+  assuntos: AssuntoConferencia[];
 }
 
-/** Uma marca de conferência como foi gravada: assunto (envelope, documento, referência exata), valor e proveniência. */
+/** Uma marca de conferência como foi gravada: envelope, documento, referência usada (bruta preservada), valor e proveniência. */
 export interface ConferenciaRegistrada {
   fatoId: string;
   trackingChave: string;
   documento: DocumentoConferido;
+  /** A referência exata com que a marca foi feita (código ou alias): proveniência, não identidade. */
   processoRef: string;
+  sequencia: number;
   valor: ValorConferencia;
   associacao: AssociacaoVerificada;
   autorMembershipId: string;
@@ -277,7 +279,42 @@ export interface ConferenciaRegistrada {
 }
 
 /**
- * Fato oficial de UM assunto (envelope, documento, referência exata). Só as
+ * Assunto operacional de um fato do Courier: organização + envelope +
+ * PROCESSO (identidade do S6) + documento. Todas as referências que o S6
+ * resolve HOJE para o processo (código e aliases vigentes) formam uma única
+ * linha do tempo; alias invalidado deixa de entrar, sem reescrever nada.
+ */
+export interface AssuntoConferencia {
+  trackingChave: string;
+  documento: DocumentoConferido;
+  processoId: string;
+  /** Marcas em ordem: cada referência na sua sequência; entre referências, pelo instante (desempate: referência, sequência). */
+  linhas: ConferenciaRegistrada[];
+}
+
+/**
+ * Une as marcas de várias referências do mesmo assunto sem quebrar a ordem
+ * própria de cada uma (a sequência do S1). Entre referências vale o instante
+ * gravado, em microssegundos (`instante`); empate exato → referência, sequência.
+ */
+function linhaDoTempo(linhas: ConferenciaRegistrada[], instante: (l: ConferenciaRegistrada) => string): ConferenciaRegistrada[] {
+  const anterior = (a: ConferenciaRegistrada, b: ConferenciaRegistrada): boolean =>
+    instante(a) !== instante(b) ? instante(a) < instante(b)
+      : a.processoRef !== b.processoRef ? a.processoRef < b.processoRef : a.sequencia < b.sequencia;
+  const filas = new Map<string, ConferenciaRegistrada[]>();
+  for (const l of linhas) filas.set(l.processoRef, [...(filas.get(l.processoRef) ?? []), l]);
+  const cabecas = [...filas.values()];
+  const out: ConferenciaRegistrada[] = [];
+  for (;;) {
+    let proxima: ConferenciaRegistrada[] | null = null;
+    for (const f of cabecas) if (f.length && (!proxima || anterior(f[0], proxima[0]))) proxima = f;
+    if (!proxima) return out;
+    out.push(proxima.shift()!);
+  }
+}
+
+/**
+ * Fato oficial de UM assunto (envelope, documento, processo). Só as
  * marcas CITADA são observação oficial: a última decide e desmarcar retrai.
  * Marca não oficial nunca muda nem esconde o fato oficial (cap. 22): fica como
  * evidência. Reconfirmar o mesmo valor só avança o frescor — o fato vale desde
@@ -298,13 +335,14 @@ function oficialDoAssunto(linhas: ConferenciaRegistrada[]): FatoConferenciaCouri
 /**
  * Fatos oficiais do Courier para UM processo. A identidade é resolvida AGORA
  * pelo S6 (código exato ou alias vigente): uma pendência resolvida depois passa
- * a valer sem regravar nada; um alias invalidado deixa de valer. Por documento,
- * vale a última marca OFICIAL (CITADA) de cada envelope — uma marca não oficial
- * posterior não a apaga (cap. 22) e segue em `historico` como evidência;
+ * a valer sem regravar nada; um alias invalidado deixa de valer. O assunto é
+ * envelope + documento DESTE processo (todas as suas referências vigentes
+ * juntas); vale a última marca OFICIAL (CITADA) de cada assunto — uma marca não
+ * oficial posterior não a apaga (cap. 22) e segue em `assuntos` como evidência;
  * recebido em algum envelope prevalece sobre ausente em outro.
  */
 export async function fatosCourierDoProcesso(db: Db, organizationId: string, processoId: string): Promise<FatosCourierDoProcesso> {
-  const out: FatosCourierDoProcesso = { processoId, mbl: null, hblOriginal: null, envelopes: [], naoPublicados: [], historico: [] };
+  const out: FatosCourierDoProcesso = { processoId, mbl: null, hblOriginal: null, envelopes: [], naoPublicados: [], assuntos: [] };
   const { rows: refs } = await db.query(
     `SELECT numero_processo AS ref FROM processos WHERE id = $1 AND organization_id = $2 AND numero_processo IS NOT NULL
      UNION SELECT referencia FROM processo_referencias WHERE processo_id = $1 AND organization_id = $2`,
@@ -318,24 +356,30 @@ export async function fatosCourierDoProcesso(db: Db, organizationId: string, pro
   if (candidatas.length === 0) return out;
 
   const { rows } = await db.query(
-    `SELECT id, tracking_chave, documento, processo_ref, valor, associacao, autor_membership_id, registrado_em
+    `SELECT id, tracking_chave, documento, processo_ref, sequencia, valor, associacao, autor_membership_id, registrado_em,
+            to_char(registrado_em AT TIME ZONE 'UTC', 'YYYYMMDDHH24MISSUS') AS instante
        FROM courier_fatos
       WHERE organization_id = $1 AND tipo = 'CONFERENCIA_DOCUMENTO' AND processo_ref = ANY($2::text[])
       ORDER BY tracking_chave, documento, processo_ref, sequencia`,
     [organizationId, candidatas],
   );
-  out.historico = rows.map((r) => ({
-    fatoId: r.id, trackingChave: r.tracking_chave, documento: r.documento, processoRef: r.processo_ref, valor: r.valor,
-    associacao: r.associacao, autorMembershipId: r.autor_membership_id, registradoEm: new Date(r.registrado_em),
-  }));
+  // Assunto = envelope + documento DESTE processo: as referências vigentes dele formam uma só linha do tempo.
   const porAssunto = new Map<string, ConferenciaRegistrada[]>();
-  for (const l of out.historico) {
-    const chave = `${l.trackingChave}|${l.documento}|${l.processoRef}`;
-    porAssunto.set(chave, [...(porAssunto.get(chave) ?? []), l]);
+  const instante = new Map<string, string>(rows.map((r) => [r.id, r.instante]));
+  for (const r of rows) {
+    const chave = `${r.tracking_chave}|${r.documento}`;
+    porAssunto.set(chave, [...(porAssunto.get(chave) ?? []), {
+      fatoId: r.id, trackingChave: r.tracking_chave, documento: r.documento, processoRef: r.processo_ref, sequencia: r.sequencia,
+      valor: r.valor, associacao: r.associacao, autorMembershipId: r.autor_membership_id, registradoEm: new Date(r.registrado_em),
+    }]);
   }
+  out.assuntos = [...porAssunto.values()].map((linhas) => ({
+    trackingChave: linhas[0].trackingChave, documento: linhas[0].documento, processoId,
+    linhas: linhaDoTempo(linhas, (l) => instante.get(l.fatoId)!),
+  }));
   const oficiais: Record<DocumentoConferido, FatoConferenciaCourier[]> = { MBL: [], HBL_ORIGINAL: [] };
   const trackings = new Set<string>();
-  for (const linhas of porAssunto.values()) {
+  for (const { linhas } of out.assuntos) {
     const ultima = linhas[linhas.length - 1];
     if (ultima.valor !== 'DESMARCADO' && ultima.associacao !== 'CITADA') {
       out.naoPublicados.push({

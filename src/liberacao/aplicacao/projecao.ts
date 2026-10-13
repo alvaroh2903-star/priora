@@ -35,7 +35,7 @@ export interface AvaliacaoLiberacao extends AvaliacaoProcesso {
 }
 
 export function avaliarLiberacao(c: EntradaCarregada): AvaliacaoLiberacao {
-  return { ...avaliarProcesso(c.entrada), divergencias: divergenciasDoCourier(c.conferencias, c.entrada.courier.fonte) };
+  return { ...avaliarProcesso(c.entrada), divergencias: divergenciasDoCourier(c.assuntos, c.entrada.courier.fonte) };
 }
 
 export type GatilhoRecalculo =
