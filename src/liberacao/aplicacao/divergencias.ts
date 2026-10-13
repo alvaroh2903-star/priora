@@ -42,7 +42,7 @@ export function divergenciasDoCourier(
   for (const { linhas } of assuntos) {
     let estado: EstadoDoFato<ValorConferido> = estadoInicial(fonte);
     for (const l of linhas) {
-      const observadoEm = l.registradoEm.toISOString();
+      const observadoEm = l.instante; // precisão do banco: a ordem de decisão é exata
       const evidencia = { fonte: 'courier', ref: `courier_fato:${l.fatoId}` };
       if (l.valor === 'DESMARCADO') {
         if (l.associacao === 'CITADA') estado = estadoInicial(estado.fonte);

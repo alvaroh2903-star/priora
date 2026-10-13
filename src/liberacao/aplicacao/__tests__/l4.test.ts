@@ -8,7 +8,9 @@ import { testDatabaseUrl, testPool, truncateAll } from '../../../demurrage-engin
 import { Cenario, contar } from '../../../operacional/__tests__/cenario';
 import { servir } from '../../../operacional/__tests__/http';
 import { resetCourierStore } from '../../../couriers/courierStore';
-import { fatosCourierDoProcesso, registrarConferenciaCourier } from '../../../couriers/fatos/courierFatos';
+import { ValorConferencia, fatosCourierDoProcesso, registrarConferenciaCourier } from '../../../couriers/fatos/courierFatos';
+import { AssociacaoVerificada } from '../../../couriers/fatos/linha';
+import { compararInstantes } from '../../dominio';
 import { invalidarEvidenciaDeReferencia, registrarAliasProcesso } from '../../../identidade';
 import { criarAuditoriaRouter } from '../../../routes/auditoriaRoutes';
 import { ProjecaoLiberacao, canonico, obterLiberacaoDoProcesso, recalcularLiberacaoProcesso } from '..';
@@ -41,6 +43,30 @@ async function aliasDe(pool: Pool, c: Cenario, processoId: string, referencia: s
 
 const referenciasDoAssunto = async (pool: Pool, c: Cenario, processoId: string) =>
   (await fatosCourierDoProcesso(pool, c.orgId, processoId)).assuntos.map((a) => [a.trackingChave, a.documento, a.linhas.map((l) => l.processoRef)]);
+
+/** Escrita pelo S1 com o resultado completo (status, valor anterior, identidade). */
+const marcar = (pool: Pool, c: Cenario, tracking: string, ref: string, valor: ValorConferencia, associacao: AssociacaoVerificada = 'CITADA') =>
+  registrarConferenciaCourier(pool, c.ctx, {
+    trackingBruto: tracking, processoRef: ref, documento: 'MBL', valor,
+    proveniencia: { associacao, brutas: associacao === 'CITADA' ? [ref] : [], emitidaEm: new Date() },
+  });
+
+/**
+ * Marca gravada com um instante EXATO do banco (microssegundos), para provar a
+ * ordem dentro do mesmo milissegundo — a escrita normal usa now() e não permite
+ * escolher o instante. Mesmas restrições da tabela; nada é alterado depois.
+ */
+async function gravarNoInstante(pool: Pool, c: Cenario, l: {
+  tracking: string; ref: string; valor: ValorConferencia; associacao: AssociacaoVerificada; sequencia: number; em: string;
+}): Promise<string> {
+  const { rows: [r] } = await pool.query(
+    `INSERT INTO courier_fatos
+       (organization_id, caixa_id, tracking_bruto, tracking_chave, tipo, documento, processo_ref_bruta, processo_ref, associacao,
+        valor, sequencia, autor_membership_id, registrado_em)
+     VALUES ($1, $2, $3, $3, 'CONFERENCIA_DOCUMENTO', 'MBL', $4, $4, $5, $6, $7, $8, $9::timestamptz) RETURNING id`,
+    [c.orgId, c.caixaId, l.tracking, l.ref, l.associacao, l.valor, l.sequencia, c.membershipPessoa, l.em]);
+  return r.id;
+}
 
 /** Auditoria real (rota) com caixa postal e OCR falsos que contam as chamadas. */
 async function auditoria(pool: Pool, c: Cenario, ref: string, mbl: string) {
@@ -396,6 +422,8 @@ test('L4 — fatos de Courier e Auditoria com propagação (dados persistidos)',
       await aliasDe(pool, a, p, 'IM9003-026');
       const primeiro = await conferir(pool, a, 'DHL 9003', 'IM9003-26', 'MBL', 'RECEBIDO');
       await gatilhos(pool).conferenciaRegistrada(a.orgId, primeiro);
+      // Uma marca contrária não oficial entra no meio; a reconfirmação oficial vem depois, pelo alias.
+      await gatilhos(pool).conferenciaRegistrada(a.orgId, await conferir(pool, a, 'DHL 9003', 'IM9003-026', 'MBL', 'AUSENTE_NA_CONFERENCIA', 'INFERIDA'));
       const antes = await projecao(pool, a, p);
       const reconf = await conferir(pool, a, 'DHL 9003', 'IM9003-026', 'MBL', 'RECEBIDO');
       await gatilhos(pool).conferenciaRegistrada(a.orgId, reconf);
@@ -407,8 +435,9 @@ test('L4 — fatos de Courier e Auditoria com propagação (dados persistidos)',
       const r = resolucao(depois) as any;
       assert.equal(r.resolvidoEm, (resolucao(antes) as any).resolvidoEm, 'vigenteDesde não se move');
       assert.equal(r.ultimaConfirmacaoEm, (await tempo(reconf)).toISOString(), 'frescor avança');
+      assert.deepEqual(depois.avaliacao.divergencias.map((d) => d.divergencia.estado), ['ABERTA'], 'reconfirmar não resolve (N-16a)');
       assert.equal(depois.impressaoMaterial, antes.impressaoMaterial);
-      assert.equal(await eventos(pool, p), 1, 'reconfirmação não é mudança material');
+      assert.equal(await eventos(pool, p), 2, 'reconfirmação não é mudança material');
     });
 
     await t.test('14. alias invalidado no S6 deixa de participar no recálculo; nenhuma linha de origem muda', async () => {
@@ -476,6 +505,173 @@ test('L4 — fatos de Courier e Auditoria com propagação (dados persistidos)',
       assert.equal(assunto.processoId, p);
       const [d] = (await projecao(pool, a, p)).avaliacao.divergencias;
       assert.equal(d.divergencia.evidencia.ref, `courier_fato:${contraria}`, 'a evidência aponta a linha com a referência usada');
+    });
+
+    await t.test('17. escrita no assunto do Processo: desmarcar pelo alias retrai a marca oficial feita pelo código', async () => {
+      await truncateAll(pool);
+      const a = await cenarioConfirmado(pool, 'l4-w-desmarca');
+      const p = await processo(pool, a, 'IM9201-26');
+      await aliasDe(pool, a, p, 'IM9201-026');
+      await gatilhos(pool).conferenciaRegistrada(a.orgId, await conferir(pool, a, 'DHL 9201', 'IM9201-26', 'MBL', 'RECEBIDO'));
+      const r = await marcar(pool, a, 'DHL 9201', 'IM9201-026', 'DESMARCADO');
+      assert.equal(r.status, 'REGISTRADO', 'não é "nada a desmarcar" só porque a marca usou outra referência');
+      assert.equal(r.status === 'REGISTRADO' && r.valorAnterior, 'RECEBIDO');
+      await gatilhos(pool).conferenciaRegistrada(a.orgId, (r as { fatoId: string }).fatoId);
+      assert.equal((await fatosCourierDoProcesso(pool, a.orgId, p)).mbl, null, 'o assunto oficial foi retraído');
+      assert.notEqual(resolucao(await projecao(pool, a, p)).tipo, 'RESOLVIDO');
+      const { rows } = await pool.query(`SELECT processo_ref, valor, sequencia FROM courier_fatos ORDER BY registrado_em`);
+      assert.deepEqual(rows.map((x) => [x.processo_ref, x.valor, x.sequencia]), [['IM9201-26', 'RECEBIDO', 1], ['IM9201-026', 'DESMARCADO', 1]],
+        'a referência enviada é preservada; a sequência continua por referência');
+    });
+
+    await t.test('18. escrita no assunto do Processo: o mesmo valor pelo alias é idempotente; a promoção a oficial continua', async () => {
+      await truncateAll(pool);
+      const a = await cenarioConfirmado(pool, 'l4-w-idem');
+      const p = await processo(pool, a, 'IM9202-26');
+      await aliasDe(pool, a, p, 'IM9202-026');
+      const oficial = await conferir(pool, a, 'DHL 9202', 'IM9202-26', 'MBL', 'RECEBIDO');
+      assert.deepEqual(await marcar(pool, a, 'DHL 9202', 'IM9202-026', 'RECEBIDO'), { status: 'SEM_MUDANCA', fatoId: oficial, sequencia: 1 });
+      assert.equal((await marcar(pool, a, 'DHL 9202', 'IM9202-026', 'RECEBIDO', 'INFERIDA')).status, 'SEM_MUDANCA');
+      assert.equal(await contar(pool, `SELECT count(*) n FROM courier_fatos`), 1);
+      // Promoção: a mesma marca, antes não oficial pelo alias, vira linha nova quando chega oficial pelo código.
+      const q = await processo(pool, a, 'IM9203-26');
+      await aliasDe(pool, a, q, 'IM9203-026');
+      assert.equal((await marcar(pool, a, 'DHL 9203', 'IM9203-026', 'RECEBIDO', 'INFERIDA')).status, 'REGISTRADO');
+      const promovida = await marcar(pool, a, 'DHL 9203', 'IM9203-26', 'RECEBIDO');
+      assert.equal(promovida.status, 'REGISTRADO');
+      assert.equal((await marcar(pool, a, 'DHL 9203', 'IM9203-026', 'RECEBIDO', 'INFERIDA')).status, 'SEM_MUDANCA', 'nunca o contrário');
+      assert.equal((await fatosCourierDoProcesso(pool, a.orgId, q)).mbl?.evidencia.ref, `courier_fato:${(promovida as { fatoId: string }).fatoId}`);
+    });
+
+    await t.test('19. escrita no assunto do Processo: mudança oficial pelo alias registra o valor anterior do assunto', async () => {
+      await truncateAll(pool);
+      const a = await cenarioConfirmado(pool, 'l4-w-anterior');
+      const p = await processo(pool, a, 'IM9204-26');
+      await aliasDe(pool, a, p, 'IM9204-026');
+      await conferir(pool, a, 'DHL 9204', 'IM9204-26', 'MBL', 'RECEBIDO');
+      const r = await marcar(pool, a, 'DHL 9204', 'IM9204-026', 'AUSENTE_NA_CONFERENCIA');
+      assert.deepEqual([r.status, r.status === 'REGISTRADO' && r.valorAnterior, r.status === 'REGISTRADO' && r.identidade],
+        ['REGISTRADO', 'RECEBIDO', { tipo: 'RESOLVIDA', processoId: p, via: 'ALIAS' }]);
+      const { rows: [linha] } = await pool.query(`SELECT valor_anterior, processo_ref, sequencia FROM courier_fatos WHERE id = $1`,
+        [(r as { fatoId: string }).fatoId]);
+      assert.deepEqual(linha, { valor_anterior: 'RECEBIDO', processo_ref: 'IM9204-026', sequencia: 1 });
+      assert.equal((await fatosCourierDoProcesso(pool, a.orgId, p)).mbl?.valor, 'AUSENTE_NA_CONFERENCIA');
+    });
+
+    await t.test('20. escrita: alias invalidado no S6 deixa de participar do assunto do Processo', async () => {
+      await truncateAll(pool);
+      const a = await cenarioConfirmado(pool, 'l4-w-invalido');
+      const p = await processo(pool, a, 'IM9205-26');
+      const aliasId = await aliasDe(pool, a, p, 'IM9205-026');
+      await conferir(pool, a, 'DHL 9205', 'IM9205-26', 'MBL', 'RECEBIDO');
+      await conferir(pool, a, 'DHL 9205', 'IM9205-026', 'MBL', 'AUSENTE_NA_CONFERENCIA');
+      assert.equal((await marcar(pool, a, 'DHL 9205', 'IM9205-26', 'AUSENTE_NA_CONFERENCIA')).status, 'SEM_MUDANCA', 'com o alias vigente: já é AUSENTE');
+      await invalidarEvidenciaDeReferencia(pool, a.orgId, {
+        referencia: { aliasId }, justificativa: 'o alias era de outro embarque', evidencia: { fonte: 'documento_original', evidenciaRef: 'prova-w' },
+        membershipId: a.membershipPessoa,
+      });
+      const r = await marcar(pool, a, 'DHL 9205', 'IM9205-26', 'AUSENTE_NA_CONFERENCIA');
+      assert.deepEqual([r.status, r.status === 'REGISTRADO' && r.valorAnterior], ['REGISTRADO', 'RECEBIDO'], 'sem o alias, o assunto era RECEBIDO');
+      // A referência invalidada, sozinha, volta a ser só a referência exata: pendência, nunca processo criado.
+      const pelaInvalidada = await marcar(pool, a, 'DHL 9205', 'IM9205-026', 'RECEBIDO');
+      assert.equal(pelaInvalidada.status === 'REGISTRADO' && pelaInvalidada.identidade.tipo, 'PENDENTE');
+      assert.equal(await contar(pool, `SELECT count(*) n FROM processos WHERE numero_processo = 'IM9205-026'`), 0);
+      assert.equal((await fatosCourierDoProcesso(pool, a.orgId, p)).mbl?.valor, 'AUSENTE_NA_CONFERENCIA');
+    });
+
+    await t.test('21. escritas concorrentes pelo código e pelo alias serializam na mesma trava do assunto', async () => {
+      await truncateAll(pool);
+      const a = await cenarioConfirmado(pool, 'l4-w-concorrencia');
+      const p = await processo(pool, a, 'IM9206-26');
+      await aliasDe(pool, a, p, 'IM9206-026');
+      for (const valor of ['RECEBIDO', 'AUSENTE_NA_CONFERENCIA'] as const) {
+        const rs = await Promise.all([0, 1, 2, 3, 4, 5].map((i) => marcar(pool, a, 'DHL 9206', i % 2 ? 'IM9206-026' : 'IM9206-26', valor)));
+        assert.equal(rs.filter((r) => r.status === 'REGISTRADO').length, 1, `${valor}: uma única linha nova para o assunto`);
+      }
+      const { rows } = await pool.query(`SELECT valor, valor_anterior FROM courier_fatos ORDER BY registrado_em`);
+      assert.deepEqual(rows.map((x) => [x.valor, x.valor_anterior]), [['RECEBIDO', null], ['AUSENTE_NA_CONFERENCIA', 'RECEBIDO']]);
+    });
+
+    await t.test('22. processos distintos no mesmo envelope continuam independentes na escrita', async () => {
+      await truncateAll(pool);
+      const a = await cenarioConfirmado(pool, 'l4-w-distintos');
+      const p1 = await processo(pool, a, 'IM9207-26');
+      const p2 = await processo(pool, a, 'IM9208-26');
+      await aliasDe(pool, a, p2, 'IM9208-026');
+      await conferir(pool, a, 'DHL 9207', 'IM9207-26', 'MBL', 'RECEBIDO');
+      assert.deepEqual(await marcar(pool, a, 'DHL 9207', 'IM9208-026', 'DESMARCADO'), { status: 'SEM_MUDANCA', fatoId: null, sequencia: null },
+        'nada de P2 a desmarcar');
+      const r = await marcar(pool, a, 'DHL 9207', 'IM9208-26', 'RECEBIDO');
+      assert.deepEqual([r.status, r.status === 'REGISTRADO' && r.valorAnterior], ['REGISTRADO', null], 'o RECEBIDO de P1 não conta para P2');
+      assert.equal((await fatosCourierDoProcesso(pool, a.orgId, p1)).mbl?.valor, 'RECEBIDO');
+    });
+
+    await t.test('23. instante exato: duas marcas oficiais no mesmo milissegundo seguem a ordem real dos microssegundos', async () => {
+      await truncateAll(pool);
+      const a = await cenarioConfirmado(pool, 'l4-us-ordem');
+      const p = await processo(pool, a, 'IM9302-26');
+      await aliasDe(pool, a, p, 'IM9302-026');
+      // Gravadas fora de ordem; a referência que perderia no desempate é a mais antiga de fato.
+      await gravarNoInstante(pool, a, { tracking: 'DHL9302', ref: 'IM9302-026', valor: 'RECEBIDO', associacao: 'CITADA', sequencia: 1, em: '2026-10-13 10:00:00.123700+00' });
+      await gravarNoInstante(pool, a, { tracking: 'DHL9302', ref: 'IM9302-26', valor: 'AUSENTE_NA_CONFERENCIA', associacao: 'CITADA', sequencia: 1, em: '2026-10-13 10:00:00.123200+00' });
+      const [assunto] = (await fatosCourierDoProcesso(pool, a.orgId, p)).assuntos;
+      assert.deepEqual(assunto.linhas.map((l) => [l.instante, l.valor]),
+        [['2026-10-13T10:00:00.123200Z', 'AUSENTE_NA_CONFERENCIA'], ['2026-10-13T10:00:00.123700Z', 'RECEBIDO']]);
+      assert.equal((await fatosCourierDoProcesso(pool, a.orgId, p)).mbl?.valor, 'RECEBIDO', 'o posterior real decide');
+      await recalcularLiberacaoProcesso(pool, a.orgId, p);
+      assert.equal(resolucao(await projecao(pool, a, p)).tipo, 'RESOLVIDO');
+      // E a escrita vê o mesmo assunto: o RECEBIDO pelo código é o mesmo valor → idempotente.
+      assert.equal((await marcar(pool, a, 'DHL 9302', 'IM9302-26', 'RECEBIDO')).status, 'SEM_MUDANCA');
+    });
+
+    await t.test('24. instante exato: valor oficial diferente, posterior no mesmo milissegundo, NÃO é descartado pela L1a', async () => {
+      await truncateAll(pool);
+      const a = await cenarioConfirmado(pool, 'l4-us-mudanca');
+      const p = await processo(pool, a, 'IM9303-26');
+      const base = { tracking: 'DHL9303', ref: 'IM9303-26' };
+      await gravarNoInstante(pool, a, { ...base, valor: 'RECEBIDO', associacao: 'CITADA', sequencia: 1, em: '2026-10-13 10:00:00.123100+00' });
+      const contraria = await gravarNoInstante(pool, a, { ...base, valor: 'AUSENTE_NA_CONFERENCIA', associacao: 'INFERIDA', sequencia: 2, em: '2026-10-13 10:00:00.123300+00' });
+      const oficial = await gravarNoInstante(pool, a, { ...base, valor: 'AUSENTE_NA_CONFERENCIA', associacao: 'CITADA', sequencia: 3, em: '2026-10-13 10:00:00.123700+00' });
+      await recalcularLiberacaoProcesso(pool, a.orgId, p);
+      const [d] = (await projecao(pool, a, p)).avaliacao.divergencias;
+      assert.equal(d.divergencia.evidencia.ref, `courier_fato:${contraria}`);
+      assert.equal(d.divergencia.estado, 'RESOLVIDA_PELA_FONTE_DE_VERDADE', 'a mudança oficial 0,4 ms depois foi aplicada');
+      assert.deepEqual([d.oficial?.valor, d.oficial?.evidencia.ref, d.oficial?.vigenteDesde],
+        ['AUSENTE_NA_CONFERENCIA', `courier_fato:${oficial}`, '2026-10-13T10:00:00.123700Z']);
+      assert.equal((await fatosCourierDoProcesso(pool, a.orgId, p)).mbl?.valor, 'AUSENTE_NA_CONFERENCIA', 'S1 e L1a concordam');
+    });
+
+    await t.test('25. instante exato: reconfirmação no mesmo milissegundo avança o frescor exato, não o vigenteDesde', async () => {
+      await truncateAll(pool);
+      const a = await cenarioConfirmado(pool, 'l4-us-reconf');
+      const p = await processo(pool, a, 'IM9304-26');
+      const base = { tracking: 'DHL9304', ref: 'IM9304-26' };
+      await gravarNoInstante(pool, a, { ...base, valor: 'RECEBIDO', associacao: 'CITADA', sequencia: 1, em: '2026-10-13 10:00:00.123100+00' });
+      await gravarNoInstante(pool, a, { ...base, valor: 'AUSENTE_NA_CONFERENCIA', associacao: 'INFERIDA', sequencia: 2, em: '2026-10-13 10:00:00.123300+00' });
+      await gravarNoInstante(pool, a, { ...base, valor: 'RECEBIDO', associacao: 'CITADA', sequencia: 3, em: '2026-10-13 10:00:00.123600+00' });
+      await recalcularLiberacaoProcesso(pool, a.orgId, p);
+      const [d] = (await projecao(pool, a, p)).avaliacao.divergencias;
+      assert.equal(d.divergencia.estado, 'ABERTA', 'reconfirmar não resolve (N-16a)');
+      assert.deepEqual([d.oficial?.vigenteDesde, d.oficial?.ultimaConfirmacaoEm], ['2026-10-13T10:00:00.123100Z', '2026-10-13T10:00:00.123600Z']);
+    });
+
+    await t.test('26–27. instante exato: fuso equivalente é o mesmo instante; marcas comuns em ms seguem iguais', async () => {
+      await truncateAll(pool);
+      const a = await cenarioConfirmado(pool, 'l4-us-fuso');
+      const p = await processo(pool, a, 'IM9305-26');
+      // Gravado com outro fuso: o banco guarda o instante absoluto; a leitura devolve o mesmo instante em UTC.
+      await gravarNoInstante(pool, a, { tracking: 'DHL9305', ref: 'IM9305-26', valor: 'RECEBIDO', associacao: 'CITADA', sequencia: 1, em: '2026-10-13 07:00:00.123456-03' });
+      const [l] = (await fatosCourierDoProcesso(pool, a.orgId, p)).assuntos[0].linhas;
+      assert.equal(l.instante, '2026-10-13T10:00:00.123456Z');
+      assert.equal(compararInstantes(l.instante, '2026-10-13T07:00:00.123456-03:00'), 0);
+      // Marca comum (now() da escrita normal): o instante preciso e o Date em ms apontam o mesmo milissegundo.
+      const comum = await conferir(pool, a, 'DHL 9306', 'IM9305-26', 'HBL_ORIGINAL', 'RECEBIDO');
+      const linhaComum = (await fatosCourierDoProcesso(pool, a.orgId, p)).assuntos.flatMap((x) => x.linhas).find((x) => x.fatoId === comum)!;
+      assert.equal(Date.parse(linhaComum.instante), linhaComum.registradoEm.getTime());
+      await recalcularLiberacaoProcesso(pool, a.orgId, p);
+      const pr = await projecao(pool, a, p);
+      assert.equal(pr.avaliacao.house.tipo, 'RESOLVIDO');
+      assert.equal((resolucao(pr) as any).resolvidoEm, '2026-10-13T10:00:00.123Z', 'a projeção visível continua em ms');
     });
   } finally {
     await pool.end();

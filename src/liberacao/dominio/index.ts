@@ -3,7 +3,7 @@ export type {
   Instante, Evidencia, DisponibilidadeFonte, FatoOficial, FonteNaoIntegrada, ModalidadeMaster, VinculoProcessoMaster,
   EstadoEnvelope, ConferenciaMbl, ConferenciaHblOriginal, CourierDoProcesso, FatoDoMaster, Liberado,
 } from './tipos';
-export { estadoInicial, aplicarObservacao, transicionarDivergencia, divergenciaAtiva } from './fato';
+export { estadoInicial, aplicarObservacao, transicionarDivergencia, divergenciaAtiva, compararInstantes } from './fato';
 export type {
   EstadoDoFato, Observacao, Mudanca, ResultadoObservacao, Divergencia, EvidenciaNaoOficial, OpcoesFato, EstadoDivergencia,
   TransicaoDivergencia, ComandoDivergencia, ErroTransicaoDivergencia, ResultadoTransicao,

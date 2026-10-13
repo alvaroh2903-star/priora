@@ -101,16 +101,22 @@ export async function registrarConferenciaCourier(
 
   return emTransacao(pool, async (c) => {
     await validarContextoOperacional(c, ctx);
+    // Assunto = envelope + documento + PROCESSO (S6). Com identidade (resolvida sem criar nada), todas as
+    // referências vigentes do processo são um só assunto: trava, estado atual e idempotência são dele. Sem
+    // identidade, o assunto continua sendo a referência exata (pendência), como antes.
+    const identificado = await resolverProcesso(c, ctx.organizationId, processoRef);
+    if (identificado.status === 'RESOLVIDO') {
+      await travarAssunto(c, `s1:${ctx.organizationId}:${trackingChave}:CONFERENCIA_DOCUMENTO:${e.documento}:processo:${identificado.processoId}`);
+    }
     await travarAssunto(c, `s1:${ctx.organizationId}:${trackingChave}:CONFERENCIA_DOCUMENTO:${e.documento}:${processoRef}`);
-    const { rows: [ultima] } = await c.query(
-      `SELECT id, sequencia, valor, associacao FROM courier_fatos
-        WHERE organization_id = $1 AND tracking_chave = $2 AND tipo = 'CONFERENCIA_DOCUMENTO' AND documento = $3 AND processo_ref = $4
-        ORDER BY sequencia DESC LIMIT 1`,
-      [ctx.organizationId, trackingChave, e.documento, processoRef],
-    );
+    const referencias = identificado.status === 'RESOLVIDO'
+      ? [...new Set([processoRef, ...await referenciasVigentes(c, ctx.organizationId, identificado.processoId)])]
+      : [processoRef];
+    const assunto = await linhaDoAssunto(c, ctx.organizationId, trackingChave, e.documento, referencias);
+    const ultima = assunto[assunto.length - 1];
     // N-16a: o mesmo estado não é mudança. Só a mesma marca com proveniência agora oficial vira linha nova.
     if (ultima && ultima.valor === e.valor && !(oficial && ultima.associacao !== 'CITADA')) {
-      return { status: 'SEM_MUDANCA', fatoId: ultima.id, sequencia: ultima.sequencia };
+      return { status: 'SEM_MUDANCA', fatoId: ultima.fatoId, sequencia: ultima.sequencia };
     }
     if (!ultima && e.valor === 'DESMARCADO') return { status: 'SEM_MUDANCA', fatoId: null, sequencia: null };
 
@@ -128,7 +134,13 @@ export async function registrarConferenciaCourier(
         identidade = { tipo: 'PENDENTE', pendenciaId: r.pendenciaId, motivo: r.motivo };
       }
     }
-    const sequencia = (ultima?.sequencia ?? 0) + 1;
+    // A sequência é da linha gravada, por referência (como a constraint exige); o estado e o valor anterior são do assunto.
+    const { rows: [{ n }] } = await c.query(
+      `SELECT COALESCE(max(sequencia), 0) AS n FROM courier_fatos
+        WHERE organization_id = $1 AND tracking_chave = $2 AND tipo = 'CONFERENCIA_DOCUMENTO' AND documento = $3 AND processo_ref = $4`,
+      [ctx.organizationId, trackingChave, e.documento, processoRef],
+    );
+    const sequencia = Number(n) + 1;
     await c.query(
       `INSERT INTO courier_fatos
          (id, organization_id, caixa_id, tracking_bruto, tracking_chave, tipo, documento, processo_ref_bruta, processo_ref,
@@ -276,6 +288,8 @@ export interface ConferenciaRegistrada {
   associacao: AssociacaoVerificada;
   autorMembershipId: string;
   registradoEm: Date;
+  /** O mesmo instante, em ISO-8601 UTC com a precisão do banco (microssegundos): é a ordem factual. */
+  instante: string;
 }
 
 /**
@@ -295,11 +309,11 @@ export interface AssuntoConferencia {
 /**
  * Une as marcas de várias referências do mesmo assunto sem quebrar a ordem
  * própria de cada uma (a sequência do S1). Entre referências vale o instante
- * gravado, em microssegundos (`instante`); empate exato → referência, sequência.
+ * gravado, com a precisão do banco; empate exato → referência, sequência.
  */
-function linhaDoTempo(linhas: ConferenciaRegistrada[], instante: (l: ConferenciaRegistrada) => string): ConferenciaRegistrada[] {
+function linhaDoTempo(linhas: ConferenciaRegistrada[]): ConferenciaRegistrada[] {
   const anterior = (a: ConferenciaRegistrada, b: ConferenciaRegistrada): boolean =>
-    instante(a) !== instante(b) ? instante(a) < instante(b)
+    a.instante !== b.instante ? a.instante < b.instante
       : a.processoRef !== b.processoRef ? a.processoRef < b.processoRef : a.sequencia < b.sequencia;
   const filas = new Map<string, ConferenciaRegistrada[]>();
   for (const l of linhas) filas.set(l.processoRef, [...(filas.get(l.processoRef) ?? []), l]);
@@ -311,6 +325,44 @@ function linhaDoTempo(linhas: ConferenciaRegistrada[], instante: (l: Conferencia
     if (!proxima) return out;
     out.push(proxima.shift()!);
   }
+}
+
+const COLUNAS_CONFERENCIA = `id, tracking_chave, documento, processo_ref, sequencia, valor, associacao, autor_membership_id, registrado_em,
+  to_char(registrado_em AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS instante`;
+
+const paraConferencia = (r: Record<string, any>): ConferenciaRegistrada => ({
+  fatoId: r.id, trackingChave: r.tracking_chave, documento: r.documento, processoRef: r.processo_ref, sequencia: r.sequencia,
+  valor: r.valor, associacao: r.associacao, autorMembershipId: r.autor_membership_id, registradoEm: new Date(r.registrado_em),
+  instante: r.instante,
+});
+
+/** Referências que o S6 resolve HOJE para o processo (código e aliases vigentes). Só leitura. */
+async function referenciasVigentes(db: Db, organizationId: string, processoId: string): Promise<string[]> {
+  const { rows: refs } = await db.query(
+    `SELECT numero_processo AS ref FROM processos WHERE id = $1 AND organization_id = $2 AND numero_processo IS NOT NULL
+     UNION SELECT referencia FROM processo_referencias WHERE processo_id = $1 AND organization_id = $2`,
+    [processoId, organizationId],
+  );
+  const out: string[] = [];
+  for (const { ref } of refs) {
+    const r = await resolverProcesso(db, organizationId, ref);
+    if (r.status === 'RESOLVIDO' && r.processoId === processoId) out.push(ref);
+  }
+  return out;
+}
+
+/** Linha do tempo de UM assunto (envelope + documento) sobre as referências dadas. */
+async function linhaDoAssunto(
+  db: Db, organizationId: string, trackingChave: string, documento: DocumentoConferido, referencias: string[],
+): Promise<ConferenciaRegistrada[]> {
+  const { rows } = await db.query(
+    `SELECT ${COLUNAS_CONFERENCIA} FROM courier_fatos
+      WHERE organization_id = $1 AND tracking_chave = $2 AND tipo = 'CONFERENCIA_DOCUMENTO' AND documento = $3
+        AND processo_ref = ANY($4::text[])
+      ORDER BY processo_ref, sequencia`,
+    [organizationId, trackingChave, documento, referencias],
+  );
+  return linhaDoTempo(rows.map(paraConferencia));
 }
 
 /**
@@ -343,39 +395,23 @@ function oficialDoAssunto(linhas: ConferenciaRegistrada[]): FatoConferenciaCouri
  */
 export async function fatosCourierDoProcesso(db: Db, organizationId: string, processoId: string): Promise<FatosCourierDoProcesso> {
   const out: FatosCourierDoProcesso = { processoId, mbl: null, hblOriginal: null, envelopes: [], naoPublicados: [], assuntos: [] };
-  const { rows: refs } = await db.query(
-    `SELECT numero_processo AS ref FROM processos WHERE id = $1 AND organization_id = $2 AND numero_processo IS NOT NULL
-     UNION SELECT referencia FROM processo_referencias WHERE processo_id = $1 AND organization_id = $2`,
-    [processoId, organizationId],
-  );
-  const candidatas: string[] = [];
-  for (const { ref } of refs) {
-    const r = await resolverProcesso(db, organizationId, ref);
-    if (r.status === 'RESOLVIDO' && r.processoId === processoId) candidatas.push(ref);
-  }
+  const candidatas = await referenciasVigentes(db, organizationId, processoId);
   if (candidatas.length === 0) return out;
 
   const { rows } = await db.query(
-    `SELECT id, tracking_chave, documento, processo_ref, sequencia, valor, associacao, autor_membership_id, registrado_em,
-            to_char(registrado_em AT TIME ZONE 'UTC', 'YYYYMMDDHH24MISSUS') AS instante
-       FROM courier_fatos
+    `SELECT ${COLUNAS_CONFERENCIA} FROM courier_fatos
       WHERE organization_id = $1 AND tipo = 'CONFERENCIA_DOCUMENTO' AND processo_ref = ANY($2::text[])
       ORDER BY tracking_chave, documento, processo_ref, sequencia`,
     [organizationId, candidatas],
   );
   // Assunto = envelope + documento DESTE processo: as referências vigentes dele formam uma só linha do tempo.
   const porAssunto = new Map<string, ConferenciaRegistrada[]>();
-  const instante = new Map<string, string>(rows.map((r) => [r.id, r.instante]));
-  for (const r of rows) {
-    const chave = `${r.tracking_chave}|${r.documento}`;
-    porAssunto.set(chave, [...(porAssunto.get(chave) ?? []), {
-      fatoId: r.id, trackingChave: r.tracking_chave, documento: r.documento, processoRef: r.processo_ref, sequencia: r.sequencia,
-      valor: r.valor, associacao: r.associacao, autorMembershipId: r.autor_membership_id, registradoEm: new Date(r.registrado_em),
-    }]);
+  for (const l of rows.map(paraConferencia)) {
+    const chave = `${l.trackingChave}|${l.documento}`;
+    porAssunto.set(chave, [...(porAssunto.get(chave) ?? []), l]);
   }
   out.assuntos = [...porAssunto.values()].map((linhas) => ({
-    trackingChave: linhas[0].trackingChave, documento: linhas[0].documento, processoId,
-    linhas: linhaDoTempo(linhas, (l) => instante.get(l.fatoId)!),
+    trackingChave: linhas[0].trackingChave, documento: linhas[0].documento, processoId, linhas: linhaDoTempo(linhas),
   }));
   const oficiais: Record<DocumentoConferido, FatoConferenciaCourier[]> = { MBL: [], HBL_ORIGINAL: [] };
   const trackings = new Set<string>();

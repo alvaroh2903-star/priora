@@ -101,6 +101,33 @@ export const ms = (instante: Instante): number => {
   return t;
 };
 
+const ISO_COM_FRACAO = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:\d{2})$/;
+
+/** Segundos absolutos (o fuso entra aqui) e a fração em nanossegundos, como texto de 9 dígitos. */
+function emPartes(instante: Instante): { segundos: number; fracao: string } {
+  const m = ISO_COM_FRACAO.exec(instante);
+  if (m) {
+    const t = Date.parse(`${m[1]}${m[3]}`);
+    if (!Number.isNaN(t)) return { segundos: t / 1000, fracao: (m[2] ?? '').slice(0, 9).padEnd(9, '0') };
+  }
+  const t = ms(instante);
+  const resto = ((t % 1000) + 1000) % 1000;
+  return { segundos: (t - resto) / 1000, fracao: String(resto).padStart(3, '0').padEnd(9, '0') };
+}
+
+/**
+ * Ordem exata de dois instantes (N-16): negativo, zero ou positivo. Não perde a
+ * fração além do milissegundo — o banco grava microssegundos e `Date.parse`
+ * truncaria uma observação realmente posterior para "simultânea". O fuso vale
+ * pelo instante absoluto; instantes sem fração ou em ms comparam como antes.
+ */
+export function compararInstantes(a: Instante, b: Instante): number {
+  const x = emPartes(a);
+  const y = emPartes(b);
+  if (x.segundos !== y.segundos) return x.segundos < y.segundos ? -1 : 1;
+  return x.fracao === y.fracao ? 0 : x.fracao < y.fracao ? -1 : 1;
+}
+
 export function estadoInicial<V>(fonte: DisponibilidadeFonte): EstadoDoFato<V> {
   return { oficial: null, fonte, historico: [], evidenciasNaoOficiais: [], divergencias: [] };
 }
@@ -174,7 +201,7 @@ export function aplicarObservacao<V>(estado: EstadoDoFato<V>, obs: Observacao<V>
   }
 
   if (Object.is(atual.valor, obs.valor)) {
-    if (ms(obs.observadoEm) > ms(atual.ultimaConfirmacaoEm)) {
+    if (compararInstantes(obs.observadoEm, atual.ultimaConfirmacaoEm) > 0) {
       mudancas.push({ tipo: 'CONFIRMACAO_ATUALIZADA', em: obs.observadoEm });
       return { estado: { ...estado, fonte, oficial: { ...atual, ultimaConfirmacaoEm: obs.observadoEm } }, material: false, mudancas };
     }
@@ -182,7 +209,7 @@ export function aplicarObservacao<V>(estado: EstadoDoFato<V>, obs: Observacao<V>
   }
 
   // Valor diferente, mas observação mais antiga que a última confirmação: não volta no tempo.
-  if (ms(obs.observadoEm) <= ms(atual.ultimaConfirmacaoEm)) return { estado: { ...estado, fonte }, material: false, mudancas };
+  if (compararInstantes(obs.observadoEm, atual.ultimaConfirmacaoEm) <= 0) return { estado: { ...estado, fonte }, material: false, mudancas };
 
   if (opcoes.terminal?.(atual.valor)) {
     mudancas.push({ tipo: 'TERMINAL_PRESERVADO', observado: obs.valor, evidencia: obs.evidencia });
