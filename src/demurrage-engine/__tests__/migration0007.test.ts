@@ -127,7 +127,11 @@ test('0007 — organization_id imutável nas tabelas de tenant', { skip: !url },
       'responsabilidade_decisoes', 'responsabilidade_decisao_periodos', 'responsabilidade_decisao_dias',
       // D15-B: free_time_tentativas (histórico de tentativas de Free Time) e
       // demurrage_pendencia_avisos (outbox de aviso aos gestores) — migration 0036.
-      'free_time_tentativas', 'demurrage_pendencia_avisos'];
+      'free_time_tentativas', 'demurrage_pendencia_avisos',
+      // Produção P1 Entrega 1: credenciais M2M e ledger de identidade/idempotência
+      // do handoff — migration 0040. `demurrage_handoff_nonces` não entra aqui:
+      // não tem organization_id (só credencial_id), de propósito.
+      'demurrage_handoff_credenciais', 'demurrage_handoff_eventos'];
     const { rows } = await pool.query(`
       SELECT c.table_name,
              EXISTS (SELECT 1 FROM pg_trigger tg

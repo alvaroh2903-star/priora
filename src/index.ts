@@ -17,6 +17,7 @@ import { demurrageV2Router } from './routes/demurrageV2Routes';
 import { demurrageGestaoRouter } from './routes/demurrageGestaoRoutes';
 import { auditoriaRouter } from './routes/auditoriaRoutes';
 import { capturaRouter } from './routes/capturaRoutes';
+import { demurrageHandoffRouter } from './routes/demurrageHandoffRoutes';
 import { iniciarSchedulerDemurrage } from './demurrage/schedulerBootstrap';
 import { iniciarCapturaPreAlerta } from './demurrage/capturaBootstrap';
 
@@ -27,6 +28,13 @@ const app = express();
 if (config.isProduction) {
   app.set('trust proxy', 1);
 }
+
+// Produção P1 (Entrega 1) — handoff M2M: PRECISA vir antes do
+// `express.json()` global. A assinatura HMAC exige os bytes EXATOS do
+// corpo; o router do handoff tem seu PRÓPRIO `express.raw()` (ver
+// `demurrageHandoffRoutes.ts`) e nunca chama `next()` além da sua própria
+// autenticação/handler — o parser global abaixo nunca vê este corpo.
+app.use('/api/integracoes/demurrage/handoff/processos', demurrageHandoffRouter);
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
