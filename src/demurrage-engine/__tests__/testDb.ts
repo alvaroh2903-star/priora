@@ -27,7 +27,7 @@ export function testPool(): Pool {
 export async function truncateAll(pool: Pool): Promise<void> {
   await pool.query(`
     TRUNCATE TABLE
-      demurrage_handoff_eventos, demurrage_handoff_nonces, demurrage_handoff_credenciais,
+      demurrage_handoff_processo_links, demurrage_handoff_eventos, demurrage_handoff_nonces, demurrage_handoff_credenciais,
       responsabilidade_decisao_dias, responsabilidade_decisao_periodos, responsabilidade_decisoes,
       demurrage_registros, processo_campos_selecionados, container_equipamento_original, demurrage_pendencias,
       demurrage_fallback_manual_avisos, demurrage_pos_commit_outbox, demurrage_fallback_manual_justificativas,

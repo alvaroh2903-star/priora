@@ -3,6 +3,7 @@ import { Pool } from 'pg';
 import { getPool } from '../demurrage-engine/db/pool';
 import { AutenticacaoHandoffDeps, HandoffAuthedRequest, criarAutenticarHandoffHttp } from '../demurrage-engine/handoff/autenticacaoHttp';
 import { RespostaHandoff, processarEventoHandoff } from '../demurrage-engine/handoff/handoffService';
+import { classificarFalhaHandoff } from '../demurrage-engine/handoff/erros';
 
 /**
  * Produção P1 (Entrega 1) — adaptador HTTP FINO do handoff.
@@ -61,9 +62,12 @@ export function criarDemurrageHandoffRouter(deps: DemurrageHandoffRoutesDeps = {
       const resposta = await processarEventoHandoff(entradaJson, req.contextoHandoff!, { pool: pool() });
       res.status(statusHttpDoResultado(resposta.resultado)).json(resposta);
     } catch (erro) {
+      // Achado #3 (v1.1): nunca loga o objeto de erro bruto (poderia incluir
+      // `.stack`/dados capturados em closure) — só a classificação FECHADA.
+      const codigo = classificarFalhaHandoff(erro);
       // eslint-disable-next-line no-console
-      console.error('[demurrage-handoff] erro inesperado ao processar evento:', erro);
-      res.status(500).json({ resultado: 'FALHA', detalhe: { motivo: 'erro_interno' } });
+      console.error(`[demurrage-handoff] erro inesperado ao processar evento: ${codigo}`);
+      res.status(500).json({ resultado: 'FALHA', detalhe: { motivo: codigo } });
     }
   });
 

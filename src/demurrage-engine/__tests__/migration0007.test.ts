@@ -131,7 +131,10 @@ test('0007 — organization_id imutável nas tabelas de tenant', { skip: !url },
       // Produção P1 Entrega 1: credenciais M2M e ledger de identidade/idempotência
       // do handoff — migration 0040. `demurrage_handoff_nonces` não entra aqui:
       // não tem organization_id (só credencial_id), de propósito.
-      'demurrage_handoff_credenciais', 'demurrage_handoff_eventos'];
+      'demurrage_handoff_credenciais', 'demurrage_handoff_eventos',
+      // v1.1 corretiva (achado #1): vínculo estável origemProcessoId -> processo
+      // interno — migration 0041.
+      'demurrage_handoff_processo_links'];
     const { rows } = await pool.query(`
       SELECT c.table_name,
              EXISTS (SELECT 1 FROM pg_trigger tg

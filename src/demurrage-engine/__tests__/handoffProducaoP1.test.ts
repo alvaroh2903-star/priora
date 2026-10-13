@@ -699,7 +699,7 @@ test('22. migração limpa 0001→0040 aplica a migration 0040 e cria as 3 tabel
   try {
     await resetSchema(pool);
     const r = await runMigrations(pool);
-    assert.equal(r.applied[r.applied.length - 1], '0040_handoff_demurrage.sql');
+    assert.ok(r.applied.includes('0040_handoff_demurrage.sql'));
     for (const tabela of ['demurrage_handoff_credenciais', 'demurrage_handoff_nonces', 'demurrage_handoff_eventos']) {
       const { rows } = await pool.query(`SELECT count(*)::int n FROM ${tabela}`);
       assert.equal(rows[0].n, 0, tabela);

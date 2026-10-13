@@ -512,7 +512,7 @@ test('D16 v1.1 #12: migration 0039 aplica num banco novo e num banco já em 0038
       await pool.query(`INSERT INTO tracking_schedule_claims (tracking_target_id, janela, status, tentativas, claimed_por, claimed_em, concluido_em) VALUES ($1,'2026-09-16','done',1,'legado',now(),now())`, [t2.id]);
 
       const r39 = await runMigrations(pool);
-      assert.deepEqual(r39.applied, [M0039, '0040_handoff_demurrage.sql'], 'aplica a 0039 (e a 0040, aditiva, que já existe à frente)');
+      assert.deepEqual(r39.applied, [M0039, '0040_handoff_demurrage.sql', '0041_handoff_vinculo_processo.sql'], 'aplica a 0039 (e a 0040/0041, aditivas, que já existem à frente)');
       assert.equal(await colunaClaimTokenExiste(pool), true);
       assert.equal(await constraintTokenExiste(pool), true);
 

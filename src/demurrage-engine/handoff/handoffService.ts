@@ -4,38 +4,50 @@ import { CONTRATO_REGISTRO_DEMURRAGE_V1, ErroContratoDemurrage, RegistroProcesso
 import { PosCommitIncompletoError, ResultadoRegistroDemurrage, registrarProcessoDemurrage } from '../registro/registrarProcessoDemurrage';
 import { reaplicarIntencoesShippingInstructions } from '../shippingInstructions/ingestaoShippingInstructions';
 import { EntradaHandoffNormalizada, ErroContratoHandoff, validarEntradaHandoff } from './contrato';
+import { CodigoFalhaHandoff, classificarFalhaHandoff } from './erros';
 
 /**
- * Produção P1 (Entrega 1) — serviço de aplicação COMPARTILHADO do handoff.
+ * Produção P1 (Entrega 1, corretiva v1.1) — serviço de aplicação
+ * COMPARTILHADO do handoff.
  *
- * Um único ponto de entrada (`processarEventoHandoff`), chamável:
- *  - diretamente dentro do monólito (contexto de organização já resolvido,
- *    NUNCA passando pela autenticação HTTP — `CREDENCIAL_IDENTIDADE_INTERNA`);
- *  - pela rota HTTP fina (`demurrageHandoffRoutes.ts`), depois de verificada
- *    a assinatura HMAC — a rota só resolve o contexto autenticado e delega
- *    aqui; nenhuma lógica de negócio na rota.
+ * Duas camadas de idempotência/identidade, cada uma com a SUA PRÓPRIA
+ * garantia de banco, nunca só de aplicação:
  *
- * Duas camadas de idempotência, deliberadamente independentes:
+ *  CAMADA A (`demurrage_handoff_eventos`) — identidade do EVENTO a montante,
+ *  por (organização, sistema, origemEventoId) — mas a identidade
+ *  IMUTÁVEL do evento é o conjunto {organização, sistema, origemEventoId,
+ *  origemProcessoId} (achado #2 da auditoria v1.1 — ver `verificarIdentidadeEvento`
+ *  abaixo): comparar só o hash do payload de negócio deixaria passar como
+ *  replay uma redelivery do MESMO evento com um `origemProcessoId`
+ *  DIFERENTE, porque `origemProcessoId` fica deliberadamente FORA do hash
+ *  (ver `contrato.ts`). A proteção de banco já existia desde a migration
+ *  0040 (`forbid_handoff_evento_identidade_change` já cobre
+ *  `origem_processo_id`) — o que faltava era a APLICAÇÃO comparar os dois
+ *  campos antes de decidir "é replay".
  *
- *  CAMADA A (`demurrage_handoff_eventos`, nova) — identidade do EVENTO a
- *  montante, por (organização, origem_sistema, origem_evento_id). Só decide
- *  UMA coisa antes de tocar a camada B: o mesmo `origemEventoId` com um hash
- *  de payload DIFERENTE é conflito explícito — e nesse caso a camada B
- *  nunca é chamada (zero risco de escrita parcial). Com o MESMO hash (replay
- *  verdadeiro ou corrida concorrente), a chamada segue para a camada B, que
- *  decide a aplicação de fato.
+ *  CAMADA DE VÍNCULO (`demurrage_handoff_processo_links`, nova na v1.1) —
+ *  identidade ESTÁVEL do PROCESSO a montante, por (organização, sistema,
+ *  origemProcessoId) -> processo_id. Resolvida e AFIRMADA antes de chamar
+ *  o D10 (achado #1 da auditoria v1.1 — ver `resolverVinculoProcesso`
+ *  abaixo): o D10 nunca aprende sobre esse vínculo — a camada de handoff
+ *  resolve/estabelece o vínculo e só então invoca o contrato `registro.v1`
+ *  com o `numeroProcesso` já conferido contra o vínculo.
  *
  *  CAMADA B (`demurrage_registros`, D10, já existente e congelada) —
- *  identidade do PAYLOAD normalizado, por `chaveIdempotencia`. Aqui é
- *  derivada deterministicamente de `(origemSistema, origemEventoId)`
- *  (`handoff:<sistema>:<eventoId>`), o que faz esta chamada herdar DE
- *  GRAÇA todas as garantias de concorrência já provadas do D10: lock
- *  consultivo por processo/contêiner, `INSERT ... ON CONFLICT DO NOTHING`,
- *  e o próprio `CHAVE_IDEMPOTENCIA_REUTILIZADA` como segunda linha de
- *  defesa contra payload divergente. "Entregas concorrentes idênticas
- *  aplicam uma vez" e "entregas concorrentes conflitantes têm desfecho
- *  determinístico sem duplicar linhas" vêm DESSA herança — nenhum lock
- *  novo foi inventado aqui.
+ *  identidade do PAYLOAD normalizado, por `chaveIdempotencia`, derivada
+ *  deterministicamente de `(origemSistema, origemEventoId)`. Esta chamada
+ *  herda DE GRAÇA todas as garantias de concorrência já provadas do D10:
+ *  lock consultivo por processo/contêiner, `INSERT ... ON CONFLICT DO
+ *  NOTHING`, `CHAVE_IDEMPOTENCIA_REUTILIZADA` como segunda linha de defesa.
+ *
+ * Replay de um evento JÁ CONCLUÍDO com sucesso é uma LEITURA PURA do
+ * retrato persistido (`resposta_aplicada`, migration 0041) — nunca chama o
+ * D10 de novo. A auditoria v1.1 (relatório §6) provou que reconstruir a
+ * resposta chamando `registrarProcessoDemurrage` de novo NÃO é
+ * garantidamente livre de escrita: o reparo pós-commit do outbox (D10
+ * v1.1) roda incondicional a cada chamada e pode gravar em
+ * `demurrage_pos_commit_outbox`/`snapshots`/`valores_apurados` mesmo para
+ * um evento do handoff já concluído como `ACEITO_COM_PENDENCIA`.
  */
 
 export const CREDENCIAL_IDENTIDADE_INTERNA = 'interno:confiavel' as const;
@@ -49,36 +61,39 @@ export interface ContextoHandoff {
 
 interface ContainerRespostaHandoff { numero: string; containerId: string; criado: boolean }
 
+/** Retrato de uma aplicação bem-sucedida — é exatamente este objeto que é persistido em `resposta_aplicada` e devolvido num replay futuro, sem tocar o D10. */
+export interface RespostaHandoffAplicada {
+  resultado: 'APLICADO' | 'REPLAY_IDEMPOTENTE' | 'ACEITO_COM_PENDENCIA';
+  eventoId: string;
+  processoId: string;
+  numeroProcesso: string;
+  processoCriado: boolean;
+  containers: ContainerRespostaHandoff[];
+  pendenciasAbertas: Array<{ tipo: string; containerNumero: string | null }>;
+}
+
 export type RespostaHandoff =
-  | {
-      resultado: 'APLICADO' | 'REPLAY_IDEMPOTENTE' | 'ACEITO_COM_PENDENCIA';
-      eventoId: string;
-      processoId: string;
-      numeroProcesso: string;
-      processoCriado: boolean;
-      containers: ContainerRespostaHandoff[];
-      pendenciasAbertas: Array<{ tipo: string; containerNumero: string | null }>;
-    }
+  | RespostaHandoffAplicada
   | { resultado: 'EXIGE_REABERTURA'; eventoId: string; numeroProcesso: string; processoId: string | null }
   | { resultado: 'CONFLITO_EVENTO'; eventoId: string | null; detalhe: Record<string, unknown> }
   | { resultado: 'CONTRATO_INVALIDO'; detalhe: Record<string, unknown> }
-  | { resultado: 'FALHA'; eventoId: string | null; detalhe: Record<string, unknown> };
+  | { resultado: 'FALHA'; eventoId: string | null; detalhe: { motivo: CodigoFalhaHandoff } };
 
-/** Nunca grava segredo, assinatura, corpo da requisição ou conteúdo de documento — só a classificação do erro. */
-function sanitizarFalha(erro: unknown): string {
-  if (erro instanceof ErroContratoDemurrage) return `ErroContratoDemurrage:${erro.codigo}`;
-  if (erro instanceof PosCommitIncompletoError) return 'PosCommitIncompletoError';
-  if (erro instanceof Error) return `${erro.name}:${erro.message}`.slice(0, 500);
-  return 'erro_desconhecido';
+interface LinhaEventoExistente {
+  id: string;
+  origemProcessoId: string;
+  payloadHash: string;
+  resultado: string | null;
+  concluidoEm: Date | null;
+  processoId: string | null;
+  respostaAplicada: RespostaHandoffAplicada | null;
 }
-
-interface LinhaEventoExistente { id: string; payloadHash: string; resultado: string | null; concluidoEm: Date | null; processoId: string | null }
 
 /**
  * Registra a identidade do evento (camada A) se for a PRIMEIRA entrega, ou
  * devolve a linha já existente (vencedora da corrida de `INSERT ... ON
  * CONFLICT DO NOTHING`). Nunca lança por conflito — quem chama decide o que
- * fazer com o hash divergente.
+ * fazer com a identidade/hash divergentes.
  */
 async function registrarOuRecuperarEvento(
   pool: Pool, ctx: ContextoHandoff, norm: EntradaHandoffNormalizada,
@@ -88,35 +103,50 @@ async function registrarOuRecuperarEvento(
        (organization_id, credencial_identidade, origem_sistema, origem_processo_id, origem_evento_id, origem_ocorrido_em, payload_hash)
      VALUES ($1, $2, $3, $4, $5, $6, $7)
      ON CONFLICT (organization_id, origem_sistema, origem_evento_id) DO NOTHING
-     RETURNING id, payload_hash AS "payloadHash", resultado, concluido_em AS "concluidoEm", processo_id AS "processoId"`,
+     RETURNING id, origem_processo_id AS "origemProcessoId", payload_hash AS "payloadHash", resultado,
+               concluido_em AS "concluidoEm", processo_id AS "processoId", resposta_aplicada AS "respostaAplicada"`,
     [ctx.organizationId, ctx.credencialIdentidade, norm.origemSistema, norm.origemProcessoId, norm.origemEventoId, norm.origemOcorridoEm, norm.payloadHash],
   );
   if (ins.rows.length) return { linha: ins.rows[0], criadaAgora: true };
+  // Nota sobre `origemOcorridoEm` (achado #2, tratamento explícito): o
+  // `DO NOTHING` acima significa que, numa redelivery do MESMO evento, o
+  // `origem_ocorrido_em` ORIGINAL nunca é sobrescrito, mesmo que a nova
+  // entrega carregue um valor diferente — ele é tratado como metadado de
+  // TRANSPORTE (versão/ordem da entrega), não como parte da identidade
+  // imutável do evento, e por isso nunca participa da comparação de
+  // conflito abaixo nem é "silenciosamente substituído": o valor
+  // persistido é sempre o da primeira entrega, preservado por construção.
   const { rows } = await pool.query(
-    `SELECT id, payload_hash AS "payloadHash", resultado, concluido_em AS "concluidoEm", processo_id AS "processoId" FROM demurrage_handoff_eventos
+    `SELECT id, origem_processo_id AS "origemProcessoId", payload_hash AS "payloadHash", resultado,
+            concluido_em AS "concluidoEm", processo_id AS "processoId", resposta_aplicada AS "respostaAplicada"
+       FROM demurrage_handoff_eventos
       WHERE organization_id = $1 AND origem_sistema = $2 AND origem_evento_id = $3`,
     [ctx.organizationId, norm.origemSistema, norm.origemEventoId],
   );
   return { linha: rows[0], criadaAgora: false };
 }
 
-const RESULTADOS_TERMINAIS_COM_SUCESSO = new Set(['APLICADO', 'REPLAY_IDEMPOTENTE', 'ACEITO_COM_PENDENCIA', 'EXIGE_REABERTURA']);
-
 /**
  * Conclui a linha do evento (camada A) de forma idempotente: a condição
  * `concluido_em IS NULL` faz a segunda escrita (ex.: o perdedor de uma
- * corrida concorrente que, mesmo assim, chega ao MESMO desfecho pela
- * camada B) virar um no-op silencioso — nunca duas linhas, nunca um erro.
+ * corrida concorrente que, mesmo assim, chega ao MESMO desfecho) virar um
+ * no-op silencioso — nunca duas linhas, nunca um erro. `respostaAplicada`,
+ * quando informado, é o retrato que um replay futuro vai ler em vez de
+ * chamar o D10 de novo.
  */
 async function concluirEvento(
   pool: Pool, ctx: ContextoHandoff, norm: EntradaHandoffNormalizada,
-  dados: { processoId: string | null; resultado: string; falhaSanitizada: string | null },
+  dados: { processoId: string | null; resultado: string; falhaSanitizada: CodigoFalhaHandoff | null; respostaAplicada?: RespostaHandoffAplicada | null },
 ): Promise<void> {
   await pool.query(
     `UPDATE demurrage_handoff_eventos
-        SET processo_id = coalesce(processo_id, $4), resultado = $5, falha_sanitizada = $6, concluido_em = now()
+        SET processo_id = coalesce(processo_id, $4), resultado = $5, falha_sanitizada = $6,
+            resposta_aplicada = coalesce($7::jsonb, resposta_aplicada), concluido_em = now()
       WHERE organization_id = $1 AND origem_sistema = $2 AND origem_evento_id = $3 AND concluido_em IS NULL`,
-    [ctx.organizationId, norm.origemSistema, norm.origemEventoId, dados.processoId, dados.resultado, dados.falhaSanitizada],
+    [
+      ctx.organizationId, norm.origemSistema, norm.origemEventoId, dados.processoId, dados.resultado, dados.falhaSanitizada,
+      dados.respostaAplicada ? JSON.stringify(dados.respostaAplicada) : null,
+    ],
   );
 }
 
@@ -142,7 +172,7 @@ function construirEntradaD10(norm: EntradaHandoffNormalizada, organizationId: st
   };
 }
 
-function respostaDeResultadoRegistro(r: ResultadoRegistroDemurrage, eventoId: string): RespostaHandoff {
+function respostaDeResultadoRegistro(r: ResultadoRegistroDemurrage, eventoId: string): RespostaHandoffAplicada {
   const base = {
     eventoId, processoId: r.processoId, numeroProcesso: r.numeroProcesso, processoCriado: r.processoCriado,
     containers: r.containers, pendenciasAbertas: r.pendenciasAbertas,
@@ -151,19 +181,122 @@ function respostaDeResultadoRegistro(r: ResultadoRegistroDemurrage, eventoId: st
   return { resultado: r.pendenciasAbertas.length ? 'ACEITO_COM_PENDENCIA' : 'APLICADO', ...base };
 }
 
+function respostaDeResultadoRegistroParcial(erro: PosCommitIncompletoError, eventoId: string, numeroProcesso: string): RespostaHandoffAplicada {
+  return {
+    resultado: 'ACEITO_COM_PENDENCIA',
+    eventoId,
+    processoId: erro.processoId,
+    numeroProcesso,
+    processoCriado: false,
+    containers: [],
+    pendenciasAbertas: [{ tipo: 'pos_commit_em_reparo', containerNumero: null }],
+  };
+}
+
 /**
  * Após um registro bem-sucedido (novo ou replay): reaplica o backlog de SI
  * (mecanismo JÁ EXISTENTE, já chamado periodicamente pelo tick do
  * scheduler) — melhor esforço, NUNCA desfaz o registro já confirmado. Uma
- * falha aqui é recuperável pelo próprio tick periódico (mesma garantia que
- * já vale hoje); não cria uma segunda pipeline de extração de SI.
+ * falha aqui é recuperável pelo próprio tick periódico; não cria uma
+ * segunda pipeline de extração de SI. O log usa SÓ a classificação FECHADA
+ * do erro (achado #3) — nunca `erro.message`.
  */
 async function reconciliarBacklogSiMelhorEsforco(pool: Pool, organizationId: string): Promise<void> {
   try {
     await reaplicarIntencoesShippingInstructions({ pool, organizationId });
   } catch (erro) {
     // eslint-disable-next-line no-console
-    console.error(`[demurrage-handoff] reconciliação de backlog SI falhou para organização ${organizationId} (recuperável pelo tick do scheduler):`, sanitizarFalha(erro));
+    console.error(`[demurrage-handoff] reconciliação de backlog SI falhou para organização ${organizationId} (recuperável pelo tick do scheduler): ${classificarFalhaHandoff(erro)}`);
+  }
+}
+
+async function buscarProcessoIdPorNumero(pool: Pool, organizationId: string, numeroProcesso: string): Promise<string | null> {
+  const { rows } = await pool.query(`SELECT id FROM processos WHERE organization_id = $1 AND numero_processo = $2`, [organizationId, numeroProcesso]);
+  return rows[0]?.id ?? null;
+}
+
+type ResolucaoVinculo =
+  | { tipo: 'conflito'; processoIdVinculado: string; numeroProcessoVinculado: string }
+  | { tipo: 'resolvido'; processoId: string; resultadoAplicado?: ResultadoRegistroDemurrage; posCommitIncompleto?: PosCommitIncompletoError };
+
+/**
+ * Resolve/estabelece o vínculo ESTÁVEL (organização, sistema,
+ * origemProcessoId) -> processo_id ANTES de chamar o D10 (achado #1).
+ *
+ * Toda a decisão roda sob um lock consultivo de TRANSAÇÃO
+ * (`pg_advisory_xact_lock`) namespaced por `demurrage:handoff:vinculo:
+ * <org>:<sistema>:<origemProcessoId>` — um namespace PRÓPRIO, que nenhum
+ * outro código do sistema usa (mesma convenção dos locks do D10). Isso é o
+ * que faz duas entregas CONCORRENTES para a MESMA identidade a montante
+ * convergirem: a segunda só prossegue depois que a primeira já comitou (ou
+ * abortou) o vínculo, então ela sempre vê o estado final e correto —
+ * nunca duas "primeiras entregas" correndo em paralelo para o mesmo
+ * `origemProcessoId`.
+ *
+ * - Vínculo já existe e o `numeroProcesso` desta entrega CONFERE: devolve
+ *   o `processoId` vinculado (zero escrita aqui — o D10 é chamado depois,
+ *   fora desta função, pelo chamador).
+ * - Vínculo já existe e o `numeroProcesso` DIVERGE: conflito explícito —
+ *   o D10 NUNCA é chamado (zero escrita de negócio, mesmo sob concorrência:
+ *   a segunda entrega nem chega a tentar registrar).
+ * - Vínculo NÃO existe (primeira entrega desta identidade a montante):
+ *   chama o D10 AGORA, nesta janela (conexão separada do pool — o lock
+ *   consultivo aqui e o lock do D10, por `numeroProcesso`, são namespaces
+ *   DIFERENTES, sem risco de deadlock), e grava o vínculo com o
+ *   `processoId` resultante antes de liberar o lock. `PosCommitIncompletoError`
+ *   ainda estabelece o vínculo (o registro principal JÁ comitou — só o
+ *   reparo pós-commit está pendente) antes de relançar; qualquer outro erro
+ *   (ex.: `PROCESSO_FINAL`, violação de FK) nunca estabelece vínculo algum.
+ */
+async function resolverVinculoProcesso(
+  pool: Pool, organizationId: string, norm: EntradaHandoffNormalizada, entradaD10: RegistroProcessoDemurrageV1,
+): Promise<ResolucaoVinculo> {
+  const lockClient = await pool.connect();
+  try {
+    await lockClient.query('BEGIN');
+    await lockClient.query(
+      'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+      [`demurrage:handoff:vinculo:${organizationId}:${norm.origemSistema}:${norm.origemProcessoId}`],
+    );
+    const { rows } = await lockClient.query(
+      `SELECT l.processo_id AS "processoId", p.numero_processo AS "numeroProcesso"
+         FROM demurrage_handoff_processo_links l JOIN processos p ON p.id = l.processo_id
+        WHERE l.organization_id = $1 AND l.origem_sistema = $2 AND l.origem_processo_id = $3`,
+      [organizationId, norm.origemSistema, norm.origemProcessoId],
+    );
+    if (rows.length) {
+      await lockClient.query('COMMIT');
+      if (rows[0].numeroProcesso !== norm.numeroProcesso) {
+        return { tipo: 'conflito', processoIdVinculado: rows[0].processoId, numeroProcessoVinculado: rows[0].numeroProcesso };
+      }
+      return { tipo: 'resolvido', processoId: rows[0].processoId };
+    }
+
+    let resultadoAplicado: ResultadoRegistroDemurrage;
+    try {
+      resultadoAplicado = await registrarProcessoDemurrage(entradaD10, { pool });
+    } catch (erro) {
+      if (erro instanceof PosCommitIncompletoError) {
+        await lockClient.query(
+          `INSERT INTO demurrage_handoff_processo_links (organization_id, origem_sistema, origem_processo_id, processo_id)
+           VALUES ($1, $2, $3, $4) ON CONFLICT (organization_id, origem_sistema, origem_processo_id) DO NOTHING`,
+          [organizationId, norm.origemSistema, norm.origemProcessoId, erro.processoId],
+        );
+        await lockClient.query('COMMIT');
+        return { tipo: 'resolvido', processoId: erro.processoId, posCommitIncompleto: erro };
+      }
+      await lockClient.query('ROLLBACK');
+      throw erro;
+    }
+    await lockClient.query(
+      `INSERT INTO demurrage_handoff_processo_links (organization_id, origem_sistema, origem_processo_id, processo_id)
+       VALUES ($1, $2, $3, $4) ON CONFLICT (organization_id, origem_sistema, origem_processo_id) DO NOTHING`,
+      [organizationId, norm.origemSistema, norm.origemProcessoId, resultadoAplicado.processoId],
+    );
+    await lockClient.query('COMMIT');
+    return { tipo: 'resolvido', processoId: resultadoAplicado.processoId, resultadoAplicado };
+  } finally {
+    lockClient.release();
   }
 }
 
@@ -181,85 +314,101 @@ export async function processarEventoHandoff(
   const pool = opcoes.pool ?? getPool();
   const { linha, criadaAgora } = await registrarOuRecuperarEvento(pool, ctx, norm);
 
-  if (!criadaAgora && linha.payloadHash !== norm.payloadHash) {
-    // Mesmo origemEventoId, payload DIFERENTE: conflito explícito — a
-    // camada B nunca é tocada, então não há risco de escrita parcial.
-    return { resultado: 'CONFLITO_EVENTO', eventoId: linha.id, detalhe: { motivo: 'payload_divergente_do_evento_original', origemEventoId: norm.origemEventoId } };
+  if (!criadaAgora) {
+    // Achado #2: a identidade IMUTÁVEL do evento é {organização, sistema,
+    // origemEventoId, origemProcessoId} — nunca só o hash do payload de
+    // negócio (que exclui `origemProcessoId` de propósito). As duas
+    // verificações abaixo NUNCA chamam o D10, NUNCA reconciliam SI e NUNCA
+    // atualizam esta linha já existente — a linha do evento original
+    // permanece exatamente como estava.
+    if (linha.origemProcessoId !== norm.origemProcessoId) {
+      return { resultado: 'CONFLITO_EVENTO', eventoId: linha.id, detalhe: { motivo: 'origem_processo_id_divergente_do_evento_original' } };
+    }
+    if (linha.payloadHash !== norm.payloadHash) {
+      return { resultado: 'CONFLITO_EVENTO', eventoId: linha.id, detalhe: { motivo: 'payload_divergente_do_evento_original' } };
+    }
+    // Replay estrito: identidade completa E payload idênticos, já concluído
+    // com um desfecho terminal — leitura pura do retrato persistido, sem
+    // tocar o D10 (auditoria de replay, ver cabeçalho do arquivo).
+    if (linha.concluidoEm && linha.resultado) {
+      if (linha.resultado === 'EXIGE_REABERTURA') {
+        return { resultado: 'EXIGE_REABERTURA', eventoId: linha.id, numeroProcesso: norm.numeroProcesso, processoId: linha.processoId };
+      }
+      if (linha.respostaAplicada) {
+        // O rótulo do PRÓPRIO replay é sempre `REPLAY_IDEMPOTENTE` (a
+        // categoria "isto é uma repetição, nenhum trabalho novo aconteceu"
+        // — ver Entrega 1, §2.2), mesmo que a aplicação original tenha sido
+        // `APLICADO` ou `ACEITO_COM_PENDENCIA`; os demais campos do retrato
+        // (processoId, contêineres, pendências) preservam o estado real.
+        return { ...linha.respostaAplicada, resultado: 'REPLAY_IDEMPOTENTE', eventoId: linha.id };
+      }
+      // Linha concluída sem retrato (nunca ocorre para um sucesso gravado
+      // depois desta correção — só defesa em profundidade para uma linha
+      // de antes da v1.1): cai para a reaplicação normal abaixo.
+    }
   }
 
-  // Mesmo payload E já concluído com um desfecho TERMINAL (sucesso ou
-  // reabertura exigida): replay puro, nem chega a chamar a camada B de novo.
-  if (!criadaAgora && linha.concluidoEm && linha.resultado && RESULTADOS_TERMINAIS_COM_SUCESSO.has(linha.resultado)) {
-    if (linha.resultado === 'EXIGE_REABERTURA') {
-      return { resultado: 'EXIGE_REABERTURA', eventoId: linha.id, numeroProcesso: norm.numeroProcesso, processoId: linha.processoId };
-    }
-    // Reconstrói a resposta chamando a camada B — que, para a MESMA chave de
-    // idempotência, devolve o resultado original completo sem reaplicar nada
-    // (D10, `status: 'ja_registrado'`). Não reinventa um cache próprio do
-    // resultado completo aqui: a camada B já É esse cache, comprovado.
-    try {
-      const r = await registrarProcessoDemurrage(construirEntradaD10(norm, ctx.organizationId), { pool });
-      return respostaDeResultadoRegistro(r, linha.id);
-    } catch (erro) {
-      if (erro instanceof PosCommitIncompletoError) return respostaDeResultadoRegistroParcial(erro, linha.id, norm.numeroProcesso);
-      throw erro;
-    }
-  }
+  // Primeira entrega deste evento, OU mesma identidade/payload mas uma
+  // tentativa anterior nunca chegou a um desfecho terminal (crash entre a
+  // camada A e a camada B, ou corrida concorrente ainda em andamento).
+  const entradaD10 = construirEntradaD10(norm, ctx.organizationId);
 
-  // Primeira entrega deste evento, OU mesmo payload mas uma tentativa
-  // anterior nunca chegou a um desfecho terminal (crash entre a camada A e a
-  // camada B, ou corrida concorrente ainda em andamento) — chama a camada B.
   try {
-    const r = await registrarProcessoDemurrage(construirEntradaD10(norm, ctx.organizationId), { pool });
+    const vinculo = await resolverVinculoProcesso(pool, ctx.organizationId, norm, entradaD10);
+
+    if (vinculo.tipo === 'conflito') {
+      // Achado #1: este `origemProcessoId` já está vinculado a OUTRO
+      // processo interno (numeroProcesso diferente) — conflito de
+      // identidade explícito, ZERO escrita de negócio (o D10 nunca chega a
+      // ser chamado para esta entrega).
+      await concluirEvento(pool, ctx, norm, { processoId: null, resultado: 'CONFLITO_EVENTO', falhaSanitizada: null });
+      return { resultado: 'CONFLITO_EVENTO', eventoId: linha.id, detalhe: { motivo: 'processo_vinculado_diferente' } };
+    }
+
+    if (vinculo.posCommitIncompleto) {
+      const resposta = respostaDeResultadoRegistroParcial(vinculo.posCommitIncompleto, linha.id, norm.numeroProcesso);
+      await concluirEvento(pool, ctx, norm, {
+        processoId: vinculo.posCommitIncompleto.processoId, resultado: 'ACEITO_COM_PENDENCIA',
+        falhaSanitizada: classificarFalhaHandoff(vinculo.posCommitIncompleto), respostaAplicada: resposta,
+      });
+      await reconciliarBacklogSiMelhorEsforco(pool, ctx.organizationId);
+      return resposta;
+    }
+
+    // `resultadoAplicado` presente = esta foi a primeira entrega desta
+    // identidade a montante, já aplicada DENTRO de `resolverVinculoProcesso`
+    // (não chama o D10 de novo); ausente = o vínculo já existia e conferia
+    // — aplica normalmente agora.
+    const r = vinculo.resultadoAplicado ?? await registrarProcessoDemurrage(entradaD10, { pool });
     const resposta = respostaDeResultadoRegistro(r, linha.id);
-    await concluirEvento(pool, ctx, norm, { processoId: r.processoId, resultado: resposta.resultado, falhaSanitizada: null });
+    await concluirEvento(pool, ctx, norm, { processoId: r.processoId, resultado: resposta.resultado, falhaSanitizada: null, respostaAplicada: resposta });
     await reconciliarBacklogSiMelhorEsforco(pool, ctx.organizationId);
     return resposta;
   } catch (erro) {
     if (erro instanceof PosCommitIncompletoError) {
-      // O registro PRINCIPAL (processo/contêineres/ledger) já está
-      // confirmado — só o recálculo/fotografia pós-commit falhou, e isso é
-      // durável e recuperável repetindo a MESMA chamada (contrato já
-      // documentado de `PosCommitIncompletoError`). Não é uma falha de
-      // negócio do handoff: marca como aplicado (com a ressalva) e segue.
-      await concluirEvento(pool, ctx, norm, { processoId: erro.processoId, resultado: 'ACEITO_COM_PENDENCIA', falhaSanitizada: sanitizarFalha(erro) });
+      // Só alcançável quando o vínculo já existia e a aplicação normal
+      // (fora de `resolverVinculoProcesso`) foi quem lançou — mesmo tratamento.
+      const resposta = respostaDeResultadoRegistroParcial(erro, linha.id, norm.numeroProcesso);
+      await concluirEvento(pool, ctx, norm, {
+        processoId: erro.processoId, resultado: 'ACEITO_COM_PENDENCIA', falhaSanitizada: classificarFalhaHandoff(erro), respostaAplicada: resposta,
+      });
       await reconciliarBacklogSiMelhorEsforco(pool, ctx.organizationId);
-      return respostaDeResultadoRegistroParcial(erro, linha.id, norm.numeroProcesso);
+      return resposta;
     }
     if (erro instanceof ErroContratoDemurrage && erro.codigo === 'PROCESSO_FINAL') {
       // Processo em estado FINAL: retido para auditoria, NUNCA muta a
       // projeção FINAL silenciosamente — exige reabertura humana explícita.
+      // Nenhum vínculo é estabelecido (não foi uma aplicação bem-sucedida).
       const processoId = await buscarProcessoIdPorNumero(pool, ctx.organizationId, norm.numeroProcesso);
       await concluirEvento(pool, ctx, norm, { processoId, resultado: 'EXIGE_REABERTURA', falhaSanitizada: null });
       return { resultado: 'EXIGE_REABERTURA', eventoId: linha.id, numeroProcesso: norm.numeroProcesso, processoId };
     }
     if (erro instanceof ErroContratoDemurrage && erro.codigo === 'CHAVE_IDEMPOTENCIA_REUTILIZADA') {
-      // Segunda linha de defesa: a camada B viu o MESMO `chaveIdempotencia`
-      // com um payload D10 normalizado diferente. Só pode acontecer se o
-      // hash da camada A (sobre o envelope do handoff) coincidiu mas a
-      // tradução para o contrato D10 diverge por outro motivo — ainda assim
-      // é, por definição, um conflito do mesmo evento.
-      await concluirEvento(pool, ctx, norm, { processoId: null, resultado: 'CONFLITO_EVENTO', falhaSanitizada: sanitizarFalha(erro) });
+      await concluirEvento(pool, ctx, norm, { processoId: null, resultado: 'CONFLITO_EVENTO', falhaSanitizada: classificarFalhaHandoff(erro) });
       return { resultado: 'CONFLITO_EVENTO', eventoId: linha.id, detalhe: { motivo: 'chave_idempotencia_reutilizada' } };
     }
-    await concluirEvento(pool, ctx, norm, { processoId: null, resultado: 'FALHA', falhaSanitizada: sanitizarFalha(erro) });
-    return { resultado: 'FALHA', eventoId: linha.id, detalhe: { motivo: sanitizarFalha(erro) } };
+    const codigo = classificarFalhaHandoff(erro);
+    await concluirEvento(pool, ctx, norm, { processoId: null, resultado: 'FALHA', falhaSanitizada: codigo });
+    return { resultado: 'FALHA', eventoId: linha.id, detalhe: { motivo: codigo } };
   }
-}
-
-function respostaDeResultadoRegistroParcial(erro: PosCommitIncompletoError, eventoId: string, numeroProcesso: string): RespostaHandoff {
-  return {
-    resultado: 'ACEITO_COM_PENDENCIA',
-    eventoId,
-    processoId: erro.processoId,
-    numeroProcesso,
-    processoCriado: false,
-    containers: [],
-    pendenciasAbertas: [{ tipo: 'pos_commit_em_reparo', containerNumero: null }],
-  };
-}
-
-async function buscarProcessoIdPorNumero(pool: Pool, organizationId: string, numeroProcesso: string): Promise<string | null> {
-  const { rows } = await pool.query(`SELECT id FROM processos WHERE organization_id = $1 AND numero_processo = $2`, [organizationId, numeroProcesso]);
-  return rows[0]?.id ?? null;
 }
