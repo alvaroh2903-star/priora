@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { config } from '../../config';
+import nodemailer from 'nodemailer';
 import { runWatchdog, WatchdogCarrierReport, WatchdogReport } from './watchdog';
 
 /**
@@ -16,9 +17,11 @@ import { runWatchdog, WatchdogCarrierReport, WatchdogReport } from './watchdog';
  *  - e repete todo dia enquanto houver falha grave (`fail`: broken/error).
  *
  * Canais (todos opcionais; sem nenhum, o relatório fica só no status/log):
- *  - WATCHDOG_ALERT_TO: e-mails (vírgula) — enviados PELA conta Microsoft
- *    vinculada (Graph), a mesma que o disparo automático usa. Padrão:
- *    prioracontato@gmail.com; definida VAZIA, desliga o e-mail;
+ *  - WATCHDOG_ALERT_TO: e-mails (vírgula). Padrão: prioracontato@gmail.com;
+ *    definida VAZIA, desliga o e-mail. Sai pelo GMAIL DA PRIORA (SMTP com senha
+ *    de app: WATCHDOG_SMTP_PASS; conta WATCHDOG_SMTP_USER, padrão o mesmo
+ *    prioracontato@gmail.com) — nunca pela caixa de um cliente. Sem a senha de
+ *    app, ou se o Gmail falhar, a RESERVA é a conta Microsoft vinculada (Graph);
  *  - WATCHDOG_ALERT_WEBHOOK: URL que recebe POST JSON {text, content} (Slack,
  *    Teams, Discord ou qualquer automação).
  * Agenda: WATCHDOG_AUTO (1/0; padrão ligado em produção), WATCHDOG_HOUR_UTC
@@ -28,11 +31,21 @@ import { runWatchdog, WatchdogCarrierReport, WatchdogReport } from './watchdog';
 /** Destinatário padrão do alerta (pedido do usuário em 12/10). */
 export const DEFAULT_ALERT_TO = 'prioracontato@gmail.com';
 
+/** Conta SMTP que ENVIA o alerta (o Gmail da Priora). */
+export interface WatchdogSmtp {
+  host: string;
+  port: number;
+  user: string;
+  pass: string;
+}
+
 export interface WatchdogAutoConfig {
   enabled: boolean;
   hourUtc: number;
   alertTo: string[];
   webhook: string;
+  /** null = sem senha de app → o e-mail vai pela reserva (Microsoft/Graph). */
+  smtp: WatchdogSmtp | null;
 }
 
 export function watchdogAutoConfig(): WatchdogAutoConfig {
@@ -46,7 +59,29 @@ export function watchdogAutoConfig(): WatchdogAutoConfig {
       .map((s) => s.trim())
       .filter((s) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s)),
     webhook: (process.env.WATCHDOG_ALERT_WEBHOOK || '').trim(),
+    smtp: smtpFromEnv(),
   };
+}
+
+/**
+ * SMTP do alerta a partir do ambiente. A senha de app do Google vem exibida em
+ * blocos ("abcd efgh ijkl mnop") — os espaços são tirados.
+ */
+export function smtpFromEnv(): WatchdogSmtp | null {
+  const pass = (process.env.WATCHDOG_SMTP_PASS || '').replace(/\s+/g, '');
+  if (!pass) return null;
+  const port = parseInt(process.env.WATCHDOG_SMTP_PORT || '465', 10);
+  return {
+    host: (process.env.WATCHDOG_SMTP_HOST || 'smtp.gmail.com').trim(),
+    port: Number.isInteger(port) && port > 0 ? port : 465,
+    user: (process.env.WATCHDOG_SMTP_USER || DEFAULT_ALERT_TO).trim(),
+    pass,
+  };
+}
+
+/** A mensagem do alerta (remetente = a própria conta SMTP da Priora). */
+export function buildSmtpMail(smtp: WatchdogSmtp, to: string[], subject: string, body: string) {
+  return { from: `"Priora Watchdog" <${smtp.user}>`, to: to.join(', '), subject, text: body };
 }
 
 /** Linha enxuta de um armador (o que o alerta e o status precisam). */
@@ -64,7 +99,7 @@ export interface WatchdogRowLite {
 export interface WatchdogAlertResult {
   at: string;
   text: string;
-  channels: Array<{ channel: 'email' | 'webhook'; ok: boolean; error?: string }>;
+  channels: Array<{ channel: 'email' | 'webhook'; via?: 'gmail' | 'microsoft'; ok: boolean; error?: string }>;
 }
 
 interface WatchdogAutoState {
@@ -174,7 +209,10 @@ export async function deliverAlert(
   subject: string,
   text: string,
   cfg: WatchdogAutoConfig,
-  deps: { sendEmail?: (to: string[], subject: string, body: string) => Promise<void> } = {},
+  deps: {
+    sendSmtp?: (smtp: WatchdogSmtp, to: string[], subject: string, body: string) => Promise<void>;
+    sendGraph?: (to: string[], subject: string, body: string) => Promise<void>;
+  } = {},
 ): Promise<WatchdogAlertResult> {
   const out: WatchdogAlertResult = { at: new Date().toISOString(), text, channels: [] };
   if (cfg.webhook) {
@@ -192,19 +230,46 @@ export async function deliverAlert(
     }
   }
   if (cfg.alertTo.length) {
-    try {
-      const send = deps.sendEmail || defaultSendEmail;
-      await send(cfg.alertTo, subject, text);
-      out.channels.push({ channel: 'email', ok: true });
-    } catch (e) {
-      out.channels.push({ channel: 'email', ok: false, error: (e as Error).message.slice(0, 160) });
+    // 1º o Gmail da Priora; a conta Microsoft vinculada só se ele não estiver
+    // configurado ou falhar (ex.: senha de app revogada).
+    let sent = false;
+    if (cfg.smtp) {
+      try {
+        await (deps.sendSmtp || defaultSendSmtp)(cfg.smtp, cfg.alertTo, subject, text);
+        out.channels.push({ channel: 'email', via: 'gmail', ok: true });
+        sent = true;
+      } catch (e) {
+        out.channels.push({ channel: 'email', via: 'gmail', ok: false, error: (e as Error).message.slice(0, 160) });
+      }
+    }
+    if (!sent) {
+      try {
+        await (deps.sendGraph || defaultSendGraph)(cfg.alertTo, subject, text);
+        out.channels.push({ channel: 'email', via: 'microsoft', ok: true });
+      } catch (e) {
+        out.channels.push({ channel: 'email', via: 'microsoft', ok: false, error: (e as Error).message.slice(0, 160) });
+      }
     }
   }
   return out;
 }
 
-/** E-mail pela conta Microsoft vinculada (import tardio: evita ciclo no boot). */
-async function defaultSendEmail(to: string[], subject: string, body: string): Promise<void> {
+/** E-mail pelo Gmail da Priora (SMTP + senha de app). */
+async function defaultSendSmtp(smtp: WatchdogSmtp, to: string[], subject: string, body: string): Promise<void> {
+  const transport = nodemailer.createTransport({
+    host: smtp.host,
+    port: smtp.port,
+    secure: smtp.port === 465,
+    auth: { user: smtp.user, pass: smtp.pass },
+    connectionTimeout: 15_000,
+    greetingTimeout: 15_000,
+    socketTimeout: 20_000,
+  });
+  await transport.sendMail(buildSmtpMail(smtp, to, subject, body));
+}
+
+/** RESERVA: e-mail pela conta Microsoft vinculada (import tardio: evita ciclo no boot). */
+async function defaultSendGraph(to: string[], subject: string, body: string): Promise<void> {
   const { getBackgroundGraphToken } = await import('../../demurrage/autoSync');
   const { sendMail } = await import('../../graph/graphService');
   const token = await getBackgroundGraphToken();
@@ -279,7 +344,12 @@ export function getWatchdogAutoStatus() {
     hourUtc: cfg.hourUtc,
     running: Boolean(running),
     nextRunAt: cfg.enabled ? nextSlot(new Date(), last, cfg.hourUtc).toISOString() : null,
-    alertChannels: { email: cfg.alertTo.length > 0, webhook: Boolean(cfg.webhook) },
+    alertChannels: {
+      email: cfg.alertTo.length > 0,
+      // Por onde o e-mail sai: Gmail da Priora (senha de app) ou a reserva Microsoft.
+      emailVia: cfg.smtp ? 'gmail' : 'microsoft',
+      webhook: Boolean(cfg.webhook),
+    },
     lastRunAt: state.lastRunAt,
     lastReport: state.lastReport,
     lastAlert: state.lastAlert,

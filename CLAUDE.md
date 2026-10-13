@@ -35,7 +35,8 @@ leia-o para o desenho pretendido. Este arquivo resume o **estado atual** e as
 - **CI** (`.github/workflows/ci.yml`): typecheck + build + `npm run selftest:all` (descobre
   sozinho todo script `:selftest`) a cada push. Self-test novo = só nomear `xxx:selftest`.
 - **Watchdog automático** (`watchdogScheduler.ts`): 1 volta/dia (06:00 UTC), avisa quando
-  armador quebra/volta (`WATCHDOG_ALERT_TO` e-mail via Graph — padrão prioracontato@gmail.com —, `WATCHDOG_ALERT_WEBHOOK`).
+  armador quebra/volta (`WATCHDOG_ALERT_TO`, padrão prioracontato@gmail.com — enviado pelo Gmail da
+  Priora com senha de app `WATCHDOG_SMTP_PASS`, reserva = conta Microsoft vinculada; `WATCHDOG_ALERT_WEBHOOK`).
   Status: `/health/watchdog-auto` (diag) e `/api/demurrage/bot/watchdog` (painel).
 - **Travas do diagnóstico**: `/health/*` com limite por IP e bloqueio por token errado;
   `?url=` só portais de armador (`diagUrlPolicy.ts`, extra via `DIAG_URL_ALLOW`);

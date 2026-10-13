@@ -1,6 +1,7 @@
 import http from 'http';
 import type { AddressInfo } from 'net';
-import { isDue, nextSlot, buildAlert, deliverAlert, watchdogAutoConfig, WatchdogRowLite } from './watchdogScheduler';
+import nodemailer from 'nodemailer';
+import { isDue, nextSlot, buildAlert, deliverAlert, watchdogAutoConfig, smtpFromEnv, buildSmtpMail, WatchdogRowLite, WatchdogSmtp } from './watchdogScheduler';
 
 /**
  * Priora — Self-test OFFLINE do watchdog AUTOMÁTICO:
@@ -82,21 +83,63 @@ async function main(): Promise<void> {
   await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r));
   const port = (srv.address() as AddressInfo).port;
   const mails: Array<{ to: string[]; subject: string }> = [];
-  const r1 = await deliverAlert('Assunto X', 'corpo Y', { enabled: true, hourUtc: 6, alertTo: ['a@b.com'], webhook: `http://127.0.0.1:${port}/ok` }, {
-    sendEmail: async (to, subject) => {
+  const r1 = await deliverAlert('Assunto X', 'corpo Y', { enabled: true, hourUtc: 6, alertTo: ['a@b.com'], webhook: `http://127.0.0.1:${port}/ok`, smtp: null }, {
+    sendGraph: async (to, subject) => {
       mails.push({ to, subject });
     },
   });
   const posted = got[0] ? JSON.parse(got[0]) : {};
   check('webhook recebeu {text, content}', /Assunto X/.test(posted.text) && /corpo Y/.test(posted.content), posted);
-  check('e-mail enviado aos destinatários', mails.length === 1 && mails[0].to[0] === 'a@b.com' && mails[0].subject === 'Assunto X', mails);
+  check('sem senha de app: e-mail pela reserva Microsoft', mails.length === 1 && mails[0].to[0] === 'a@b.com' && r1.channels.some((c) => c.via === 'microsoft' && c.ok), r1.channels);
   check('os dois canais ok', r1.channels.length === 2 && r1.channels.every((c) => c.ok), r1.channels);
-  const r2 = await deliverAlert('S', 'T', { enabled: true, hourUtc: 6, alertTo: ['a@b.com'], webhook: `http://127.0.0.1:${port}/falha` }, {
-    sendEmail: async () => {
+  const r2 = await deliverAlert('S', 'T', { enabled: true, hourUtc: 6, alertTo: ['a@b.com'], webhook: `http://127.0.0.1:${port}/falha`, smtp: null }, {
+    sendGraph: async () => {
       throw new Error('sem conta Microsoft vinculada');
     },
   });
   check('falha de canal fica registrada, sem exceção', r2.channels.every((c) => !c.ok) && r2.channels.some((c) => /HTTP 500/.test(c.error || '')), r2.channels);
+
+  console.log('[selftest] Gmail da Priora (SMTP) com reserva Microsoft');
+  const smtp: WatchdogSmtp = { host: 'smtp.gmail.com', port: 465, user: 'prioracontato@gmail.com', pass: 'x' };
+  let viaGraph = 0;
+  const viaSmtp: string[][] = [];
+  const r3 = await deliverAlert('S', 'T', { enabled: true, hourUtc: 6, alertTo: ['prioracontato@gmail.com'], webhook: '', smtp }, {
+    sendSmtp: async (_s, to) => {
+      viaSmtp.push(to);
+    },
+    sendGraph: async () => {
+      viaGraph++;
+    },
+  });
+  check('com senha de app: sai pelo Gmail e NÃO usa a Microsoft', viaSmtp.length === 1 && viaGraph === 0 && r3.channels.length === 1 && r3.channels[0].via === 'gmail' && r3.channels[0].ok, r3.channels);
+  const r4 = await deliverAlert('S', 'T', { enabled: true, hourUtc: 6, alertTo: ['prioracontato@gmail.com'], webhook: '', smtp }, {
+    sendSmtp: async () => {
+      throw new Error('535 Username and Password not accepted');
+    },
+    sendGraph: async () => {
+      viaGraph++;
+    },
+  });
+  check('Gmail falhou (senha revogada) → reserva Microsoft entrega', viaGraph === 1 && r4.channels.map((c) => `${c.via}:${c.ok}`).join(',') === 'gmail:false,microsoft:true', r4.channels);
+  check('erro do Gmail registrado', /535/.test(r4.channels[0].error || ''), r4.channels[0]);
+
+  console.log('[selftest] configuração do SMTP');
+  delete process.env.WATCHDOG_SMTP_PASS;
+  check('sem WATCHDOG_SMTP_PASS → sem SMTP', smtpFromEnv() === null);
+  process.env.WATCHDOG_SMTP_PASS = 'abcd efgh ijkl mnop';
+  const sm = smtpFromEnv();
+  check('senha de app sem os espaços do Google', sm?.pass === 'abcdefghijklmnop', sm?.pass?.length);
+  check('padrão: smtp.gmail.com:465, conta prioracontato@gmail.com', sm?.host === 'smtp.gmail.com' && sm?.port === 465 && sm?.user === 'prioracontato@gmail.com', sm && { ...sm, pass: '***' });
+  check('status mostra emailVia=gmail', watchdogAutoConfig().smtp !== null);
+  delete process.env.WATCHDOG_SMTP_PASS;
+
+  // A mensagem montada de verdade pelo nodemailer (sem rede: streamTransport).
+  const tr = nodemailer.createTransport({ streamTransport: true, buffer: true, newline: 'unix' });
+  const info = await tr.sendMail(buildSmtpMail(smtp, ['prioracontato@gmail.com'], 'Priora — watchdog: teste', 'corpo ✅'));
+  const raw = (info.message as Buffer).toString('utf8');
+  check('remetente = Gmail da Priora', /^From: "?Priora Watchdog"? <prioracontato@gmail\.com>/m.test(raw), raw.slice(0, 300));
+  check('destinatário certo', /^To: prioracontato@gmail\.com/m.test(raw));
+  check('assunto com acento codificado', /^Subject: =\?UTF-8\?/m.test(raw));
   srv.close();
 
   if (failures === 0) console.log('\n[selftest] ✅ watchdog automático (agenda + alerta) OK');
