@@ -3,7 +3,9 @@ import { Pool } from 'pg';
 import { AuthedRequest, requireAuth } from '../middleware/requireAuth';
 import { getPool } from '../demurrage-engine/db/pool';
 import { fatosDuraveisHabilitados } from '../operacional/contexto';
-import { ehUuid, obterLiberacaoDoProcesso, recalcularLiberacaoProcesso } from '../liberacao/aplicacao';
+import {
+  detalharLiberacao, ehUuid, listarLiberacao, processoDaReferencia, recalcularLiberacaoProcesso,
+} from '../liberacao/aplicacao';
 
 /**
  * L2 — leitura da projeção da Liberação e reconstrução manual.
@@ -14,7 +16,11 @@ import { ehUuid, obterLiberacaoDoProcesso, recalcularLiberacaoProcesso } from '.
  *    (`req.pessoa.organizationId`), nunca do corpo, da query ou de cabeçalho.
  *    Sessão legada (a conta é a própria caixa) não tem pessoa → 403.
  *  - CLIENT fica fora (o `requireAuth` já recusa; aqui de novo, por defesa).
- * Os consumidores (UI da Liberação, Home, Fila, Clara) ainda não existem.
+ * Leitura (L11a): nada é recalculado nem gravado para exibir. Só entram os
+ * processos com contexto de Liberação (projeção gravada, vínculo válido com
+ * Master no S2 ou conferência do S1 que o S6 resolve para o processo); com
+ * contexto e sem projeção, o processo vem como "ainda não avaliado"
+ * (`projecao: null`), sem avaliação fabricada.
  */
 export interface LiberacaoRouterDeps {
   auth?: RequestHandler;
@@ -38,17 +44,44 @@ export function criarLiberacaoRouter(deps: LiberacaoRouterDeps = {}): Router {
     next();
   });
 
-  /** GET /api/liberacao/processos/:processoId — projeção atual (null se o processo ainda não foi avaliado). */
+  /** GET /api/liberacao/processos — processos da organização com contexto de Liberação e a disponibilidade atual do Courier. */
+  router.get('/processos', async (req: AuthedRequest, res, next) => {
+    try {
+      res.json(await listarLiberacao(pool(), req.pessoa!.organizationId));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
+   * GET /api/liberacao/processos/:processoId — projeção atual (null se ainda não
+   * avaliado) e, para exibição, identidade, pendências, Master, as três
+   * dimensões do N-17 e as evidências, lidas dos donos. Processo da organização
+   * sem contexto de Liberação: 404 SEM_CONTEXTO_DE_LIBERACAO.
+   */
   router.get('/processos/:processoId', async (req: AuthedRequest, res, next) => {
     try {
-      const organizationId = req.pessoa!.organizationId;
       const { processoId } = req.params;
       if (!ehUuid(processoId)) return res.status(404).json({ error: 'Processo não encontrado.' });
-      const { rows: [proc] } = await pool().query(
-        `SELECT 1 FROM processos WHERE id = $1 AND organization_id = $2`, [processoId, organizationId],
-      );
-      if (!proc) return res.status(404).json({ error: 'Processo não encontrado.' });
-      res.json({ processoId, projecao: await obterLiberacaoDoProcesso(pool(), organizationId, processoId) });
+      const r = await detalharLiberacao(pool(), req.pessoa!.organizationId, processoId);
+      if (r.status === 'NAO_ENCONTRADO') return res.status(404).json({ error: 'Processo não encontrado.' });
+      if (r.status === 'SEM_CONTEXTO') {
+        return res.status(404).json({
+          error: 'Este processo ainda não tem contexto de Liberação.', motivo: 'SEM_CONTEXTO_DE_LIBERACAO', processo: r.processo,
+        });
+      }
+      res.json(r.detalhe);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /** GET /api/liberacao/referencias/:referencia — processo do código ou alias vigente (S6), exato. */
+  router.get('/referencias/:referencia', async (req: AuthedRequest, res, next) => {
+    try {
+      const processoId = await processoDaReferencia(pool(), req.pessoa!.organizationId, req.params.referencia);
+      if (!processoId) return res.status(404).json({ error: 'Processo não encontrado.' });
+      res.json({ processoId });
     } catch (err) {
       next(err);
     }

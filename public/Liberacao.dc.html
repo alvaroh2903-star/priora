@@ -13,25 +13,718 @@
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
   body{font-family:'Plus Jakarta Sans',sans-serif;-webkit-font-smoothing:antialiased;background:#F4F5FB}
+  ::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:#D7DAE8;border-radius:8px;border:2px solid #F4F5FB}::-webkit-scrollbar-track{background:transparent}
   @keyframes pageIn{from{transform:translateY(12px)}to{transform:translateY(0)}}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .lib-row{transition:background .15s,border-color .15s}.lib-row:hover{background:#FAFAFE}
+  .ghost-btn{transition:background .16s,border-color .16s,color .16s}.ghost-btn:hover{background:#F3F1FE!important;border-color:#CFC6FB!important;color:#3D34C9!important}
+  @media (max-width:900px){.lib-grid{grid-template-columns:minmax(0,1fr)!important}.lib-wrap{padding:16px!important}.lib-lista{position:static!important;max-height:340px!important}}
 </style>
 </helmet>
 <main style="flex:1;min-width:0;display:flex;flex-direction:column">
-    <dc-import name="Topbar" title="Liberação" subtitle="A Clara reúne todas as evidências e diz o que falta para liberar — você decide." icon-path="M9 11l3 3L20 5 M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" hint-size="100%,110px"></dc-import>
-    <div style="flex:1;display:flex;align-items:center;justify-content:center;padding:40px;animation:pageIn .35s ease both">
-      <div style="text-align:center;max-width:440px;background:#fff;border:1px solid #E6E8F2;border-radius:16px;padding:44px 34px">
-        <div style="width:58px;height:58px;border-radius:15px;background:#EEEBFE;display:flex;align-items:center;justify-content:center;margin:0 auto 18px">
-          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#4327E6" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+    <dc-import name="Topbar" title="Liberação" subtitle="O que a Priora já comprovou sobre a liberação de cada processo, com evidência. O que ainda não tem fonte aparece como não determinável." icon-path="M9 11l3 3L20 5 M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" hint-size="100%,110px"></dc-import>
+
+    <!-- CARREGANDO -->
+    <sc-if value="{{ showLoading }}" hint-placeholder-val="{{ true }}">
+      <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:60px;gap:16px">
+        <div style="width:38px;height:38px;border:3px solid #E6E8F2;border-top-color:#4327E6;border-radius:50%;animation:spin .8s linear infinite"></div>
+        <div style="font-size:14px;color:#6B7192;font-weight:600">Carregando a Liberação…</div>
+      </div>
+    </sc-if>
+
+    <!-- AVISO (rollout desligado, sem acesso, erro, vazio) -->
+    <sc-if value="{{ showAviso }}" hint-placeholder-val="{{ false }}">
+      <div style="flex:1;display:flex;align-items:center;justify-content:center;padding:40px;animation:pageIn .35s ease both">
+        <div style="text-align:center;max-width:490px;background:#fff;border:1px solid {{ aviso.borda }};border-radius:16px;padding:42px 34px">
+          <div style="width:56px;height:56px;border-radius:15px;background:{{ aviso.fundo }};display:flex;align-items:center;justify-content:center;margin:0 auto 18px">
+            <svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="{{ aviso.cor }}" stroke-width="2"><path d="{{ aviso.icone }}"></path></svg>
+          </div>
+          <div style="font-size:19px;font-weight:800;color:#161A2E;margin-bottom:9px">{{ aviso.titulo }}</div>
+          <div style="font-size:14px;line-height:1.6;color:#6B7192">{{ aviso.texto }}</div>
+          <sc-if value="{{ aviso.podeRepetir }}" hint-placeholder-val="{{ false }}">
+            <button onClick="{{ onRecarregar }}" style="margin-top:20px;background:#0D1227;color:#fff;border:none;border-radius:10px;padding:11px 18px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer">Tentar de novo</button>
+          </sc-if>
         </div>
-        <div style="font-size:19px;font-weight:800;color:#161A2E;margin-bottom:9px">Em construção</div>
-        <div style="font-size:14px;line-height:1.6;color:#6B7192">Esta tela será conectada aos seus dados reais do Outlook em breve.<br>Por enquanto, use a aba <b style="color:#4327E6">Processos</b> — já funcionando com seus e-mails.</div>
+      </div>
+    </sc-if>
+
+    <!-- CONTEÚDO -->
+    <sc-if value="{{ showConteudo }}" hint-placeholder-val="{{ false }}">
+    <div class="lib-wrap" style="padding:22px 36px 40px 36px;display:flex;flex-direction:column;gap:16px;animation:pageIn .35s ease both">
+
+      <!-- DISPONIBILIDADE ATUAL DO COURIER (3ª dimensão do N-17, lida agora do dono) -->
+      <sc-if value="{{ fonteAgora.foraOn }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;align-items:flex-start;gap:11px;background:#FEF4E1;border:1px solid #F5E6C8;border-radius:14px;padding:13px 16px">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#B9760A" stroke-width="2" style="flex-shrink:0;margin-top:1px"><path d="M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
+          <p style="font-size:13px;color:#7A5A12;line-height:1.5"><b>{{ fonteAgora.titulo }}</b> · {{ fonteAgora.texto }}</p>
+        </div>
+      </sc-if>
+
+    <div class="lib-grid" style="display:grid;grid-template-columns:300px minmax(0,1fr);gap:20px;align-items:start">
+
+      <!-- LISTA DE PROCESSOS -->
+      <div class="lib-lista" style="background:#fff;border:1px solid #EAEBF4;border-radius:20px;padding:16px;position:sticky;top:22px;max-height:calc(100vh - 44px);display:flex;flex-direction:column">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;padding:0 4px">
+          <h2 style="font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:#161A2E">Processos</h2>
+          <span style="font-size:12px;font-weight:700;color:#4327E6;background:#EEEBFE;padding:3px 10px;border-radius:20px">{{ contagem }}</span>
+        </div>
+        <input value="{{ filtro }}" onChange="{{ onFiltro }}" placeholder="Filtrar pelo código exibido" style="width:100%;height:38px;padding:0 12px;border:1px solid #E6E8F2;border-radius:10px;font-family:inherit;font-size:13px;color:#161A2E;background:#F7F8FC;outline:none;margin-bottom:10px">
+        <div style="overflow-y:auto;display:flex;flex-direction:column;gap:6px;margin:0 -4px;padding:0 4px">
+          <sc-if value="{{ listaFiltradaVazia }}" hint-placeholder-val="{{ false }}">
+            <div style="font-size:12.5px;color:#9AA0B4;padding:10px 6px">Nenhum processo com esse código na lista.</div>
+          </sc-if>
+          <sc-for list="{{ itens }}" as="it" hint-placeholder-count="6">
+            <div class="lib-row" onClick="{{ it.onSelecionar }}" data-lib-processo="{{ it.processoId }}" style="cursor:pointer;border:1px solid {{ it.borda }};background:{{ it.fundo }};border-radius:12px;padding:10px 12px">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+                <span style="font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;color:{{ it.corCodigo }}">{{ it.codigo }}</span>
+                <sc-if value="{{ it.temDivergencia }}" hint-placeholder-val="{{ false }}"><span title="Divergência factual ativa" style="width:8px;height:8px;border-radius:50%;background:#E5484D;flex-shrink:0"></span></sc-if>
+              </div>
+              <div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:7px">
+                <sc-for list="{{ it.chips }}" as="ch" hint-placeholder-count="2">
+                  <span style="font-size:10.5px;font-weight:700;color:{{ ch.cor }};background:{{ ch.fundo }};padding:2px 8px;border-radius:20px">{{ ch.texto }}</span>
+                </sc-for>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+
+      <!-- DETALHE -->
+      <div data-lib-detalhe="1" style="display:flex;flex-direction:column;gap:16px;min-width:0">
+
+        <sc-if value="{{ focoNaoEncontrado.on }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex;align-items:flex-start;gap:11px;background:#FEF4E1;border:1px solid #F5E6C8;border-radius:14px;padding:13px 16px">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#B9760A" stroke-width="2" style="flex-shrink:0;margin-top:1px"><circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/></svg>
+            <p style="font-size:13px;color:#7A5A12;line-height:1.5">Nenhum processo da sua organização tem a referência <b style="font-family:'JetBrains Mono',monospace">{{ focoNaoEncontrado.ref }}</b>. A busca usa a identidade exata (código ou alias comprovado), nunca o código-base nem semelhança.</p>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ semContexto.on }}" hint-placeholder-val="{{ false }}">
+          <div style="background:#fff;border:1px solid #EAEBF4;border-radius:20px;padding:26px 26px">
+            <div style="font-size:11px;font-weight:700;color:#9AA0B4;text-transform:uppercase;letter-spacing:.05em">Processo</div>
+            <div style="font-family:'JetBrains Mono',monospace;font-size:20px;font-weight:700;color:#5A6076;margin-top:3px">{{ semContexto.codigo }}</div>
+            <div style="font-size:14px;font-weight:800;color:#161A2E;margin-top:14px">Ainda sem contexto de Liberação</div>
+            <div style="font-size:13px;color:#6B7192;line-height:1.6;margin-top:4px">A Priora ainda não tem, para este processo, avaliação gravada, vínculo documental com um Master nem conferência no Courier. Ele entra na Liberação quando um desses fatos existir.</div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ semSelecao }}" hint-placeholder-val="{{ false }}">
+          <div style="background:#fff;border:1px solid #EAEBF4;border-radius:20px;padding:44px 30px;text-align:center">
+            <div style="font-size:16px;font-weight:800;color:#161A2E;margin-bottom:6px">Escolha um processo</div>
+            <div style="font-size:13.5px;color:#6B7192;line-height:1.6">Você verá o que a Priora já comprovou sobre o Master, a House e a etapa — e o que ainda não tem fonte.</div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ carregandoDetalhe }}" hint-placeholder-val="{{ false }}">
+          <div style="background:#fff;border:1px solid #EAEBF4;border-radius:20px;padding:40px;display:flex;align-items:center;justify-content:center;gap:12px">
+            <div style="width:24px;height:24px;border:3px solid #E6E8F2;border-top-color:#4327E6;border-radius:50%;animation:spin .8s linear infinite"></div>
+            <span style="font-size:13.5px;color:#6B7192;font-weight:600">Carregando o processo…</span>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ erroDetalhe.on }}" hint-placeholder-val="{{ false }}">
+          <div style="background:#fff;border:1px solid #F4DEDE;border-radius:20px;padding:28px 26px">
+            <div style="font-size:15px;font-weight:800;color:#C2333A;margin-bottom:6px">Não foi possível abrir o processo</div>
+            <div style="font-size:13.5px;color:#6B7192;line-height:1.6">{{ erroDetalhe.texto }}</div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ d.on }}" hint-placeholder-val="{{ false }}">
+          <!-- CABEÇALHO: identidade central, aliases e pendências de identidade -->
+          <div style="background:#fff;border:1px solid #EAEBF4;border-radius:20px;padding:20px 22px">
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap">
+              <div style="min-width:0">
+                <div style="font-size:11px;font-weight:700;color:#9AA0B4;text-transform:uppercase;letter-spacing:.05em">Processo</div>
+                <div style="font-family:'JetBrains Mono',monospace;font-size:22px;font-weight:700;color:#4327E6;margin-top:3px">{{ d.codigo }}</div>
+                <sc-if value="{{ d.temAliases }}" hint-placeholder-val="{{ false }}">
+                  <div style="font-size:12px;color:#7A8099;margin-top:5px">Também identificado como: <span style="font-family:'JetBrains Mono',monospace;font-weight:600;color:#5A6076">{{ d.aliases }}</span></div>
+                </sc-if>
+              </div>
+              <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
+                <span style="font-size:11.5px;font-weight:700;color:{{ d.fonte.cor }};background:{{ d.fonte.fundo }};padding:4px 11px;border-radius:20px">{{ d.fonte.texto }}</span>
+                <span style="font-size:11.5px;color:#9AA0B4">{{ d.avaliadoEm }}</span>
+              </div>
+            </div>
+            <sc-if value="{{ d.naoAvaliado }}" hint-placeholder-val="{{ false }}">
+              <div style="margin-top:16px;background:#F8F7FE;border:1px solid #ECE9FB;border-radius:12px;padding:14px 16px">
+                <div style="font-size:13.5px;font-weight:800;color:#161A2E">Ainda não avaliado</div>
+                <div style="font-size:12.5px;color:#6B7192;line-height:1.55;margin-top:4px">{{ d.naoAvaliadoTexto }}</div>
+              </div>
+            </sc-if>
+            <sc-if value="{{ d.temPendencias }}" hint-placeholder-val="{{ false }}">
+              <div style="margin-top:16px">
+                <div style="font-size:11px;font-weight:700;color:#9AA0B4;text-transform:uppercase;letter-spacing:.05em;margin-bottom:7px">Pendências de identidade</div>
+                <div style="display:flex;flex-direction:column;gap:8px">
+                  <sc-for list="{{ d.pendencias }}" as="p" hint-placeholder-count="1">
+                    <div style="background:#FFFBF3;border:1px solid #F5E6C8;border-radius:11px;padding:11px 13px" title="{{ p.ref }}">
+                      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+                        <span style="font-size:12.5px;font-weight:800;color:#7A5A12">{{ p.titulo }}</span>
+                        <span style="font-size:10.5px;font-weight:700;color:#B9760A;background:#FEF4E1;padding:2px 9px;border-radius:20px">{{ p.estado }}</span>
+                      </div>
+                      <div style="font-size:12px;color:#5A6076;line-height:1.5;margin-top:4px">{{ p.texto }}</div>
+                      <div style="font-size:11px;color:#9AA0B4;margin-top:3px">{{ p.sub }}</div>
+                    </div>
+                  </sc-for>
+                </div>
+              </div>
+            </sc-if>
+          </div>
+
+          <sc-if value="{{ d.avaliado }}" hint-placeholder-val="{{ false }}">
+            <!-- AVALIAÇÃO ATUAL (saída da L1a, sem reinterpretação) -->
+            <div style="background:#fff;border:1px solid #EAEBF4;border-radius:20px;padding:20px 22px">
+              <h3 style="font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:#161A2E;margin-bottom:14px">Avaliação atual</h3>
+              <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px">
+                <sc-for list="{{ d.saidas }}" as="s" hint-placeholder-count="3">
+                  <div style="background:{{ s.fundo }};border:1px solid {{ s.borda }};border-radius:14px;padding:14px 15px">
+                    <div style="font-size:10.5px;font-weight:700;color:#9AA0B4;text-transform:uppercase;letter-spacing:.05em">{{ s.rotulo }}</div>
+                    <div style="font-size:14.5px;font-weight:800;color:{{ s.cor }};margin-top:5px;line-height:1.35">{{ s.titulo }}</div>
+                    <div style="display:flex;flex-direction:column;gap:3px;margin-top:8px">
+                      <sc-for list="{{ s.linhas }}" as="l" hint-placeholder-count="2"><div style="font-size:11.5px;color:#6B7192;line-height:1.4">{{ l }}</div></sc-for>
+                    </div>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </sc-if>
+
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;align-items:start">
+            <!-- MASTER -->
+            <sc-if value="{{ d.master.on }}" hint-placeholder-val="{{ false }}">
+              <div style="background:#fff;border:1px solid #EAEBF4;border-radius:20px;padding:20px 22px">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px">
+                  <h3 style="font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:#161A2E">Master</h3>
+                  <span style="font-size:11px;font-weight:700;color:{{ d.master.cor }};background:{{ d.master.fundo }};padding:3px 10px;border-radius:20px">{{ d.master.selo }}</span>
+                </div>
+                <div style="font-size:12px;color:#7A8099">{{ d.master.vinculoTexto }}</div>
+                <sc-for list="{{ d.master.mbls }}" as="m" hint-placeholder-count="1">
+                  <div style="font-family:'JetBrains Mono',monospace;font-size:15px;font-weight:700;color:#161A2E;margin-top:4px">{{ m }}</div>
+                </sc-for>
+                <sc-for list="{{ d.master.identificacao }}" as="f" hint-placeholder-count="2">
+                  <div style="display:flex;justify-content:space-between;gap:12px;font-size:12px;margin-top:6px"><span style="color:#9AA0B4">{{ f.rotulo }}</span><span style="color:#161A2E;font-weight:600;text-align:right;font-family:{{ f.fonte }};word-break:break-all">{{ f.valor }}</span></div>
+                </sc-for>
+                <sc-if value="{{ d.master.temVinculados }}" hint-placeholder-val="{{ false }}">
+                  <div style="margin-top:10px">
+                    <div style="font-size:11px;color:#9AA0B4;font-weight:700;margin-bottom:5px">Processos vinculados a este Master</div>
+                    <div style="display:flex;flex-wrap:wrap;gap:6px">
+                      <sc-for list="{{ d.master.vinculados }}" as="v" hint-placeholder-count="2">
+                        <button onClick="{{ v.onAbrir }}" class="ghost-btn" style="font-family:'JetBrains Mono',monospace;font-size:11.5px;font-weight:700;color:{{ v.cor }};background:#fff;border:1px solid #E6E8F2;border-radius:8px;padding:4px 9px;cursor:pointer">{{ v.codigo }}</button>
+                      </sc-for>
+                    </div>
+                  </div>
+                </sc-if>
+                <sc-for list="{{ d.master.pendencias }}" as="p" hint-placeholder-count="1">
+                  <div style="margin-top:10px;background:#FFFBF3;border:1px solid #F5E6C8;border-radius:11px;padding:10px 12px" title="{{ p.ref }}">
+                    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+                      <span style="font-size:12px;font-weight:800;color:#7A5A12">{{ p.titulo }}</span>
+                      <span style="font-size:10.5px;font-weight:700;color:#B9760A;background:#FEF4E1;padding:2px 9px;border-radius:20px">{{ p.estado }}</span>
+                    </div>
+                    <div style="font-size:11.5px;color:#5A6076;line-height:1.5;margin-top:3px">{{ p.texto }}</div>
+                    <div style="font-size:11px;color:#9AA0B4;margin-top:2px">{{ p.sub }}</div>
+                  </div>
+                </sc-for>
+
+                <div style="margin-top:14px;padding-top:13px;border-top:1px solid #F2F3F9">
+                  <!-- As três dimensões do N-17, prontas do servidor -->
+                  <sc-if value="{{ d.master.dims.on }}" hint-placeholder-val="{{ false }}">
+                    <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:12px">
+                      <sc-for list="{{ d.master.dims.celulas }}" as="c" hint-placeholder-count="3">
+                        <div style="background:{{ c.fundo }};border:1px solid {{ c.borda }};border-radius:11px;padding:9px 10px;min-width:0">
+                          <div style="font-size:9.5px;font-weight:700;color:#9AA0B4;text-transform:uppercase;letter-spacing:.05em">{{ c.rotulo }}</div>
+                          <div style="font-size:12.5px;font-weight:800;color:{{ c.cor }};margin-top:3px;line-height:1.3">{{ c.valor }}</div>
+                          <div style="font-size:10.5px;color:#7A8099;margin-top:3px;line-height:1.35">{{ c.sub }}</div>
+                        </div>
+                      </sc-for>
+                    </div>
+                  </sc-if>
+                  <div style="font-size:14px;font-weight:800;color:{{ d.master.cor }}">{{ d.master.titulo }}</div>
+                  <sc-for list="{{ d.master.linhas }}" as="l" hint-placeholder-count="2"><div style="font-size:12px;color:#6B7192;margin-top:4px;line-height:1.45">{{ l }}</div></sc-for>
+                </div>
+                <sc-if value="{{ d.master.tardio.on }}" hint-placeholder-val="{{ false }}">
+                  <div style="margin-top:12px;background:#F8F7FE;border:1px solid #ECE9FB;border-radius:12px;padding:12px 14px">
+                    <div style="font-size:12px;font-weight:800;color:#4327E6">Vínculo posterior ao fato do Master</div>
+                    <sc-for list="{{ d.master.tardio.linhas }}" as="l" hint-placeholder-count="2"><div style="font-size:12px;color:#4A5063;margin-top:4px;line-height:1.45">{{ l }}</div></sc-for>
+                  </div>
+                </sc-if>
+                <div style="margin-top:12px;display:flex;flex-direction:column;gap:6px">
+                  <sc-for list="{{ d.master.fisico }}" as="f" hint-placeholder-count="3">
+                    <div style="display:flex;justify-content:space-between;gap:12px;font-size:12px"><span style="color:#9AA0B4">{{ f.rotulo }}</span><span style="color:#161A2E;font-weight:600;text-align:right">{{ f.valor }}</span></div>
+                  </sc-for>
+                </div>
+              </div>
+            </sc-if>
+
+            <!-- HOUSE -->
+            <sc-if value="{{ d.avaliado }}" hint-placeholder-val="{{ false }}">
+              <div style="background:#fff;border:1px solid #EAEBF4;border-radius:20px;padding:20px 22px">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px">
+                  <h3 style="font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:#161A2E">House</h3>
+                  <span style="font-size:11px;font-weight:700;color:{{ d.house.cor }};background:{{ d.house.fundo }};padding:3px 10px;border-radius:20px">{{ d.house.selo }}</span>
+                </div>
+                <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:12px">
+                  <sc-for list="{{ d.house.dims.celulas }}" as="c" hint-placeholder-count="3">
+                    <div style="background:{{ c.fundo }};border:1px solid {{ c.borda }};border-radius:11px;padding:9px 10px;min-width:0">
+                      <div style="font-size:9.5px;font-weight:700;color:#9AA0B4;text-transform:uppercase;letter-spacing:.05em">{{ c.rotulo }}</div>
+                      <div style="font-size:12.5px;font-weight:800;color:{{ c.cor }};margin-top:3px;line-height:1.3">{{ c.valor }}</div>
+                      <div style="font-size:10.5px;color:#7A8099;margin-top:3px;line-height:1.35">{{ c.sub }}</div>
+                    </div>
+                  </sc-for>
+                </div>
+                <div style="font-size:14px;font-weight:800;color:{{ d.house.cor }}">{{ d.house.titulo }}</div>
+                <sc-for list="{{ d.house.linhas }}" as="l" hint-placeholder-count="1"><div style="font-size:12px;color:#6B7192;margin-top:4px;line-height:1.45">{{ l }}</div></sc-for>
+                <div style="margin-top:14px;padding-top:13px;border-top:1px solid #F2F3F9;display:flex;flex-direction:column;gap:7px">
+                  <sc-for list="{{ d.house.caminhos }}" as="c" hint-placeholder-count="3">
+                    <div style="display:flex;justify-content:space-between;gap:12px;font-size:12px"><span style="color:#5A6076">{{ c.rotulo }}</span><span style="color:{{ c.cor }};font-weight:700;text-align:right">{{ c.valor }}</span></div>
+                  </sc-for>
+                </div>
+              </div>
+            </sc-if>
+          </div>
+
+          <sc-if value="{{ d.avaliado }}" hint-placeholder-val="{{ false }}">
+            <!-- DIVERGÊNCIAS -->
+            <sc-if value="{{ d.temDivergencias }}" hint-placeholder-val="{{ false }}">
+              <div style="background:#fff;border:1px solid #F4DEDE;border-radius:20px;padding:20px 22px">
+                <div style="display:flex;align-items:center;gap:9px;margin-bottom:6px">
+                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#E5484D" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
+                  <h3 style="font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:#C2333A">Divergência factual</h3>
+                </div>
+                <p style="font-size:12.5px;color:#6B7192;line-height:1.5;margin-bottom:14px">O fato oficial do Courier continua valendo; a evidência em conflito fica registrada ao lado dele. Somente leitura nesta etapa.</p>
+                <div style="display:flex;flex-direction:column;gap:12px">
+                  <sc-for list="{{ d.divergencias }}" as="v" hint-placeholder-count="1">
+                    <div style="border:1px solid #F0E3E3;border-radius:14px;padding:14px 16px">
+                      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+                        <span style="font-size:13px;font-weight:800;color:#161A2E">{{ v.documento }}</span>
+                        <span style="font-size:11px;font-weight:700;color:{{ v.cor }};background:{{ v.fundo }};padding:3px 10px;border-radius:20px">{{ v.estado }}</span>
+                      </div>
+                      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-top:11px">
+                        <div style="background:#F3FAF6;border:1px solid #D6EEE2;border-radius:11px;padding:11px 13px">
+                          <div style="font-size:10.5px;font-weight:700;color:#177D54;text-transform:uppercase;letter-spacing:.04em">Fato oficial (Courier)</div>
+                          <div style="font-size:13px;font-weight:800;color:#161A2E;margin-top:4px">{{ v.oficial }}</div>
+                          <div style="font-size:11.5px;color:#6B7192;margin-top:3px" title="{{ v.oficialRef }}">{{ v.oficialFonte }}</div>
+                        </div>
+                        <div style="background:#FEF7F7;border:1px solid #F4DEDE;border-radius:11px;padding:11px 13px">
+                          <div style="font-size:10.5px;font-weight:700;color:#C2333A;text-transform:uppercase;letter-spacing:.04em">Evidência em conflito</div>
+                          <div style="font-size:13px;font-weight:800;color:#161A2E;margin-top:4px">{{ v.conflito }}</div>
+                          <div style="font-size:11.5px;color:#6B7192;margin-top:3px" title="{{ v.conflitoRef }}">{{ v.conflitoFonte }}</div>
+                        </div>
+                      </div>
+                      <div style="display:flex;flex-direction:column;gap:3px;margin-top:10px">
+                        <sc-for list="{{ v.historico }}" as="h" hint-placeholder-count="1"><div style="font-size:11.5px;color:#9AA0B4">{{ h }}</div></sc-for>
+                      </div>
+                    </div>
+                  </sc-for>
+                </div>
+              </div>
+            </sc-if>
+
+            <!-- MARCOS CONFIRMADOS -->
+            <div style="background:#fff;border:1px solid #EAEBF4;border-radius:20px;padding:20px 22px">
+              <h3 style="font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:#161A2E;margin-bottom:10px">Marcos confirmados</h3>
+              <sc-if value="{{ d.semMarcos }}" hint-placeholder-val="{{ false }}">
+                <div style="font-size:12.5px;color:#9AA0B4">Nenhum marco confirmado pelas fontes integradas até agora.</div>
+              </sc-if>
+              <div style="display:flex;flex-direction:column;gap:8px">
+                <sc-for list="{{ d.marcos }}" as="m" hint-placeholder-count="2">
+                  <div style="display:flex;align-items:flex-start;gap:11px">
+                    <span style="width:22px;height:22px;border-radius:7px;background:#E7F6EF;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#1F9D6B" stroke-width="2.6"><path d="M20 6 9 17l-5-5"/></svg></span>
+                    <div style="min-width:0">
+                      <div style="font-size:13px;font-weight:700;color:#161A2E">{{ m.titulo }}</div>
+                      <div style="font-size:11.5px;color:#7A8099;margin-top:2px" title="{{ m.ref }}">{{ m.sub }}</div>
+                    </div>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+
+            <!-- EVIDÊNCIAS -->
+            <div style="background:#fff;border:1px solid #EAEBF4;border-radius:20px;padding:20px 22px">
+              <h3 style="font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:#161A2E;margin-bottom:10px">Evidências usadas</h3>
+              <sc-if value="{{ d.semEvidencias }}" hint-placeholder-val="{{ false }}">
+                <div style="font-size:12.5px;color:#9AA0B4">Nenhuma evidência de fonte integrada para este processo.</div>
+              </sc-if>
+              <div style="display:flex;flex-direction:column;gap:2px">
+                <sc-for list="{{ d.evidencias }}" as="e" hint-placeholder-count="2">
+                  <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid #F4F5FA" title="{{ e.ref }}">
+                    <div style="min-width:0">
+                      <div style="font-size:12.5px;font-weight:700;color:#161A2E">{{ e.rotulo }}</div>
+                      <div style="font-size:11.5px;color:#7A8099;margin-top:2px">{{ e.detalhe }}</div>
+                    </div>
+                    <span style="font-size:11px;color:#9AA0B4;white-space:nowrap">{{ e.quando }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </sc-if>
+        </sc-if>
       </div>
     </div>
+    </div>
+    </sc-if>
 </main>
 </x-dc>
 <script type="text/x-dc" data-dc-script>
 class Component extends DCLogic {
-  renderVals(){ return {}; }
+  /*
+   * L11a — tela SÓ DE LEITURA. Este código busca, seleciona, formata e
+   * exibe. Não decide nada: quais processos entram, resolução do Master,
+   * House, etapa, bloqueador, próxima ação, divergência, pendências de
+   * identidade e as três dimensões do N-17 (estado oficial, frescor e
+   * disponibilidade atual da fonte) vêm prontos do servidor. Aqui só se
+   * traduz cada valor em texto.
+   */
+  state = { lista:null, fonteCourier:null, carregando:true, falha:null, filtro:'', selecionado:null, detalhe:null, carregandoDetalhe:false,
+    erroDetalhe:null, focoNaoEncontrado:null, semContexto:null };
+
+  UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+  ETAPA = { PREPARACAO_PARA_LIBERACAO:'Preparação para liberação', PREPARACAO_OPERACIONAL:'Preparação operacional',
+    APTO_PARA_PROCEDIMENTO:'Apto para procedimento', PROCEDIMENTO_EM_ANDAMENTO:'Procedimento em andamento',
+    APTO_PARA_APRESENTACAO:'Apto para apresentação', MASTER_APRESENTADO:'Master apresentado',
+    ACOMPANHANDO_DESBLOQUEIO:'Acompanhando desbloqueio', LIBERADO:'Liberado' };
+  FONTE = { EMAIL_WAVE:'Wave (e-mail do agente)', EMAIL_EMISSAO_DESTINO:'Emissão no destino (e-mail)',
+    PORTAL_FOTO_HBL:'Foto do HBL pelo Portal do Cliente', EMAIL_TELEX:'Telex (e-mail do agente)',
+    HEADCARGO:'HeadCargo (Termo e financeiro do cliente)', PROCEDIMENTO_AGENCIA:'Procedimento da agência e apresentação',
+    SISCARGA:'SISCARGA (desbloqueio e conclusão)' };
+  BLOQUEIO = { MASTER_FISICO_NAO_RECEBIDO:'Master físico ainda não recebido (escopo Master)' };
+  MARCO = { MASTER_RESOLVIDO:'Master resolvido', HOUSE_RESOLVIDO:'House resolvida', MASTER_APRESENTADO:'Master apresentado', LIBERADO:'Liberado' };
+  DOC = { MBL:'MBL (Master)', HBL_ORIGINAL:'HBL original (House)' };
+  VALOR = { RECEBIDO:'Recebido', RECEBIDO_E_CONFERIDO:'Recebido e conferido', AUSENTE_NA_CONFERENCIA:'Ausente na conferência',
+    DESMARCADO:'Marca retirada', ENTREGUE:'Entregue' };
+  ESTADO_DIV = { ABERTA:'Aberta', EM_ANALISE:'Em análise', RESOLVIDA_PELA_FONTE_DE_VERDADE:'Resolvida pela fonte de verdade',
+    ENCERRADA_POR_EVIDENCIA_INVALIDA:'Encerrada por evidência inválida' };
+  PROVENIENCIA = { CITADA:'citada no envelope', AMBIGUA:'ambígua (conversa com mais de um envelope)', INFERIDA:'inferida por referência cruzada',
+    CLARA:'lida pela Clara', NAO_VERIFICADA:'proveniência não verificada' };
+  MODALIDADE = { FISICO:'Físico', WAVE:'Wave', EMISSAO_DESTINO:'Emissão no destino' };
+  MOTIVO_INCLUSAO = { AVALIACAO_GRAVADA:'avaliação gravada', VINCULO_COM_MASTER:'vínculo documental com um Master (Auditoria)',
+    CONFERENCIA_NO_COURIER:'conferência no Courier' };
+  CHIP_INCLUSAO = { VINCULO_COM_MASTER:'Vínculo com Master', CONFERENCIA_NO_COURIER:'Conferência no Courier' };
+  MOTIVO_PEND = { ALIAS_CONFLITANTE:'Alias em conflito', REFERENCIA_INCOMPLETA:'Referência incompleta', PROCESSO_NAO_ENCONTRADO:'Referência sem processo',
+    ARMADOR_INCOMPATIVEL:'Armador incompatível', MASTER_NAO_ENCONTRADO:'Referência de Master sem identidade' };
+  FONTE_AGORA = { DISPONIVEL:'Courier disponível', INDISPONIVEL:'Courier indisponível', DESCONHECIDO:'Courier: caixa não verificada' };
+  COR_FONTE = { DISPONIVEL:'verde', INDISPONIVEL:'ambar', DESCONHECIDO:'ambar' };
+  COR_ESTADO = { RESOLVIDO:'verde', NAO_RESOLVIDO:'ambar', NAO_CONFIRMAVEL:'neutro', NAO_DETERMINAVEL:'neutro' };
+  COR_DIV = { ABERTA:'vermelho', EM_ANALISE:'vermelho', RESOLVIDA_PELA_FONTE_DE_VERDADE:'neutro', ENCERRADA_POR_EVIDENCIA_INVALIDA:'neutro' };
+  COR = { verde:{ cor:'#177D54', fundo:'#E7F6EF', borda:'#D6EEE2' }, neutro:{ cor:'#5A6076', fundo:'#F4F5FA', borda:'#ECEDF4' },
+    ambar:{ cor:'#B9760A', fundo:'#FEF4E1', borda:'#F5E6C8' }, vermelho:{ cor:'#C2333A', fundo:'#FDECEC', borda:'#F4DEDE' },
+    roxo:{ cor:'#4327E6', fundo:'#EEEBFE', borda:'#E4E1FA' } };
+
+  componentDidMount(){
+    this._onFocus = (e)=>{ const dt=e&&e.detail; if (dt && dt.module==='liberacao' && dt.id!=null) this.focar(dt.id); };
+    window.addEventListener('priora:focus', this._onFocus);
+    this.carregarLista();
+    const p = window.PrioraBus && window.PrioraBus.consume('liberacao');
+    if (p && p.id!=null) this.focar(p.id);
+  }
+  componentWillUnmount(){ window.removeEventListener('priora:focus', this._onFocus); }
+
+  api(url){
+    return fetch(url, { credentials:'same-origin' }).then(function(r){
+      return r.json().catch(function(){ return null; }).then(function(j){ return { ok:r.ok, status:r.status, corpo:j }; });
+    });
+  }
+
+  carregarLista(){
+    const self=this;
+    this.setState({ carregando:true, falha:null });
+    this.api('/api/liberacao/processos').then(function(r){
+      if (r.ok) return self.setState({ carregando:false, lista:(r.corpo&&r.corpo.processos)||[], fonteCourier:(r.corpo&&r.corpo.fonteCourier)||null });
+      self.setState({ carregando:false, falha:{ status:r.status, motivo:r.corpo&&r.corpo.motivo, texto:r.corpo&&r.corpo.error } });
+    }).catch(function(err){ self.setState({ carregando:false, falha:{ status:0, texto:String(err&&err.message||err) } }); });
+  }
+
+  /* PrioraBus: ID central do processo, ou código/alias resolvido pela identidade exata do S6 (no servidor). */
+  focar(id){
+    id = String(id==null?'':id).trim();
+    if (!id) return;
+    if (this.UUID.test(id)) { this.selecionar(id.toLowerCase()); return; }
+    const self=this;
+    this.api('/api/liberacao/referencias/'+encodeURIComponent(id)).then(function(r){
+      if (r.ok && r.corpo && r.corpo.processoId) self.selecionar(r.corpo.processoId);
+      else self.naoEncontrado(id);
+    }).catch(function(){ self.naoEncontrado(id); });
+  }
+  /* Referência sem processo: nada fica selecionado, para não parecer que algum processo correspondeu. */
+  naoEncontrado(id){
+    this.setState({ focoNaoEncontrado:id, selecionado:null, detalhe:null, carregandoDetalhe:false, erroDetalhe:null, semContexto:null });
+  }
+
+  selecionar(processoId){
+    const self=this;
+    if (window.PrioraBus) window.PrioraBus.scrollToSel('[data-lib-detalhe]');
+    if (this.state.selecionado===processoId && (this.state.detalhe || this.state.carregandoDetalhe || this.state.semContexto)) return;
+    this.setState({ selecionado:processoId, detalhe:null, erroDetalhe:null, carregandoDetalhe:true, focoNaoEncontrado:null, semContexto:null });
+    this.api('/api/liberacao/processos/'+encodeURIComponent(processoId)).then(function(r){
+      if (self.state.selecionado!==processoId) return;
+      if (r.ok) return self.setState({ detalhe:r.corpo, carregandoDetalhe:false });
+      if (r.status===404 && r.corpo && r.corpo.motivo==='SEM_CONTEXTO_DE_LIBERACAO') {
+        return self.setState({ carregandoDetalhe:false, semContexto:{ codigo:(r.corpo.processo&&r.corpo.processo.codigo)||'Processo sem código' } });
+      }
+      self.setState({ carregandoDetalhe:false, erroDetalhe: r.status===404 ? 'Este processo não existe na sua organização.' : ((r.corpo&&r.corpo.error)||('Erro '+r.status)) });
+    }).catch(function(err){ if (self.state.selecionado===processoId) self.setState({ carregandoDetalhe:false, erroDetalhe:String(err&&err.message||err) }); });
+  }
+
+  /* ---------------- formatação ---------------- */
+  quando(iso){ if(!iso) return '—'; var d=new Date(iso); if(isNaN(d)) return '—'; return d.toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}); }
+  rotulo(mapa, v){ return (v && mapa[v]) || v || '—'; }
+  cor(nome){ return this.COR[nome] || this.COR.neutro; }
+  codigoDe(id, d){ var c = d && d.contexto && d.contexto.processos && d.contexto.processos[id]; if (c) return c; var it=(this.state.lista||[]).find(function(x){return x.processoId===id;}); return (it&&it.codigo) || 'processo sem código'; }
+  evid(ref, d){ return (d && d.contexto && d.contexto.evidencias && d.contexto.evidencias[ref]) || null; }
+  autorDe(a){ return a ? ('por '+(a.nome || ('membro '+a.membershipId))) : ''; }
+  detalheEvid(e){
+    if (!e) return '';
+    if (e.tipo==='COURIER_CONFERENCIA') return this.rotulo(this.DOC,e.documento)+' · '+this.rotulo(this.VALOR,e.valor)+' · envelope '+e.envelope+' · referência '+e.referencia+' · '+this.rotulo(this.PROVENIENCIA,e.proveniencia)+' · '+this.autorDe(e.autor);
+    if (e.tipo==='COURIER_ENVELOPE') return e.valor+' · envelope '+e.envelope+' · '+this.autorDe(e.autor);
+    if (e.tipo==='AUDITORIA_EXTRACAO') return e.anexo+' ('+e.documento+')';
+    return '';
+  }
+  textoEvid(e){ if (!e) return 'Evidência registrada'; var dt=this.detalheEvid(e); return e.rotulo+(dt?(' · '+dt):''); }
+  fonteDe(evidencia, d){ return evidencia ? this.textoEvid(this.evid(evidencia.ref, d)) : '—'; }
+  indeterminado(x){
+    var self=this, linhas=[];
+    (x.semFonteIntegrada||[]).forEach(function(f){ linhas.push('Fonte não integrada: '+self.rotulo(self.FONTE,f)); });
+    (x.fontesIndisponiveis||[]).forEach(function(){ linhas.push('Fonte indisponível: Courier'); });
+    (x.semObservacao||[]).forEach(function(){ linhas.push('Sem observação do Courier para este processo'); });
+    var titulo = (x.semFonteIntegrada||[]).length ? 'Não determinável — marcos posteriores sem fonte'
+      : (x.fontesIndisponiveis||[]).length ? 'Não determinável — fonte indisponível' : 'Não determinável — sem observação do Courier';
+    return { titulo:titulo, linhas:linhas };
+  }
+  saida(rotulo, s, tipoNada, textoNada){
+    var c=this.COR;
+    if (s.tipo==='NAO_DETERMINAVEL'){ var i=this.indeterminado(s); return Object.assign({ rotulo:rotulo, titulo:i.titulo, linhas:i.linhas }, c.neutro); }
+    if (s.tipo==='DETERMINADA') return Object.assign({ rotulo:rotulo, titulo:this.rotulo(this.ETAPA,s.etapa), linhas:[] }, c.roxo);
+    if (s.tipo==='CONHECIDO') return Object.assign({ rotulo:rotulo, titulo:this.rotulo(this.BLOQUEIO,s.motivo), linhas:[] }, c.ambar);
+    if (s.tipo===tipoNada) return Object.assign({ rotulo:rotulo, titulo:textoNada, linhas:[] }, c.verde);
+    return Object.assign({ rotulo:rotulo, titulo:s.tipo, linhas:[] }, c.neutro);
+  }
+  /* Fato oficial com o seu próprio frescor (valores da projeção, só formatados). */
+  fatoComFrescor(f){ return this.rotulo(this.VALOR,f.valor)+' · desde '+this.quando(f.vigenteDesde)+' · última confirmação '+this.quando(f.ultimaConfirmacaoEm); }
+
+  /* As três dimensões do N-17, como o servidor as entregou: só texto e cor. */
+  vmDims(dim, tituloEstado){
+    var c=this.cor(this.COR_ESTADO[dim.estadoOficial.tipo]), cf=this.cor(this.COR_FONTE[dim.fonte.estado]);
+    return { on:true, celulas:[
+      { rotulo:'Estado oficial', valor:tituloEstado, sub: dim.estadoOficial.confirmado ? 'Fato confirmado: continua valendo mesmo com a fonte fora' : 'Sem fato confirmado',
+        cor:c.cor, fundo:c.fundo, borda:c.borda },
+      { rotulo:'Última confirmação', valor: dim.frescor ? this.quando(dim.frescor.ultimaConfirmacaoEm) : '—',
+        sub: dim.frescor ? ('Ação original: '+this.quando(dim.frescor.acaoOriginalEm)) : 'Sem fato confirmado', cor:'#161A2E', fundo:'#F7F8FC', borda:'#ECEDF4' },
+      { rotulo:'Fonte agora', valor:this.rotulo(this.FONTE_AGORA,dim.fonte.estado),
+        sub: 'Desde '+this.quando(dim.fonte.desde)+(dim.fonte.mudouDesdeAAvaliacao ? (' · na avaliação: '+this.rotulo(this.FONTE_AGORA,dim.fonte.naAvaliacao)) : ''),
+        cor:cf.cor, fundo:cf.fundo, borda:cf.borda },
+    ] };
+  }
+
+  vmPendencia(p, d){
+    var titulo=this.rotulo(this.MOTIVO_PEND,p.motivo), outro = p.outroProcesso ? (p.outroProcesso.codigo || 'outro processo') : 'outro processo', texto;
+    if (p.motivo==='ALIAS_CONFLITANTE' && p.relacao==='REFERENCIA_DESTE_PROCESSO') texto='Uma evidência indica '+p.referencia+' como alias de '+outro+', mas a referência já identifica este processo. Nada é fundido.';
+    else if (p.motivo==='ALIAS_CONFLITANTE') texto='Uma evidência indica '+p.referencia+' como alias deste processo, mas a referência já identifica '+outro+'. Nada é fundido.';
+    else if (p.motivo==='ARMADOR_INCOMPATIVEL') texto='A referência '+p.referencia+(p.armador?(' (armador '+p.armador.toUpperCase()+')'):'')+' tem o MBL deste Master com armador incompatível. Nada é anexado.';
+    else texto='Referência '+p.referencia+(p.armador?(' (armador '+p.armador.toUpperCase()+')'):'')+'.';
+    return { titulo:titulo, estado:this.rotulo(this.ESTADO_DIV,p.estado), texto:texto,
+      sub:'Observada em '+this.quando(p.observadaEm)+' · fonte '+p.fonte, ref:p.evidenciaRef };
+  }
+
+  vmMaster(d){
+    var self=this, c=this.COR, m=d.master, p=d.projecao, ctx=d.contexto;
+    var out = { on:false, mbls:[], identificacao:[], vinculados:[], temVinculados:false, pendencias:[], linhas:[], fisico:[], tardio:{ on:false, linhas:[] }, dims:{ on:false, celulas:[] } };
+    var mostrarIdentidade = function(idt){
+      var mbls=[]; idt.referencias.forEach(function(r){ if (mbls.indexOf(r.mbl)<0) mbls.push(r.mbl); });
+      out.mbls = mbls.length ? mbls : ['Master sem referência ativa'];
+      if (idt.armadores.length) out.identificacao.push({ rotulo:'Armador', valor:idt.armadores.map(function(a){ return a.toUpperCase(); }).join(', '), fonte:'inherit' });
+      out.identificacao.push({ rotulo:'ID do Master', valor:idt.id, fonte:"'JetBrains Mono',monospace" });
+      out.vinculados = idt.processosVinculados.map(function(x){ var atual = x.processoId===d.processoId;
+        return { codigo:(x.codigo||'processo sem código')+(atual?' (este)':''), cor: atual?'#4327E6':'#5A6076', onAbrir:function(){ if(!atual) self.selecionar(x.processoId); } }; });
+      out.temVinculados = out.vinculados.length>0;
+      out.pendencias = out.pendencias.concat(idt.pendencias.map(function(x){ return self.vmPendencia(x, d); }));
+    };
+    if (m.identidade){
+      out.vinculoTexto = 'Vínculo documental (Auditoria)';
+      mostrarIdentidade(m.identidade);
+    } else if (m.emConflito.length){
+      out.vinculoTexto = 'Vínculo em conflito na Auditoria — nenhum Master é escolhido';
+      m.emConflito.forEach(function(idt){ out.mbls.push(idt.referencias.map(function(y){ return y.mbl; }).join(' / ') || 'Master sem referência ativa');
+        out.identificacao.push({ rotulo:'ID do Master', valor:idt.id, fonte:"'JetBrains Mono',monospace" });
+        out.pendencias = out.pendencias.concat(idt.pendencias.map(function(x){ return self.vmPendencia(x, d); })); });
+    } else {
+      out.vinculoTexto = 'Sem vínculo documental com um Master (Auditoria)';
+    }
+    if (!m.fisico){
+      // Ainda não avaliado: só a identidade do vínculo atual (S2), sem resolução física.
+      out.on = !!(m.identidade || m.emConflito.length);
+      Object.assign(out, c.neutro, { selo:'Ainda não avaliado', titulo:'Resolução física ainda não avaliada' });
+      out.linhas.push('O vínculo existe; a resolução do Master físico aparece depois que a Priora avaliar este processo.');
+      return out;
+    }
+    out.on = true;
+    var r=m.fisico.resolucao, av=p.avaliacao.master;
+    if (r.tipo==='RESOLVIDO'){
+      Object.assign(out, c.verde, { selo:'Resolvido' });
+      out.titulo = 'Master físico recebido';
+      if (r.via==='MASTER_VINCULADO'){
+        var origem = m.fisico.origemDoFato ? (m.fisico.origemDoFato.codigo || 'processo sem código') : 'outro processo vinculado';
+        out.linhas.push('Fato do Master: conferido no Courier pelo processo '+origem+' e válido para os processos vinculados.');
+      } else out.linhas.push('Conferido no Courier neste processo.');
+      out.linhas.push('Fonte: '+this.textoEvid(m.fisico.evidencia));
+      if (r.vinculoTardio){
+        var vt=r.vinculoTardio;
+        out.tardio = { on:true, linhas:[
+          'Este processo foi vinculado ao Master em '+this.quando(vt.vinculadoEm)+'; a conferência do Master é de '+this.quando(vt.acaoEm)+'.',
+          'O fato vale para este processo pelo vínculo — nada é atribuído a ele retroativamente.',
+          'Vinculados no momento da conferência: '+((vt.processosVinculadosNaAcao||[]).map(function(id){ return self.codigoDe(id, d); }).join(', ')||'nenhum'),
+        ].concat(vt.mensagem?[vt.mensagem]:[]) };
+      }
+    } else if (r.tipo==='NAO_CONFIRMAVEL'){
+      Object.assign(out, c.neutro, { selo:'Não confirmável' });
+      out.titulo = r.motivo==='FONTE_INDISPONIVEL' ? 'Não confirmável — Courier indisponível' : 'Não confirmável — o Courier ainda não observou este processo';
+      out.linhas.push('Sem fato confirmado, nada é concluído sobre o físico deste processo.');
+    } else {
+      Object.assign(out, c.ambar, { selo:'Não resolvido' });
+      out.titulo = 'Não resolvido pelas fontes integradas';
+      out.linhas.push('As fontes integradas ainda não resolvem o Master deste processo. O que cada fonte registrou está abaixo.');
+    }
+    out.dims = this.vmDims(m.fisico.dimensoes, out.titulo);
+    var fis=av.fisicoDoProcesso;
+    out.fisico = [
+      { rotulo:'Modalidade', valor: av.modalidadeIdentificada ? this.rotulo(this.MODALIDADE,av.modalidadeIdentificada) : 'Não identificada — fonte não integrada' },
+      { rotulo:'Envelope (Courier)', valor: fis.envelope ? this.fatoComFrescor(fis.envelope) : 'Sem recebimento registrado' },
+      { rotulo:'MBL deste processo (Courier)', valor: fis.mbl ? this.fatoComFrescor(fis.mbl) : 'Sem conferência registrada' },
+      { rotulo:'Wave / emissão no destino', valor:'Fonte não integrada' },
+    ];
+    return out;
+  }
+
+  vmHouse(d){
+    var c=this.COR, h=d.house, p=d.projecao, self=this;
+    var out = { linhas:[], caminhos:[] };
+    if (h.situacao.tipo==='RESOLVIDO'){
+      Object.assign(out, c.verde, { selo:'Resolvida', titulo:'House resolvida — HBL original recebido e conferido pela Rocket (caminho B)' });
+      out.linhas.push('Fonte: '+this.textoEvid(h.evidencia));
+      out.caminhos.push({ rotulo:'Caminho B — HBL original no Courier', valor:'Recebido e conferido', cor:c.verde.cor });
+    } else {
+      Object.assign(out, c.neutro, { selo:'Não determinável', titulo:'Não determinável — fonte não integrada' });
+      var hbl = p.fontes.courier.hblOriginalFatoId ? this.evid('courier_fato:'+p.fontes.courier.hblOriginalFatoId, d) : null;
+      out.caminhos.push({ rotulo:'Caminho B — HBL original no Courier', valor: hbl ? this.rotulo(this.VALOR,hbl.valor) : 'Sem conferência registrada', cor:c.neutro.cor });
+      (h.situacao.semFonteIntegrada||[]).forEach(function(f){ out.caminhos.push({ rotulo:self.rotulo(self.FONTE,f), valor:'Fonte não integrada', cor:c.neutro.cor }); });
+    }
+    out.dims = this.vmDims(h.dimensoes, h.situacao.tipo==='RESOLVIDO' ? 'House resolvida (caminho B)' : 'Não determinável');
+    return out;
+  }
+
+  vmDivergencias(d){
+    var self=this, c=this.COR;
+    return (d.projecao.avaliacao.divergencias||[]).map(function(x){
+      var dv=x.divergencia, cor = self.cor(self.COR_DIV[dv.estado]);
+      return { documento:self.rotulo(self.DOC,x.documento), estado:self.rotulo(self.ESTADO_DIV,dv.estado), cor:cor.cor, fundo:cor.fundo,
+        oficial: x.oficial ? self.rotulo(self.VALOR,x.oficial.valor) : 'Fato oficial retirado',
+        oficialFonte: x.oficial ? self.fonteDe(x.oficial.evidencia, d) : '—', oficialRef: x.oficial ? x.oficial.evidencia.ref : '',
+        conflito: self.rotulo(self.VALOR,dv.valorDivergente), conflitoFonte: self.fonteDe(dv.evidencia, d), conflitoRef: dv.evidencia.ref,
+        historico: (dv.transicoes||[]).map(function(t){ return self.quando(t.em)+' · '+self.rotulo(self.ESTADO_DIV,t.para)+(t.autor?(' · '+t.autor):''); }) };
+    });
+  }
+
+  vmFonteAgora(f){
+    var cf=this.cor(f && this.COR_FONTE[f.estado]);
+    return { texto: f ? this.rotulo(this.FONTE_AGORA,f.estado) : '—', cor:cf.cor, fundo:cf.fundo };
+  }
+
+  vmDetalhe(){
+    var st=this.state, d=st.detalhe, self=this;
+    var vazio = { on:false, avaliado:false, naoAvaliado:false, fonte:{}, saidas:[], master:{ on:false, tardio:{}, dims:{ celulas:[] } },
+      house:{ dims:{ celulas:[] } }, divergencias:[], marcos:[], evidencias:[], pendencias:[] };
+    if (!d) return vazio;
+    var base = Object.assign({}, vazio, { on:true, codigo:d.processo.codigo||'Processo sem código',
+      aliases:(d.processo.aliases||[]).join(', '), temAliases:(d.processo.aliases||[]).length>0,
+      pendencias:(d.processo.pendencias||[]).map(function(p){ return self.vmPendencia(p, d); }), fonte:this.vmFonteAgora(d.fonteCourier) });
+    base.temPendencias = base.pendencias.length>0;
+    base.master = this.vmMaster(d);
+    var p=d.projecao;
+    if (!p) {
+      var fatos=(d.motivosDeInclusao||[]).map(function(m){ return self.rotulo(self.MOTIVO_INCLUSAO,m); }).join('; ');
+      return Object.assign(base, { naoAvaliado:true, avaliadoEm:'Ainda não avaliado',
+        naoAvaliadoTexto:'A Liberação ainda não avaliou este processo, mas já há fatos dele na Priora: '+fatos+'. Nenhuma situação é presumida até a avaliação.' });
+    }
+    var av=p.avaliacao;
+    base.avaliado = true;
+    base.avaliadoEm = 'Avaliado em '+this.quando(p.avaliadoEm);
+    base.saidas = [
+      this.saida('Etapa', av.etapa, '', ''),
+      this.saida('Bloqueador', av.bloqueador, 'NENHUM', 'Nenhum bloqueador conhecido'),
+      this.saida('Próxima ação', av.proximaAcao, 'NENHUMA', 'Nenhuma'),
+    ];
+    base.house = this.vmHouse(d);
+    base.divergencias = this.vmDivergencias(d);
+    base.temDivergencias = base.divergencias.length>0;
+    base.marcos = (av.progresso||[]).map(function(m){
+      return { titulo:self.rotulo(self.MARCO,m.marco)+(m.escopo==='MASTER'?' · escopo Master':' · este processo'),
+        sub:self.quando(m.em)+' · '+self.fonteDe(m.evidencia, d)+(m.vinculoTardio?' · vínculo posterior ao fato':''), ref:m.evidencia.ref };
+    });
+    base.semMarcos = base.marcos.length===0;
+    var ev = d.contexto.evidencias||{};
+    base.evidencias = Object.keys(ev).sort().map(function(k){ var e=ev[k];
+      return { rotulo:e.rotulo, detalhe:self.detalheEvid(e), quando:self.quando(e.registradoEm||e.recebidoEm), ref:e.ref };
+    });
+    base.semEvidencias = base.evidencias.length===0;
+    return base;
+  }
+
+  vmItem(it){
+    var c=this.COR, self=this, sel=this.state.selecionado===it.processoId, chips=[], r=it.resumo;
+    if (!it.avaliado) {
+      chips.push({ texto:'Ainda não avaliado', cor:c.neutro.cor, fundo:c.neutro.fundo });
+      (it.motivosDeInclusao||[]).forEach(function(m){ if (self.CHIP_INCLUSAO[m]) chips.push({ texto:self.CHIP_INCLUSAO[m], cor:c.roxo.cor, fundo:c.roxo.fundo }); });
+    } else {
+      var m = r.master.situacao==='RESOLVIDO' ? Object.assign({ texto: r.master.via==='MASTER_VINCULADO' ? 'Master recebido (pelo vínculo)' : 'Master recebido' }, c.verde)
+        : r.master.situacao==='NAO_RESOLVIDO' ? Object.assign({ texto:'Master não resolvido' }, c.ambar) : Object.assign({ texto:'Master não confirmável' }, c.neutro);
+      chips.push(m);
+      chips.push(r.house.situacao==='RESOLVIDO' ? Object.assign({ texto:'House: caminho B' }, c.verde) : Object.assign({ texto:'House não determinável' }, c.neutro));
+      if (r.divergenciasAtivas>0) chips.push(Object.assign({ texto:'Divergência' }, c.vermelho));
+    }
+    return { processoId:it.processoId, codigo:it.codigo||'Processo sem código', chips:chips,
+      temDivergencia: !!(r && r.divergenciasAtivas>0), borda: sel?'#CFC6FB':'#F0F1F7', fundo: sel?'#F8F7FE':'#fff', corCodigo: sel?'#4327E6':'#161A2E',
+      onSelecionar:function(){ self.selecionar(it.processoId); } };
+  }
+
+  aviso(){
+    var f=this.state.falha, c=this.COR;
+    var IC_INFO='M12 8v4M12 16h.01M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z', IC_ERRO='M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z';
+    var neutro = { borda:'#E6E8F2', fundo:c.roxo.fundo, cor:c.roxo.cor, icone:IC_INFO, podeRepetir:false };
+    if (f.motivo==='LIBERACAO_DESLIGADA') return Object.assign({}, neutro, { titulo:'Liberação ainda não ativada', texto:'A leitura real da Liberação depende da ativação dos fatos duráveis nesta instalação. Nada é exibido por suposição.' });
+    if (f.motivo==='PESSOA_NECESSARIA') return Object.assign({}, neutro, { titulo:'Entre com a sua conta pessoal', texto:'A Liberação é lida pela sua conta na organização, não pela conta da caixa monitorada.' });
+    if (f.motivo==='PAPEL_SEM_ACESSO_OPERACIONAL') return Object.assign({}, neutro, { titulo:'Sem acesso à operação', texto:'O seu papel não tem acesso à Liberação operacional.' });
+    if (f.status===401) return Object.assign({}, neutro, { titulo:'Sessão expirada', texto:'Entre de novo para continuar.' });
+    return { borda:'#F4DEDE', fundo:'#FDECEC', cor:'#E5484D', icone:IC_ERRO, podeRepetir:true, titulo:'Não foi possível carregar a Liberação', texto:f.texto||('Erro '+f.status) };
+  }
+
+  renderVals(){
+    var st=this.state, self=this, f=st.fonteCourier;
+    var base = { showLoading:st.carregando, showAviso:false, showConteudo:false, aviso:{}, onRecarregar:function(){ self.carregarLista(); },
+      itens:[], contagem:'0', filtro:st.filtro, onFiltro:function(e){ self.setState({ filtro:(e&&e.target&&e.target.value)||'' }); },
+      listaFiltradaVazia:false, semSelecao:false, carregandoDetalhe:st.carregandoDetalhe,
+      erroDetalhe:{ on:!!st.erroDetalhe, texto:st.erroDetalhe||'' }, focoNaoEncontrado:{ on:!!st.focoNaoEncontrado, ref:st.focoNaoEncontrado||'' },
+      semContexto:{ on:!!st.semContexto, codigo:(st.semContexto&&st.semContexto.codigo)||'' },
+      fonteAgora:{ foraOn:false, titulo:'', texto:'' },
+      d:this.vmDetalhe() };
+    if (st.carregando) return base;
+    if (st.falha){ base.showAviso=true; base.aviso=this.aviso(); return base; }
+    var lista=st.lista||[];
+    if (!lista.length){ base.showAviso=true;
+      base.aviso={ borda:'#E6E8F2', fundo:'#EEEBFE', cor:'#4327E6', icone:'M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z', podeRepetir:false,
+        titulo:'Nenhum processo com contexto de Liberação', texto:'Um processo aparece aqui quando a Priora tem um fato de Liberação dele: avaliação gravada, vínculo documental com um Master (Auditoria) ou conferência no Courier.' };
+      return base; }
+    base.showConteudo=true;
+    if (f && this.COR_FONTE[f.estado]!=='verde') {
+      base.fonteAgora = { foraOn:true, titulo:this.rotulo(this.FONTE_AGORA,f.estado)+' agora',
+        texto:(f.estado==='DESCONHECIDO' ? 'A caixa monitorada ainda não teve o acesso verificado, desde '+this.quando(f.desde)+'.' : 'Desde '+this.quando(f.desde)+'.')
+          +' Os fatos já confirmados continuam valendo; nada novo é concluído sem a fonte.' };
+    }
+    var q=(st.filtro||'').trim().toUpperCase();
+    var visiveis = q ? lista.filter(function(it){ return String(it.codigo||'').toUpperCase().indexOf(q)>=0; }) : lista;
+    base.itens = visiveis.map(function(it){ return self.vmItem(it); });
+    base.contagem = String(lista.length);
+    base.listaFiltradaVazia = visiveis.length===0;
+    base.semSelecao = !st.selecionado && !st.focoNaoEncontrado;
+    return base;
+  }
 }
 </script>
 </body>

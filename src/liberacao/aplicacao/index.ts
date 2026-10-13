@@ -10,3 +10,8 @@ export { divergenciasDoCourier } from './divergencias';
 export type { DivergenciaDeConferencia, ValorConferido } from './divergencias';
 export { gatilhosLiberacaoPadrao } from './gatilhos';
 export type { GatilhosLiberacao } from './gatilhos';
+export { detalharLiberacao, listarLiberacao, processoDaReferencia } from './leitura';
+export type {
+  AutorDoFato, DetalheDaLiberacao, EvidenciaLegivel, FonteCourierAgora, IdentidadeDoMaster, ItemDaLista, LeituraDaHouse, LeituraDoMaster,
+  ListaDaLiberacao, MotivoDeInclusao, PendenciaDeIdentidade, ResultadoDetalhe, ResumoDaLiberacao, TresDimensoes,
+} from './leitura';
