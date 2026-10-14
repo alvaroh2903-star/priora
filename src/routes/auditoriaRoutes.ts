@@ -21,8 +21,12 @@ import {
   consolidarPorConhecimento,
   docIlegivelPreAlerta,
   pareceArmadorPorNome,
+  mistralOcrLigado,
+  modoExtracaoPb001,
+  preAlertaExigeGemini,
+  versaoPipelineDocPb001,
 } from '../auditoria/preAlerta/extracaoPreAlerta';
-import { executarPreAlerta, DocPreAlerta, TipoDoc } from '../auditoria/preAlerta';
+import { executarPreAlerta, DocPreAlerta, TipoDoc, MOTOR_PB001_VERSAO } from '../auditoria/preAlerta';
 import { executarCeMercante, ehComponenteCE, numeroBaseDoNome } from '../auditoria/ceMercante';
 import { mapLimit } from '../browser/carriers/concurrency';
 import {
@@ -832,11 +836,20 @@ const preAlertaCache = new Map<string, { sig: string; payload: unknown }>();
 
 auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, next) => {
   try {
-    if (!isAiConfigured()) {
+    // Fase 2: com Mistral + parser determinístico o PB-001 NÃO usa o Gemini — a
+    // falta de GEMINI_API_KEY (ou cota 429) não bloqueia. Só exige o Gemini sem
+    // Mistral (visão) ou com o rollback legado explicitamente ligado.
+    const modoExtracao = modoExtracaoPb001();
+    const pipeline = { mistralLigado: mistralOcrLigado(), modo: modoExtracao };
+    if (preAlertaExigeGemini(pipeline) && !isAiConfigured()) {
       return res.status(503).json({
-        error: 'A leitura de documentos (OCR) exige a IA. Defina GEMINI_API_KEY no servidor.',
+        error:
+          'A leitura de documentos exige o OCR do Mistral (MISTRAL_OCR_KEY) — ou, sem ele (ou com o rollback legado ligado), a IA (GEMINI_API_KEY).',
       });
     }
+    // Versão do pipeline que deriva o documento: separa caches de documento/resultado
+    // produzidos pelo parser determinístico dos produzidos pelo caminho legado.
+    const versaoDoc = versaoPipelineDocPb001(pipeline);
     const alvoProcesso = String(req.params.processo || '').toUpperCase();
     const alvoBase = processBase(alvoProcesso);
     if (config.auditoriaOcultar.includes(alvoBase)) {
@@ -876,11 +889,15 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
     // uma chave compartilhada entre contas.
     const escopoConta = req.session.homeAccountId;
     const chaveMem = escopoConta ? `${escopoConta}:${alvoBase}` : null;
+    // Resultado já comparado: chave inclui o pipeline do documento e a versão do
+    // MOTOR — mudou parser/regras → recompara (sem OCR); nunca serve resultado de
+    // outro pipeline.
+    const sigResultado = `${sig}|${versaoDoc ?? 'legado'}|${MOTOR_PB001_VERSAO}`;
     const chaveResultado = escopoConta
-      ? `resultado:v1:${escopoConta}:prealerta:${alvoBase}:${sig}`
+      ? `resultado:v2:${escopoConta}:prealerta:${alvoBase}:${sigResultado}`
       : null;
     const cached = chaveMem ? preAlertaCache.get(chaveMem) : undefined;
-    if (!refresh && !debug && cached && cached.sig === sig) {
+    if (!refresh && !debug && cached && cached.sig === sigResultado) {
       return res.json(cached.payload);
     }
     // Cache PERSISTENTE do resultado (Supabase): sobrevive a deploy/sleep. Um
@@ -888,7 +905,7 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
     if (!refresh && !debug && chaveResultado && chaveMem) {
       const salvo = await lerCacheJson<Record<string, unknown>>(chaveResultado);
       if (salvo) {
-        preAlertaCache.set(chaveMem, { sig, payload: salvo });
+        preAlertaCache.set(chaveMem, { sig: sigResultado, payload: salvo });
         return res.json(salvo);
       }
     }
@@ -935,6 +952,7 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
       erroFonte: ErroFonte;
       estruturacaoPendente: boolean | null;
       persistenceStatus: string | null;
+      modoExtracao: string;
     }> = [];
     const extraidos = await mapLimit(listaGrupos, 3, async (grupo) => {
       const temHBL = grupo.some((d) => d.tipo === 'HBL');
@@ -947,7 +965,7 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
         nome: d.nome,
       }));
       // Cache persistente: se já lemos este documento antes, não paga OCR de novo.
-      const chave = chaveOcr(escopoOcr, paginas);
+      const chave = chaveOcr(escopoOcr, paginas, versaoDoc);
       let doc: DocPreAlerta | null;
       let tipoDetectado: string | null;
       let deCache = false;
@@ -965,7 +983,7 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
       } else {
         const r = await withTimeout(
           // Escopo de conta/tenant também isola a EVIDÊNCIA de OCR (dado sensível).
-          extrairDocPreAlertaMultiplo(req.accessToken!, paginas, hint, { escopo: escopoOcr }),
+          extrairDocPreAlertaMultiplo(req.accessToken!, paginas, hint, { escopo: escopoOcr, modo: modoExtracao }),
           60000,
           'ocr',
         ).catch((e) => ({
@@ -1027,6 +1045,7 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
           erroFonte,
           estruturacaoPendente,
           persistenceStatus,
+          modoExtracao,
         });
       }
       if (!cls) return null;
@@ -1066,7 +1085,7 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
       };
       // Não cacheia o payload de diagnóstico nem quando a IA está bloqueada.
       if (!debug && !avisoIA && chaveMem && chaveResultado) {
-        preAlertaCache.set(chaveMem, { sig, payload: payloadFalta });
+        preAlertaCache.set(chaveMem, { sig: sigResultado, payload: payloadFalta });
         await gravarCacheJson(chaveResultado, payloadFalta, alvoBase);
       }
       return res.json(payloadFalta);
@@ -1089,7 +1108,7 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
     };
     // Não cacheia payload com bloqueio de IA (é transitório: some quando o limite subir).
     if (!debug && !avisoIA && chaveMem && chaveResultado) {
-      preAlertaCache.set(chaveMem, { sig, payload });
+      preAlertaCache.set(chaveMem, { sig: sigResultado, payload });
       await gravarCacheJson(chaveResultado, payload, alvoBase); // persiste o já-comparado
     }
     res.json(payload);

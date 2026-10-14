@@ -117,14 +117,22 @@ export function familiaV003(op: Operacao): {
       inc ? 'Leitura incerta do número — confirmar no documento.' : `Número do contêiner divergente: MBL ${cm.numero} × HBL ${ch.numero}.`));
     ev.push(mk('V-003.3', 'Relacionamento MBL↔HBL', inc ? 'ValidacaoHumana' : 'NaoAvaliada', 'Critica', houseId, ch.numero, [], 'Relacionamento não criado — correspondência não confirmada.'));
   } else {
+    // Leitura INCERTA de número entre as sobras: a ausência não é conclusiva (o
+    // contêiner "faltante" pode ser justamente o de leitura incerta) → 👤, nunca
+    // divergência automática (regra global de ambiguidade do Blueprint).
+    const sobraIncerta =
+      houseLeftover.some(({ ch }) => incerto(ch, 'numero')) || masterLeftover.some((cm) => incerto(cm, 'numero'));
+    const resSobra: ResultadoValidacao = sobraIncerta ? 'ValidacaoHumana' : 'Divergencia';
+    const motivoIncerto = 'Há leitura incerta de número de contêiner — confirmar no documento antes de concluir ausência.';
     for (const { houseId, ch } of houseLeftover) {
-      ev.push(mk('V-003.1', 'Existência de contêiner', 'Divergencia', 'Alta', houseId, ch.numero, par(houseId, null, ch), `Contêiner ${ch.numero ?? '(sem número)'} do House não foi localizado no MBL.`));
+      ev.push(mk('V-003.1', 'Existência de contêiner', resSobra, 'Alta', houseId, ch.numero, par(houseId, null, ch),
+        sobraIncerta ? motivoIncerto : `Contêiner ${ch.numero ?? '(sem número)'} do House não foi localizado no MBL.`));
     }
     for (const cm of masterLeftover) {
-      ev.push(mk('V-003.1', 'Existência de contêiner', 'Divergencia', 'Alta', null, cm.numero, [
+      ev.push(mk('V-003.1', 'Existência de contêiner', resSobra, 'Alta', null, cm.numero, [
         { doc: 'MBL', valor: cm.numero ?? '—' },
         { doc: 'HBL', valor: '—' },
-      ], `Contêiner ${cm.numero} do MBL não aparece em nenhum House.`));
+      ], sobraIncerta ? motivoIncerto : `Contêiner ${cm.numero} do MBL não aparece em nenhum House.`));
     }
   }
 

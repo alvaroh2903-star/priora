@@ -1,0 +1,640 @@
+/**
+ * PB-001 Fase 2 — parser DETERMINÍSTICO + canônico v2 + adaptador + unidades.
+ *
+ * Fixtures de OCR SANITIZADAS (Markdown no formato do Mistral; empresas, números
+ * de BL e lacres fictícios; contêineres válidos em ISO 6346). Sem rede.
+ * Cobre os 25 casos exigidos + o teste de aceitação primário. Rode: npm test
+ */
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+
+import {
+  OCR_SOURCE_SCHEMA,
+  OcrEvidenceV1,
+  PaginaRef,
+  SourceOcrEvidenceV1,
+  _limparMemoriaEvidencia,
+  _seedFonteEvidencia,
+  assinaturaFonte,
+  comporGrupo,
+  hashBytes,
+} from '../ocr/ocrEvidence';
+import { CANONICAL_DOC_SCHEMA, CanonicalDocumentV2, PARSER_VERSION } from '../canonical/canonicalDocument';
+import { canonicalParaDocPreAlerta } from '../canonical/adapterDocPreAlerta';
+import { _limparMemoriaCanonico, chaveCanonico } from '../canonical/canonicalCache';
+import { parsearEvidencia } from '../parser/parserDeterministico';
+import {
+  detectarConvencaoNumerica,
+  normalizarContainer,
+  normalizarLacre,
+  normalizarNcm,
+  normalizarNumeroCampo,
+} from '../parser/normalizadores';
+import { normalizarUnidade } from '../unidades';
+import {
+  Extracao,
+  ParteComRef,
+  PortasExtracao,
+  classificarPapel,
+  consolidarPorConhecimento,
+  extrairViaMistralCore,
+  modoExtracaoPb001,
+  montarOperacao,
+  preAlertaExigeGemini,
+  versaoPipelineDocPb001,
+} from './extracaoPreAlerta';
+import { executarPreAlerta } from './index';
+import { ContainerDoc, DocPreAlerta, Evidencia, MedidaDoc, Operacao } from './modelo';
+import { familiaV003 } from './v003Containers';
+import { familiaV004 } from './v004Volumes';
+import { familiaV005 } from './v005PesoBruto';
+import { familiaV007 } from './v007Cubagem';
+import { familiaV012 } from './v012Ncm';
+import { config } from '../../config';
+import { isAiConfigured } from '../../ai/geminiClient';
+import * as geminiClient from '../../ai/geminiClient';
+
+/* ------------------------------------------------------------------ *
+ * Fixtures sanitizadas
+ * ------------------------------------------------------------------ */
+
+const MBL_MD = `# BILL OF LADING
+
+| SHIPPER | B/L NO. |
+| --- | --- |
+| ACME EXPORT CO LTD<br>NO 1 ROAD, SHANGHAI | SHYY26075038 |
+| CONSIGNEE | BOOKING NO. |
+| ROCKET LOGISTICA E AGENCIAMENTO DE CARGAS S.A.<br>RUA EXEMPLO 100 | MEDU1234567 |
+
+PORT OF LOADING: SHANGHAI, CHINA
+PORT OF DISCHARGE: SANTOS, BRAZIL
+
+| CONTAINER NO. | SEAL NO. | NO. OF PKGS | GROSS WEIGHT (KGS) | NET WEIGHT (KGS) | MEASUREMENT |
+| --- | --- | --- | --- | --- | --- |
+| MSCU1234503 | ML1234567 | 600 CTNS | 9.000 | 8.500 | 28.000 CBM |
+| TGHU8765436 | ML7654321 | 600 CTNS | 9.500 | 9.000 | 28,500 CBM |
+| TOTAL | | 1200 CTNS | 18.500 | 17.500 | 56.500 CBM |
+
+NCM: 3926.90.90`;
+
+const HBL_A_MD = `# HOUSE BILL OF LADING
+HBL NO.: HVNSE2605034
+MASTER B/L NO.: SHYY26075038
+CONSIGNEE: BRA TRADE COMERCIAL LTDA
+PORT OF LOADING: SHANGHAI
+PORT OF DISCHARGE: SANTOS
+
+| CONTAINER | SEAL | PACKAGES | GROSS WEIGHT | NET WEIGHT | CBM |
+| --- | --- | --- | --- | --- | --- |
+| MSCU 123450-3 | ML1234567 | 600 CARTONS | 9000.00 KGS | 8500.00 KGS | 28 CBM |
+| TOTAL | | 600 CARTONS | 9000.00 KGS | 8500.00 KGS | 28 CBM |
+
+NCM: 39269090`;
+
+const HBL_B_MD = `# HOUSE BILL OF LADING
+HBL NO.: HVNSE2605035
+CONSIGNEE: OUTRO CLIENTE IMPORTADORA LTDA
+PORT OF LOADING: SHANGHAI
+PORT OF DISCHARGE: SANTOS
+
+| CONTAINER | SEAL | PACKAGES | GROSS WEIGHT | NET WEIGHT | CBM |
+| --- | --- | --- | --- | --- | --- |
+| TGHU8765436 | ML7654321 | 600 CTNS | 9.500,000 KGS | 9.000,000 KGS | 28,5 CBM |
+| TOTAL | | 600 CTNS | 9.500,000 KGS | 9.000,000 KGS | 28,5 CBM |
+
+NCM: 3926.90.90`;
+
+const MODEL = 'mistral-ocr-4-1';
+
+function fonte(paginas: string[], attachmentId = 'a1', nome = 'DOC.pdf', escopo = 'contaT', data?: string): SourceOcrEvidenceV1 {
+  const source: PaginaRef = { messageId: 'm1', attachmentId, nome };
+  const contentHash = data ? hashBytes(data) : `h-${attachmentId}`;
+  return {
+    schemaVersion: OCR_SOURCE_SCHEMA,
+    assinatura: assinaturaFonte({ escopo, source, contentHash, capturaVersao: 1 }),
+    source,
+    contentHash,
+    capturaVersao: 1,
+    usable: true,
+    provider: 'mistral',
+    model: MODEL,
+    capturedAt: '2026-01-01T00:00:00.000Z',
+    pagesProcessed: paginas.length,
+    docSizeBytes: 100,
+    durationMs: 1,
+    pages: paginas.map((markdown, i) => ({ pageIndex: i, markdown, dimensions: null })),
+  };
+}
+
+const grupo = (...fontes: SourceOcrEvidenceV1[]): OcrEvidenceV1 => comporGrupo('contaT', 'DOC.pdf', fontes);
+const parse = (...paginas: string[]): CanonicalDocumentV2 => parsearEvidencia(grupo(fonte(paginas)));
+const incerto = (f: { signals?: { uncertain?: boolean } }): boolean => !!f.signals?.uncertain;
+const sub = (evs: Evidencia[], s: string): Evidencia | undefined => evs.find((e) => e.subvalidacao === s);
+
+/** Portas falsas que CONTAM chamadas: Mistral e Gemini (o Gemini sempre "429"). */
+function portasContadas(store: Map<string, SourceOcrEvidenceV1>, parser?: PortasExtracao['parser']) {
+  const n = { ocr: 0, gemini: 0, parse: 0 };
+  const canon = new Map<string, CanonicalDocumentV2>();
+  const portas: PortasExtracao = {
+    ocr: async () => {
+      n.ocr++;
+      throw new Error('Mistral NÃO deveria ser chamado (evidência já guardada)');
+    },
+    estruturar: async (): Promise<Extracao> => {
+      n.gemini++;
+      throw new Error('got status: 429 RESOURCE_EXHAUSTED quota');
+    },
+    lerFonteEvidencia: async (s) => {
+      const ev = store.get(s);
+      return ev ? { ev, durable: true } : null;
+    },
+    gravarFonteEvidencia: async (ev) => ({ status: 'memory-only', evidence: ev }),
+    lerCanonico: async (k) => canon.get(k) ?? null,
+    gravarCanonico: async (k, d) => {
+      canon.set(k, d);
+    },
+    parser: parser ?? {
+      versao: PARSER_VERSION,
+      parse: (ev) => {
+        n.parse++;
+        return parsearEvidencia(ev);
+      },
+    },
+  };
+  return { portas, n, canon };
+}
+
+/** Parte (anexo) + evidência JÁ guardada no store (reuso do Mistral). */
+function parteComEvidencia(store: Map<string, SourceOcrEvidenceV1>, md: string, attachmentId: string, nome: string): ParteComRef {
+  const data = Buffer.from(`${nome}-${attachmentId}`).toString('base64');
+  const ev = fonte([md], attachmentId, nome, 'contaT', data);
+  store.set(ev.assinatura, ev);
+  return { data, mimeType: 'application/pdf', ref: ev.source };
+}
+
+/* ------------------------------------------------------------------ *
+ * 1–4 · Estrutura (BL, tabela de contêineres, múltiplos, multipágina)
+ * ------------------------------------------------------------------ */
+
+test('1 · BL por rótulo/valor; nº de MASTER (referência) não é o nº deste documento', () => {
+  const c = parse(HBL_A_MD);
+  assert.equal(c.identification.blNumber.normalizedValue, 'HVNSE2605034');
+  assert.equal(c.identification.blNumber.rawValue, 'HVNSE2605034');
+  const m = parse(MBL_MD);
+  assert.equal(m.identification.blNumber.normalizedValue, 'SHYY26075038'); // célula-rótulo → valor abaixo
+  // "BOOKING NO." com valor no formato de contêiner NÃO vira contêiner fantasma.
+  assert.deepEqual(m.containers.map((x) => x.number.normalizedValue), ['MSCU1234503', 'TGHU8765436']);
+});
+
+test('2 · tabela Markdown de contêineres: valores da LINHA pertencem àquele contêiner', () => {
+  const c = parse(MBL_MD);
+  const ct = c.containers[0];
+  assert.equal(ct.number.normalizedValue, 'MSCU1234503');
+  assert.equal(ct.seal.normalizedValue, 'ML1234567');
+  assert.equal(ct.grossWeight.normalizedValue, 9000);
+  assert.equal(ct.grossWeight.normalizedUnit, 'KG'); // unidade do cabeçalho "(KGS)"
+  assert.equal(ct.netWeight.normalizedValue, 8500);
+  assert.equal(ct.cubage.normalizedValue, 28);
+  assert.equal(ct.cubage.normalizedUnit, 'CBM');
+});
+
+test('3 · múltiplos contêineres: lacres/pesos não são pareados por posição global', () => {
+  const c = parse(MBL_MD);
+  const t = c.containers.find((x) => x.number.normalizedValue === 'TGHU8765436')!;
+  assert.equal(t.seal.normalizedValue, 'ML7654321');
+  assert.equal(t.grossWeight.normalizedValue, 9500);
+  assert.equal(t.cubage.normalizedValue, 28.5);
+  // Totais SÓ da linha TOTAL (nunca somados/derivados dos contêineres).
+  assert.equal(c.cargo.grossWeight.normalizedValue, 18500);
+  assert.match(c.cargo.grossWeight.normalizationRule ?? '', /linha-total-da-tabela/);
+});
+
+test('4 · multipágina/multianexo: cada campo aponta anexo + página exatos', () => {
+  const ev = grupo(
+    fonte(['B/L NO.: SHYY26075038'], 'anexoA', 'P1.jpg'),
+    fonte(['(continuação)', 'PORT OF LOADING: QINGDAO\nPORT OF DISCHARGE: SANTOS'], 'anexoB', 'P2.jpg'),
+  );
+  const c = parsearEvidencia(ev);
+  assert.deepEqual(c.identification.blNumber.evidencePageRef, { documentId: ev.documentId, attachmentId: 'anexoA', pageIndex: 0 });
+  assert.deepEqual(c.route.pol.evidencePageRef, { documentId: ev.documentId, attachmentId: 'anexoB', pageIndex: 1 });
+});
+
+/* ------------------------------------------------------------------ *
+ * 5–9 · Números e unidades (campo-cientes; sem conversão)
+ * ------------------------------------------------------------------ */
+
+test('5 · peso: formatos equivalentes do PB-001 (8000 = 8000.00 = 8.000,000 = 8.000 KG)', () => {
+  for (const s of ['8000', '8000.00', '8.000,000', '8.000']) {
+    assert.equal(normalizarNumeroCampo(s, 'peso', null).valor, 8000, s);
+  }
+  assert.equal(normalizarNumeroCampo('17.637', 'peso', null).valor, 17637); // "17.637 LB" do Blueprint
+  assert.equal(normalizarNumeroCampo('8.001', 'peso', null).valor, 8001); // ≠ 8.000 → divergência no motor
+  const o = normalizarNumeroCampo('2O000', 'peso', null); // O→0 em campo numérico
+  assert.equal(o.valor, 20000);
+  assert.match(o.regra ?? '', /O-para-0/);
+  // "X,ddd" de peso: sem convenção no documento → incerto (não chuta); com convenção → único.
+  assert.equal(normalizarNumeroCampo('8,000', 'peso', null).incerto, true);
+  assert.equal(normalizarNumeroCampo('8,000', 'peso', 'US').valor, 8000);
+  assert.equal(normalizarNumeroCampo('8,000', 'peso', 'BR').valor, 8);
+  assert.equal(detectarConvencaoNumerica('GROSS 18,500.000 KGS'), 'US');
+  assert.equal(detectarConvencaoNumerica('BRUTO 18.500,000 KG'), 'BR');
+  assert.equal(detectarConvencaoNumerica('18,500.000 e 18.500,000'), null);
+});
+
+test('6 · cubagem: formatos equivalentes do PB-001 (28 = 28.000 = 28,000 = 28.0; 28.5 = 28.500 = 28,500)', () => {
+  for (const s of ['28', '28.000', '28,000', '28.0']) assert.equal(normalizarNumeroCampo(s, 'cubagem', null).valor, 28, s);
+  for (const s of ['28.5', '28.500', '28,500', '28.5000']) assert.equal(normalizarNumeroCampo(s, 'cubagem', null).valor, 28.5, s);
+  assert.notEqual(normalizarNumeroCampo('28.000', 'cubagem', null).valor, 28000); // NUNCA 28000 CBM
+  assert.equal(normalizarNumeroCampo('12,5O', 'cubagem', null).valor, 12.5); // "12,5O CBM" → 12,50
+});
+
+function docU(tipo: 'MBL' | 'HBL', nome: string, cont: MedidaDoc | null, total: MedidaDoc | null): DocPreAlerta {
+  const c: ContainerDoc = {
+    numero: 'MSCU1234503', pesoBrutoKg: null, pesoLiquidoKg: null, cubagemM3: null, lacre: null, ncm: [],
+    leituraIncerta: [], medidas: { pesoBruto: cont, pesoLiquido: null, cubagem: null },
+  };
+  return {
+    tipo, nome, legivel: true, containers: [c],
+    pesoBrutoTotalKg: null, pesoLiquidoTotalKg: null, cubagemTotalM3: null,
+    qtdVolumesTotal: null, tipoVolume: null, descricaoMercadoria: null, ncm: [],
+    pol: null, pod: null, placeOfReceipt: null, placeOfDelivery: null, transbordos: [],
+    leituraIncerta: [], medidas: { pesoBrutoTotal: total, pesoLiquidoTotal: null, cubagemTotal: null },
+  };
+}
+const v005 = (m: DocPreAlerta, h: DocPreAlerta) => {
+  const op: Operacao = { processo: 'IMU', master: m, houses: [h] };
+  return familiaV005(op, familiaV003(op).relacoes).evidencias;
+};
+
+test('7 · unidades diferentes → Divergência (KG × LB), mesmo se equivalentes', () => {
+  const ev = v005(
+    docU('MBL', 'MBL', { valor: 8000, unidade: 'KG' }, { valor: 8000, unidade: 'KG' }),
+    docU('HBL', 'HBL', { valor: 17637, unidade: 'LB' }, { valor: 17637, unidade: 'LB' }),
+  );
+  assert.equal(sub(ev, 'V-005.1')?.resultado, 'Divergencia');
+  assert.match(sub(ev, 'V-005.1')?.motivo ?? '', /não converte/);
+  assert.equal(sub(ev, 'V-005.2')?.resultado, 'Divergencia');
+  // CBM × FT³ (V-007)
+  const m = docU('MBL', 'M', null, null);
+  const h = docU('HBL', 'H', null, null);
+  m.containers[0].medidas!.cubagem = { valor: 28.5, unidade: 'CBM' };
+  h.containers[0].medidas!.cubagem = { valor: 1006.47, unidade: 'CFT' };
+  const op: Operacao = { processo: 'IMC', master: m, houses: [h] };
+  assert.equal(sub(familiaV007(op, familiaV003(op).relacoes).evidencias, 'V-007.1')?.resultado, 'Divergencia');
+});
+
+test('8 · mesma unidade → comparação numérica (zero tolerância), inclusive em LB', () => {
+  const igual = v005(docU('MBL', 'M', { valor: 17637, unidade: 'LB' }, null), docU('HBL', 'H', { valor: 17637, unidade: 'LB' }, null));
+  assert.equal(sub(igual, 'V-005.1')?.resultado, 'Consistente');
+  const dif = v005(docU('MBL', 'M', { valor: 8000, unidade: 'KG' }, null), docU('HBL', 'H', { valor: 8001, unidade: 'KG' }, null));
+  assert.equal(sub(dif, 'V-005.1')?.resultado, 'Divergencia');
+  // unidade ausente/incerta → Validação Humana (nunca presumida KG)
+  const semU = v005(docU('MBL', 'M', { valor: 8000, unidade: null }, null), docU('HBL', 'H', { valor: 8000, unidade: 'KG' }, null));
+  assert.equal(sub(semU, 'V-005.1')?.resultado, 'ValidacaoHumana');
+});
+
+test('9 · sem conversão automática: LB fica LB no canônico e NUNCA entra no campo *Kg', () => {
+  const c = parse('B/L NO.: SHYY26075038\nCONTAINER: MSCU1234503\nGROSS WEIGHT: 17.637 LBS');
+  assert.equal(c.cargo.grossWeight.normalizedValue, 17637);
+  assert.equal(c.cargo.grossWeight.normalizedUnit, 'LB');
+  assert.equal(c.cargo.grossWeight.rawUnit, 'LBS');
+  const { doc } = canonicalParaDocPreAlerta(c, 'H.pdf', 'HBL');
+  assert.equal(doc.pesoBrutoTotalKg, null); // não rotula LB como KG
+  assert.deepEqual(doc.medidas?.pesoBrutoTotal, { valor: 17637, unidade: 'LB' });
+  assert.equal(normalizarUnidade('LBS').unidade, 'LB');
+  assert.equal(normalizarUnidade('MT').unidade, null); // tonelada: fora da tabela aprovada → incerto
+});
+
+/* ------------------------------------------------------------------ *
+ * 10–15 · NCM, contêiner, lacre
+ * ------------------------------------------------------------------ */
+
+test('10 · NCM "36O6": bruto preservado + normalizado 3606 com regra explícita (nunca 366)', () => {
+  const c = parse('B/L NO.: SHYY26075038\nNCM: 36O6');
+  const n = c.cargo.ncm[0];
+  assert.equal(n.rawValue, '36O6');
+  assert.equal(n.normalizedValue, '3606');
+  assert.match(n.normalizationRule ?? '', /ncm\.O-para-0/);
+  assert.equal(normalizarNcm('3606.10.00').valor, '36061000');
+  assert.notEqual(normalizarNcm('36O6').valor, '366');
+});
+
+test('11 · NCM ambíguo → incerto (e V-012 vai a Validação Humana)', () => {
+  assert.equal(normalizarNcm('39269?90').incerto, true);
+  assert.equal(normalizarNcm('3926I090').incerto, true); // só O→0 é aprovado
+  assert.equal(normalizarNcm('3926909').incerto, true); // 7 dígitos
+  const c = parse('B/L NO.: SHYY26075038\nNCM: 39269?90');
+  assert.equal(incerto(c.cargo.ncm[0]), true);
+  const { doc } = canonicalParaDocPreAlerta(c, 'H', 'HBL');
+  assert.ok(doc.leituraIncerta?.includes('ncm'));
+  assert.deepEqual(doc.ncm, []); // código incerto não vira código "certo"
+  const master = { ...doc, tipo: 'MBL' as const, leituraIncerta: [], ncm: ['39269090'] };
+  const r = familiaV012({ processo: 'IMN', master, houses: [doc] });
+  assert.equal(r.resultado, 'ValidacaoHumana');
+});
+
+test('12 · contêiner exato', () => {
+  const l = normalizarContainer('MSCU1234503');
+  assert.equal(l.valor, 'MSCU1234503');
+  assert.equal(l.regra, 'container.exato');
+});
+
+test('13 · contêiner: normalização segura e ÚNICA (formatação; O/0 por posição + dígito verificador)', () => {
+  assert.equal(normalizarContainer('mscu 123450-3').valor, 'MSCU1234503');
+  const o = normalizarContainer('OOLU1OO2005'); // "O" em posição de dígito → 0 (Blueprint: MSCU12345O7)
+  assert.equal(o.valor, 'OOLU1002005');
+  assert.match(o.regra ?? '', /posicional-O\/0\+iso6346-dv-confere/);
+});
+
+test('14 · contêiner ambíguo → incerto (sem fuzzy; sem forçar igualdade)', () => {
+  assert.equal(normalizarContainer('MSCU1234S03').incerto, true); // S em posição de dígito (par não aprovado)
+  assert.equal(normalizarContainer('MSCU1234509').incerto, true); // dígito verificador não confere
+  const c = parse('CONTAINER: MSCU1234S03');
+  assert.equal(incerto(c.containers[0].number), true);
+  const { doc } = canonicalParaDocPreAlerta(c, 'H', 'HBL');
+  assert.ok(doc.containers[0].leituraIncerta?.includes('numero'));
+});
+
+test('15 · lacre ambíguo → incerto (nunca repara O↔0, I↔1, S↔5)', () => {
+  assert.equal(normalizarLacre('ML1234567').valor, 'ML1234567');
+  const a = normalizarLacre('ML12O4567');
+  assert.equal(a.incerto, true);
+  assert.equal(a.valor, null); // não "corrige" para ML1204567
+  const c = parse('CONTAINER: MSCU1234503 SEAL: ML12O4567');
+  assert.equal(incerto(c.containers[0].seal), true);
+});
+
+/* ------------------------------------------------------------------ *
+ * 16–20 · Volumes, ausência, conflito, proveniência
+ * ------------------------------------------------------------------ */
+
+test('16 · sinônimo de pacote APROVADO (CTNS ≡ CARTONS)', () => {
+  const c = parse(MBL_MD);
+  assert.equal(c.cargo.packageType.normalizedValue, 'CARTON');
+  assert.match(c.cargo.packageType.normalizationRule ?? '', /sinonimo-aprovado\(CTNS→CARTON\)/);
+  const { doc: m } = canonicalParaDocPreAlerta(c, 'M', 'MBL');
+  const { doc: h } = canonicalParaDocPreAlerta(parse(HBL_A_MD), 'H', 'HBL');
+  assert.equal(m.tipoVolume, 'CTNS'); // o motor recebe a grafia impressa
+  assert.equal(h.tipoVolume, 'CARTONS');
+  assert.equal(sub(familiaV004({ processo: 'IMV', master: m, houses: [{ ...h, qtdVolumesTotal: 1200 }] }).evidencias, 'V-004.2')?.resultado, 'Consistente');
+});
+
+test('17 · equivalência desconhecida NÃO é forçada (BOXES × CAJAS → confirmar)', () => {
+  const c = parse('B/L NO.: SHYY26075038\nTOTAL PACKAGES: 10 CAJAS');
+  assert.equal(c.cargo.packageType.normalizedValue, 'CAJAS');
+  assert.match(c.cargo.packageType.normalizationRule ?? '', /sem-equivalencia-aprovada/);
+  const { doc: h } = canonicalParaDocPreAlerta(c, 'H', 'HBL');
+  const m = { ...h, tipo: 'MBL' as const, tipoVolume: 'BOXES' };
+  assert.equal(sub(familiaV004({ processo: 'IMV', master: m, houses: [h] }).evidencias, 'V-004.2')?.resultado, 'ValidacaoHumana');
+});
+
+test('18 · campo ausente → nada inventado (sem peso líquido no documento)', () => {
+  const c = parse('B/L NO.: SHYY26075038\nGROSS WEIGHT: 8000 KGS');
+  assert.equal(c.cargo.netWeight.rawValue, null);
+  assert.equal(c.cargo.netWeight.normalizedValue, null);
+  assert.equal(c.cargo.netWeight.extractionMethod, 'pending');
+  const { doc } = canonicalParaDocPreAlerta(c, 'H', 'HBL');
+  assert.equal(doc.pesoLiquidoTotalKg, null);
+  assert.equal(doc.medidas?.pesoLiquidoTotal, null);
+  assert.ok(!doc.leituraIncerta?.includes('pesoLiquidoTotalKg')); // ausente ≠ incerto
+});
+
+test('19 · campo duplicado CONFLITANTE → incerto com candidatos (sem escolher)', () => {
+  const c = parsearEvidencia(grupo(fonte(['B/L NO.: AAA1111111']), fonte(['B/L NO.: BBB2222222\nPORT OF LOADING: QINGDAO\nPOL: NINGBO'], 'a2')));
+  assert.equal(incerto(c.identification.blNumber), true);
+  assert.deepEqual(c.identification.blNumber.signals?.candidates, ['AAA1111111', 'BBB2222222']);
+  assert.equal(incerto(c.route.pol), true);
+  const { doc } = canonicalParaDocPreAlerta(c, 'H', 'HBL');
+  assert.equal(doc.conhecimentoNumero, null); // identidade incerta não é usada
+  assert.ok(doc.leituraIncerta?.includes('pol'));
+});
+
+test('20 · proveniência canônica exata (método, provedor, modelo, página)', () => {
+  const ev = grupo(fonte([MBL_MD], 'anexoMBL', 'MBL.pdf'));
+  const c = parsearEvidencia(ev);
+  assert.equal(c.schemaVersion, CANONICAL_DOC_SCHEMA);
+  assert.equal(c.schemaVersion, 'canonical-doc/v2');
+  assert.equal(c.parserVersion, 'parser/v1');
+  assert.equal(c.ocrAssinatura, ev.assinatura);
+  const f = c.containers[0].grossWeight;
+  assert.equal(f.extractionMethod, 'deterministic');
+  assert.equal(f.provider, 'mistral');
+  assert.equal(f.model, MODEL);
+  assert.equal(f.sourceDocumentId, ev.documentId);
+  assert.deepEqual(f.evidencePageRef, { documentId: ev.documentId, attachmentId: 'anexoMBL', pageIndex: 0 });
+  assert.equal(Object.prototype.hasOwnProperty.call(c, 'rawText'), false); // não duplica o OCR
+});
+
+/* ------------------------------------------------------------------ *
+ * 21–24 · Cache canônico e ZERO Gemini
+ * ------------------------------------------------------------------ */
+
+test('21 · nova versão do parser → re-parse do OCR guardado, ZERO chamada ao Mistral', async () => {
+  const store = new Map<string, SourceOcrEvidenceV1>();
+  const parte = parteComEvidencia(store, MBL_MD, 'a1', 'MBL.pdf');
+  const v1 = portasContadas(store);
+  const r1 = await extrairViaMistralCore([parte], 'MBL', 'MBL.pdf', { escopo: 'contaT', modo: 'deterministico' }, v1.portas);
+  assert.equal(r1.canonicalDeCache, false);
+  const r1b = await extrairViaMistralCore([parte], 'MBL', 'MBL.pdf', { escopo: 'contaT', modo: 'deterministico' }, v1.portas);
+  assert.equal(r1b.canonicalDeCache, true); // mesmo parser → canônico do cache
+  assert.equal(v1.n.parse, 1);
+  // "Bump" do parser: chave nova; reusa a MESMA evidência de OCR.
+  let parses2 = 0;
+  const v2 = portasContadas(store, { versao: 'parser/v1-bump-teste', parse: (ev) => (parses2++, parsearEvidencia(ev)) });
+  for (const [k, d] of v1.canon) v2.canon.set(k, d); // mesmo store do canônico
+  const r2 = await extrairViaMistralCore([parte], 'MBL', 'MBL.pdf', { escopo: 'contaT', modo: 'deterministico' }, v2.portas);
+  assert.equal(r2.canonicalDeCache, false);
+  assert.equal(parses2, 1);
+  assert.equal(v1.n.ocr + v2.n.ocr, 0); // ZERO Mistral
+  assert.ok(v2.canon.has(chaveCanonico(r2.ocrAssinatura!, 'parser/v1-bump-teste')));
+  assert.ok(v2.canon.has(chaveCanonico(r2.ocrAssinatura!, PARSER_VERSION))); // versões coexistem
+});
+
+test('22 · contagem de chamadas ao Gemini = ZERO (porta E cliente real instrumentado)', async () => {
+  const gc = geminiClient as unknown as Record<string, unknown>;
+  const nomes = ['generateStructured', 'generateStructuredFromDocument', 'generateStructuredFromDocuments'];
+  const originais = nomes.map((k) => gc[k]);
+  let chamadas = 0;
+  nomes.forEach((k) => {
+    gc[k] = () => {
+      chamadas++;
+      throw new Error('Gemini NÃO deveria ser chamado');
+    };
+  });
+  _limparMemoriaEvidencia();
+  _limparMemoriaCanonico();
+  try {
+    // CONTROLE: a instrumentação intercepta o caminho REAL — o modo legado (portas
+    // reais) chama o Gemini 1x. Prova que a contagem abaixo não é vazia.
+    const data = Buffer.from('controle').toString('base64');
+    const evC = fonte([MBL_MD], 'aCtl', 'MBL.pdf', 'contaCtl', data);
+    _seedFonteEvidencia(evC, true);
+    const parteC: ParteComRef = { data, mimeType: 'application/pdf', ref: evC.source };
+    const leg = await extrairViaMistralCore([parteC], 'MBL', 'MBL.pdf', { escopo: 'contaCtl', modo: 'legado' });
+    assert.equal(chamadas, 1);
+    assert.equal(leg.erroFonte, 'gemini-estruturacao');
+    chamadas = 0;
+    // MESMAS portas reais, modo determinístico → nenhuma chamada.
+    const det = await extrairViaMistralCore([parteC], 'MBL', 'MBL.pdf', { escopo: 'contaCtl', modo: 'deterministico' });
+    assert.ok(det.doc);
+    assert.equal(chamadas, 0);
+
+    const store = new Map<string, SourceOcrEvidenceV1>();
+    const { portas, n } = portasContadas(store);
+    for (const [md, a, nome] of [[MBL_MD, 'a1', 'MBL.pdf'], [HBL_A_MD, 'a2', 'HBL-A.pdf'], [HBL_B_MD, 'a3', 'HBL-B.pdf']]) {
+      const r = await extrairViaMistralCore([parteComEvidencia(store, md, a, nome)], 'MBL', nome, { escopo: 'contaT', modo: 'deterministico' }, portas);
+      assert.ok(r.doc);
+    }
+    assert.equal(n.gemini, 0);
+    assert.equal(chamadas, 0);
+  } finally {
+    nomes.forEach((k, i) => {
+      gc[k] = originais[i];
+    });
+    _limparMemoriaEvidencia();
+    _limparMemoriaCanonico();
+  }
+});
+
+test('23 · Gemini NÃO configurado → caminho determinístico funciona (portas REAIS, sem rede)', async () => {
+  const chave = config.ai.apiKey;
+  (config.ai as { apiKey: string }).apiKey = '';
+  _limparMemoriaEvidencia();
+  _limparMemoriaCanonico();
+  try {
+    assert.equal(isAiConfigured(), false);
+    const data = Buffer.from('MBL-real').toString('base64');
+    const ev = fonte([MBL_MD], 'aReal', 'MBL.pdf', 'contaReal', data);
+    _seedFonteEvidencia(ev, true); // OCR já guardado → Mistral NÃO é chamado
+    const r = await extrairViaMistralCore([{ data, mimeType: 'application/pdf', ref: ev.source }], 'MBL', 'MBL.pdf', {
+      escopo: 'contaReal',
+      modo: 'deterministico',
+    });
+    assert.equal(r.erro, null);
+    assert.equal(r.erroFonte, null);
+    assert.equal(r.doc?.conhecimentoNumero, 'SHYY26075038');
+    // Rota: com Mistral + parser, o PB-001 não exige o Gemini.
+    assert.equal(preAlertaExigeGemini({ mistralLigado: true, modo: 'deterministico' }), false);
+    assert.equal(preAlertaExigeGemini({ mistralLigado: false, modo: 'deterministico' }), true);
+    assert.equal(preAlertaExigeGemini({ mistralLigado: true, modo: 'legado' }), true);
+  } finally {
+    (config.ai as { apiKey: string }).apiKey = chave;
+    _limparMemoriaEvidencia();
+    _limparMemoriaCanonico();
+  }
+});
+
+test('24 · Gemini 429 → caminho determinístico funciona; doc incompleto NÃO vai ao Gemini', async () => {
+  const store = new Map<string, SourceOcrEvidenceV1>();
+  const { portas, n } = portasContadas(store);
+  const r = await extrairViaMistralCore([parteComEvidencia(store, HBL_A_MD, 'a2', 'HBL-A.pdf')], 'HBL', 'HBL-A.pdf',
+    { escopo: 'contaT', modo: 'deterministico' }, portas);
+  assert.ok(r.doc);
+  assert.equal(r.erroFonte, null);
+  assert.equal(r.estruturacaoPendente, false);
+  // Documento INCOMPLETO (sem nº de BL, sem pesos): segue legível, ZERO Gemini.
+  const r2 = await extrairViaMistralCore([parteComEvidencia(store, 'PORT OF LOADING: NINGBO', 'a9', 'X.pdf')], 'HBL', 'X.pdf',
+    { escopo: 'contaT', modo: 'deterministico' }, portas);
+  assert.equal(r2.doc?.legivel, true); // OCR utilizável ≠ ilegível por campo ausente
+  assert.equal(r2.doc?.conhecimentoNumero, null);
+  assert.equal(r2.doc?.pol, 'NINGBO');
+  assert.equal(n.gemini, 0);
+  // Rollback legado: flag padrão FALSE.
+  assert.equal(config.pb001.geminiLegacyStructuringFallbackEnabled, false);
+  assert.equal(modoExtracaoPb001(), 'deterministico');
+});
+
+/* ------------------------------------------------------------------ *
+ * 25 + ACEITAÇÃO PRIMÁRIA
+ * ------------------------------------------------------------------ */
+
+test('25 + ACEITAÇÃO · evidência reusada → parser → canônico → adaptador → PB-001 (V-003…V-012), Gemini = 0', async () => {
+  const store = new Map<string, SourceOcrEvidenceV1>();
+  const { portas, n } = portasContadas(store);
+  const docs: DocPreAlerta[] = [];
+  for (const [md, a, nome] of [[MBL_MD, 'a1', 'MBL.pdf'], [HBL_A_MD, 'a2', 'HBL-A.pdf'], [HBL_B_MD, 'a3', 'HBL-B.pdf']]) {
+    const r = await extrairViaMistralCore([parteComEvidencia(store, md, a, nome)], 'MBL', nome, { escopo: 'contaT', modo: 'deterministico' }, portas);
+    assert.ok(r.canonical); // CanonicalDocument produzido
+    assert.equal(r.modo, 'deterministico');
+    // Classificador ATUAL (precedência inalterada) recebe evidência determinística.
+    const cls = classificarPapel({
+      temMBL: false, temHBL: false, tipoDetectado: r.tipoDetectado, nome,
+      legivel: r.doc!.legivel, qtdContainers: r.doc!.containers.length,
+      consignee: r.doc!.consignee, numeroDoc: r.doc!.conhecimentoNumero,
+    });
+    assert.ok(cls);
+    docs.push({ ...r.doc!, tipo: cls!.tipo, papelConfiavel: cls!.papelConfiavel });
+  }
+  assert.deepEqual(docs.map((d) => d.tipo), ['MBL', 'HBL', 'HBL']); // Rocket → Master (regra existente)
+  const op = montarOperacao('IM0001-26', consolidarPorConhecimento(docs));
+  const res = executarPreAlerta(op);
+  const familias = Object.fromEntries(res.familias.map((f) => [f.familia, f.resultado]));
+  for (const f of ['V-003', 'V-004', 'V-005', 'V-006', 'V-007', 'V-008', 'V-009', 'V-012']) {
+    assert.equal(familias[f], 'Consistente', f);
+  }
+  assert.equal(n.ocr, 0); // evidência do Mistral REUSADA
+  assert.equal(n.gemini, 0); // ZERO Gemini
+});
+
+/* ------------------------------------------------------------------ *
+ * Encanamento do motor (incerteza por campo) e consolidação
+ * ------------------------------------------------------------------ */
+
+test('motor · incerteza: V-003 sobra incerta, V-004.1 e total de V-005 → Validação Humana (nunca divergência)', () => {
+  const ct = (numero: string, inc: string[] = []): ContainerDoc => ({
+    numero, pesoBrutoKg: null, pesoLiquidoKg: null, cubagemM3: null, lacre: null, ncm: [], leituraIncerta: inc,
+  });
+  const base = docU('MBL', 'M', null, null);
+  const m: DocPreAlerta = { ...base, containers: [ct('MSCU1234503'), ct('TGHU8765436')] };
+  const h: DocPreAlerta = { ...docU('HBL', 'H', null, null), containers: [ct('MSCU1234S03', ['numero']), ct('FANU1234566')] };
+  const op3: Operacao = { processo: 'IMI', master: m, houses: [h] };
+  const v3 = familiaV003(op3).familia.evidencias.filter((e) => e.subvalidacao === 'V-003.1');
+  assert.ok(v3.length > 0 && v3.every((e) => e.resultado === 'ValidacaoHumana'));
+  const v4 = familiaV004({ processo: 'IMQ', master: { ...m, qtdVolumesTotal: 1200 }, houses: [{ ...h, qtdVolumesTotal: null, leituraIncerta: ['qtdVolumesTotal'] }] });
+  assert.equal(sub(v4.evidencias, 'V-004.1')?.resultado, 'ValidacaoHumana');
+  const v5 = v005(
+    docU('MBL', 'M', null, { valor: 8000, unidade: 'KG' }),
+    docU('HBL', 'H', null, { valor: null, unidade: null, incerta: true }),
+  );
+  assert.equal(sub(v5, 'V-005.2')?.resultado, 'ValidacaoHumana');
+});
+
+test('consolidação · páginas do mesmo BL em arquivos separados mantêm medidas e incertezas', () => {
+  const a = canonicalParaDocPreAlerta(parse('B/L NO.: SHYY26075038\nPORT OF LOADING: SHANGHAI'), 'P1', 'MBL').doc;
+  const b = canonicalParaDocPreAlerta(parse('B/L NO.: SHYY26075038\nGROSS WEIGHT: 17.637 LBS\nNET WEIGHT: 8,000 KGS'), 'P2', 'MBL').doc;
+  const [unido] = consolidarPorConhecimento([a, b]);
+  assert.deepEqual(unido.medidas?.pesoBrutoTotal, { valor: 17637, unidade: 'LB' });
+  assert.ok(unido.leituraIncerta?.includes('pesoLiquidoTotalKg')); // "8,000" sem convenção
+});
+
+test('título · DEBIT NOTE → tipoDetectado OUTRO (classificador não o trata como House)', () => {
+  const c = parse('# DEBIT NOTE\nB/L NO.: SHYY26075038\nCONSIGNEE: ACME COMERCIAL LTDA\nCONTAINER: MSCU1234503');
+  const { tipoDetectado, doc } = canonicalParaDocPreAlerta(c, 'doc1.pdf', 'HBL');
+  assert.equal(tipoDetectado, 'OUTRO');
+  const cls = classificarPapel({
+    temMBL: false, temHBL: false, tipoDetectado, nome: 'doc1.pdf', legivel: doc.legivel,
+    qtdContainers: doc.containers.length, consignee: doc.consignee, numeroDoc: doc.conhecimentoNumero,
+  });
+  assert.equal(cls, null);
+});
+
+test('cache · sem escopo de conta o canônico NÃO é lido nem gravado (fail closed), mas o doc é produzido', async () => {
+  const store = new Map<string, SourceOcrEvidenceV1>();
+  const { portas, canon, n } = portasContadas(store);
+  const data = Buffer.from('sem-escopo').toString('base64');
+  const r = await extrairViaMistralCore(
+    [{ data, mimeType: 'application/pdf', ref: { messageId: 'm1', attachmentId: 'aX', nome: 'MBL.pdf' } }],
+    'MBL', 'MBL.pdf', { escopo: '', modo: 'deterministico' },
+    { ...portas, ocr: async () => ({ ok: true, provider: 'mistral', model: MODEL, pages: [{ index: 0, markdown: MBL_MD, dimensions: null, images: [] }], pagesProcessed: 1, docSizeBytes: 1, durationMs: 1, error: null }) },
+  );
+  assert.equal(r.doc?.conhecimentoNumero, 'SHYY26075038');
+  assert.equal(r.persistenceStatus, 'no-scope');
+  assert.equal(canon.size, 0); // nenhum canônico sob chave compartilhada
+  assert.equal(n.gemini, 0);
+});
+
+test('cache · versão do pipeline separa documento determinístico × legado (PB-002 inalterado)', () => {
+  assert.equal(versaoPipelineDocPb001({ mistralLigado: true, modo: 'legado' }), undefined);
+  assert.equal(versaoPipelineDocPb001({ mistralLigado: false, modo: 'deterministico' }), undefined);
+  assert.match(versaoPipelineDocPb001({ mistralLigado: true, modo: 'deterministico' }) ?? '', /^det\|parser\/v1\|canonical-doc\/v2\|adapter-docprealerta\/v1$/);
+});

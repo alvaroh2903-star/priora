@@ -61,10 +61,19 @@ export function familiaV012(op: Operacao): ResultadoFamilia {
     { doc: 'Houses', valor: ncmHouses.join(', ') || '—' },
   ];
 
+  // NCM com leitura INCERTA (ex.: "39269?90") não entra no conjunto e impede
+  // conclusão automática (o código incerto pode ser justamente o que "falta").
+  const incM = (master.leituraIncerta ?? []).includes('ncm');
+  const incH = op.houses.some((h) => (h.leituraIncerta ?? []).includes('ncm'));
+  const motivoIncerto = 'Há NCM com leitura incerta — confirmar no documento (correspondência não concluída automaticamente).';
+
   // V-012.1 Existência.
   if (ncmMaster.length === 0 || ncmHouses.length === 0) {
-    ev.push(mk('V-012.1', 'Existência dos NCMs', 'NaoAvaliada', 'Critica', val, 'Nenhum NCM localizado em um dos lados — comparação não avaliada.'));
-    ev.push(mk('V-012.2', 'Correspondência dos NCMs', 'NaoAvaliada', 'Critica', val, 'Correspondência não avaliada — existência não confirmada.'));
+    const ladoIncerto = (ncmMaster.length === 0 && incM) || (ncmHouses.length === 0 && incH);
+    ev.push(mk('V-012.1', 'Existência dos NCMs', ladoIncerto ? 'ValidacaoHumana' : 'NaoAvaliada', 'Critica', val,
+      ladoIncerto ? motivoIncerto : 'Nenhum NCM localizado em um dos lados — comparação não avaliada.'));
+    ev.push(mk('V-012.2', 'Correspondência dos NCMs', ladoIncerto ? 'ValidacaoHumana' : 'NaoAvaliada', 'Critica', val,
+      ladoIncerto ? motivoIncerto : 'Correspondência não avaliada — existência não confirmada.'));
     const r0 = consolidar(ev.map((e) => e.resultado));
     ev.push(mk('V-012.4', 'Consistência do NCM (documental)', r0, 'Critica', [], `Consolidação documental da Família V-012: ${r0}.`));
     return { familia: 'V-012', resultado: r0, evidencias: ev };
@@ -74,7 +83,9 @@ export function familiaV012(op: Operacao): ResultadoFamilia {
   // V-012.2 Correspondência (menor nível de dígitos comum; ordem irrelevante).
   const semParNoHouse = ncmMaster.filter((a) => !ncmHouses.some((b) => ncmCompativeis(a, b)));
   const semParNoMaster = ncmHouses.filter((b) => !ncmMaster.some((a) => ncmCompativeis(a, b)));
-  if (semParNoHouse.length === 0 && semParNoMaster.length === 0) {
+  if (incM || incH) {
+    ev.push(mk('V-012.2', 'Correspondência dos NCMs', 'ValidacaoHumana', 'Critica', val, motivoIncerto));
+  } else if (semParNoHouse.length === 0 && semParNoMaster.length === 0) {
     ev.push(mk('V-012.2', 'Correspondência dos NCMs', 'Consistente', 'Critica', val, 'Todos os NCMs correspondem (no menor nível de dígitos comum).'));
   } else {
     const partes: string[] = [];

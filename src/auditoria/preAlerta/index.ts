@@ -33,6 +33,13 @@ export { familiaV008 } from './v008Lacres';
 export { familiaV009 } from './v009Portos';
 export { familiaV012 } from './v012Ncm';
 
+/**
+ * Versão do MOTOR (regras/encanamento do PB-001). Entra na chave do cache de
+ * RESULTADO: mudou o motor → recompara a partir dos documentos já extraídos
+ * (zero OCR). v2 = unidades explícitas (V-005/006/007) + incerteza por campo.
+ */
+export const MOTOR_PB001_VERSAO = 'motor/v2-unidades-incerteza' as const;
+
 export interface ResultadoPreAlerta {
   processo: string;
   familias: ResultadoFamilia[];

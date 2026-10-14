@@ -33,13 +33,19 @@ export interface PaginaRef {
   nome: string;
 }
 
-/** Assinatura estável de um grupo de páginas (independe da ordem). */
-export function chaveOcr(escopo: string, paginas: PaginaRef[]): string {
+/**
+ * Assinatura estável de um grupo de páginas (independe da ordem). Este cache
+ * guarda o DOCUMENTO DERIVADO (DocPreAlerta), não o OCR bruto. `versaoPipeline`
+ * (opcional) separa documentos produzidos por pipelines diferentes (ex.: parser
+ * determinístico × estruturação legada) — sem ela, a chave é a legada (inalterada).
+ */
+export function chaveOcr(escopo: string, paginas: PaginaRef[], versaoPipeline?: string): string {
   const base = paginas
     .map((p) => `${p.messageId}::${p.attachmentId}::${p.nome}`)
     .sort()
     .join('|');
-  return crypto.createHash('sha256').update(`${OCR_VERSAO}\n${escopo}\n${base}`).digest('hex');
+  const versao = versaoPipeline ? `${OCR_VERSAO}|${versaoPipeline}` : OCR_VERSAO;
+  return crypto.createHash('sha256').update(`${versao}\n${escopo}\n${base}`).digest('hex');
 }
 
 /** Lê o resultado do OCR do cache. null = miss (ou Supabase indisponível). */
