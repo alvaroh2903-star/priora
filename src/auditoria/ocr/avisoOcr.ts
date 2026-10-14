@@ -58,8 +58,7 @@ export function avisoDeErroOCR(erro: string | null | undefined, fonte?: ErroFont
       ? AVISO_LIMITE_IA
       : `Estruturação (Gemini) indisponível (NÃO é teto de gastos): ${corta(erro)}`;
   }
-  // Sem fonte conhecida: cai na heurística por texto (comportamento anterior).
-  return ehLimiteIA(erro)
-    ? AVISO_LIMITE_IA
-    : `A IA (Gemini) recusou a leitura (NÃO é teto de gastos): ${corta(erro)}`;
+  // FONTE DESCONHECIDA = desconhecida. NÃO culpar o Gemini nem o Mistral: mensagem
+  // NEUTRA (a causa pode estar em qualquer etapa — download, OCR, estruturação).
+  return `Falha na leitura/estruturação documental: ${corta(erro)}`;
 }

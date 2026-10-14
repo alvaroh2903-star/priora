@@ -1,25 +1,28 @@
 /**
- * Fase 1 (deterministic-first) — regressões do contrato de evidência de OCR.
- * Cobrem: sobrevivência à queda do Gemini, reuso sem re-OCR, atribuição de erro
- * por FONTE, escopo de conta, proveniência por página, status de durabilidade,
- * hash de conteúdo × identidade de origem, identidade estável do documento, e a
- * forma do CanonicalDocument (participantes donos dos IDs fiscais, sem duplicar OCR).
+ * Fase 1 (deterministic-first) — regressões do contrato de evidência de OCR
+ * (revisão final). Cobrem: sobrevivência à queda do Gemini; reuso POR ANEXO sem
+ * re-OCR; sucesso de um anexo sobrevive à falha de outro; OCR vazio não envenena;
+ * escopo de conta obrigatório (sem 'mvp' compartilhado); imutabilidade (no-overwrite)
+ * + coexistência de re-OCR controlado; durabilidade preservada na memória; hash de
+ * conteúdo só-bytes; erro de fonte desconhecida neutro; e a forma do CanonicalDocument.
  * Runner nativo (node:test), sem rede. Rode: npm test
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  OCR_EVIDENCE_SCHEMA,
-  OcrEvidenceV1,
+  OCR_SOURCE_SCHEMA,
   PaginaRef,
   PersistenceStatus,
+  SourceOcrEvidenceV1,
+  SourceOcrPage,
   _limparMemoriaEvidencia,
-  assinaturaEvidencia,
-  gravarEvidencia,
-  grupoId,
-  hashConteudo,
-  lerEvidencia,
+  _seedFonteEvidencia,
+  assinaturaFonte,
+  comporGrupo,
+  gravarFonteEvidencia,
+  hashBytes,
+  lerFonteEvidencia,
   resumoSeguroEvidencia,
   textoBrutoDaEvidencia,
 } from '../ocr/ocrEvidence';
@@ -30,19 +33,23 @@ import { MistralOcrResultado } from '../../ai/mistralOcrClient';
 
 const REF1: PaginaRef = { messageId: 'm1', attachmentId: 'a1', nome: 'MBL.pdf' };
 const REF2: PaginaRef = { messageId: 'm1', attachmentId: 'a2', nome: 'MBL-2.pdf' };
-const PARTES: ParteComRef[] = [{ data: 'ZmFrZQ==', mimeType: 'application/pdf', ref: REF1 }];
+const DADO_A = 'QUFB'; // "AAA"
+const DADO_B = 'QkJC'; // "BBB"
+const PARTES: ParteComRef[] = [{ data: DADO_A, mimeType: 'application/pdf', ref: REF1 }];
 const CTX = { escopo: 'contaA' };
 
-function ocrOk(markdown = 'B/L No: ONEYABC123456\nContainer: BMOU9784013\nSeal: ML123'): MistralOcrResultado {
+function ocrOk(markdown = 'B/L No: ONEYABC123456\nSeal: ML123'): MistralOcrResultado {
   return {
     ok: true, provider: 'mistral', model: 'mistral-ocr-4-1',
     pages: [{ index: 0, markdown, dimensions: null, images: [] }],
     pagesProcessed: 1, docSizeBytes: 100, durationMs: 3, error: null,
   };
 }
+const ocrFail = (): MistralOcrResultado => ({ ...ocrOk(), ok: false, pages: [], error: '[429] rate limit' });
+const ocrVazio = (): MistralOcrResultado => ocrOk('   '); // ok=true mas sem texto útil
 function aiOk(over: Partial<Extracao> = {}): Extracao {
   return {
-    legivel: true, tipoDetectado: 'MBL', conhecimentoNumero: 'ONEYABC123456', consignee: 'ROCKET LOGISTICA',
+    legivel: true, tipoDetectado: 'MBL', conhecimentoNumero: 'ONEYABC123456', consignee: 'ROCKET',
     pol: null, pod: null, placeOfReceipt: null, placeOfDelivery: null, transbordos: [],
     pesoBrutoTotalKg: null, pesoLiquidoTotalKg: null, cubagemTotalM3: null,
     qtdVolumesTotal: null, tipoVolume: null, descricaoMercadoria: null, ncm: [],
@@ -50,48 +57,54 @@ function aiOk(over: Partial<Extracao> = {}): Extracao {
     ...over,
   };
 }
-function mkEv(over: Partial<OcrEvidenceV1> = {}): OcrEvidenceV1 {
+function mkSource(o: {
+  escopo?: string; source?: PaginaRef; contentHash?: string; capturaVersao?: number; usable?: boolean;
+  pages?: SourceOcrPage[]; assinatura?: string;
+} = {}): SourceOcrEvidenceV1 {
+  const source = o.source ?? REF1;
+  const contentHash = o.contentHash ?? 'ch1';
+  const capturaVersao = o.capturaVersao ?? 1;
+  const escopo = o.escopo ?? 'contaA';
   return {
-    schemaVersion: OCR_EVIDENCE_SCHEMA, assinatura: 'sig', documentId: grupoId([REF1]), displayName: 'MBL.pdf',
-    fontes: [REF1], contentHash: 'ch', provider: 'mistral', model: 'mistral-ocr-4-1',
-    capturedAt: new Date().toISOString(), pagesProcessed: 1, docSizeBytes: 100, durationMs: 3,
-    pages: [{
-      sourceMessageId: 'm1', sourceAttachmentId: 'a1', sourceName: 'MBL.pdf',
-      sourceDocumentOrdinal: 0, sourcePageIndex: 0, markdown: 'B/L No: ONEYABC123456', dimensions: null,
-    }],
-    ...over,
+    schemaVersion: OCR_SOURCE_SCHEMA,
+    assinatura: o.assinatura ?? assinaturaFonte({ escopo, source, contentHash, capturaVersao }),
+    source, contentHash, capturaVersao, usable: o.usable ?? true,
+    provider: 'mistral', model: 'mistral-ocr-4-1', capturedAt: new Date().toISOString(),
+    pagesProcessed: 1, docSizeBytes: 100, durationMs: 3,
+    pages: o.pages ?? [{ pageIndex: 0, markdown: 'B/L No: ONEYABC123456', dimensions: null }],
   };
 }
 
-/** Portas fake com store em memória + contadores. */
 function fakePortas(cfg: {
-  ocr?: () => MistralOcrResultado | Promise<MistralOcrResultado>;
+  ocr?: (url: string) => MistralOcrResultado | Promise<MistralOcrResultado>;
   estruturar?: () => Promise<Extracao>;
-  gravar?: (ev: OcrEvidenceV1) => Promise<PersistenceStatus>;
-  durableRead?: boolean;
-}): { portas: PortasExtracao; store: Map<string, OcrEvidenceV1>; n: { ocr: number; estrut: number; gravar: number } } {
-  const store = new Map<string, OcrEvidenceV1>();
+  gravar?: (ev: SourceOcrEvidenceV1) => Promise<PersistenceStatus>;
+}): {
+  portas: PortasExtracao;
+  store: Map<string, { ev: SourceOcrEvidenceV1; durable: boolean }>;
+  n: { ocr: number; estrut: number; gravar: number };
+  ocrUrls: string[];
+} {
+  const store = new Map<string, { ev: SourceOcrEvidenceV1; durable: boolean }>();
   const n = { ocr: 0, estrut: 0, gravar: 0 };
+  const ocrUrls: string[] = [];
   const portas: PortasExtracao = {
-    ocr: async () => { n.ocr++; return cfg.ocr ? cfg.ocr() : ocrOk(); },
+    ocr: async (url) => { n.ocr++; ocrUrls.push(url); return cfg.ocr ? cfg.ocr(url) : ocrOk(); },
     estruturar: async () => { n.estrut++; return cfg.estruturar ? cfg.estruturar() : aiOk(); },
-    lerEvidencia: async (sig) => {
-      const ev = store.get(sig);
-      return ev ? { ev, durable: cfg.durableRead ?? false } : null;
-    },
-    gravarEvidencia: async (ev) => {
+    lerFonteEvidencia: async (sig) => { const e = store.get(sig); return e ? { ev: e.ev, durable: e.durable } : null; },
+    gravarFonteEvidencia: async (ev) => {
       n.gravar++;
       if (cfg.gravar) return cfg.gravar(ev);
-      if (!store.has(ev.assinatura)) store.set(ev.assinatura, ev);
+      if (!store.has(ev.assinatura)) store.set(ev.assinatura, { ev, durable: false });
       return 'memory-only';
     },
   };
-  return { portas, store, n };
+  return { portas, store, n, ocrUrls };
 }
 
 const geminiCai = (): Promise<Extracao> => Promise.reject(new Error('got status: 429 RESOURCE_EXHAUSTED quota'));
 
-// 1 — SOBREVIVÊNCIA (critério de aceite / regressão IM3261-26)
+// 1 — SOBREVIVÊNCIA (regressão IM3261-26)
 test('OCR Mistral OK + Gemini INDISPONÍVEL → OCR persistido, erro local, sem exceção', async () => {
   const { portas, store } = fakePortas({ estruturar: geminiCai });
   const r = await extrairViaMistralCore(PARTES, 'MBL', 'MBL.pdf', CTX, portas);
@@ -99,171 +112,185 @@ test('OCR Mistral OK + Gemini INDISPONÍVEL → OCR persistido, erro local, sem 
   assert.equal(r.estruturacaoPendente, true);
   assert.equal(r.erroFonte, 'gemini-estruturacao');
   assert.equal(r.ocrObtido, true);
-  assert.ok(r.ocrAssinatura);
-  assert.equal(store.has(r.ocrAssinatura as string), true); // persistido ANTES do Gemini
+  assert.equal(store.size, 1); // evidência do anexo persistida ANTES do Gemini
 });
 
 // 2 — REUSO sem re-OCR
-test('re-tentativa NÃO re-roda (re-paga) o OCR: reusa a evidência', async () => {
+test('re-tentativa NÃO re-roda (re-paga) o OCR do anexo já lido', async () => {
   const { portas, n } = fakePortas({ estruturar: geminiCai });
   await extrairViaMistralCore(PARTES, 'MBL', 'MBL.pdf', CTX, portas);
   await extrairViaMistralCore(PARTES, 'MBL', 'MBL.pdf', CTX, portas);
-  assert.equal(n.ocr, 1);
+  assert.equal(n.ocr, 1); // Mistral chamado UMA vez para o anexo
   assert.equal(n.estrut, 2);
 });
 
-// 3 — HAPPY PATH inalterado
-test('happy path: Mistral OK + Gemini OK → DocPreAlerta populado, sem erro', async () => {
+// 3 — HAPPY PATH
+test('happy path: Mistral OK + Gemini OK → DocPreAlerta populado', async () => {
   const { portas } = fakePortas({});
   const r = await extrairViaMistralCore(PARTES, 'MBL', 'MBL.pdf', CTX, portas);
   assert.ok(r.doc);
   assert.equal(r.erroFonte, null);
-  assert.equal(r.estruturacaoPendente, false);
   assert.equal(r.doc?.conhecimentoNumero, 'ONEYABC123456');
-  assert.equal(r.doc?.containers[0].lacre, 'ML123');
 });
 
-// 4 — OBSERVABILIDADE no core: Mistral 429 atribuído ao Mistral (não ao Gemini)
-test('Mistral FALHA (429) → erroFonte mistral-ocr, nada persistido, estruturação não tentada', async () => {
-  const { portas, store, n } = fakePortas({
-    ocr: () => ({ ...ocrOk(), ok: false, pages: [], error: '[429] rate limit' } as MistralOcrResultado),
-  });
+// 4 (item 4) — SUCESSO de um anexo SOBREVIVE à falha de outro; retry só re-OCR o que falhou
+test('OCR parcial: anexo OK sobrevive à falha de outro; retry re-OCR só o que falhou', async () => {
+  const partes: ParteComRef[] = [
+    { data: DADO_A, mimeType: 'application/pdf', ref: REF1 },
+    { data: DADO_B, mimeType: 'application/pdf', ref: REF2 },
+  ];
+  const { portas, store, ocrUrls } = fakePortas({ ocr: (url) => (url.includes(DADO_B) ? ocrFail() : ocrOk()) });
+  const r1 = await extrairViaMistralCore(partes, 'MBL', 'MBL.pdf', CTX, portas);
+  assert.equal(r1.erroFonte, 'mistral-ocr'); // B falhou
+  assert.equal(store.size, 1); // A (ok) PERSISTIDO; B não
+  await extrairViaMistralCore(partes, 'MBL', 'MBL.pdf', CTX, portas); // retry
+  const vezesA = ocrUrls.filter((u) => u.includes(DADO_A)).length;
+  const vezesB = ocrUrls.filter((u) => u.includes(DADO_B)).length;
+  assert.equal(vezesA, 1); // A reusado — NÃO re-OCR
+  assert.equal(vezesB, 2); // só B re-OCR
+});
+
+// 5a (item 5) — OCR vazio NÃO é persistido (não envenena); re-OCR permitido
+test('OCR vazio/insuficiente: não persiste (não envenena cache); re-OCR na próxima', async () => {
+  const { portas, store, n } = fakePortas({ ocr: () => ocrVazio() });
   const r = await extrairViaMistralCore(PARTES, 'MBL', 'MBL.pdf', CTX, portas);
   assert.equal(r.erroFonte, 'mistral-ocr');
-  assert.equal(r.ocrObtido, false);
-  assert.equal(r.persistenceStatus, null);
-  assert.equal(store.size, 0);
-  assert.equal(n.estrut, 0);
-  assert.match(r.erro ?? '', /Mistral/);
+  assert.match(r.erro ?? '', /insuficiente/);
+  assert.equal(store.size, 0); // NADA persistido
+  await extrairViaMistralCore(PARTES, 'MBL', 'MBL.pdf', CTX, portas);
+  assert.equal(n.ocr, 2); // re-OCR (não ficou preso num resultado vazio)
 });
 
-// 4b — ADAPTADOR DE ERRO DA ROTA (integração do avisoOcr que a rota consome)
-test('avisoDeErroOCR: atribui pela FONTE real (Mistral × Gemini), não por free-text', () => {
-  const mistral = avisoDeErroOCR('[429] rate limit', 'mistral-ocr');
-  assert.match(mistral, /OCR Mistral/);
-  assert.ok(!/Gemini/.test(mistral));
-  assert.match(avisoDeErroOCR('got status 429', 'gemini-estruturacao'), /Estrutura/);
-  assert.equal(avisoDeErroOCR('exceeded its monthly spending cap', 'gemini-estruturacao'), AVISO_LIMITE_IA);
-  assert.match(avisoDeErroOCR('gemini quota', null), /Gemini/); // sem fonte → heurística antiga
+// 5b (item 5) — re-OCR CONTROLADO coexiste com histórico (não sobrescreve)
+test('capturaVersao: re-OCR controlado coexiste com a evidência anterior (sem apagar)', async () => {
+  _limparMemoriaEvidencia();
+  const ev1 = mkSource({ capturaVersao: 1 });
+  const ev2 = mkSource({ capturaVersao: 2 });
+  assert.notEqual(ev1.assinatura, ev2.assinatura);
+  await gravarFonteEvidencia(ev1);
+  await gravarFonteEvidencia(ev2);
+  assert.ok(await lerFonteEvidencia(ev1.assinatura)); // histórico preservado
+  assert.ok(await lerFonteEvidencia(ev2.assinatura)); // nova captura coexiste
 });
 
-// 1b — ESCOPO/TENANT: mesmos messageId/attachmentId sob contas diferentes → chaves diferentes
-test('escopo de conta: mesma origem+conteúdo sob contas diferentes → evidência diferente', () => {
-  const a = assinaturaEvidencia({ escopo: 'contaA', fontes: [REF1], contentHash: 'ch' });
-  const b = assinaturaEvidencia({ escopo: 'contaB', fontes: [REF1], contentHash: 'ch' });
+// 1b (item 1) — SEM escopo de conta: NÃO cacheia/compartilha evidência bruta
+test('sem escopo de conta: evidência de OCR NÃO é persistida nem compartilhada', async () => {
+  const { portas, store, n } = fakePortas({ estruturar: geminiCai });
+  const r = await extrairViaMistralCore(PARTES, 'MBL', 'MBL.pdf', { escopo: undefined }, portas);
+  assert.equal(r.persistenceStatus, 'no-scope'); // fail-closed explícito: OCR rodou, mas NÃO foi persistido
+  assert.equal(store.size, 0); // NADA sob chave compartilhada
+  await extrairViaMistralCore(PARTES, 'MBL', 'MBL.pdf', { escopo: '' }, portas);
+  assert.equal(n.ocr, 2); // sem reuso → re-OCR (nenhum compartilhamento)
+});
+
+// 1c (item 1) — mesma origem+conteúdo sob contas diferentes → chaves diferentes
+test('escopo de conta: mesma origem/conteúdo sob contas diferentes → chave diferente', () => {
+  const a = assinaturaFonte({ escopo: 'contaA', source: REF1, contentHash: 'ch' });
+  const b = assinaturaFonte({ escopo: 'contaB', source: REF1, contentHash: 'ch' });
   assert.notEqual(a, b);
 });
 
-// 2b — PROVENIÊNCIA: 2 anexos, AMBOS com página índice 0 → origem distinguível
-test('proveniência por página: 2 anexos com page index 0 permanecem distinguíveis', async () => {
-  const partes: ParteComRef[] = [
-    { data: 'QUFB', mimeType: 'application/pdf', ref: REF1 },
-    { data: 'QkJC', mimeType: 'application/pdf', ref: REF2 },
-  ];
-  const { portas, store } = fakePortas({ ocr: () => ocrOk('pagina indice 0'), estruturar: geminiCai });
-  const r = await extrairViaMistralCore(partes, 'MBL', 'MBL.pdf', { escopo: 'contaA' }, portas);
-  const ev = store.get(r.ocrAssinatura as string)!;
-  assert.equal(ev.pages.length, 2);
-  assert.equal(ev.pages[0].sourcePageIndex, 0);
-  assert.equal(ev.pages[1].sourcePageIndex, 0);
-  assert.notEqual(ev.pages[0].sourceAttachmentId, ev.pages[1].sourceAttachmentId);
-  assert.deepEqual(ev.pages.map((p) => p.sourceDocumentOrdinal), [0, 1]);
+// 2 (item 2) — Canonical FieldEvidence referencia a página exata (evidencePageRef)
+test('canonical FieldEvidence: possui evidencePageRef (campo → anexo → página)', () => {
+  const grupo = comporGrupo('contaA', 'MBL.pdf', [mkSource()]);
+  const c = canonicalDesdeEvidencia(grupo);
+  assert.equal(Object.prototype.hasOwnProperty.call(c.identification.blNumber, 'evidencePageRef'), true);
+  assert.equal(c.identification.blNumber.evidencePageRef, null); // Fase 1: pending
 });
 
-// 3b — DURABILIDADE: falha do store durável não vira "durable" nem derruba o doc
-test('durabilidade: falha de persistência durável → persistenceStatus honesto, doc segue', async () => {
-  const { portas } = fakePortas({ gravar: async () => 'failed' as PersistenceStatus });
-  const r = await extrairViaMistralCore(PARTES, 'MBL', 'MBL.pdf', CTX, portas);
-  assert.equal(r.ocrObtido, true);
-  assert.equal(r.persistenceStatus, 'failed'); // NUNCA 'durable' sem confirmação
-  assert.ok(r.doc); // Gemini ok → documento segue mesmo sem persistência durável
-});
-
-// 3c — STORE REAL sem Supabase: memory-only, nunca 'durable'
-test('store real sem Supabase: gravarEvidencia = memory-only; lerEvidencia durable=false', async () => {
+// 3 (item 3) — IMUTABILIDADE: segundo escritor NÃO sobrescreve o primeiro
+test('imutabilidade: gravarFonteEvidencia não sobrescreve evidência existente', async () => {
   _limparMemoriaEvidencia();
-  const ev = mkEv({ assinatura: 'sig-real-1' });
-  const status = await gravarEvidencia(ev);
-  assert.equal(status, 'memory-only');
-  const lido = await lerEvidencia('sig-real-1');
-  assert.ok(lido);
-  assert.equal(lido?.durable, false);
+  const ev1 = mkSource({ assinatura: 'sig-imut', pages: [{ pageIndex: 0, markdown: 'PRIMEIRO', dimensions: null }] });
+  const ev2 = mkSource({ assinatura: 'sig-imut', pages: [{ pageIndex: 0, markdown: 'SEGUNDO', dimensions: null }] });
+  await gravarFonteEvidencia(ev1);
+  await gravarFonteEvidencia(ev2);
+  const lido = await lerFonteEvidencia('sig-imut');
+  assert.equal(lido?.ev.pages[0].markdown, 'PRIMEIRO'); // 1º escritor preservado
 });
 
-// 5 — HASH DE CONTEÚDO × IDENTIDADE DE ORIGEM (distintos)
-test('hashConteudo + assinatura: conteúdo e origem são identidades DISTINTAS', () => {
-  const h1 = hashConteudo([{ data: 'QUFB', ref: REF1 }]);
-  const h1b = hashConteudo([{ data: 'QUFB', ref: REF1 }]);
-  const h2 = hashConteudo([{ data: 'QkJC', ref: REF1 }]);
-  assert.equal(h1, h1b); // determinístico
-  assert.notEqual(h1, h2); // bytes diferentes → hash diferente
-  // mesmo conteúdo, origem diferente → chave diferente (origem conta)
+// 6 (item 6) — DURABILIDADE preservada em memória
+test('durabilidade preservada: um hit de memória durável permanece durável', async () => {
+  _limparMemoriaEvidencia();
+  const ev = mkSource({ assinatura: 'sig-dur' });
+  _seedFonteEvidencia(ev, true);
+  assert.equal((await lerFonteEvidencia('sig-dur'))?.durable, true);
+  assert.equal((await lerFonteEvidencia('sig-dur'))?.durable, true); // não vira memory-only
+});
+
+// 4b — OBSERVABILIDADE: Mistral 429 atribuído ao Mistral
+test('Mistral FALHA → erroFonte mistral-ocr; nada persistido; estruturação não tentada', async () => {
+  const { portas, store, n } = fakePortas({ ocr: () => ocrFail() });
+  const r = await extrairViaMistralCore(PARTES, 'MBL', 'MBL.pdf', CTX, portas);
+  assert.equal(r.erroFonte, 'mistral-ocr');
+  assert.equal(r.ocrObtido, false);
+  assert.equal(store.size, 0);
+  assert.equal(n.estrut, 0);
+});
+
+// 7 (item 7) — fonte DESCONHECIDA não culpa o Gemini
+test('avisoDeErroOCR: fonte conhecida atribui; DESCONHECIDA = mensagem neutra', () => {
+  assert.match(avisoDeErroOCR('[429] rate limit', 'mistral-ocr'), /OCR Mistral/);
+  assert.match(avisoDeErroOCR('got status 429', 'gemini-estruturacao'), /Estrutura/);
+  assert.equal(avisoDeErroOCR('exceeded its monthly spending cap', 'gemini-estruturacao'), AVISO_LIMITE_IA);
+  const neutra = avisoDeErroOCR('timeout', null);
+  assert.ok(!/Gemini/.test(neutra));
+  assert.ok(!/Mistral/.test(neutra));
+  assert.match(neutra, /leitura\/estrutura/i);
+});
+
+// 8 (item 8) — hashBytes é SÓ conteúdo (bytes); origem é separada
+test('hashBytes: mesmos bytes + attachmentIds diferentes → MESMO contentHash; origem difere', () => {
+  const h1 = hashBytes(DADO_A);
+  const h2 = hashBytes(DADO_A);
+  assert.equal(h1, h2); // determinístico, só bytes
+  assert.notEqual(hashBytes(DADO_A), hashBytes(DADO_B)); // bytes diferentes
+  // mesmos bytes, anexos diferentes → mesmo contentHash, mas chaves (origem) diferentes
+  assert.equal(h1, hashBytes(DADO_A));
   assert.notEqual(
-    assinaturaEvidencia({ escopo: 't', fontes: [REF1], contentHash: h1 }),
-    assinaturaEvidencia({ escopo: 't', fontes: [REF2], contentHash: h1 }),
-  );
-  // mesma origem, conteúdo diferente → chave diferente (conteúdo conta)
-  assert.notEqual(
-    assinaturaEvidencia({ escopo: 't', fontes: [REF1], contentHash: h1 }),
-    assinaturaEvidencia({ escopo: 't', fontes: [REF1], contentHash: h2 }),
+    assinaturaFonte({ escopo: 't', source: REF1, contentHash: h1 }),
+    assinaturaFonte({ escopo: 't', source: REF2, contentHash: h1 }),
   );
 });
 
-// 5b — modelo NÃO invalida histórico (não participa da chave); ordem irrelevante
-test('assinatura: ordem das fontes irrelevante; modelo não participa', () => {
-  const a = assinaturaEvidencia({ escopo: 't', fontes: [REF1, REF2], contentHash: 'c' });
-  const b = assinaturaEvidencia({ escopo: 't', fontes: [REF2, REF1], contentHash: 'c' });
-  assert.equal(a, b);
+// CANONICAL — não duplica OCR; participantes donos dos IDs fiscais
+test('canonicalDesdeEvidencia: referencia ocrAssinatura, não duplica rawText', () => {
+  const grupo = comporGrupo('contaA', 'MBL.pdf', [mkSource()]);
+  const c = canonicalDesdeEvidencia(grupo);
+  assert.equal(c.ocrAssinatura, grupo.assinatura);
+  assert.equal(c.documentId, grupo.documentId);
+  assert.notEqual(c.documentId, c.displayName); // identidade estável ≠ filename
+  assert.equal(Object.prototype.hasOwnProperty.call(c, 'rawText'), false);
+  assert.match(textoBrutoDaEvidencia(grupo), /ONEYABC123456/); // texto transitório
 });
 
-// 6 — IDENTIDADE DO DOCUMENTO: estável (hash das fontes), não é o filename
-test('grupoId/documentId: identidade ESTÁVEL, independente de nome/ordem; não é filename', () => {
-  const g1 = grupoId([REF1, REF2]);
-  const g2 = grupoId([REF2, REF1]);
-  assert.equal(g1, g2); // ordem irrelevante
-  assert.ok(g1.startsWith('grp_'));
-  assert.notEqual(g1, 'MBL.pdf'); // não é o nome do arquivo
-  const ev = mkEv({ documentId: g1, displayName: 'MBL.pdf' });
-  assert.notEqual(ev.documentId, ev.displayName);
-});
-
-// 6b — CANONICAL: referencia ocrAssinatura, NÃO duplica o texto bruto
-test('canonicalDesdeEvidencia: referencia OCR, não duplica rawText; texto é transitório', () => {
-  const ev = mkEv({ assinatura: 'sig-c', documentId: grupoId([REF1]) });
-  const c = canonicalDesdeEvidencia(ev);
-  assert.equal(c.ocrAssinatura, 'sig-c');
-  assert.equal(c.documentId, ev.documentId);
-  assert.equal(c.displayName, 'MBL.pdf');
-  assert.equal(Object.prototype.hasOwnProperty.call(c, 'rawText'), false); // NÃO duplica OCR
-  assert.equal(c.identification.blNumber.extractionMethod, 'pending');
-  assert.equal(c.identification.blNumber.rawValue, null);
-  // texto bruto é obtido de forma TRANSITÓRIA a partir da evidência
-  assert.match(textoBrutoDaEvidencia(ev), /ONEYABC123456/);
-});
-
-// 7 — PARTICIPANTES: IDs fiscais pertencem à PARTE (sem lista global)
-test('canonical: identificadores fiscais pertencem à parte (shipper/consignee/notify/alsoNotify)', () => {
-  const c = canonicalDesdeEvidencia(mkEv());
+test('canonical: identificadores fiscais pertencem à parte (sem lista global)', () => {
+  const c = canonicalDesdeEvidencia(comporGrupo('contaA', 'MBL.pdf', [mkSource()]));
   for (const p of [c.parties.shipper, c.parties.consignee, c.parties.notify, c.parties.alsoNotify]) {
-    assert.equal(p.name.extractionMethod, 'pending');
     assert.ok(Array.isArray(p.taxIdentifiers));
   }
-  // não há lista global de taxIdentifiers em parties
   assert.equal(Object.prototype.hasOwnProperty.call(c.parties, 'taxIdentifiers'), false);
 });
 
-// 8 — RESUMO SEGURO: não vaza texto, nem escopo, nem nome de arquivo
-test('resumoSeguroEvidencia: sem markdown, sem escopo de conta, sem nome de arquivo', () => {
-  const ev = mkEv({
-    pages: [{
-      sourceMessageId: 'm1', sourceAttachmentId: 'a1', sourceName: 'SEGREDO-BL.pdf',
-      sourceDocumentOrdinal: 0, sourcePageIndex: 0, markdown: 'SEGREDO BL ONEYABC123456', dimensions: null,
-    }],
-  });
-  const resumo = resumoSeguroEvidencia(ev);
-  const json = JSON.stringify(resumo);
-  assert.ok(!('pages' in resumo));
+// PROVENIÊNCIA — 2 anexos com página 0 permanecem distinguíveis
+test('proveniência: 2 anexos com page index 0 permanecem distinguíveis no grupo', () => {
+  const grupo = comporGrupo('contaA', 'MBL.pdf', [
+    mkSource({ source: REF1, pages: [{ pageIndex: 0, markdown: 'A', dimensions: null }] }),
+    mkSource({ source: REF2, pages: [{ pageIndex: 0, markdown: 'B', dimensions: null }] }),
+  ]);
+  assert.equal(grupo.pages.length, 2);
+  assert.equal(grupo.pages[0].sourcePageIndex, 0);
+  assert.equal(grupo.pages[1].sourcePageIndex, 0);
+  assert.notEqual(grupo.pages[0].sourceAttachmentId, grupo.pages[1].sourceAttachmentId);
+  assert.deepEqual(grupo.pages.map((p) => p.sourceDocumentOrdinal), [0, 1]);
+});
+
+// RESUMO SEGURO — sem texto, sem nome de arquivo
+test('resumoSeguroEvidencia: sem markdown e sem nome de arquivo', () => {
+  const grupo = comporGrupo('contaA', 'SEGREDO.pdf', [
+    mkSource({ pages: [{ pageIndex: 0, markdown: 'SEGREDO ONEYABC123456', dimensions: null }] }),
+  ]);
+  const json = JSON.stringify(resumoSeguroEvidencia(grupo));
   assert.ok(!json.includes('SEGREDO'));
-  assert.ok(!json.includes('MBL.pdf'));
-  assert.equal(resumo.textLength, 'SEGREDO BL ONEYABC123456'.length);
+  assert.ok(!json.includes('.pdf'));
 });

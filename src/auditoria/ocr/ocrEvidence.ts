@@ -1,71 +1,97 @@
 /**
- * PB-001 — Contrato de EVIDÊNCIA de OCR (Fase 1 do plano *deterministic-first*).
+ * PB-001 — EVIDÊNCIA de OCR (Fase 1 do plano *deterministic-first*).
  *
- * O resultado BRUTO do Mistral (texto por página) é IMUTÁVEL e persistido ANTES de
- * qualquer estruturação (Gemini). Assim, uma falha do passo seguinte (ex.: Gemini
- * 429) NÃO descarta o OCR já pago, nem força re-OCR: a re-tentativa re-estrutura a
- * partir da evidência salva.
+ * Arquitetura (revisão final do Estágio 1):
+ *  - A evidência AUTORITATIVA e IMUTÁVEL é POR ANEXO (`SourceOcrEvidenceV1`),
+ *    cacheada por (tenant + identidade de origem + HASH DE CONTEÚDO + versão de
+ *    captura). Assim, o OCR bem-sucedido de um anexo SOBREVIVE à falha de outro, e
+ *    a re-tentativa só re-roda (re-paga) os anexos que faltaram/falharam.
+ *  - O GRUPO (`OcrEvidenceV1`) é uma COMPOSIÇÃO TRANSITÓRIA das evidências de anexo
+ *    bem-sucedidas (não é persistido separadamente — não duplica o texto bruto).
  *
- * Identidades DISTINTAS:
- *  - IDENTIDADE DE ORIGEM (`fontes`): quais anexos (messageId/attachmentId) deram
- *    origem — estável, para rastreabilidade ("este texto veio do anexo X, página Y").
- *  - IDENTIDADE DE CONTEÚDO (`contentHash`): SHA-256 dos BYTES dos anexos.
- *  - IDENTIDADE DO DOCUMENTO (`documentId`): id ESTÁVEL do grupo (hash das fontes),
- *    independente do nome de arquivo. `displayName` é só exibição (humano).
+ * Identidades DISTINTAS (item 8):
+ *  - CONTEÚDO (`contentHash`): SHA-256 dos BYTES apenas (nunca mistura attachmentId).
+ *  - ORIGEM: messageId/attachmentId.
+ *  A chave do cache combina tenant + origem + conteúdo + versão de captura + schema.
+ *  O MODELO do Mistral NÃO entra na chave (upgrade não invalida histórico).
  *
- * A ASSINATURA do cache combina: escopo (conta/tenant) + identidade de origem +
- * conteúdo + versão do schema. O MODELO do Mistral NÃO entra na chave → upgrade de
- * modelo não invalida evidências históricas (política aprovada). Re-OCR só quando:
- * conteúdo muda; OCR anterior falhou/insuficiente; pedido explícito; migração que
- * exige capacidade ausente (bump MANUAL de OCR_EVIDENCE_SCHEMA).
+ * Imutabilidade: gravação é insert-if-absent (um 2º escritor não sobrescreve o 1º).
+ * Re-OCR controlado coexiste via `capturaVersao` (não apaga a evidência anterior).
+ * OCR vazio/insuficiente NÃO é persistido → não "envenena" o cache (re-OCR permitido).
  *
- * NUNCA logar/expor markdown bruto nem o escopo de conta — use `resumoSeguroEvidencia`.
+ * NUNCA logar/expor markdown bruto, escopo de conta ou nomes de arquivo — use
+ * `resumoSeguroEvidencia`.
  */
 import crypto from 'crypto';
 import { isSupabaseConfigured } from '../../db/supabase';
-import { lerCacheJson, gravarCacheJsonConfirmado } from '../preAlerta/ocrCache';
+import { lerCacheJson, inserirCacheJsonSeAusente } from '../preAlerta/ocrCache';
 
 export const OCR_EVIDENCE_SCHEMA = 'ocr-evidence/v1' as const;
+export const OCR_SOURCE_SCHEMA = 'ocr-source-evidence/v1' as const;
 
-/** Durabilidade da persistência da evidência (não confundir com "OCR obtido"). */
-export type PersistenceStatus = 'durable' | 'memory-only' | 'failed';
+/** Durabilidade da persistência (ou ausência de escopo de conta). */
+export type PersistenceStatus = 'durable' | 'memory-only' | 'failed' | 'no-scope';
 
 /** Identidade de origem de um anexo (não é o nome de exibição). */
 export interface PaginaRef {
   messageId: string;
   attachmentId: string;
-  nome: string; // nome de exibição do anexo (humano)
+  nome: string;
 }
 
-/** Uma página do OCR bruto COM PROVENIÊNCIA (uso interno; nunca logar/expor). */
-export interface OcrEvidencePage {
-  sourceMessageId: string;
-  sourceAttachmentId: string;
-  sourceName: string; // nome de exibição do anexo de origem
-  sourceDocumentOrdinal: number; // posição do anexo no grupo (0-based)
-  sourcePageIndex: number | null; // índice da página DENTRO daquele anexo (do Mistral)
+/** Página do OCR bruto de UM anexo (evidência autoritativa). */
+export interface SourceOcrPage {
+  pageIndex: number | null; // índice da página DENTRO do anexo (do Mistral)
   markdown: string;
   dimensions: unknown | null;
 }
 
-/** Evidência de OCR — IMUTÁVEL. Nunca sobrescrever com dado normalizado. */
-export interface OcrEvidenceV1 {
-  schemaVersion: typeof OCR_EVIDENCE_SCHEMA;
-  assinatura: string; // escopo + origem + conteúdo + schema (chave do cache)
-  documentId: string; // IDENTIDADE ESTÁVEL do grupo (hash das fontes) — NÃO é filename
-  displayName: string; // nome humano (1º anexo) — só exibição
-  fontes: PaginaRef[]; // identidade de ORIGEM (anexos)
-  contentHash: string; // identidade de CONTEÚDO (SHA-256 dos bytes)
+/** Evidência de OCR de UM anexo — IMUTÁVEL, cacheável por conteúdo. */
+export interface SourceOcrEvidenceV1 {
+  schemaVersion: typeof OCR_SOURCE_SCHEMA;
+  assinatura: string; // tenant + origem + contentHash + capturaVersao + schema
+  source: PaginaRef;
+  contentHash: string; // SHA-256 dos BYTES do anexo (conteúdo apenas)
+  capturaVersao: number; // 1 = normal; >1 = re-OCR controlado (coexiste, não sobrescreve)
+  usable: boolean; // há texto? OCR vazio/insuficiente => false (não é persistido)
   provider: 'mistral';
-  model: string; // proveniência — NÃO entra na assinatura
-  capturedAt: string; // ISO-8601
+  model: string;
+  capturedAt: string;
   pagesProcessed: number | null;
   docSizeBytes: number | null;
   durationMs: number | null;
-  pages: OcrEvidencePage[]; // RAW, imutável, com proveniência por página
+  pages: SourceOcrPage[];
 }
 
-/** Resumo SEGURO (sem markdown/texto, sem escopo de conta, sem nomes de arquivo). */
+/** Página do GRUPO (composição) — carrega a PROVENIÊNCIA exata. */
+export interface OcrEvidencePage {
+  sourceMessageId: string;
+  sourceAttachmentId: string;
+  sourceName: string;
+  sourceDocumentOrdinal: number; // posição do anexo no grupo (0-based)
+  sourcePageIndex: number | null; // índice da página dentro do anexo
+  markdown: string;
+  dimensions: unknown | null;
+}
+
+/** Evidência do GRUPO (conhecimento) — COMPOSIÇÃO TRANSITÓRIA das fontes. */
+export interface OcrEvidenceV1 {
+  schemaVersion: typeof OCR_EVIDENCE_SCHEMA;
+  assinatura: string; // chave do grupo (tenant + origens + hash de grupo + schema)
+  documentId: string; // identidade ESTÁVEL do grupo (hash das fontes) — NÃO é filename
+  displayName: string; // nome humano (1º anexo) — só exibição
+  fontes: PaginaRef[];
+  contentHash: string; // hash de conteúdo do grupo (deriva dos hashes de fonte)
+  provider: 'mistral';
+  model: string;
+  capturedAt: string;
+  pagesProcessed: number | null;
+  docSizeBytes: number | null;
+  durationMs: number | null;
+  pages: OcrEvidencePage[]; // composto, com proveniência por página
+}
+
+/** Resumo SEGURO (sem markdown/texto, sem escopo de conta, sem nome de arquivo). */
 export interface OcrEvidenceResumoSeguro {
   schemaVersion: string;
   assinatura: string;
@@ -81,15 +107,18 @@ export interface OcrEvidenceResumoSeguro {
   durationMs: number | null;
 }
 
-/** SHA-256 dos BYTES dos anexos (identidade de CONTEÚDO). Ordem-independente. PURO. */
-export function hashConteudo(partes: Array<{ data: string; ref: PaginaRef }>): string {
-  const porAnexo = partes
-    .map((p) => {
-      const h = crypto.createHash('sha256').update(Buffer.from(p.data, 'base64')).digest('hex');
-      return `${p.ref.attachmentId}:${h}`;
-    })
-    .sort();
-  return crypto.createHash('sha256').update(porAnexo.join('|')).digest('hex');
+/* ------------------------------------------------------------------ *
+ * Hashing — CONTEÚDO (bytes) × ORIGEM (ids) são identidades separadas.
+ * ------------------------------------------------------------------ */
+
+/** SHA-256 dos BYTES de um anexo (CONTEÚDO apenas; não inclui ids). PURO. */
+export function hashBytes(dataBase64: string): string {
+  return crypto.createHash('sha256').update(Buffer.from(dataBase64, 'base64')).digest('hex');
+}
+
+/** Hash de conteúdo do GRUPO a partir dos hashes de conteúdo das fontes. PURO. */
+export function hashConteudoGrupo(hashesFonte: string[]): string {
+  return crypto.createHash('sha256').update([...hashesFonte].sort().join('|')).digest('hex');
 }
 
 /** Id ESTÁVEL do grupo (hash das fontes, independente de nome/ordem). PURO. */
@@ -98,10 +127,22 @@ export function grupoId(fontes: PaginaRef[]): string {
   return 'grp_' + crypto.createHash('sha256').update(base).digest('hex').slice(0, 24);
 }
 
-/**
- * Assinatura do cache: escopo (conta/tenant) + identidade de origem + conteúdo +
- * schema. O MODELO não participa (upgrade de modelo não invalida histórico). PURO.
- */
+/** Chave da evidência de UM anexo: tenant + origem + conteúdo + versão + schema. PURO. */
+export function assinaturaFonte(params: {
+  escopo: string;
+  source: PaginaRef;
+  contentHash: string;
+  capturaVersao?: number;
+}): string {
+  const origem = `${params.source.messageId}::${params.source.attachmentId}`;
+  const v = params.capturaVersao ?? 1;
+  return crypto
+    .createHash('sha256')
+    .update(`${OCR_SOURCE_SCHEMA}\n${params.escopo}\n${origem}\n${params.contentHash}\nv${v}`)
+    .digest('hex');
+}
+
+/** Chave do GRUPO: tenant + origens + hash de conteúdo do grupo + schema. PURO. */
 export function assinaturaEvidencia(params: {
   escopo: string;
   fontes: PaginaRef[];
@@ -119,7 +160,57 @@ export function textoBrutoDaEvidencia(ev: OcrEvidenceV1): string {
   return ev.pages.map((p) => p.markdown).join('\n\n').trim();
 }
 
-/** Reduz a evidência a METADADOS seguros (sem markdown/escopo/nomes). PURO. */
+/**
+ * Compõe o GRUPO (transitório) a partir das evidências de anexo (na ordem dada).
+ * Cada página do grupo recebe a proveniência exata (anexo + ordinal + página). PURO.
+ */
+export function comporGrupo(
+  escopo: string,
+  displayName: string,
+  fontesEv: SourceOcrEvidenceV1[],
+): OcrEvidenceV1 {
+  const fontes = fontesEv.map((s) => s.source);
+  const contentHash = hashConteudoGrupo(fontesEv.map((s) => s.contentHash));
+  const pages: OcrEvidencePage[] = [];
+  let pagesProcessed = 0;
+  let docSizeBytes = 0;
+  let durationMs = 0;
+  let model = 'mistral';
+  fontesEv.forEach((s, ordinal) => {
+    model = s.model || model;
+    pagesProcessed += s.pagesProcessed ?? s.pages.length;
+    docSizeBytes += s.docSizeBytes ?? 0;
+    durationMs += s.durationMs ?? 0;
+    for (const p of s.pages) {
+      pages.push({
+        sourceMessageId: s.source.messageId,
+        sourceAttachmentId: s.source.attachmentId,
+        sourceName: s.source.nome,
+        sourceDocumentOrdinal: ordinal,
+        sourcePageIndex: p.pageIndex,
+        markdown: p.markdown,
+        dimensions: p.dimensions,
+      });
+    }
+  });
+  return {
+    schemaVersion: OCR_EVIDENCE_SCHEMA,
+    assinatura: assinaturaEvidencia({ escopo, fontes, contentHash }),
+    documentId: grupoId(fontes),
+    displayName,
+    fontes,
+    contentHash,
+    provider: 'mistral',
+    model,
+    capturedAt: new Date().toISOString(),
+    pagesProcessed: pagesProcessed || null,
+    docSizeBytes: docSizeBytes || null,
+    durationMs: durationMs || null,
+    pages,
+  };
+}
+
+/** Reduz a evidência de grupo a METADADOS seguros (sem markdown/escopo/nomes). PURO. */
 export function resumoSeguroEvidencia(ev: OcrEvidenceV1): OcrEvidenceResumoSeguro {
   return {
     schemaVersion: ev.schemaVersion,
@@ -138,46 +229,44 @@ export function resumoSeguroEvidencia(ev: OcrEvidenceV1): OcrEvidenceResumoSegur
 }
 
 /* ------------------------------------------------------------------ *
- * Store (cache-1): memória sempre + Supabase quando configurado. IMUTÁVEL
- * (first-writer-wins). A gravação DISTINGUE memória de durabilidade.
+ * Store da evidência POR ANEXO (cache-1). Memória (com durabilidade preservada)
+ * + Supabase insert-if-absent. IMUTÁVEL (first-writer-wins).
  * ------------------------------------------------------------------ */
-const memoria = new Map<string, OcrEvidenceV1>();
-const chaveSupabase = (assinatura: string): string => `ocr-evidence:v1:${assinatura}`;
+const memoria = new Map<string, { ev: SourceOcrEvidenceV1; durable: boolean }>();
+const chaveSupabase = (assinatura: string): string => `ocr-source:v1:${assinatura}`;
 
-/** Lê a evidência. Devolve também se a origem é DURÁVEL (lida do Supabase). */
-export async function lerEvidencia(
+/** Lê a evidência de um anexo, PRESERVANDO a durabilidade conhecida (item 6). */
+export async function lerFonteEvidencia(
   assinatura: string,
-): Promise<{ ev: OcrEvidenceV1; durable: boolean } | null> {
+): Promise<{ ev: SourceOcrEvidenceV1; durable: boolean } | null> {
   const emMem = memoria.get(assinatura);
-  if (emMem) return { ev: emMem, durable: false }; // conservador: memória não garante durabilidade
+  if (emMem) return { ev: emMem.ev, durable: emMem.durable }; // durabilidade preservada
   if (!isSupabaseConfigured()) return null;
-  const doBanco = await lerCacheJson<OcrEvidenceV1>(chaveSupabase(assinatura));
+  const doBanco = await lerCacheJson<SourceOcrEvidenceV1>(chaveSupabase(assinatura));
   if (doBanco) {
-    memoria.set(assinatura, doBanco);
+    memoria.set(assinatura, { ev: doBanco, durable: true });
     return { ev: doBanco, durable: true };
   }
   return null;
 }
 
 /**
- * Grava a evidência e REPORTA a durabilidade real:
- *  - 'durable'     → confirmado no Supabase (ou já existia lá);
- *  - 'memory-only' → só em memória (Supabase desligado ou escrita não confirmada);
- *  - 'failed'      → nem a memória pôde ser preenchida (caso extremo).
- * Imutável: não sobrescreve. NUNCA afirma 'durable' sem confirmação.
+ * Grava a evidência de um anexo (insert-if-absent) e REPORTA a durabilidade real.
+ * Nunca sobrescreve uma evidência existente (imutável). NUNCA afirma 'durable' sem
+ * confirmação. OCR insuficiente (usable=false) NÃO deve ser gravado pelo chamador.
  */
-export async function gravarEvidencia(ev: OcrEvidenceV1): Promise<PersistenceStatus> {
+export async function gravarFonteEvidencia(ev: SourceOcrEvidenceV1): Promise<PersistenceStatus> {
   try {
-    if (!memoria.has(ev.assinatura)) memoria.set(ev.assinatura, ev);
-    if (!isSupabaseConfigured()) return 'memory-only';
-    try {
-      const existe = await lerCacheJson<OcrEvidenceV1>(chaveSupabase(ev.assinatura));
-      if (existe) return 'durable';
-      const ok = await gravarCacheJsonConfirmado(chaveSupabase(ev.assinatura), ev, ev.documentId);
-      return ok ? 'durable' : 'memory-only';
-    } catch {
+    const existente = memoria.get(ev.assinatura);
+    if (existente) return existente.durable ? 'durable' : 'memory-only'; // imutável: mantém o 1º
+    if (!isSupabaseConfigured()) {
+      memoria.set(ev.assinatura, { ev, durable: false });
       return 'memory-only';
     }
+    const res = await inserirCacheJsonSeAusente(chaveSupabase(ev.assinatura), ev, ev.source.attachmentId);
+    const durable = res === 'inserted' || res === 'exists';
+    memoria.set(ev.assinatura, { ev, durable });
+    return durable ? 'durable' : 'memory-only';
   } catch {
     return 'failed';
   }
@@ -186,4 +275,9 @@ export async function gravarEvidencia(ev: OcrEvidenceV1): Promise<PersistenceSta
 /** APENAS para testes: zera o cache em memória. */
 export function _limparMemoriaEvidencia(): void {
   memoria.clear();
+}
+
+/** APENAS para testes: injeta uma evidência de anexo com durabilidade conhecida. */
+export function _seedFonteEvidencia(ev: SourceOcrEvidenceV1, durable: boolean): void {
+  memoria.set(ev.assinatura, { ev, durable });
 }

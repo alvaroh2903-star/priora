@@ -491,7 +491,7 @@ auditoriaRouter.get('/diagnostico', async (req: AuthedRequest, res, next) => {
           token,
           [pagina],
           hint,
-          { escopo: String(req.session.homeAccountId || 'mvp') },
+          { escopo: req.session.homeAccountId }, // sem conta → evidência fail-closed no core
         );
         docsRes.push({
           nome: d.nome,
@@ -871,20 +871,24 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
     // ?debug=1 → raio-x por documento (ver abaixo). NUNCA usa o cache do payload
     // (senão devolveria uma auditoria antiga, sem o diagnóstico) e não o grava.
     const debug = String(req.query.debug || '') === '1';
-    const escopo = String(req.session.homeAccountId || 'mvp');
-    // Chave do RESULTADO já comparado (por conta + processo + assinatura dos docs).
-    // Mesmos documentos = mesma chave → devolve o resultado salvo, sem OCR/Gemini.
-    const chaveResultado = `resultado:v1:${escopo}:prealerta:${alvoBase}:${sig}`;
-    const cached = preAlertaCache.get(alvoBase);
+    // Escopo = conta Microsoft autenticada. SEM fallback compartilhado 'mvp': sem
+    // conta, os caches de dado sensível ficam DESLIGADOS (fail closed) — jamais sob
+    // uma chave compartilhada entre contas.
+    const escopoConta = req.session.homeAccountId;
+    const chaveMem = escopoConta ? `${escopoConta}:${alvoBase}` : null;
+    const chaveResultado = escopoConta
+      ? `resultado:v1:${escopoConta}:prealerta:${alvoBase}:${sig}`
+      : null;
+    const cached = chaveMem ? preAlertaCache.get(chaveMem) : undefined;
     if (!refresh && !debug && cached && cached.sig === sig) {
       return res.json(cached.payload);
     }
     // Cache PERSISTENTE do resultado (Supabase): sobrevive a deploy/sleep. Um
     // processo já auditado com os mesmos documentos NÃO reabre os PDFs.
-    if (!refresh && !debug) {
+    if (!refresh && !debug && chaveResultado && chaveMem) {
       const salvo = await lerCacheJson<Record<string, unknown>>(chaveResultado);
       if (salvo) {
-        preAlertaCache.set(alvoBase, { sig, payload: salvo });
+        preAlertaCache.set(chaveMem, { sig, payload: salvo });
         return res.json(salvo);
       }
     }
@@ -904,9 +908,10 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
     // senão, o tipo detectado pelo conteúdo). PARALELO com LIMITE de 3 leituras
     // de visão simultâneas: rápido, sem estourar o limite/minuto do Gemini
     // (Nível 1 aguenta). Máx. 6 grupos por processo.
-    // Escopo do cache = conta Microsoft (isola por caixa). O resultado do OCR é
-    // determinístico, então é cacheado por assinatura do documento (Supabase).
-    const escopoOcr = String(req.session.homeAccountId || 'mvp');
+    // Escopo do cache = conta Microsoft (isola por caixa). Vazio quando não há conta
+    // → o cache por-anexo (globalmente único por messageId/attachmentId) segue seguro
+    // e a EVIDÊNCIA de OCR bruto fica fail-closed no core (sem chave compartilhada).
+    const escopoOcr = escopoConta ?? '';
     const listaGrupos = Array.from(grupos.values()).slice(0, 6);
     // Bloqueio de cota/teto de gastos do Gemini (não é "doc ilegível") → aviso claro.
     let avisoIA: string | null = null;
@@ -1060,8 +1065,8 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
         ...(debug ? { diagnostico } : {}),
       };
       // Não cacheia o payload de diagnóstico nem quando a IA está bloqueada.
-      if (!debug && !avisoIA) {
-        preAlertaCache.set(alvoBase, { sig, payload: payloadFalta });
+      if (!debug && !avisoIA && chaveMem && chaveResultado) {
+        preAlertaCache.set(chaveMem, { sig, payload: payloadFalta });
         await gravarCacheJson(chaveResultado, payloadFalta, alvoBase);
       }
       return res.json(payloadFalta);
@@ -1083,8 +1088,8 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
       ...(debug ? { diagnostico } : {}),
     };
     // Não cacheia payload com bloqueio de IA (é transitório: some quando o limite subir).
-    if (!debug && !avisoIA) {
-      preAlertaCache.set(alvoBase, { sig, payload });
+    if (!debug && !avisoIA && chaveMem && chaveResultado) {
+      preAlertaCache.set(chaveMem, { sig, payload });
       await gravarCacheJson(chaveResultado, payload, alvoBase); // persiste o já-comparado
     }
     res.json(payload);
@@ -1160,25 +1165,30 @@ auditoriaRouter.get('/:processo/ce-mercante', async (req: AuthedRequest, res, ne
     const selecionados = [...ceComps, ...mblDocs, ...hblDocs].slice(0, 16);
     const sig = selecionados.map((d) => `${d.tipo}:${d.nome}`).sort().join('|');
     const refresh = String(req.query.refresh || '') === '1';
-    const escopo = String(req.session.homeAccountId || 'mvp');
-    const chaveResultado = `resultado:v1:${escopo}:cemercante:${alvoBase}:${sig}`;
-    const cached = ceMercanteCache.get(alvoBase);
+    // Escopo = conta autenticada. SEM fallback 'mvp': sem conta, caches de dado
+    // sensível ficam DESLIGADOS (fail closed).
+    const escopoConta = req.session.homeAccountId;
+    const chaveMem = escopoConta ? `${escopoConta}:${alvoBase}` : null;
+    const chaveResultado = escopoConta
+      ? `resultado:v1:${escopoConta}:cemercante:${alvoBase}:${sig}`
+      : null;
+    const cached = chaveMem ? ceMercanteCache.get(chaveMem) : undefined;
     if (!refresh && cached && cached.sig === sig) {
       return res.json(cached.payload);
     }
     // Resultado persistente (Supabase): CE já auditado com os mesmos documentos
     // volta do banco — sem reabrir os PDFs, sem OCR/Gemini.
-    if (!refresh) {
+    if (!refresh && chaveResultado && chaveMem) {
       const salvo = await lerCacheJson<Record<string, unknown>>(chaveResultado);
       if (salvo) {
-        ceMercanteCache.set(alvoBase, { sig, payload: salvo });
+        ceMercanteCache.set(chaveMem, { sig, payload: salvo });
         return res.json(salvo);
       }
     }
 
     // OCR por conhecimento. Reusa o cache persistente — os BLs já lidos no PB-001
     // NÃO pagam OCR de novo. Máx. 3 leituras simultâneas (limite/minuto do Gemini).
-    const escopoOcr = String(req.session.homeAccountId || 'mvp');
+    const escopoOcr = escopoConta ?? '';
     let avisoIA: string | null = null;
     const ocrDe = async (docs: DocRef[], hint: TipoDoc): Promise<DocPreAlerta[]> => {
       const grupos = new Map<string, DocRef[]>();
@@ -1251,8 +1261,8 @@ auditoriaRouter.get('/:processo/ce-mercante', async (req: AuthedRequest, res, ne
       ...(avisoIA ? { avisoIA } : {}),
     };
     // Não cacheia quando a IA está bloqueada (some quando o limite subir).
-    if (!avisoIA) {
-      ceMercanteCache.set(alvoBase, { sig, payload });
+    if (!avisoIA && chaveMem && chaveResultado) {
+      ceMercanteCache.set(chaveMem, { sig, payload });
       await gravarCacheJson(chaveResultado, payload, alvoBase); // persiste o já-comparado
     }
     res.json(payload);

@@ -31,6 +31,17 @@ export type PaymentTerm = 'PREPAID' | 'COLLECT' | 'UNKNOWN';
 export type RolePapel = 'MBL' | 'HBL';
 export type EvidenceStrength = 'strong' | 'weak';
 
+/**
+ * Referência EXATA à página de OCR que originou o valor do campo. Desambigua
+ * quando dois anexos têm página índice 0: identifica o anexo + a página.
+ * Permite reconstruir: campo → valor bruto → evidência de OCR → anexo → página.
+ */
+export interface EvidencePageRef {
+  documentId: string; // identidade ESTÁVEL do grupo
+  attachmentId: string; // anexo de origem (chave da evidência por-anexo)
+  pageIndex: number | null; // página dentro do anexo
+}
+
 /** Envelope de evidência de 1 campo canônico. `rawValue` NUNCA é apagado. */
 export interface FieldEvidence<T> {
   rawValue: string | null;
@@ -38,6 +49,8 @@ export interface FieldEvidence<T> {
   normalizationRule: string | null; // id da regra aplicada (rastreável)
   sourceDocumentId: string | null; // identidade ESTÁVEL do documento de origem
   page: number | null;
+  /** Referência EXATA à página de OCR (anexo + página). Fase 2 preenche. */
+  evidencePageRef: EvidencePageRef | null;
   extractionMethod: ExtractionMethod;
   provider: string | null;
   model: string | null;
@@ -52,6 +65,7 @@ export function campoVazio<T>(sourceDocumentId: string | null = null): FieldEvid
     normalizationRule: null,
     sourceDocumentId,
     page: null,
+    evidencePageRef: null,
     extractionMethod: 'pending',
     provider: null,
     model: null,
