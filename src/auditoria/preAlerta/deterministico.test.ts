@@ -388,6 +388,15 @@ test('17 · equivalência desconhecida NÃO é forçada (BOXES × CAJAS → conf
   assert.equal(sub(familiaV004({ processo: 'IMV', master: m, houses: [h] }).evidencias, 'V-004.2')?.resultado, 'ValidacaoHumana');
 });
 
+test('5b · milhar por ESPAÇO ("18 500,000 KGS", "1 200 CTNS") → incerto, nunca um número errado', () => {
+  // Documento com convenção BR (que faria "500,000" virar 500 kg se o espaço fosse ignorado).
+  const c = parse('B/L NO.: SHYY26075038\nFREIGHT 1.234,56\nGROSS WEIGHT: 18 500,000 KGS\nTOTAL PACKAGES: 1 200 CTNS');
+  assert.equal(incerto(c.cargo.grossWeight), true);
+  assert.equal(c.cargo.grossWeight.normalizedValue, null);
+  assert.equal(incerto(c.cargo.packageQuantity), true);
+  assert.equal(c.cargo.packageQuantity.normalizedValue, null);
+});
+
 test('18 · campo ausente → nada inventado (sem peso líquido no documento)', () => {
   const c = parse('B/L NO.: SHYY26075038\nGROSS WEIGHT: 8000 KGS');
   assert.equal(c.cargo.netWeight.rawValue, null);

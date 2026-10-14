@@ -256,6 +256,8 @@ function segmentos(linha: string): Segmento[] {
 interface TokenMedida {
   numRaw: string;
   unitRaw: string | null;
+  /** Número colado por ESPAÇO a outro grupo de dígitos ("18 500,000"): possível milhar por espaço. */
+  grupoPorEspaco: boolean;
 }
 
 /** Números com unidade reconhecida adjacente (quando houver). */
@@ -268,7 +270,10 @@ function tokensMedida(texto: string): TokenMedida[] {
     if (antes && /[A-Za-z0-9]/.test(antes)) continue; // meio de token alfanumérico
     let unitRaw: string | null = m[3] ? m[3].replace(/\.+$/, '') : null;
     if (unitRaw && !ehUnidadeReconhecida(unitRaw)) unitRaw = null;
-    out.push({ numRaw: m[1], unitRaw });
+    const grupoPorEspaco =
+      /(?:^|[^\d.,])\d{1,3} $/.test(texto.slice(Math.max(0, m.index - 5), m.index)) || // "18 |500,000"
+      (!m[3] && /^ \d{3}(?!\d)/.test(texto.slice(m.index + m[1].length))); // "1| 200"
+    out.push({ numRaw: m[1], unitRaw, grupoPorEspaco });
   }
   return out;
 }
@@ -311,6 +316,11 @@ function lerMedida(
     const n = normalizarNumeroCampo(t.numRaw, num, conv);
     let motivo: string | null = n.motivo;
     let inc = n.incerto;
+    if (!inc && t.grupoPorEspaco) {
+      // "18 500,000": o espaço pode ser separador de milhar — não se escolhe uma leitura.
+      inc = true;
+      motivo = 'possível separador de milhar por espaço (leitura não única)';
+    }
     if (!inc) {
       if (!unitRaw) {
         inc = true;
@@ -357,7 +367,11 @@ const NAO_E_TIPO = new Set(['SAID', 'STC', 'TO', 'OF', 'THE', 'AND', 'ONLY', 'IN
 function lerVolumes(valor: string, conv: ConvencaoNumerica, ref: EvidencePageRef): { qtd: Cand<number> | null; tipo: Cand<string> | null } {
   const m = /(?<![A-Za-z0-9])(\d[\dOo.,]*[\dOo]|\d)\s*([A-Za-z][A-Za-z().'\/-]{1,20})?/.exec(valor);
   if (!m) return { qtd: null, tipo: null };
-  const qtd = cand(normalizarNumeroCampo(m[1], 'quantidade', conv), m[1], ref);
+  // "1 200 CTNS": o espaço pode ser separador de milhar — quantidade incerta (sem chute).
+  const espaco = /^ \d{3}(?!\d)/.test(valor.slice(m.index + m[1].length));
+  const qtd = espaco
+    ? cand<number>({ valor: null, regra: null, incerto: true, motivo: 'possível separador de milhar por espaço (leitura não única)', candidatos: [valor.trim()] }, valor.trim(), ref)
+    : cand(normalizarNumeroCampo(m[1], 'quantidade', conv), m[1], ref);
   let tipo: Cand<string> | null = null;
   const tok = (m[2] || '').replace(/[.'\/-]+$/, '');
   const limpo = tok.toUpperCase().replace(/[^A-Z]/g, '');
