@@ -497,3 +497,234 @@ Estas regras foram aprovadas durante a L0 e valem para todas as fases. O detalhe
   - **Motivo:** as suítes executam `TRUNCATE … CASCADE` e `DROP SCHEMA public CASCADE`.
 - **Restrição operacional do scheduler da Demurrage:** enquanto não houver um kill switch aprovado, **não se inicia a Priora com banco configurado** em ambiente onde credenciais reais de tracking ou Graph possam ser alcançadas.
 - **Fases após a L0:** cada uma (começando pelo diagnóstico de S6) exige autorização explícita.
+
+---
+
+## 10. Decisões de produto da L1b (motor de decisão puro completo)
+
+> **Status:** P1–P9 aprovadas pelo responsável pelo produto na autorização da L1b (2026-10-14), depois do diagnóstico da L1b; P10–P13 aprovadas nas correções finais da L1b, antes do commit.
+> Registro aditivo: nada acima foi alterado. A L1a continua congelada; a L1b é aditiva, ao lado dela, com contrato próprio.
+
+### P1 — Master Apresentado × Acompanhando Desbloqueio
+- **MASTER_APRESENTADO** é etapa própria. O processo fica nela enquanto a condição financeira do armador não está resolvida, e essa condição é o bloqueador.
+- Apresentação + condição financeira resolvida → **ACOMPANHANDO_DESBLOQUEIO**. A janela de 48h começa nesse momento, pelo **instante válido mais recente** das duas.
+- **Maersk:** a apresentação basta.
+
+### P2 — Etapas do procedimento por agência
+- **Unimar / Maersk:**
+  - etapa 3 (Apto para Procedimento) → agendamento iniciado = 4;
+  - agendamento confirmado, pronto para a apresentação física = 5;
+  - status **Finalizado** no portal = 6 (o Finalizado é a evidência).
+- **MSC / Rochamar:**
+  - a etapa 3 exige Master resolvido + portão do cliente; preparar o memorando não é apresentação;
+  - depois de "Enviar para apresentação" → 4;
+  - memorando carimbado + "Confirmar apresentação" do Analista → 6;
+  - não existe etapa 5 artificial.
+- **Grieg / Evergreen:**
+  - preparação / memorando / aviso por e-mail = 4;
+  - etapa 5 só com atracação real confirmada + pagamento ao armador finalizado + portão do cliente;
+  - depois do envio, segue no fluxo de apresentação até protocolo carimbado + Analista → 6.
+- **Armador conhecido fora da matriz:** etapa `PREPARACAO_OPERACIONAL`, bloqueador `PROCEDIMENTO_DE_APRESENTACAO_NAO_MAPEADO`, nenhuma recomendação. Armador **desconhecido** é outro caso (informação que falta).
+
+### P3 — Conflito no S2
+- CONFLITO do S2 não é "Master não localizado" e não escolhe Master.
+- Etapa `PREPARACAO_PARA_LIBERACAO`; bloqueador = conflito de identidade/vínculo; responsável Rocket/Analista; próxima ação = resolver o conflito; classe C. Nada se propaga a partir dos candidatos.
+- **Processo ativo vinculado (N-13)** = vínculo publicado e válido + não LIBERADO. Processo em CONFLITO não bloqueia um Master candidato. Nenhuma semântica de cancelamento é inventada.
+
+### P4 — Várias modalidades
+- Várias modalidades válidas não criam, sozinhas, divergência; todas são preservadas.
+- Modalidade corrente = a de **instante factual mais recente**; um fato mais novo a troca.
+- Empate exato não é resolvido por ordem de array, lexical ou técnica: o Master continua resolvido, a modalidade corrente pode aparecer como ambígua, e o empate não inventa procedimento de agência.
+- A modalidade nunca escolhe a agência (a matriz escolhe).
+
+### P5 — Override
+- **Escopo:** processo + pendência/episódio específico + ação específica. `INICIAR_PROCEDIMENTO` não autoriza `APRESENTAR`.
+- Não resolve a pendência.
+- Pode cobrir condição desconhecida/indisponível só quando a solicitação a identifica explicitamente **e** o aprovador a aceita expressamente.
+- **Fim:** mudança material o invalida; não há prazo; deixa de valer depois da execução, da resolução da pendência ou de mudança material.
+- Solicitante ≠ aprovador; ANALYST solicita; MANAGER/ADMIN decide.
+- Não existe override global de Master, nem override de impossibilidade externa (Evergreen antes da atracação, Master não resolvido, evidência de apresentação ausente).
+
+### P6 — Pedido de modalidade
+- Depois da confirmação do pré-alerta, faltando modalidade → **uma** ação Rocket combinada pedindo ao agente a modalidade do HBL (físico/Telex) e do MBL (físico/Wave/destino). Pede-se só o que falta; nunca se repete depois de obtida a informação.
+- A L1b não envia e-mail.
+- Modalidade do House desconhecida → nunca se adivinha; a próxima ação é identificá-la. Físico segue o caminho A/B; Telex aguarda e-mail válido do agente.
+
+### P7 — Pagamento ao armador
+- Pendente do lado da Rocket → `ROCKET_FINANCEIRO`, classe C.
+- Rocket já pagou e falta só confirmação/baixa externa → espera externa.
+- Fonte de verdade: HeadCargo. A exceção Maersk continua.
+
+### P8 — Cobrança do desbloqueio
+- O relógio de 48h começa pelo P1, mas a cobrança só é devida depois da **atracação real** confirmada. ATA sozinha nunca a dispara.
+- Janela vencida antes da atracação → a cobrança aparece imediatamente na atracação.
+
+### P9 — Fonte fora do ar
+- Integrada mas indisponível, sem fato anterior → NÃO DETERMINÁVEL / INFORMAÇÃO INDISPONÍVEL, sem classe A–D.
+- Com fato anterior → mantém o fato e o seu efeito de gate (N-17).
+
+### P10 — Grieg / Evergreen depois do envio
+- Depois que a Evergreen/Grieg fica apta para apresentação e o Analista executa "Enviar para apresentação":
+  - a etapa principal continua **APTO_PARA_APRESENTACAO**;
+  - expõe-se o subestado operacional **APRESENTACAO_EM_ANDAMENTO**, com a mensagem "Apresentação em andamento — aguardando protocolo carimbado";
+  - a etapa principal **não regride** para PROCEDIMENTO_EM_ANDAMENTO;
+  - **não** se marca MASTER_APRESENTADO.
+- Só protocolo/memorando carimbado + confirmação do Analista estabelece MASTER_APRESENTADO.
+- Decisão explícita de produto: preservar a progressão da etapa e, ainda assim, representar o fato da apresentação em andamento.
+
+### P11 — Armador fora da matriz continua acionável
+- Armador conhecido, mas fora da matriz congelada:
+  - etapa continua `PREPARACAO_OPERACIONAL`;
+  - bloqueador `PROCEDIMENTO_DE_APRESENTACAO_NAO_MAPEADO`;
+  - responsável Rocket; próxima ação `VALIDAR_MAPEAR_PROCEDIMENTO_DE_APRESENTACAO`; classe C.
+- Nunca se infere agência; nunca se recomenda agendamento, memorando ou apresentação até o mapeamento ser validado.
+- O processo não some da atenção operacional só porque o procedimento não está mapeado.
+
+### P12 — Master resolvido sem armador
+- Operacionalmente, um Master conhecido normalmente tem armador conhecido; isto é um **estado defensivo de inconsistência**, não um fluxo normal.
+- Master resolvido sem o fato confiável de armador:
+  - responsável Rocket/Analista; próxima ação `IDENTIFICAR_ARMADOR_DO_MASTER`; classe C;
+  - expõe-se atenção de inconsistência de dados/identidade;
+  - nada se infere de prefixo do MBL, padrão de texto, tracking ou aproximação.
+- Existindo o fato confiável de armador, vale a matriz normal.
+
+### P13 — BL encaminhado para apresentação
+- Fato operacional puro **`BL_ENCAMINHADO_PARA_APRESENTACAO`**: o Analista registrou que o BL/pacote documental foi de fato encaminhado para apresentação.
+- Preserva: identidade do Master; agência/fluxo quando conhecido; autor; instante; evidência/referência quando houver.
+- **Não é prova de apresentação.**
+  - **MSC / Rochamar / Grieg:** o registro do envio estabelece APRESENTACAO_EM_ANDAMENTO; não estabelece MASTER_APRESENTADO; continua exigido o protocolo/memorando carimbado + confirmação do Analista.
+  - **Unimar / Maersk:** o Analista pode registrar o encaminhamento, para rastreabilidade; isso **não** vira gate adicional; o status **Finalizado** no portal continua suficiente, sozinho, para MASTER_APRESENTADO; a ausência da marca manual nunca impede um Finalizado válido de provar a apresentação.
+- Em todo fluxo: **encaminhado ≠ apresentado**.
+
+## 11. Regras fechadas para a L1b
+
+- **Identificado mas não resolvido ≠ não localizado:**
+  - envelope em trânsito → espera externa;
+  - envelope entregue sem conferência do MBL → a Rocket confere (C);
+  - MBL ausente na conferência → acompanhamento com o agente (externo);
+  - Wave identificado e não confirmado → espera do agente;
+  - emissão no destino anunciada → a Rocket consulta o armador, se ainda não consultou; depois, espera do armador.
+- **MASTER_NAO_LOCALIZADO** exige as três fontes (Courier, Wave, emissão no destino) integradas e observáveis, nenhuma evidência, nenhuma modalidade identificada e nenhum conflito. Fonte fora impede a conclusão.
+- **Armador:** só conta fato confiável fornecido — nunca prefixo do MBL, padrão, palpite de tracking ou aproximação.
+- **Classe C para ações da Rocket:** consultar o armador sobre a emissão no destino, conferir o MBL entregue, revisão do Termo ambíguo pelo Analista, pedir a modalidade ao agente. "Verificar desconsolidação" continua regulatório.
+- **T-48h:** fonte do CE House indisponível sem fato anterior → nenhuma condição "CE House ausente".
+- **Falha da Rocket:** só com evidência positiva contra uma obrigação explícita; nunca com prazo inventado.
+- **`CE_MASTER_RETIFICADO`:** fato confiável consumido. Antes dele, o responsável é o armador; depois, Rocket/desconsolidação podem retificar o CE House.
+- **Etapa não determinável na prioridade:** empata na proximidade e segue para o próximo critério.
+- **Fontes semânticas separadas:** Wave, emissão no destino, Telex, pré-alerta/modalidade, financeiro do cliente no HeadCargo, Termo Único, pagamento ao armador, frete no SISCARGA, fiscal no SISCARGA, Courier, procedimento da agência, VesselCall, Auditoria do CE House.
+- **Terminalidade:**
+  - `concluirPeloSiscarga` só cria a prova a partir de uma verificação final fresca e bem-sucedida, do CE House atual, com frete e fiscal sem pendência;
+  - depois de LIBERADO, contradições posteriores não o invalidam;
+  - dado velho ou parcial nunca cria LIBERADO.
+- **Tempo:**
+  - só existem T-10, T-48h e a janela de 48h;
+  - **T-10:** exato → ETA − 10 dias; só data → 00:00 de D−10 no fuso confiável (fallback do N-19); ETA desconhecida → C + referência indisponível; ETA mais nova move C↔B; fonte fora mantém a ETA;
+  - **T-48h:** primeiro a atracação prevista no porto final, a ETA como reserva; só data → 00:00 de D−2; fuso da fonte, depois do porto, depois o fallback brasileiro só-data (`America/Sao_Paulo`, OPERATIONAL_FALLBACK); sem segurança → nenhum limiar; precisão melhor recalcula o mesmo episódio; uma única condição ativa;
+  - **janela de 48h (D-8 estrito):** nunca inventar hora; precisão insuficiente → nenhuma cobrança, incerteza exposta; reversão PAGO→NÃO PAGO deixa o gate não resolvido; um novo PAGO dá um novo instante;
+  - **ordenação por ETA com precisão de DATA:** nenhum 00:00 fictício; valores da mesma data que não podem ser ordenados empatam.
+- **Resolução do Master** cobre todos os casos: físico, Wave, emissão no destino, identificado-não-resolvido, não localizado, indisponível, não integrado, conflito e histórico.
+- **Portão do cliente:** Termo × Financeiro × House × Override, com todos os estados; tecnicamente possível ≠ operacionalmente permitido.
+- **Master compartilhado:** segundo passo puro.
+  - A etapa continua individual; uma ação por Master; um processo bloqueado a bloqueia; os bloqueadores são listados.
+  - O override de um processo libera só o que cobre.
+  - A L8 registra a execução; a propagação segue o vínculo; vale o N-15; LIBERADO não reabre.
+- **Matriz:** Unimar — ONE, PIL, HMM, CMA CGM, COSCO, OOCL, Yang Ming; Maersk — Maersk; MSC — MSC; Rochamar — Hapag-Lloyd, ZIM; Grieg — Evergreen. Nada mais.
+- **Prioridade:**
+  - ordem: classe → grupo temporal → ETA onde comparável → proximidade da etapa onde conhecida → tempo aguardando; sem pontuação;
+  - N-10 = A; não localizado antes de T-10 = C; em/depois de T-10 = B; ATA = B; ETA desconhecida = C + REFERENCIA_TEMPORAL_INDISPONIVEL;
+  - C continua C depois da chegada; T-48h e fiscal nunca são classe; a cobrança de 48h é A só com a janela vencida e a atracação confirmada;
+  - identificador estável só como último desempate.
+- **Regulatório:** condições puras para CE House, T-48h, CE Master inferido (sem afirmação sobre as 72h), pendência fiscal, e-CAC, mudança de rota, sequência de retificação e N-10 — separadas da classe da fila.
+- **Arquitetura:** L1a congelada; a L1b é aditiva, com contrato próprio, e não alarga `FatoDoMaster`. Propriedade de compatibilidade: com toda fonte posterior à L1a NAO_INTEGRADA, a L1b projetada pela fachada é igual ao resultado congelado da L1a.
+
+## 12. Correções técnicas aprovadas antes do commit da L1b
+
+Aplicam regras já congeladas; não criam regra nova.
+
+- **Matriz — CMA CGM:** a busca usa a forma canônica determinística de um fato de armador **já confiável** (maiúsculas; espaços, hífens e sublinhados viram um `_`), de modo que "CMA CGM" é `CMA_CGM` → Unimar. Nada de aproximação, prefixo de MBL ou padrão: outra grafia é outro código.
+- **Atracação não substitui ATA:** na ordenação normal do N-11, ATA existente → grupo de chegada ocorrida; sem ATA, usa-se a ETA. A atracação real só tem os papéis aprovados: gate da Evergreen e cobrança da P8.
+- **Nenhum dia fabricado por UTC:** ETA/hora sem fuso confiável não é convertida para UTC para achar o dia. Preserva-se o valor bruto e a precisão; o dia é o local num fuso confiável (fonte ou porto) ou, sem ele, o dia escrito pela fonte. Hora sem confiança degrada para a data conhecida. O fallback operacional do N-19 não dá dia factual (só materializa T-10/T-48h).
+- **Prioridade preserva toda ordem comprovada:** classe → grupo temporal → ETA formam uma ordem parcial estrita (na ETA: dias diferentes ordenam; no mesmo dia, só dois instantes exatos se ordenam). A fila é uma extensão linear determinística dessa ordem; etapa e tempo aguardando só decidem onde ela não ordena. Uma ETA imprecisa nunca apaga a ordem comprovada entre outras (A 08:00 antes de C 20:00, com ou sem um B só com data). Resultado independente da ordem de entrada; comparação transitiva por conjunto.
+- **Pagamento ao armador:** nenhum status HeadCargo é inventado antes do contrato (o oficial é só pendente/finalizado). "A Rocket já executou e aguarda baixa externa" é **fato operacional separado** do financeiro da Rocket; sem ele → `ROCKET_FINANCEIRO`, C; com ele → espera externa, D. O oficial do HeadCargo continua independente.
+- **Termo incompleto ≠ reprovação:** campos obrigatórios faltando → `PENDENTE_DE_CORRECAO`, responsável cliente, com os campos concretos. Reprovação só para invalidade conclusiva (signatário não outorgado, procuração vencida, poderes insuficientes). Assinatura/procuração ambígua ou não verificável continua em revisão.
+- **Apresentação só com data continua só data:** o instante técnico de registro nunca é o momento factual; o marco mostra a data; a janela de 48h não usa hora inventada. Quando a própria confirmação do Analista é o evento factual, o seu instante vale como esse fato — os dois casos ficam distintos.
+- **SISCARGA terminal:** antes de LIBERADO, a verificação final tem de ser fresca e válida para o CE House atual, com frete e fiscal sem pendência (contradição posterior à verificação a torna velha). Depois de LIBERADO, contradições posteriores não invalidam a prova nem reabrem o processo.
+
+## 13. Decisões finais da L1b (aprovadas antes do commit)
+
+> **Status:** aprovadas pelo responsável pelo produto nas correções finais da L1b, antes do commit. Registro aditivo: nada acima foi alterado.
+
+### 13.1 P12 — etapa aprovada
+- Master resolvido sem fato confiável identificando o armador:
+  - etapa `PREPARACAO_OPERACIONAL`;
+  - responsável Rocket/Analista; próxima ação `IDENTIFICAR_ARMADOR_DO_MASTER`; classe C;
+  - atenção `INCONSISTENCIA_DE_DADOS_DO_MASTER`.
+- Estado defensivo excepcional: na operação normal, o Master identificado permite identificar seu armador.
+- Nunca se infere o armador por prefixo, semelhança ou heurística.
+
+### 13.2 Grieg / Evergreen — envio antecipado
+- Registrar `BL_ENCAMINHADO_PARA_APRESENTACAO` **não concede** uma aptidão que ainda não existe.
+- BL encaminhado antes de cumpridas as condições obrigatórias da Evergreen (atracação efetiva, pagamento ao armador finalizado, portão do cliente):
+  - preservam-se o fato do envio, o autor, o horário e a evidência;
+  - **não** se promove automaticamente para APTO_PARA_APRESENTACAO;
+  - mantêm-se os bloqueadores reais, inclusive atracação efetiva e pagamento ao armador;
+  - sinaliza-se que houve encaminhamento antes da aptidão;
+  - **não** se infere MASTER_APRESENTADO.
+- Cumpridos os requisitos, aplica-se a P10 normalmente, respeitando a evidência real de apresentação.
+
+### 13.3 Unimar / Maersk — BL encaminhado
+- O Analista registrou o encaminhamento e o portal ainda não retornou Finalizado:
+  - não se recomenda novamente o mesmo envio;
+  - próxima ação/situação: aguardar a confirmação Finalizado.
+- O registro manual continua sendo apenas rastreabilidade.
+- Finalizado continua suficiente para comprovar a apresentação, independentemente do registro manual.
+
+### 13.4 Agência do encaminhamento incompatível com a matriz
+- O encaminhamento registrado indica agência diferente da determinada pela matriz oficial:
+  - preservam-se o registro original e sua evidência;
+  - sinaliza-se a inconsistência para análise do Analista;
+  - esse encaminhamento incompatível **não** é usado para avançar a etapa;
+  - **não** se infere que o Master foi apresentado;
+  - **não** se corrige silenciosamente o registro histórico.
+
+### 13.5 Grieg / Evergreen — reversão financeira após encaminhamento válido
+- Se o BL foi encaminhado com atracação efetiva e pagamento ao armador **validamente confirmados** no instante do envio, preserva-se **APTO_PARA_APRESENTACAO** (etapa 5), mesmo que surja depois uma nova pendência financeira.
+- Preservam-se `BL_ENCAMINHADO_PARA_APRESENTACAO`, o autor, o instante e as evidências.
+- A nova pendência financeira é exibida explicitamente, com responsável e próxima ação.
+- Ficam bloqueadas as ações posteriores que dependem da regularização financeira.
+- **Não** se infere MASTER_APRESENTADO nem LIBERADO.
+- Se a confirmação original do pagamento for **invalidada retroativamente**, a aptidão é reavaliada com base nas evidências válidas, sem apagar o histórico.
+- **Distinção:** nova pendência posterior = nova observação oficial depois de uma confirmação válida (N-16b), que preserva a etapa 5. Invalidação retroativa = fato explícito que retira a validade da confirmação original como prova; nesse caso a aptidão no envio é reavaliada.
+
+### 13.6 Grieg / Evergreen — apresentação × pagamento (Opção B)
+- **Aprovada expressamente pelo responsável pelo produto.**
+- No fluxo Evergreen/Grieg, quando:
+  1. o BL foi encaminhado validamente para apresentação;
+  2. surgiu depois uma nova pendência financeira;
+  3. o protocolo/memorando carimbado retornou;
+  4. o Analista confirmou a apresentação;
+
+  a Priora **reconhece a apresentação efetivamente comprovada**.
+- **Resultado obrigatório:**
+  - etapa 6, **MASTER_APRESENTADO**;
+  - preservam-se o encaminhamento, o protocolo e a confirmação do Analista;
+  - exibe-se a pendência financeira atual, com responsável e próxima ação financeira;
+  - **não** se avança para a etapa 7 (ACOMPANHANDO_DESBLOQUEIO) enquanto o pagamento exigido estiver pendente;
+  - **não** se infere LIBERADO.
+- **Princípio congelado:** uma pendência posterior não apaga um marco operacional anteriormente comprovado. Apresentação e pagamento são dimensões independentes.
+- **Alcance:** esta regra **não** permite validar um envio originalmente irregular nem desconsiderar evidência invalidada retroativamente; valem as regras de 13.2 e 13.5 para esses casos.
+- **Consequência em 13.5:** a nova pendência financeira posterior a um envio válido não bloqueia a confirmação da apresentação. A exigência de protocolo carimbado + confirmação do Analista continua.
+
+### 13.7 Envio irregular seguido de apresentação factual
+- **Aprovada pelo responsável pelo produto.**
+- Uma tentativa de apresentação irregular/não autorizada **não invalida** uma apresentação factual posterior quando a evidência exigida existe.
+- Retornado o protocolo/memorando carimbado e confirmado pelo Analista, registra-se **MASTER_APRESENTADO / etapa 6**, mesmo que o envio original tenha sido irregular.
+- **Porém:**
+  - preserva-se o evento do envio irregular;
+  - preserva-se o motivo da irregularidade;
+  - a exceção/atenção continua visível;
+  - **não** se trata retroativamente a ação original como recomendada ou autorizada;
+  - **não** se apaga nenhum override ou pré-condição faltante;
+  - **não** se avança para a etapa 7 enquanto a condição de pagamento estiver pendente;
+  - a janela de 48h só começa quando apresentação e pagamento são ambos válidos, pelo instante mais recente.
+- **Distinção:** ESTADO FACTUAL = apresentado; CONFORMIDADE DO PROCESSO = a apresentação foi irregular.
