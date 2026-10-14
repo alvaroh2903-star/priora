@@ -2,6 +2,12 @@
 
 **Baseline do backend congelado:** `d5b4fbc` (D16 v1.1). Este documento não altera nenhum arquivo de código — é o diagnóstico e o plano exigidos antes de qualquer implementação.
 
+> **Status da Produção P1 (atualizado após decisão final do usuário):**
+> **Entrega 1 — APROVADA E CONGELADA.** Entrega 2 e Entrega 3 — não iniciadas,
+> aguardando autorização explícita do usuário para começar. Produção P1 como
+> um todo **não está declarada completa**. Ver §6 para o detalhe do
+> congelamento e os relatórios de entrega.
+
 ## 0. Status executivo
 
 O motor Demurrage V2 (D10–D16 v1.1) está completo e testado (1.068 testes), mas **não tem nenhuma rota de produção que crie um processo**. Isso já era conhecido desde o D16. O que esta auditoria confirma, e que muda a urgência do diagnóstico, é mais grave do que "a integração ainda não foi construída":
@@ -193,9 +199,26 @@ Os itens 2 e 3 podem, a princípio, ser cobertos reaproveitando/estendendo `GET 
 ## 6. Sequência de implementação (3 entregas)
 
 ### Entrega 1 — Handoff de entrada
+
+**STATUS: APROVADA E CONGELADA (decisão final do usuário, após a corretiva v1.3).**
+Não alterar a superfície congelada desta entrega, salvo: bug comprovado;
+falha de segurança/integridade; ou mudança explicitamente aprovada pelo
+usuário. Relatórios, em ordem: `docs/demurrage-producao-p1-entrega-1.md`
+(implementação original); `docs/demurrage-producao-p1-entrega-1-v1-1.md`
+(vínculo estável do processo a montante, identidade imutável do evento,
+sanitização de erro); `docs/demurrage-producao-p1-entrega-1-v1-2.md`
+(segurança transacional de `resolverVinculoProcesso` — rollback garantido,
+conflito oculto no INSERT do vínculo); `docs/demurrage-producao-p1-entrega-1-v1-3.md`
+(elimina pool starvation sob concorrência — conexão dedicada para o lock
+consultivo). Observação não bloqueante registrada na v1.3: a conexão
+dedicada do lock fica fora do pool compartilhado — monitorar o limite
+total de conexões PostgreSQL sob carga futura muito alta; não é motivo
+para reabrir a superfície congelada preventivamente.
+
 **Escopo:** serviço de aplicação versionado envolvendo `registrarProcessoDemurrage` (§2.1-2.2: acrescentar `origemEventoId` estruturado; decidir e implementar a opção (a) do §2.2 item 2 — nunca aceitar descarga); rota HTTP interna fina protegida pelo segredo de serviço por organização (§5.2-5.3); nenhuma chamada ao tracking durante o registro (já garantido pelo contrato).
 **Gate de aceitação:** replay do mesmo payload nunca duplica processo/contêiner/ledger; reenvio com fatos novos atualiza um processo OPEN pelos mecanismos de observação oficiais (nunca um caminho paralelo); reenvio sobre um FINAL é rejeitado; organização nunca vem confiável só do corpo; dado parcial produz pendência nomeada, nunca default inventado; backlog de `si_pendencias.processo_nao_identificado` existente é reconciliável reprocessando a SI manual (sem mudança no reprocessamento).
 **Regressão:** suíte completa do Demurrage Engine (D10–D16 v1.1, incluindo `d16Vertical.test.ts` e `schedulerClaimFencing.test.ts`); V1; `tsc`/build. Nenhum teste existente deve mudar de comportamento — só testes novos para a rota/serviço do handoff.
+**Regressão final no congelamento (v1.3):** Demurrage Engine 1037/1037; V1 25/25; D13 UI 66/66; `tsc --noEmit` limpo; build limpo.
 
 ### Entrega 2 — Rotas de ação operacional
 **Escopo:** as rotas do §3 marcadas "obrigatório" (itens 1, 3, 4a, 5, 6, 7) — cada uma um wrapper fino sobre o serviço congelado correspondente, com RBAC/organização resolvidos na camada de rota (nunca regra de negócio nova); para o item 2 (tracking manual), acrescentar `membershipId` ao registro de auditoria antes de expor por rota.
