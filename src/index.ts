@@ -16,6 +16,8 @@ import { trackingRouter } from './routes/trackingRoutes';
 import { demurrageRouter } from './routes/demurrageRoutes';
 import { demurrageBotRouter } from './routes/demurrageBotRoutes';
 import { auditoriaRouter } from './routes/auditoriaRoutes';
+import { portsRouter } from './routes/portsRoutes';
+import { PORTS as PORT_SOURCES, getLineup, findVessel } from './ports';
 import { chromium } from 'playwright';
 import { withPage } from './browser/browser';
 import { trackShipment, detect, detectCarrier, resolveSearchRef } from './browser/carriers';
@@ -132,6 +134,7 @@ app.use('/api/demurrage/bot', demurrageBotRouter);
 app.use('/api/demurrage', demurrageRouter);
 app.use('/api/rocket', rocketRouter);
 app.use('/api/auditoria', auditoriaRouter);
+app.use('/api/ports', portsRouter);
 
 /** Estado de autenticação do usuário atual (para a UI). */
 app.get('/api/me', (req, res) => {
@@ -1269,6 +1272,33 @@ app.get('/health/watchdog-auto', async (req, res) => {
   }
   if (String(req.query.run || '') === '1') void runWatchdogAutoOnce();
   res.json(getWatchdogAutoStatus());
+});
+
+/**
+ * Line-up dos PORTOS (gated por DIAG_TOKEN) — testar sem login:
+ *   /health/port-lineup?token=<DIAG_TOKEN>&port=itapoa|riobrasil|paranagua|all
+ *                      [&refresh=1][&navio=<nome>&viagem=<viagem>]
+ * Devolve contagem por status, erro e as primeiras escalas de cada porto; com
+ * `navio`, procura o navio em todos.
+ */
+app.get('/health/port-lineup', async (req, res) => {
+  const token = requireDiagToken(req, res);
+  if (!token) return;
+  const navio = String(req.query.navio || '').trim();
+  if (navio) return res.json(await findVessel(navio, String(req.query.viagem || '').trim() || null));
+  const want = String(req.query.port || 'all').trim();
+  const ids = want === 'all' ? PORT_SOURCES.map((p) => p.id) : [want];
+  const refresh = String(req.query.refresh || '') === '1';
+  const out = await Promise.all(
+    ids.map(async (id) => {
+      const t0 = Date.now();
+      const l = await getLineup(id, { refresh });
+      const porStatus: Record<string, number> = {};
+      for (const c of l.calls) porStatus[c.status] = (porStatus[c.status] || 0) + 1;
+      return { port: id, name: l.portName, ms: Date.now() - t0, cached: l.cached, error: l.error, count: l.count, porStatus, amostra: l.calls.slice(0, 5) };
+    }),
+  );
+  res.json({ commit: BUILD_COMMIT, ports: out });
 });
 
 app.get('/health/jobs', (req, res) => {

@@ -38,6 +38,7 @@
     "detailhistory:selftest": "ts-node src/browser/carriers/scrapers/detailHistorySelftest.ts",
     "estimates:selftest": "ts-node src/browser/carriers/estimatesSelftest.ts",
     "security:selftest": "ts-node src/middleware/securitySelftest.ts",
+    "ports:selftest": "ts-node src/ports/portsSelftest.ts",
     "demurrage:calc": "ts-node src/demurrage/calculatorSelftest.ts",
     "auth:selftest": "ts-node src/auth/accountSwitchSelftest.ts",
     "rocket:selftest": "ts-node src/rocket/rocketSelftest.ts",
