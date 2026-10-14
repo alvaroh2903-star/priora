@@ -13,10 +13,19 @@ import {
   generateStructuredFromDocument,
   generateStructuredFromDocuments,
 } from '../../ai/geminiClient';
-import { ocrDocumentoMistral, isMistralOcrConfigured } from '../../ai/mistralOcrClient';
+import { ocrDocumentoMistral, isMistralOcrConfigured, MistralOcrResultado } from '../../ai/mistralOcrClient';
 import { config } from '../../config';
 import { getAttachmentContent } from '../../graph/graphService';
 import { ContainerDoc, DocPreAlerta, Operacao, TipoDoc } from './modelo';
+import {
+  OCR_EVIDENCE_SCHEMA,
+  OcrEvidencePage,
+  OcrEvidenceV1,
+  PaginaRef,
+  assinaturaEvidencia,
+  gravarEvidencia,
+  lerEvidencia,
+} from '../ocr/ocrEvidence';
 
 const ContainerSchema = z.object({
   numero: z.string().nullable(),
@@ -175,43 +184,131 @@ function mistralOcrLigado(): boolean {
   return config.mistralOcr.enabled && isMistralOcrConfigured();
 }
 
+/* ------------------------------------------------------------------ *
+ * Caminho ATIVO (plano *deterministic-first*, Fase 1): o MISTRAL faz o OCR
+ * (pixels → texto) e sua saída BRUTA é persistida como EVIDÊNCIA DE OCR **antes**
+ * da estruturação. Em seguida o GEMINI estrutura o texto no ExtractionSchema. O
+ * Gemini deixou de ser OBRIGATÓRIO: se a estruturação falhar (ex.: 429/teto de
+ * gastos), o OCR já está salvo → a re-tentativa NÃO re-roda (nem re-paga) o OCR,
+ * e a falha é LOCAL (atribuída à estruturação, não "documento ilegível"). A
+ * estruturação determinística a partir do texto bruto entra na Fase 2.
+ * ------------------------------------------------------------------ */
+
+/** Portas injetáveis (permitem testar "Mistral OK + Gemini indisponível" sem rede). */
+export interface PortasExtracao {
+  ocr: (documentUrl: string) => Promise<MistralOcrResultado>;
+  estruturar: (markdown: string, tipo: TipoDoc) => Promise<Extracao>;
+  lerEvidencia: (assinatura: string) => Promise<OcrEvidenceV1 | null>;
+  gravarEvidencia: (ev: OcrEvidenceV1) => Promise<void>;
+}
+
+/** Estruturação padrão: Gemini em modo TEXTO (sem tokens de imagem). */
+async function estruturarComGemini(markdown: string, tipo: TipoDoc): Promise<Extracao> {
+  return generateStructured(
+    ExtractionSchema,
+    SYSTEM_PROMPT,
+    `Tipo esperado deste documento (dica): ${tipo}. O TEXTO abaixo já foi transcrito por OCR ` +
+      `do documento (não há imagem) — ESTRUTURE os campos EXCLUSIVAMENTE a partir dele, sem inventar:\n\n${markdown}`,
+  );
+}
+
+const PORTAS_PADRAO: PortasExtracao = {
+  ocr: ocrDocumentoMistral,
+  estruturar: estruturarComGemini,
+  lerEvidencia,
+  gravarEvidencia,
+};
+
+export interface ResultadoViaMistral {
+  doc: DocPreAlerta | null;
+  tipoDetectado: Extracao['tipoDetectado'] | null;
+  erro: string | null;
+  /** Fonte REAL do erro (observabilidade): OCR do Mistral × estruturação do Gemini. */
+  erroFonte: 'mistral-ocr' | 'gemini-estruturacao' | null;
+  /** O OCR bruto foi obtido e persistido como evidência? */
+  ocrEvidenciaOk: boolean;
+  /** OCR ok, porém a estruturação falhou/indisponível (NÃO é "documento ilegível"). */
+  estruturacaoPendente: boolean;
+  ocrAssinatura: string | null;
+}
+
 /**
- * Caminho ATIVO (blueprint 3.11 — camada de OCR substituível): o MISTRAL faz o OCR
- * (pixels → texto) e o GEMINI ESTRUTURA o texto no ExtractionSchema (texto → campos).
- * O Gemini NÃO faz mais OCR de visão no pipeline ligado — só texto. As REGRAS
- * continuam no motor determinístico. Cada anexo é OCR'd pelo Mistral (base64 data
- * URI; base64 é provisório p/ docs grandes — Files API fica p/ depois) e os markdowns
- * são concatenados. Devolve o erro real quando falha (para aparecer no ?debug=1).
+ * Núcleo testável: OCR (Mistral) → PERSISTE evidência → estruturação (Gemini).
+ * Reusa a evidência quando já existe (não re-paga OCR). I/O via `portas` (default =
+ * implementações reais) para permitir testar a sobrevivência à queda do Gemini.
+ * `ctx` dá a identidade de conteúdo (escopo + páginas) para a assinatura.
  */
-async function extrairViaMistral(
+export async function extrairViaMistralCore(
   partes: Array<{ data: string; mimeType: string }>,
   tipo: TipoDoc,
   nome: string,
-): Promise<{ doc: DocPreAlerta | null; tipoDetectado: Extracao['tipoDetectado'] | null; erro: string | null }> {
-  try {
-    let markdown = '';
+  ctx: { escopo: string; pagesRef: PaginaRef[] },
+  portas: PortasExtracao = PORTAS_PADRAO,
+): Promise<ResultadoViaMistral> {
+  const assinatura = assinaturaEvidencia(ctx.escopo, ctx.pagesRef);
+
+  // 1) EVIDÊNCIA DE OCR — reusa se já existe; senão roda o Mistral e PERSISTE.
+  let evidencia = await portas.lerEvidencia(assinatura);
+  if (!evidencia) {
+    const pages: OcrEvidencePage[] = [];
+    let pagesProcessed = 0;
+    let docSizeBytes = 0;
+    let durationMs = 0;
+    let model = config.mistralOcr.model || 'mistral';
     for (const parte of partes) {
-      const r = await ocrDocumentoMistral(`data:${parte.mimeType};base64,${parte.data}`);
+      const r = await portas.ocr(`data:${parte.mimeType};base64,${parte.data}`);
       if (!r.ok) {
-        return { doc: null, tipoDetectado: null, erro: `OCR (Mistral) falhou: ${String(r.error || 'erro').slice(0, 240)}` };
+        // Falha do PRÓPRIO OCR (ex.: Mistral 429) — atribuída ao Mistral, não ao Gemini.
+        return {
+          doc: null, tipoDetectado: null,
+          erro: `OCR (Mistral) falhou: ${String(r.error || 'erro').slice(0, 240)}`,
+          erroFonte: 'mistral-ocr', ocrEvidenciaOk: false, estruturacaoPendente: false, ocrAssinatura: null,
+        };
       }
-      markdown += r.pages.map((p) => p.markdown).join('\n\n') + '\n\n';
+      model = r.model || model;
+      pagesProcessed += r.pagesProcessed ?? r.pages.length;
+      docSizeBytes += r.docSizeBytes ?? 0;
+      durationMs += r.durationMs ?? 0;
+      for (const p of r.pages) pages.push({ index: p.index, markdown: p.markdown, dimensions: p.dimensions });
     }
-    markdown = markdown.trim();
-    if (!markdown) return { doc: null, tipoDetectado: null, erro: 'OCR (Mistral) não retornou texto.' };
-    // Gemini em modo TEXTO (sem tokens de imagem): estrutura o markdown no schema.
-    const ai = await generateStructured(
-      ExtractionSchema,
-      SYSTEM_PROMPT,
-      `Tipo esperado deste documento (dica): ${tipo}. O TEXTO abaixo já foi transcrito por OCR ` +
-        `do documento (não há imagem) — ESTRUTURE os campos EXCLUSIVAMENTE a partir dele, sem inventar:\n\n${markdown}`,
-    );
-    return { doc: mapExtracaoParaDoc(ai, nome, tipo), tipoDetectado: ai.tipoDetectado ?? null, erro: null };
-  } catch (e) {
+    evidencia = {
+      schemaVersion: OCR_EVIDENCE_SCHEMA,
+      assinatura,
+      documentId: nome,
+      pagesRef: ctx.pagesRef,
+      provider: 'mistral',
+      model,
+      capturedAt: new Date().toISOString(),
+      pagesProcessed: pagesProcessed || null,
+      docSizeBytes: docSizeBytes || null,
+      durationMs: durationMs || null,
+      pages,
+    };
+    // PERSISTE ANTES da estruturação: a falha do Gemini não descarta o OCR pago.
+    await portas.gravarEvidencia(evidencia);
+  }
+
+  const markdown = evidencia.pages.map((p) => p.markdown).join('\n\n').trim();
+  if (!markdown) {
     return {
-      doc: null,
-      tipoDetectado: null,
-      erro: `Estruturação (Gemini texto) falhou: ${String((e as { message?: string })?.message || e).slice(0, 240)}`,
+      doc: null, tipoDetectado: null, erro: 'OCR (Mistral) não retornou texto.',
+      erroFonte: 'mistral-ocr', ocrEvidenciaOk: true, estruturacaoPendente: false, ocrAssinatura: assinatura,
+    };
+  }
+
+  // 2) ESTRUTURAÇÃO (Gemini) — NÃO obrigatória. Falha = LOCAL (o OCR sobrevive).
+  try {
+    const ai = await portas.estruturar(markdown, tipo);
+    return {
+      doc: mapExtracaoParaDoc(ai, nome, tipo), tipoDetectado: ai.tipoDetectado ?? null,
+      erro: null, erroFonte: null, ocrEvidenciaOk: true, estruturacaoPendente: false, ocrAssinatura: assinatura,
+    };
+  } catch (e) {
+    // O OCR bruto já está salvo (assinatura) → re-tentativa re-estrutura sem re-OCR.
+    return {
+      doc: null, tipoDetectado: null,
+      erro: `Estruturação (Gemini) indisponível: ${String((e as { message?: string })?.message || e).slice(0, 240)}`,
+      erroFonte: 'gemini-estruturacao', ocrEvidenciaOk: true, estruturacaoPendente: true, ocrAssinatura: assinatura,
     };
   }
 }
@@ -220,6 +317,7 @@ export async function extrairDocPreAlertaMultiplo(
   accessToken: string,
   paginas: PaginaDoc[],
   tipo: TipoDoc,
+  opts?: { escopo?: string },
 ): Promise<{
   doc: DocPreAlerta;
   tipoDetectado: Extracao['tipoDetectado'] | null;
@@ -229,6 +327,12 @@ export async function extrairDocPreAlertaMultiplo(
   paginasComBytes?: number;
   /** Qual OCR foi efetivamente usado (mistral | gemini) — observabilidade. */
   ocrProvider?: 'mistral' | 'gemini';
+  /** Fonte REAL do erro (observabilidade): OCR do Mistral × estruturação do Gemini. */
+  erroFonte?: 'mistral-ocr' | 'gemini-estruturacao' | null;
+  /** OCR ok, mas estruturação falhou/indisponível (NÃO é "documento ilegível"). */
+  estruturacaoPendente?: boolean;
+  /** O OCR bruto foi persistido como evidência (recuperável sem re-rodar OCR)? */
+  ocrEvidenciaOk?: boolean;
 }> {
   const nome = paginas[0]?.nome ?? 'documento';
   let comBytes = 0;
@@ -259,14 +363,35 @@ export async function extrairDocPreAlertaMultiplo(
     // (com o erro real no ?debug=1) — NÃO cai na visão do Gemini. O Gemini-visão
     // abaixo só roda quando o Mistral está desligado (kill switch / sem chave).
     if (mistralOcrLigado()) {
-      const via = await extrairViaMistral(partes, tipo, nome);
+      const pagesRef: PaginaRef[] = paginas.map((p) => ({
+        messageId: p.messageId,
+        attachmentId: p.attachmentId,
+        nome: p.nome,
+      }));
+      const via = await extrairViaMistralCore(partes, tipo, nome, {
+        escopo: opts?.escopo || 'mvp',
+        pagesRef,
+      });
       if (via.doc) {
-        return { doc: via.doc, tipoDetectado: via.tipoDetectado, paginasComBytes: comBytes, ocrProvider: 'mistral' };
+        return {
+          doc: via.doc,
+          tipoDetectado: via.tipoDetectado,
+          paginasComBytes: comBytes,
+          ocrProvider: 'mistral',
+          ocrEvidenciaOk: via.ocrEvidenciaOk,
+        };
       }
+      // Mistral leu, mas a estruturação falhou/indisponível: o OCR está SALVO
+      // (recuperável sem re-OCR). O doc sai ilegível p/ o motor desta fase, porém
+      // com a causa correta (gemini-estruturacao) e o sinal estruturacaoPendente —
+      // NÃO é "documento ilegível" nem OCR perdido.
       return {
         doc: docIlegivelPreAlerta(nome, tipo),
         tipoDetectado: null,
         erro: via.erro || 'OCR (Mistral) falhou.',
+        erroFonte: via.erroFonte,
+        estruturacaoPendente: via.estruturacaoPendente,
+        ocrEvidenciaOk: via.ocrEvidenciaOk,
         paginasComBytes: comBytes,
         ocrProvider: 'mistral',
       };
