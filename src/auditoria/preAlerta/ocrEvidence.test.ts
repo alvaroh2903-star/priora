@@ -11,9 +11,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  GravacaoEvidencia,
   OCR_SOURCE_SCHEMA,
   PaginaRef,
-  PersistenceStatus,
   SourceOcrEvidenceV1,
   SourceOcrPage,
   _configurarBackendEvidenciaParaTeste,
@@ -27,7 +27,7 @@ import {
   resumoSeguroEvidencia,
   textoBrutoDaEvidencia,
 } from '../ocr/ocrEvidence';
-import { AVISO_LIMITE_IA, avisoDeErroOCR } from '../ocr/avisoOcr';
+import { AVISO_LIMITE_IA, avisoDeErroOCR, ehErroIA } from '../ocr/avisoOcr';
 import { canonicalDesdeEvidencia } from '../canonical/canonicalDocument';
 import { Extracao, ParteComRef, PortasExtracao, extrairViaMistralCore } from './extracaoPreAlerta';
 import { MistralOcrResultado } from '../../ai/mistralOcrClient';
@@ -79,7 +79,7 @@ function mkSource(o: {
 function fakePortas(cfg: {
   ocr?: (url: string) => MistralOcrResultado | Promise<MistralOcrResultado>;
   estruturar?: () => Promise<Extracao>;
-  gravar?: (ev: SourceOcrEvidenceV1) => Promise<PersistenceStatus>;
+  gravar?: (ev: SourceOcrEvidenceV1) => Promise<GravacaoEvidencia>;
 }): {
   portas: PortasExtracao;
   store: Map<string, { ev: SourceOcrEvidenceV1; durable: boolean }>;
@@ -97,7 +97,7 @@ function fakePortas(cfg: {
       n.gravar++;
       if (cfg.gravar) return cfg.gravar(ev);
       if (!store.has(ev.assinatura)) store.set(ev.assinatura, { ev, durable: false });
-      return 'memory-only';
+      return { status: 'memory-only', evidence: store.get(ev.assinatura)!.ev }; // 1º escritor
     },
   };
   return { portas, store, n, ocrUrls };
@@ -205,7 +205,8 @@ test('imutabilidade: gravarFonteEvidencia não sobrescreve evidência existente'
   const ev1 = mkSource({ assinatura: 'sig-imut', pages: [{ pageIndex: 0, markdown: 'PRIMEIRO', dimensions: null }] });
   const ev2 = mkSource({ assinatura: 'sig-imut', pages: [{ pageIndex: 0, markdown: 'SEGUNDO', dimensions: null }] });
   await gravarFonteEvidencia(ev1);
-  await gravarFonteEvidencia(ev2);
+  const g2 = await gravarFonteEvidencia(ev2);
+  assert.equal(g2.evidence?.pages[0].markdown, 'PRIMEIRO'); // devolve o 1º ao chamador, não o 2º
   const lido = await lerFonteEvidencia('sig-imut');
   assert.equal(lido?.ev.pages[0].markdown, 'PRIMEIRO'); // 1º escritor preservado
 });
@@ -224,8 +225,9 @@ test('conflito no banco (exists/23505): memória serve o 1º escritor, nunca o p
     ler: async () => persistida,
   });
   try {
-    const st = await gravarFonteEvidencia(candidato);
-    assert.equal(st, 'durable'); // é durável — mas a verdade é a do 1º escritor
+    const g = await gravarFonteEvidencia(candidato);
+    assert.equal(g.status, 'durable'); // é durável — mas a verdade é a do 1º escritor
+    assert.equal(g.evidence?.pages[0].markdown, 'FIRST'); // o chamador recebe o 1º escritor
     const lido = await lerFonteEvidencia('sig-db');
     assert.equal(lido?.ev.pages[0].markdown, 'FIRST'); // NUNCA "SECOND"
     assert.equal(lido?.durable, true);
@@ -249,14 +251,96 @@ test('conflito no banco (exists) + releitura falha: não cacheia o perdedor como
     },
   });
   try {
-    const st = await gravarFonteEvidencia(candidato);
-    assert.equal(st, 'failed'); // falha conservadora, não 'durable'
+    const g = await gravarFonteEvidencia(candidato);
+    assert.equal(g.status, 'failed'); // falha conservadora, não 'durable'
+    assert.equal(g.evidence, null); // nada autoritativo → o chamador NÃO usa o perdedor
     assert.equal(leu, 1); // tentou reler o 1º escritor
     // memória NÃO foi poluída com o perdedor → lerFonteEvidencia recorre ao banco de novo.
     await lerFonteEvidencia('sig-db2');
     assert.equal(leu, 2);
   } finally {
     _configurarBackendEvidenciaParaTeste(null);
+  }
+});
+
+// 3d (item 3) — CORE: a corrida perdida NÃO vaza o candidato local para a estruturação.
+// Fluxo COMPLETO de extrairViaMistralCore com o store REAL (memória + banco fake):
+// pré-checagem vazia → OCR local "SECOND" → nesse meio-tempo OUTRO processo persiste
+// "FIRST" → o insert leva 'exists' (23505) → a estruturação TEM de receber "FIRST".
+test('core: corrida perdida (exists/23505) → estruturação recebe o 1º escritor ("FIRST"), nunca "SECOND"', async () => {
+  _limparMemoriaEvidencia();
+  const db = new Map<string, SourceOcrEvidenceV1>(); // banco FAKE (chave → linha)
+  let chaveDoAnexo: string | null = null;
+  _configurarBackendEvidenciaParaTeste({
+    configurado: () => true,
+    ler: async (chave) => {
+      chaveDoAnexo ??= chave; // a pré-checagem do core revela a chave do anexo
+      return db.get(chave) ?? null;
+    },
+    inserir: async (chave, ev) => {
+      if (db.has(chave)) return 'exists'; // 23505: o 1º escritor fica
+      db.set(chave, ev);
+      return 'inserted';
+    },
+  });
+  // Mesma assinatura que o core calcula para este anexo (escopo + origem + bytes).
+  const primeiro = mkSource({
+    escopo: 'contaA', source: REF1, contentHash: hashBytes(DADO_A),
+    pages: [{ pageIndex: 0, markdown: 'FIRST', dimensions: null }],
+  });
+  const recebido: string[] = [];
+  const { portas } = fakePortas({
+    ocr: () => {
+      // CORRIDA: enquanto ESTE processo fazia o OCR, OUTRO processo persistiu "FIRST".
+      assert.ok(chaveDoAnexo); // a pré-checagem aconteceu (e não achou nada)
+      db.set(chaveDoAnexo, primeiro);
+      return ocrOk('SECOND');
+    },
+  });
+  const portasStoreReal: PortasExtracao = {
+    ...portas,
+    lerFonteEvidencia, // store REAL (memória + backend fake)
+    gravarFonteEvidencia,
+    estruturar: async (markdown) => {
+      recebido.push(markdown);
+      return aiOk();
+    },
+  };
+  try {
+    const r = await extrairViaMistralCore(PARTES, 'MBL', 'MBL.pdf', CTX, portasStoreReal);
+    assert.deepEqual(recebido, ['FIRST']); // a estruturação viu SÓ o 1º escritor
+    assert.ok(!recebido.some((m) => m.includes('SECOND'))); // o perdedor NUNCA desce
+    assert.ok(r.doc);
+    assert.equal(r.persistenceStatus, 'durable');
+    assert.equal((await lerFonteEvidencia(primeiro.assinatura))?.ev.pages[0].markdown, 'FIRST');
+  } finally {
+    _configurarBackendEvidenciaParaTeste(null);
+    _limparMemoriaEvidencia();
+  }
+});
+
+// 3e (item 3) — CORE: conflito com 1º escritor ILEGÍVEL agora → não compõe com o
+// perdedor; nada desce p/ a estruturação; erro com fonte neutra (retry depois).
+test('core: conflito (exists) com 1º escritor ilegível → sem estruturação, erro neutro', async () => {
+  _limparMemoriaEvidencia();
+  _configurarBackendEvidenciaParaTeste({
+    configurado: () => true,
+    ler: async () => null, // o 1º escritor não pode ser relido agora
+    inserir: async () => 'exists',
+  });
+  const { portas, n } = fakePortas({ ocr: () => ocrOk('SECOND') });
+  const portasStoreReal: PortasExtracao = { ...portas, lerFonteEvidencia, gravarFonteEvidencia };
+  try {
+    const r = await extrairViaMistralCore(PARTES, 'MBL', 'MBL.pdf', CTX, portasStoreReal);
+    assert.equal(n.estrut, 0); // o candidato perdedor NÃO chega à estruturação
+    assert.equal(r.doc, null);
+    assert.equal(r.erroFonte, null); // nem Mistral nem Gemini: fonte neutra
+    assert.equal(r.persistenceStatus, 'failed');
+    assert.ok(ehErroIA(r.erro)); // é exibido como aviso (não some como "ilegível")
+    assert.match(avisoDeErroOCR(r.erro, r.erroFonte), /^Falha na leitura\/estruturação documental/);
+  } finally {
+    _configurarBackendEvidenciaParaTeste(null);
+    _limparMemoriaEvidencia();
   }
 });
 

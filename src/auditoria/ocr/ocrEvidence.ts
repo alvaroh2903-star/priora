@@ -268,48 +268,65 @@ export async function lerFonteEvidencia(
 }
 
 /**
+ * Resultado da gravação: o status E a evidência AUTORITATIVA — a que o store
+ * considera verdadeira para esta assinatura. O chamador DEVE seguir com
+ * `evidence`, não com o candidato que passou (numa corrida, são diferentes).
+ * `evidence: null` = não há evidência autoritativa utilizável agora (conflito com um
+ * 1º escritor que não pôde ser relido): o chamador NÃO pode usar o próprio candidato.
+ */
+export interface GravacaoEvidencia {
+  status: PersistenceStatus;
+  evidence: SourceOcrEvidenceV1 | null;
+}
+
+/**
  * Grava a evidência de um anexo (insert-if-absent) e REPORTA a durabilidade real.
  * Nunca sobrescreve uma evidência existente (imutável). NUNCA afirma 'durable' sem
  * confirmação. OCR insuficiente (usable=false) NÃO deve ser gravado pelo chamador.
  *
- * first-writer-wins de PONTA A PONTA (banco E memória):
- *  - 'inserted' → ESTE processo é o 1º escritor: cacheia o que inseriu (durável).
- *  - 'exists'   → OUTRO escritor venceu: carrega a evidência JÁ persistida e cacheia
- *                 ELA — NUNCA o candidato perdedor. Se não der para reler o 1º
- *                 escritor, falha conservadora: não cacheia o perdedor como durável
- *                 (a memória nunca discorda do banco).
- *  - 'failed'   → insert não confirmado (sem conflito conhecido): cópia local
- *                 não-durável, como no caminho sem Supabase.
+ * first-writer-wins de PONTA A PONTA (banco, memória E chamador):
+ *  - já em memória → a evidência JÁ cacheada (1º escritor neste processo).
+ *  - 'inserted'    → ESTE processo é o 1º escritor: o candidato (durável).
+ *  - 'exists'      → OUTRO escritor venceu: relê a evidência JÁ persistida, cacheia e
+ *                    devolve ELA — NUNCA o candidato perdedor. Se não der para reler o
+ *                    1º escritor: status 'failed' e evidence null (a memória nunca
+ *                    discorda do banco, e o chamador não compõe com o perdedor).
+ *  - 'failed'      → insert não confirmado (sem conflito conhecido): cópia local
+ *                    não-durável, como no caminho sem Supabase.
  */
-export async function gravarFonteEvidencia(ev: SourceOcrEvidenceV1): Promise<PersistenceStatus> {
+export async function gravarFonteEvidencia(ev: SourceOcrEvidenceV1): Promise<GravacaoEvidencia> {
   try {
     const existente = memoria.get(ev.assinatura);
-    if (existente) return existente.durable ? 'durable' : 'memory-only'; // imutável: mantém o 1º
+    if (existente) {
+      // imutável: mantém (e devolve) o 1º
+      return { status: existente.durable ? 'durable' : 'memory-only', evidence: existente.ev };
+    }
     if (!backend.configurado()) {
       memoria.set(ev.assinatura, { ev, durable: false });
-      return 'memory-only';
+      return { status: 'memory-only', evidence: ev };
     }
     const res = await backend.inserir(chaveSupabase(ev.assinatura), ev);
     if (res === 'inserted') {
       memoria.set(ev.assinatura, { ev, durable: true });
-      return 'durable';
+      return { status: 'durable', evidence: ev };
     }
     if (res === 'exists') {
       // Perdemos a corrida: a verdade durável é a do PRIMEIRO escritor. Relê e cacheia ELA.
       const vencedora = await backend.ler(chaveSupabase(ev.assinatura));
       if (vencedora) {
         memoria.set(ev.assinatura, { ev: vencedora, durable: true });
-        return 'durable';
+        return { status: 'durable', evidence: vencedora };
       }
       // Não conseguimos reler o 1º escritor: NÃO afirmar que o perdedor é durável nem
       // poluir a memória com ele (lerFonteEvidencia cairá no banco e trará o vencedor).
-      return 'failed';
+      return { status: 'failed', evidence: null };
     }
     // res === 'failed': sem conflito conhecido → cópia local não-durável (best-effort).
     memoria.set(ev.assinatura, { ev, durable: false });
-    return 'memory-only';
+    return { status: 'memory-only', evidence: ev };
   } catch {
-    return 'failed';
+    // Estado desconhecido (pode haver um 1º escritor): nada autoritativo a devolver.
+    return { status: 'failed', evidence: null };
   }
 }
 

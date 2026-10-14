@@ -18,6 +18,7 @@ import { config } from '../../config';
 import { getAttachmentContent } from '../../graph/graphService';
 import { ContainerDoc, DocPreAlerta, Operacao, TipoDoc } from './modelo';
 import {
+  GravacaoEvidencia,
   OCR_SOURCE_SCHEMA,
   PaginaRef,
   PersistenceStatus,
@@ -213,7 +214,8 @@ export interface PortasExtracao {
   estruturar: (markdown: string, tipo: TipoDoc) => Promise<Extracao>;
   /** Evidência POR ANEXO (imutável, cacheável por conteúdo). */
   lerFonteEvidencia: (assinatura: string) => Promise<{ ev: SourceOcrEvidenceV1; durable: boolean } | null>;
-  gravarFonteEvidencia: (ev: SourceOcrEvidenceV1) => Promise<PersistenceStatus>;
+  /** Devolve o status E a evidência AUTORITATIVA (numa corrida, a do 1º escritor). */
+  gravarFonteEvidencia: (ev: SourceOcrEvidenceV1) => Promise<GravacaoEvidencia>;
 }
 
 /** Estruturação padrão: Gemini em modo TEXTO (sem tokens de imagem). */
@@ -272,6 +274,7 @@ export async function extrairViaMistralCore(
   const ranks: number[] = []; // 0 durable · 1 memory-only · 2 failed
   let falhaFonte: { ref: PaginaRef; erro: string } | null = null;
   let insuficiente: PaginaRef | null = null;
+  let conflito: PaginaRef | null = null;
 
   for (const parte of partes) {
     const contentHash = hashBytes(parte.data);
@@ -319,8 +322,21 @@ export async function extrairViaMistralCore(
         continue;
       }
       // Persiste o anexo bem-sucedido (insert-if-absent) — sobrevive à falha de outro.
-      const st = cacheavel ? await portas.gravarFonteEvidencia(sev) : 'no-scope';
-      ranks.push(st === 'durable' ? 0 : st === 'memory-only' ? 1 : st === 'failed' ? 2 : 1);
+      if (cacheavel) {
+        const g = await portas.gravarFonteEvidencia(sev);
+        if (!g.evidence) {
+          // Conflito com um 1º escritor que não pôde ser relido: NÃO compõe com o
+          // candidato local (violaria first-writer-wins). Este anexo fica p/ o retry.
+          conflito = parte.ref;
+          continue;
+        }
+        // Segue com a evidência AUTORITATIVA do store — numa corrida perdida (23505),
+        // é a do 1º escritor, NUNCA o candidato local.
+        sev = g.evidence;
+        ranks.push(g.status === 'durable' ? 0 : g.status === 'memory-only' ? 1 : 2);
+      } else {
+        ranks.push(1); // sem escopo: nada persistido (status final 'no-scope')
+      }
     }
     fontesEv.push(sev);
   }
@@ -340,6 +356,15 @@ export async function extrairViaMistralCore(
       doc: null, tipoDetectado: null,
       erro: `OCR (Mistral) sem texto no anexo "${insuficiente.nome}" (insuficiente — re-OCR permitido).`,
       erroFonte: 'mistral-ocr', ocrObtido: false, persistenceStatus: null,
+      estruturacaoPendente: false, ocrAssinatura: null,
+    };
+  }
+  if (conflito) {
+    // Não é falha do Mistral nem do Gemini → fonte neutra (null).
+    return {
+      doc: null, tipoDetectado: null,
+      erro: `Evidência de OCR do anexo "${conflito.nome}" em conflito com uma gravação concorrente que não pôde ser relida agora — o candidato local não é usado (first-writer-wins); tente novamente.`,
+      erroFonte: null, ocrObtido: false, persistenceStatus: 'failed',
       estruturacaoPendente: false, ocrAssinatura: null,
     };
   }
