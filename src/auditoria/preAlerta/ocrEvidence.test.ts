@@ -16,6 +16,7 @@ import {
   PersistenceStatus,
   SourceOcrEvidenceV1,
   SourceOcrPage,
+  _configurarBackendEvidenciaParaTeste,
   _limparMemoriaEvidencia,
   _seedFonteEvidencia,
   assinaturaFonte,
@@ -207,6 +208,56 @@ test('imutabilidade: gravarFonteEvidencia não sobrescreve evidência existente'
   await gravarFonteEvidencia(ev2);
   const lido = await lerFonteEvidencia('sig-imut');
   assert.equal(lido?.ev.pages[0].markdown, 'PRIMEIRO'); // 1º escritor preservado
+});
+
+// 3b (item 3) — CONFLITO NO BANCO (23505): first-writer-wins de PONTA A PONTA.
+// Outro processo já persistiu "FIRST"; este processo tenta inserir "SECOND" e leva
+// 'exists'. A memória NÃO pode servir "SECOND" como durável — tem de servir "FIRST".
+test('conflito no banco (exists/23505): memória serve o 1º escritor, nunca o perdedor', async () => {
+  _limparMemoriaEvidencia();
+  const persistida = mkSource({ assinatura: 'sig-db', pages: [{ pageIndex: 0, markdown: 'FIRST', dimensions: null }] });
+  const candidato = mkSource({ assinatura: 'sig-db', pages: [{ pageIndex: 0, markdown: 'SECOND', dimensions: null }] });
+  // Backend FAKE: Supabase "configurado", insert sempre em CONFLITO, leitura devolve o 1º escritor.
+  _configurarBackendEvidenciaParaTeste({
+    configurado: () => true,
+    inserir: async () => 'exists',
+    ler: async () => persistida,
+  });
+  try {
+    const st = await gravarFonteEvidencia(candidato);
+    assert.equal(st, 'durable'); // é durável — mas a verdade é a do 1º escritor
+    const lido = await lerFonteEvidencia('sig-db');
+    assert.equal(lido?.ev.pages[0].markdown, 'FIRST'); // NUNCA "SECOND"
+    assert.equal(lido?.durable, true);
+  } finally {
+    _configurarBackendEvidenciaParaTeste(null); // restaura o backend real
+  }
+});
+
+// 3c (item 3) — 'exists' mas o 1º escritor é ILEGÍVEL agora: falha conservadora.
+// NUNCA cachear o perdedor como durável; lerFonteEvidencia volta ao banco.
+test('conflito no banco (exists) + releitura falha: não cacheia o perdedor como durável', async () => {
+  _limparMemoriaEvidencia();
+  const candidato = mkSource({ assinatura: 'sig-db2', pages: [{ pageIndex: 0, markdown: 'SECOND', dimensions: null }] });
+  let leu = 0;
+  _configurarBackendEvidenciaParaTeste({
+    configurado: () => true,
+    inserir: async () => 'exists',
+    ler: async () => {
+      leu += 1;
+      return null; // 1ª releitura (dentro do gravar) falha
+    },
+  });
+  try {
+    const st = await gravarFonteEvidencia(candidato);
+    assert.equal(st, 'failed'); // falha conservadora, não 'durable'
+    assert.equal(leu, 1); // tentou reler o 1º escritor
+    // memória NÃO foi poluída com o perdedor → lerFonteEvidencia recorre ao banco de novo.
+    await lerFonteEvidencia('sig-db2');
+    assert.equal(leu, 2);
+  } finally {
+    _configurarBackendEvidenciaParaTeste(null);
+  }
 });
 
 // 6 (item 6) — DURABILIDADE preservada em memória

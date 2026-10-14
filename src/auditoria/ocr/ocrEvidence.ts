@@ -235,14 +235,31 @@ export function resumoSeguroEvidencia(ev: OcrEvidenceV1): OcrEvidenceResumoSegur
 const memoria = new Map<string, { ev: SourceOcrEvidenceV1; durable: boolean }>();
 const chaveSupabase = (assinatura: string): string => `ocr-source:v1:${assinatura}`;
 
+/**
+ * Backend de persistência (Supabase por padrão). Em PRODUÇÃO são exatamente as
+ * funções reais do ocrCache — o comportamento não muda. É um SEAM só para o teste
+ * poder exercitar o caminho de CONFLITO no banco (23505) sem rede.
+ */
+interface EvidenceBackend {
+  configurado(): boolean;
+  inserir(chave: string, ev: SourceOcrEvidenceV1): Promise<'inserted' | 'exists' | 'failed'>;
+  ler(chave: string): Promise<SourceOcrEvidenceV1 | null>;
+}
+const BACKEND_REAL: EvidenceBackend = {
+  configurado: () => isSupabaseConfigured(),
+  inserir: (chave, ev) => inserirCacheJsonSeAusente(chave, ev, ev.source.attachmentId),
+  ler: (chave) => lerCacheJson<SourceOcrEvidenceV1>(chave),
+};
+let backend: EvidenceBackend = BACKEND_REAL;
+
 /** Lê a evidência de um anexo, PRESERVANDO a durabilidade conhecida (item 6). */
 export async function lerFonteEvidencia(
   assinatura: string,
 ): Promise<{ ev: SourceOcrEvidenceV1; durable: boolean } | null> {
   const emMem = memoria.get(assinatura);
   if (emMem) return { ev: emMem.ev, durable: emMem.durable }; // durabilidade preservada
-  if (!isSupabaseConfigured()) return null;
-  const doBanco = await lerCacheJson<SourceOcrEvidenceV1>(chaveSupabase(assinatura));
+  if (!backend.configurado()) return null;
+  const doBanco = await backend.ler(chaveSupabase(assinatura));
   if (doBanco) {
     memoria.set(assinatura, { ev: doBanco, durable: true });
     return { ev: doBanco, durable: true };
@@ -254,19 +271,43 @@ export async function lerFonteEvidencia(
  * Grava a evidência de um anexo (insert-if-absent) e REPORTA a durabilidade real.
  * Nunca sobrescreve uma evidência existente (imutável). NUNCA afirma 'durable' sem
  * confirmação. OCR insuficiente (usable=false) NÃO deve ser gravado pelo chamador.
+ *
+ * first-writer-wins de PONTA A PONTA (banco E memória):
+ *  - 'inserted' → ESTE processo é o 1º escritor: cacheia o que inseriu (durável).
+ *  - 'exists'   → OUTRO escritor venceu: carrega a evidência JÁ persistida e cacheia
+ *                 ELA — NUNCA o candidato perdedor. Se não der para reler o 1º
+ *                 escritor, falha conservadora: não cacheia o perdedor como durável
+ *                 (a memória nunca discorda do banco).
+ *  - 'failed'   → insert não confirmado (sem conflito conhecido): cópia local
+ *                 não-durável, como no caminho sem Supabase.
  */
 export async function gravarFonteEvidencia(ev: SourceOcrEvidenceV1): Promise<PersistenceStatus> {
   try {
     const existente = memoria.get(ev.assinatura);
     if (existente) return existente.durable ? 'durable' : 'memory-only'; // imutável: mantém o 1º
-    if (!isSupabaseConfigured()) {
+    if (!backend.configurado()) {
       memoria.set(ev.assinatura, { ev, durable: false });
       return 'memory-only';
     }
-    const res = await inserirCacheJsonSeAusente(chaveSupabase(ev.assinatura), ev, ev.source.attachmentId);
-    const durable = res === 'inserted' || res === 'exists';
-    memoria.set(ev.assinatura, { ev, durable });
-    return durable ? 'durable' : 'memory-only';
+    const res = await backend.inserir(chaveSupabase(ev.assinatura), ev);
+    if (res === 'inserted') {
+      memoria.set(ev.assinatura, { ev, durable: true });
+      return 'durable';
+    }
+    if (res === 'exists') {
+      // Perdemos a corrida: a verdade durável é a do PRIMEIRO escritor. Relê e cacheia ELA.
+      const vencedora = await backend.ler(chaveSupabase(ev.assinatura));
+      if (vencedora) {
+        memoria.set(ev.assinatura, { ev: vencedora, durable: true });
+        return 'durable';
+      }
+      // Não conseguimos reler o 1º escritor: NÃO afirmar que o perdedor é durável nem
+      // poluir a memória com ele (lerFonteEvidencia cairá no banco e trará o vencedor).
+      return 'failed';
+    }
+    // res === 'failed': sem conflito conhecido → cópia local não-durável (best-effort).
+    memoria.set(ev.assinatura, { ev, durable: false });
+    return 'memory-only';
   } catch {
     return 'failed';
   }
@@ -275,6 +316,14 @@ export async function gravarFonteEvidencia(ev: SourceOcrEvidenceV1): Promise<Per
 /** APENAS para testes: zera o cache em memória. */
 export function _limparMemoriaEvidencia(): void {
   memoria.clear();
+}
+
+/**
+ * APENAS para testes: injeta um backend de persistência fake (ou restaura o real
+ * passando `null`). Permite exercitar o caminho de conflito no banco (23505) sem rede.
+ */
+export function _configurarBackendEvidenciaParaTeste(fake: Partial<EvidenceBackend> | null): void {
+  backend = fake ? { ...BACKEND_REAL, ...fake } : BACKEND_REAL;
 }
 
 /** APENAS para testes: injeta uma evidência de anexo com durabilidade conhecida. */
