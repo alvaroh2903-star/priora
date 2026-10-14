@@ -103,3 +103,31 @@ export async function gravarCacheJson(chave: string, valor: unknown, nome: strin
     /* best-effort */
   }
 }
+
+/**
+ * Inserção ATÔMICA "insert-if-absent" (NÃO upsert): preserva a IMUTABILIDADE da
+ * evidência de OCR. Um segundo escritor com a MESMA chave NÃO sobrescreve o primeiro
+ * — a violação de unicidade (23505) é tratada como "já existe", não como erro.
+ *  - 'inserted' → esta chamada gravou a linha;
+ *  - 'exists'   → já havia uma linha (primeiro escritor preservado);
+ *  - 'failed'   → Supabase indisponível ou erro real.
+ * Exclusivo da evidência de OCR — não muda o comportamento do cache genérico.
+ */
+export async function inserirCacheJsonSeAusente(
+  chave: string,
+  valor: unknown,
+  nome: string,
+): Promise<'inserted' | 'exists' | 'failed'> {
+  if (!isSupabaseConfigured()) return 'failed';
+  try {
+    const { error } = await getSupabase()
+      .from(TABELA)
+      .insert({ chave, valor, nome, atualizado_em: new Date().toISOString() });
+    if (!error) return 'inserted';
+    const code = (error as { code?: string }).code;
+    if (code === '23505' || /duplicate key|unique/i.test(error.message || '')) return 'exists';
+    return 'failed';
+  } catch {
+    return 'failed';
+  }
+}
