@@ -1,13 +1,18 @@
 /**
  * PB-001 — Fundação do CanonicalDocument (Fase 1: SÓ o contrato + a ponte).
  *
- * Objetivo nesta fase: ter um esquema canônico versionado capaz de representar
- * toda a informação aprovada do PB-001, com EVIDÊNCIA por campo (raw + normalizado
- * + regra + origem). O PARSER determinístico que PREENCHE estes campos a partir do
- * markdown do OCR é a **Fase 2** — aqui ficam apenas os tipos e um construtor
- * mínimo (`canonicalDesdeEvidencia`) que carrega o texto bruto como ponte.
+ * Esquema canônico versionado capaz de representar a informação aprovada do PB-001,
+ * com EVIDÊNCIA por campo (raw + normalizado + regra + sinais). O PARSER
+ * determinístico que PREENCHE estes campos é a **Fase 2** — aqui ficam os tipos e
+ * um construtor mínimo (`canonicalDesdeEvidencia`).
  *
- * Princípio: NUNCA inventar confiança como verdade. Incerteza fica em `signals`.
+ * Decisões de contrato:
+ *  - O texto BRUTO do OCR tem UMA casa autoritativa: `OcrEvidence`. O canônico NÃO
+ *    duplica o texto; referencia `ocrAssinatura`. O parser recebe o texto bruto de
+ *    forma TRANSITÓRIA (via `textoBrutoDaEvidencia`).
+ *  - Identificadores fiscais pertencem à PARTE que identificam (não há lista global).
+ *  - `documentId` é a identidade ESTÁVEL do grupo; `displayName` é só exibição.
+ *  - NUNCA inventar confiança como verdade — incerteza fica em `signals`.
  */
 import { OcrEvidenceV1 } from '../ocr/ocrEvidence';
 
@@ -31,7 +36,7 @@ export interface FieldEvidence<T> {
   rawValue: string | null;
   normalizedValue: T | null;
   normalizationRule: string | null; // id da regra aplicada (rastreável)
-  sourceDocumentId: string | null;
+  sourceDocumentId: string | null; // identidade ESTÁVEL do documento de origem
   page: number | null;
   extractionMethod: ExtractionMethod;
   provider: string | null;
@@ -53,12 +58,21 @@ export function campoVazio<T>(sourceDocumentId: string | null = null): FieldEvid
   };
 }
 
+/** Uma PARTE: identificadores fiscais pertencem à parte que identificam. */
+export interface CanonicalParty {
+  name: FieldEvidence<string>;
+  taxIdentifiers: FieldEvidence<string>[]; // CNPJ/EIN/VAT desta parte (evidência forte)
+}
+
+export function parteVazia(sourceDocumentId: string | null = null): CanonicalParty {
+  return { name: campoVazio<string>(sourceDocumentId), taxIdentifiers: [] };
+}
+
 export interface CanonicalParties {
-  shipper: FieldEvidence<string>;
-  consignee: FieldEvidence<string>;
-  notify: FieldEvidence<string>;
-  alsoNotify: FieldEvidence<string>;
-  taxIdentifiers: FieldEvidence<string>[]; // CNPJ/EIN/VAT (evidência forte)
+  shipper: CanonicalParty;
+  consignee: CanonicalParty;
+  notify: CanonicalParty;
+  alsoNotify: CanonicalParty;
 }
 
 export interface CanonicalRoute {
@@ -106,10 +120,10 @@ export interface CanonicalFreightCharge {
 export interface CanonicalDocumentV1 {
   schemaVersion: typeof CANONICAL_DOC_SCHEMA;
   parserVersion: string;
-  ocrAssinatura: string; // liga ao OcrEvidence que originou este documento
-  documentId: string;
-  /** Texto bruto concatenado do OCR — ponte p/ o parser determinístico da Fase 2. */
-  rawText: string;
+  /** Referência à ÚNICA casa do texto bruto (OcrEvidence). O canônico NÃO o duplica. */
+  ocrAssinatura: string;
+  documentId: string; // identidade ESTÁVEL do grupo
+  displayName: string; // nome humano (exibição)
   identification: {
     blNumber: FieldEvidence<string>;
     role: RolePapel | null;
@@ -125,25 +139,24 @@ export interface CanonicalDocumentV1 {
 
 /**
  * Ponte Fase 1: constrói um CanonicalDocument "pending" a partir da evidência de
- * OCR, carregando só o texto bruto. Os campos ficam vazios (a Fase 2 os preenche
- * deterministicamente a partir de `rawText`, sem re-rodar OCR). PURO (testável).
+ * OCR, referenciando-a por `ocrAssinatura` (SEM duplicar o texto bruto). Os campos
+ * ficam vazios (a Fase 2 os preenche deterministicamente, lendo o texto bruto da
+ * evidência de forma transitória). PURO (testável).
  */
 export function canonicalDesdeEvidencia(ev: OcrEvidenceV1): CanonicalDocumentV1 {
-  const rawText = ev.pages.map((p) => p.markdown).join('\n\n').trim();
   const src = ev.documentId;
   return {
     schemaVersion: CANONICAL_DOC_SCHEMA,
     parserVersion: PARSER_VERSION,
     ocrAssinatura: ev.assinatura,
-    documentId: src,
-    rawText,
+    documentId: ev.documentId,
+    displayName: ev.displayName,
     identification: { blNumber: campoVazio<string>(src), role: null, roleConfidence: null },
     parties: {
-      shipper: campoVazio<string>(src),
-      consignee: campoVazio<string>(src),
-      notify: campoVazio<string>(src),
-      alsoNotify: campoVazio<string>(src),
-      taxIdentifiers: [],
+      shipper: parteVazia(src),
+      consignee: parteVazia(src),
+      notify: parteVazia(src),
+      alsoNotify: parteVazia(src),
     },
     route: {
       placeOfReceipt: campoVazio<string>(src),

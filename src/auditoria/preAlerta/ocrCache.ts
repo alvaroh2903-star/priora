@@ -103,3 +103,24 @@ export async function gravarCacheJson(chave: string, valor: unknown, nome: strin
     /* best-effort */
   }
 }
+
+/**
+ * Gravação JSON que CONFIRMA a durabilidade: devolve `true` só quando o Supabase
+ * aceitou a escrita (sem erro). Usada pela evidência de OCR para nunca afirmar
+ * "durável" sem confirmação — diferente de `gravarCacheJson` (best-effort/silenciosa).
+ */
+export async function gravarCacheJsonConfirmado(
+  chave: string,
+  valor: unknown,
+  nome: string,
+): Promise<boolean> {
+  if (!isSupabaseConfigured()) return false;
+  try {
+    const { error } = await getSupabase()
+      .from(TABELA)
+      .upsert({ chave, valor, nome, atualizado_em: new Date().toISOString() }, { onConflict: 'chave' });
+    return !error;
+  } catch {
+    return false;
+  }
+}
