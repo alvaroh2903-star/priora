@@ -150,7 +150,8 @@ async function concluirEvento(
   );
 }
 
-function construirEntradaD10(norm: EntradaHandoffNormalizada, organizationId: string): RegistroProcessoDemurrageV1 {
+/** Exportado também para a suíte de injeção de falha da corretiva v1.2 (`handoffVinculoTransacaoV12.test.ts`), que chama `resolverVinculoProcesso` diretamente — nenhum caminho de produção importa esta função fora de `processarEventoHandoff` abaixo. */
+export function construirEntradaD10(norm: EntradaHandoffNormalizada, organizationId: string): RegistroProcessoDemurrageV1 {
   const e = norm.entrada;
   return {
     versao: CONTRATO_REGISTRO_DEMURRAGE_V1,
@@ -215,13 +216,42 @@ async function buscarProcessoIdPorNumero(pool: Pool, organizationId: string, num
   return rows[0]?.id ?? null;
 }
 
-type ResolucaoVinculo =
+export type ResolucaoVinculo =
   | { tipo: 'conflito'; processoIdVinculado: string; numeroProcessoVinculado: string }
   | { tipo: 'resolvido'; processoId: string; resultadoAplicado?: ResultadoRegistroDemurrage; posCommitIncompleto?: PosCommitIncompletoError };
 
 /**
+ * SÓ TESTE (corretiva v1.2) — pontos de injeção de falha determinística
+ * dentro da transação de `resolverVinculoProcesso`, usados EXCLUSIVAMENTE
+ * pela suíte `handoffVinculoTransacaoV12.test.ts`. `processarEventoHandoff`
+ * — o ÚNICO ponto de entrada que a rota HTTP e qualquer outro chamador de
+ * produção usam — chama `resolverVinculoProcesso` SEM este 5º argumento;
+ * não existe nenhum caminho (rota, contrato, variável de ambiente) que
+ * permita a um request HTTP alcançar/ativar qualquer um destes ganchos.
+ * Cada gancho, se lançar, interrompe a transação exatamente no ponto que
+ * nomeia — é assim que os testes provam que TODO ponto de falha (lock
+ * consultivo, leitura do vínculo, INSERT do vínculo, COMMIT, e o próprio
+ * ROLLBACK) termina em exatamente um COMMIT bem-sucedido ou uma tentativa
+ * de ROLLBACK antes do `release()`, nunca numa conexão devolvida ao pool
+ * ainda dentro de uma transação aberta ou abortada (achado bloqueante desta
+ * corretiva).
+ */
+export interface GanchosTesteResolverVinculo {
+  /** Dispara imediatamente ANTES do lock consultivo de transação (`pg_advisory_xact_lock`). */
+  antesDoLockConsultivo?: () => void | Promise<void>;
+  /** Dispara imediatamente ANTES da leitura do vínculo já estabelecido (representa "falha antes do INSERT" — teste obrigatório #4). */
+  antesDaLeituraDoVinculo?: () => void | Promise<void>;
+  /** Dispara imediatamente ANTES do INSERT do vínculo, já depois do D10 ter sido chamado (representa "falha durante o INSERT" — teste obrigatório #5). */
+  antesDoInsertDoVinculo?: () => void | Promise<void>;
+  /** Dispara imediatamente ANTES de QUALQUER COMMIT desta função (teste obrigatório #6). */
+  antesDoCommit?: () => void | Promise<void>;
+  /** Quando presente, SUBSTITUI o ROLLBACK real — se lançar, simula a falha do próprio rollback (testes obrigatórios #9/#10). */
+  antesDoRollback?: () => void | Promise<void>;
+}
+
+/**
  * Resolve/estabelece o vínculo ESTÁVEL (organização, sistema,
- * origemProcessoId) -> processo_id ANTES de chamar o D10 (achado #1).
+ * origemProcessoId) -> processo_id ANTES de chamar o D10 (achado #1 da v1.1).
  *
  * Toda a decisão roda sob um lock consultivo de TRANSAÇÃO
  * (`pg_advisory_xact_lock`) namespaced por `demurrage:handoff:vinculo:
@@ -247,56 +277,145 @@ type ResolucaoVinculo =
  *   ainda estabelece o vínculo (o registro principal JÁ comitou — só o
  *   reparo pós-commit está pendente) antes de relançar; qualquer outro erro
  *   (ex.: `PROCESSO_FINAL`, violação de FK) nunca estabelece vínculo algum.
+ *
+ * SEGURANÇA TRANSACIONAL (corretiva v1.2 — achado bloqueante do usuário):
+ * o estado da transação é rastreado EXPLICITAMENTE em `transacaoAberta`.
+ * Todo caminho de saída depois de um `BEGIN` bem-sucedido passa por
+ * exatamente um `COMMIT` OU por uma tentativa de `ROLLBACK` — nunca os
+ * dois, nunca nenhum. O `finally` NUNCA libera a conexão cegamente: se
+ * havia uma transação aberta e o `ROLLBACK` (ou o gancho de teste que o
+ * substitui) também falhar, a conexão é liberada com `release(erro)`, que
+ * instrui o `pg-pool` a DESCARTAR essa conexão física em vez de devolvê-la
+ * ao pool para reuso — nunca uma conexão possivelmente suja volta a ser
+ * emprestada a outra chamada. A falha do rollback nunca substitui o erro de
+ * negócio ORIGINAL (sempre relançado sem alteração) e só é classificada/logada
+ * pelo mapeamento FECHADO já existente (achado #3 da v1.1) — nunca
+ * `.message`, stack, corpo da requisição ou segredo.
+ *
+ * CONFLITO OCULTO NA INSERÇÃO DO VÍNCULO (corretiva v1.2 — segundo achado
+ * bloqueante): o `INSERT ... ON CONFLICT DO NOTHING` do vínculo agora usa
+ * `RETURNING`. Quando o conflito suprime a linha (algo gravou o vínculo
+ * para esta MESMA identidade a montante por FORA do lock consultivo desta
+ * função — nunca pode ser outra chamada DESTA função, que está serializada
+ * pelo mesmo lock), uma releitura AUTORITATIVA (ainda dentro da mesma
+ * transação/lock) prova se o vínculo persistido aponta para o MESMO
+ * `processoId` que acabamos de produzir/resolver. Só com essa prova de
+ * igualdade a função devolve `resolvido`; uma divergência devolve conflito
+ * explícito — nunca muta ou reatribui o vínculo já existente (o trigger
+ * append-only da migration 0041 impediria de qualquer forma).
  */
-async function resolverVinculoProcesso(
+export async function resolverVinculoProcesso(
   pool: Pool, organizationId: string, norm: EntradaHandoffNormalizada, entradaD10: RegistroProcessoDemurrageV1,
+  ganchosTeste?: GanchosTesteResolverVinculo,
 ): Promise<ResolucaoVinculo> {
   const lockClient = await pool.connect();
+  let transacaoAberta = false;
+  let liberarComoSuja: Error | undefined;
   try {
     await lockClient.query('BEGIN');
+    transacaoAberta = true;
+
+    await ganchosTeste?.antesDoLockConsultivo?.();
     await lockClient.query(
       'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
       [`demurrage:handoff:vinculo:${organizationId}:${norm.origemSistema}:${norm.origemProcessoId}`],
     );
-    const { rows } = await lockClient.query(
+
+    const lerVinculoAtual = () => lockClient.query<{ processoId: string; numeroProcesso: string }>(
       `SELECT l.processo_id AS "processoId", p.numero_processo AS "numeroProcesso"
          FROM demurrage_handoff_processo_links l JOIN processos p ON p.id = l.processo_id
         WHERE l.organization_id = $1 AND l.origem_sistema = $2 AND l.origem_processo_id = $3`,
       [organizationId, norm.origemSistema, norm.origemProcessoId],
     );
+
+    await ganchosTeste?.antesDaLeituraDoVinculo?.();
+    const { rows } = await lerVinculoAtual();
     if (rows.length) {
+      await ganchosTeste?.antesDoCommit?.();
       await lockClient.query('COMMIT');
+      transacaoAberta = false;
       if (rows[0].numeroProcesso !== norm.numeroProcesso) {
         return { tipo: 'conflito', processoIdVinculado: rows[0].processoId, numeroProcessoVinculado: rows[0].numeroProcesso };
       }
       return { tipo: 'resolvido', processoId: rows[0].processoId };
     }
 
-    let resultadoAplicado: ResultadoRegistroDemurrage;
+    let processoIdEstabelecido: string;
+    let resultadoAplicado: ResultadoRegistroDemurrage | undefined;
+    let posCommitIncompleto: PosCommitIncompletoError | undefined;
     try {
       resultadoAplicado = await registrarProcessoDemurrage(entradaD10, { pool });
-    } catch (erro) {
-      if (erro instanceof PosCommitIncompletoError) {
-        await lockClient.query(
-          `INSERT INTO demurrage_handoff_processo_links (organization_id, origem_sistema, origem_processo_id, processo_id)
-           VALUES ($1, $2, $3, $4) ON CONFLICT (organization_id, origem_sistema, origem_processo_id) DO NOTHING`,
-          [organizationId, norm.origemSistema, norm.origemProcessoId, erro.processoId],
-        );
-        await lockClient.query('COMMIT');
-        return { tipo: 'resolvido', processoId: erro.processoId, posCommitIncompleto: erro };
-      }
-      await lockClient.query('ROLLBACK');
-      throw erro;
+      processoIdEstabelecido = resultadoAplicado.processoId;
+    } catch (erroD10) {
+      if (!(erroD10 instanceof PosCommitIncompletoError)) throw erroD10;
+      posCommitIncompleto = erroD10;
+      processoIdEstabelecido = erroD10.processoId;
     }
-    await lockClient.query(
+
+    await ganchosTeste?.antesDoInsertDoVinculo?.();
+    const ins = await lockClient.query<{ processoId: string }>(
       `INSERT INTO demurrage_handoff_processo_links (organization_id, origem_sistema, origem_processo_id, processo_id)
-       VALUES ($1, $2, $3, $4) ON CONFLICT (organization_id, origem_sistema, origem_processo_id) DO NOTHING`,
-      [organizationId, norm.origemSistema, norm.origemProcessoId, resultadoAplicado.processoId],
+       VALUES ($1, $2, $3, $4) ON CONFLICT (organization_id, origem_sistema, origem_processo_id) DO NOTHING
+       RETURNING processo_id AS "processoId"`,
+      [organizationId, norm.origemSistema, norm.origemProcessoId, processoIdEstabelecido],
     );
+
+    let processoIdPersistido: string | undefined;
+    let numeroProcessoPersistido: string | undefined;
+    if (ins.rows.length) {
+      processoIdPersistido = ins.rows[0].processoId;
+    } else {
+      // Conflito OCULTO (achado v1.2): releitura autoritativa, ainda dentro
+      // desta transação/lock, antes de decidir qualquer coisa.
+      const releitura = await lerVinculoAtual();
+      processoIdPersistido = releitura.rows[0]?.processoId;
+      numeroProcessoPersistido = releitura.rows[0]?.numeroProcesso;
+    }
+
+    await ganchosTeste?.antesDoCommit?.();
     await lockClient.query('COMMIT');
-    return { tipo: 'resolvido', processoId: resultadoAplicado.processoId, resultadoAplicado };
+    transacaoAberta = false;
+
+    if (processoIdPersistido !== processoIdEstabelecido) {
+      // NUNCA muta/reatribui o vínculo já persistido — só constata e
+      // devolve conflito explícito. O D10 já pode ter aplicado `entradaD10`
+      // contra `processoIdEstabelecido` nesta mesma chamada (não há como
+      // desfazer uma transação já comitada dentro de `registrarProcessoDemurrage`)
+      // — por isso este NÃO é um caminho de zero escrita como o conflito
+      // normal (vínculo já existia, verificado ANTES do D10 ser chamado);
+      // é defesa em profundidade contra um vínculo gravado por fora desta
+      // função, documentada no relatório v1.2 (§ verificação de conflito).
+      return {
+        tipo: 'conflito',
+        processoIdVinculado: processoIdPersistido as string,
+        numeroProcessoVinculado: numeroProcessoPersistido ?? norm.numeroProcesso,
+      };
+    }
+
+    if (posCommitIncompleto) return { tipo: 'resolvido', processoId: processoIdEstabelecido, posCommitIncompleto };
+    return { tipo: 'resolvido', processoId: processoIdEstabelecido, resultadoAplicado };
+  } catch (erro) {
+    if (transacaoAberta) {
+      try {
+        if (ganchosTeste?.antesDoRollback) await ganchosTeste.antesDoRollback();
+        else await lockClient.query('ROLLBACK');
+      } catch (erroRollback) {
+        // O ROLLBACK também falhou: a conexão pode ficar numa transação
+        // aberta/abortada indeterminada — NUNCA a devolvemos ao pool para
+        // reuso (ver `finally`: `release(liberarComoSuja)` força o `pg-pool`
+        // a DESCARTAR esta conexão física). A falha do rollback NUNCA
+        // substitui o erro de negócio ORIGINAL (`erro`, relançado abaixo sem
+        // alteração) e só é classificada/logada pelo mapeamento FECHADO já
+        // existente (achado #3 da v1.1) — nunca `.message`, stack ou erro bruto.
+        liberarComoSuja = erroRollback instanceof Error ? erroRollback : new Error('rollback_falhou');
+        // eslint-disable-next-line no-console
+        console.error(`[demurrage-handoff] rollback de resolverVinculoProcesso também falhou — conexão descartada, nunca reutilizada: ${classificarFalhaHandoff(erroRollback)}`);
+      }
+      transacaoAberta = false;
+    }
+    throw erro;
   } finally {
-    lockClient.release();
+    lockClient.release(liberarComoSuja);
   }
 }
 
