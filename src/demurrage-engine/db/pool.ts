@@ -19,20 +19,20 @@ let pool: Pool | null = null;
 
 /**
  * Tamanho MÍNIMO absoluto do pool (corretiva v1.2, auditoria de uso do
- * pool do handoff) — `resolverVinculoProcesso` (handoff/handoffService.ts)
- * mantém uma conexão reservada em transação (lock consultivo de
- * `pg_advisory_xact_lock`) PELO TEMPO que leva para chamar
- * `registrarProcessoDemurrage` (D10) usando o MESMO pool; o D10 precisa da
- * SUA PRÓPRIA conexão para a transação principal dele enquanto a primeira
- * ainda está aberta. Com `max` configurado para 1, a segunda chamada a
- * `pool.connect()` nunca teria uma conexão livre — ficaria bloqueada para
- * sempre esperando a PRÓPRIA transação externa (que está esperando ela)
- * liberar uma conexão que nunca existiu: autobloqueio determinístico, não
- * uma condição de corrida rara. `max = 1` NUNCA É SEGURO para esta
- * aplicação — por isso é tratado como falha de configuração na subida,
- * nunca como uma suposição implícita do padrão da biblioteca `pg` (que,
- * sem este arquivo, seria 10 — já seguro, mas nunca verificado nem
- * documentado como requisito antes desta corretiva).
+ * pool do handoff; rationale atualizada na v1.3). Historicamente
+ * (`resolverVinculoProcesso` em handoff/handoffService.ts) mantinha uma
+ * conexão reservada em transação (lock consultivo) PELO TEMPO que levava
+ * para chamar `registrarProcessoDemurrage` (D10) usando o MESMO pool — um
+ * autobloqueio determinístico com `max = 1`. A corretiva v1.3 eliminou essa
+ * dependência estruturalmente: o `lockClient` de `resolverVinculoProcesso`
+ * hoje é uma conexão DEDICADA, fora deste pool (ver o cabeçalho daquela
+ * função) — o D10 é o único consumidor deste pool nesse caminho, e usa
+ * no máximo UMA conexão por vez, nunca duas aninhadas. `max >= 2` deixa de
+ * ser a ÚNICA proteção contra autobloqueio (que agora é estrutural), mas
+ * permanece como piso mínimo de defesa em profundidade — nenhuma parte
+ * conhecida do sistema precisa de menos que isso, e mantê-lo evita reabrir
+ * a mesma classe de risco se um futuro caminho de código voltar a aninhar
+ * duas conexões do mesmo pool.
  */
 const POOL_MAX_MINIMO = 2;
 /** Valor padrão quando `DEMURRAGE_DATABASE_POOL_MAX` não está definida — mesmo padrão histórico da biblioteca `pg`, agora uma decisão EXPLÍCITA e validada, não mais implícita. */

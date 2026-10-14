@@ -1,4 +1,4 @@
-import { Pool } from 'pg';
+import { Client, Pool } from 'pg';
 import { getPool } from '../db/pool';
 import { CONTRATO_REGISTRO_DEMURRAGE_V1, ErroContratoDemurrage, RegistroProcessoDemurrageV1 } from '../registro/contrato';
 import { PosCommitIncompletoError, ResultadoRegistroDemurrage, registrarProcessoDemurrage } from '../registro/registrarProcessoDemurrage';
@@ -282,15 +282,48 @@ export interface GanchosTesteResolverVinculo {
  * o estado da transação é rastreado EXPLICITAMENTE em `transacaoAberta`.
  * Todo caminho de saída depois de um `BEGIN` bem-sucedido passa por
  * exatamente um `COMMIT` OU por uma tentativa de `ROLLBACK` — nunca os
- * dois, nunca nenhum. O `finally` NUNCA libera a conexão cegamente: se
- * havia uma transação aberta e o `ROLLBACK` (ou o gancho de teste que o
- * substitui) também falhar, a conexão é liberada com `release(erro)`, que
- * instrui o `pg-pool` a DESCARTAR essa conexão física em vez de devolvê-la
- * ao pool para reuso — nunca uma conexão possivelmente suja volta a ser
- * emprestada a outra chamada. A falha do rollback nunca substitui o erro de
- * negócio ORIGINAL (sempre relançado sem alteração) e só é classificada/logada
- * pelo mapeamento FECHADO já existente (achado #3 da v1.1) — nunca
- * `.message`, stack, corpo da requisição ou segredo.
+ * dois, nunca nenhum. O `finally` NUNCA libera a conexão cegamente: ela
+ * nunca é devolvida a um pool compartilhado reutilizável enquanto seu
+ * estado transacional não for conhecido (ver nota de concorrência abaixo —
+ * corretiva v1.3). A falha do rollback nunca substitui o erro de negócio
+ * ORIGINAL (sempre relançado sem alteração) e só é classificada/logada pelo
+ * mapeamento FECHADO já existente (achado #3 da v1.1) — nunca `.message`,
+ * stack, corpo da requisição ou segredo.
+ *
+ * CONCORRÊNCIA E O POOL COMPARTILHADO (corretiva v1.3 — achado bloqueante
+ * levantado na revisão final da v1.2): a v1.2 validou que UMA chamada
+ * isolada não se autobloqueia com `pool.max >= 2`, mas isso NÃO prova
+ * segurança sob CONCORRÊNCIA — reproduzido deterministicamente (script de
+ * investigação, não comitado): com `pool.max = N` e N chamadas concorrentes
+ * para N identidades a montante DIFERENTES (sem contenção entre si no lock
+ * consultivo — chaves distintas), cada uma adquire sua própria conexão do
+ * `lockClient` (todas as N conexões do pool ficam ocupadas), e cada uma
+ * então tenta adquirir uma SEGUNDA conexão do MESMO pool para o D10 — zero
+ * conexões livres, nenhuma chamada nunca libera a sua primeira (está
+ * esperando a segunda), nenhuma chamada nunca consegue a segunda (não há
+ * conexão livre): deadlock permanente (o `pg-pool` não tem timeout de
+ * conexão por padrão). Aumentar `pool.max` só eleva o N necessário para
+ * saturar — não elimina o problema estrutural.
+ *
+ * CORREÇÃO: a conexão do `lockClient` (que faz o lock consultivo e,
+ * eventualmente, o INSERT do vínculo) agora é um `pg.Client` DEDICADO —
+ * conectado diretamente, FORA do `pool` compartilhado — nunca retirado nem
+ * devolvido a nenhum pool. O D10 (`registrarProcessoDemurrage`, chamado
+ * DENTRO desta transação) continua usando o `pool` compartilhado exatamente
+ * como antes (nenhuma mudança em D10) — mas agora o `lockClient` e a
+ * conexão que o D10 pega são fisicamente recursos DIFERENTES, sem disputa
+ * nenhuma entre si. Isso elimina a dependência circular por construção: o
+ * `pool` compartilhado só precisa servir UMA conexão por vez para o D10
+ * (uso sequencial, nunca aninhado), e a disponibilidade de conexões no
+ * `lockClient` nunca depende de quantas chamadas concorrentes de
+ * `resolverVinculoProcesso` estão em voo — cada uma tem a sua própria
+ * conexão dedicada, independente do `pool.max`. O `pg_advisory_xact_lock`
+ * continua sendo exatamente o mesmo mecanismo entre processos/instâncias
+ * (a semântica do lock no Postgres não depende de a conexão vir de um pool
+ * Node ou de uma conexão direta) — a garantia de serialização do achado #1
+ * da v1.1 (duas entregas concorrentes para o MESMO `origemProcessoId`
+ * convergem) permanece intacta e é reconfirmada pelos testes de
+ * concorrência existentes.
  *
  * CONFLITO OCULTO NA INSERÇÃO DO VÍNCULO (corretiva v1.2 — segundo achado
  * bloqueante): o `INSERT ... ON CONFLICT DO NOTHING` do vínculo agora usa
@@ -308,9 +341,14 @@ export async function resolverVinculoProcesso(
   pool: Pool, organizationId: string, norm: EntradaHandoffNormalizada, entradaD10: RegistroProcessoDemurrageV1,
   ganchosTeste?: GanchosTesteResolverVinculo,
 ): Promise<ResolucaoVinculo> {
-  const lockClient = await pool.connect();
+  // Conexão DEDICADA (não do `pool` compartilhado) — ver nota de
+  // concorrência acima (corretiva v1.3). `pool.options.connectionString`
+  // é a mesma connection string que o `pool` recebido já usa (o `Pool`
+  // desta base de código é sempre construído só com `{ connectionString }`,
+  // em produção e em todos os testes).
+  const lockClient = new Client({ connectionString: pool.options.connectionString });
+  await lockClient.connect();
   let transacaoAberta = false;
-  let liberarComoSuja: Error | undefined;
   try {
     await lockClient.query('BEGIN');
     transacaoAberta = true;
@@ -400,22 +438,30 @@ export async function resolverVinculoProcesso(
         if (ganchosTeste?.antesDoRollback) await ganchosTeste.antesDoRollback();
         else await lockClient.query('ROLLBACK');
       } catch (erroRollback) {
-        // O ROLLBACK também falhou: a conexão pode ficar numa transação
-        // aberta/abortada indeterminada — NUNCA a devolvemos ao pool para
-        // reuso (ver `finally`: `release(liberarComoSuja)` força o `pg-pool`
-        // a DESCARTAR esta conexão física). A falha do rollback NUNCA
-        // substitui o erro de negócio ORIGINAL (`erro`, relançado abaixo sem
-        // alteração) e só é classificada/logada pelo mapeamento FECHADO já
-        // existente (achado #3 da v1.1) — nunca `.message`, stack ou erro bruto.
-        liberarComoSuja = erroRollback instanceof Error ? erroRollback : new Error('rollback_falhou');
+        // O ROLLBACK também falhou: a conexão é DEDICADA (corretiva v1.3,
+        // nunca pertenceu a um pool compartilhado) — o `finally` abaixo
+        // encerra (`end()`) essa conexão física incondicionalmente, então
+        // não há "devolver suja ao pool" a evitar aqui. A falha do rollback
+        // NUNCA substitui o erro de negócio ORIGINAL (`erro`, relançado
+        // abaixo sem alteração) e só é classificada/logada pelo mapeamento
+        // FECHADO já existente (achado #3 da v1.1) — nunca `.message`,
+        // stack ou erro bruto.
         // eslint-disable-next-line no-console
-        console.error(`[demurrage-handoff] rollback de resolverVinculoProcesso também falhou — conexão descartada, nunca reutilizada: ${classificarFalhaHandoff(erroRollback)}`);
+        console.error(`[demurrage-handoff] rollback de resolverVinculoProcesso também falhou — conexão dedicada será encerrada: ${classificarFalhaHandoff(erroRollback)}`);
       }
       transacaoAberta = false;
     }
     throw erro;
   } finally {
-    lockClient.release(liberarComoSuja);
+    // Conexão DEDICADA (nunca de um pool) — sempre `end()`, nunca
+    // `release()`: não há pool nenhum para devolver (suja ou limpa) esta
+    // conexão. Encerrar a conexão TCP garante que o Postgres aborta
+    // qualquer transação remanescente do lado do servidor, mesmo se a
+    // tentativa de ROLLBACK acima também tiver falhado.
+    await lockClient.end().catch((erroEnd) => {
+      // eslint-disable-next-line no-console
+      console.error(`[demurrage-handoff] encerrar a conexão dedicada de resolverVinculoProcesso falhou (sem impacto — a conexão já estava inutilizável): ${classificarFalhaHandoff(erroEnd)}`);
+    });
   }
 }
 
