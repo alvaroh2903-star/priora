@@ -26,8 +26,10 @@ export const CANONICAL_DOC_SCHEMA = 'canonical-doc/v2' as const;
  * (o canônico em cache da versão anterior deixa de ser servido; o OCR é reusado).
  * v1.1: unidades mínimas, sem convenção numérica global, quantidade V-004.1,
  * rótulos conservadores, título por anexo, Consignee multilinha.
+ * v1.2: lista APROVADA de sinônimos de pacote restaurada (BAGS→BAG, PCS→PIECE…;
+ * sem PKGE/PC) — muda a saída (tipo canônico e volumes sem rótulo).
  */
-export const PARSER_VERSION = 'parser/v1.1' as const;
+export const PARSER_VERSION = 'parser/v1.2' as const;
 
 export type ExtractionMethod =
   | 'deterministic' // parser determinístico resolveu

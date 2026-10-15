@@ -19,7 +19,7 @@ import {
   comporGrupo,
   hashBytes,
 } from '../ocr/ocrEvidence';
-import { CANONICAL_DOC_SCHEMA, CanonicalDocumentV2, PARSER_VERSION } from '../canonical/canonicalDocument';
+import { CANONICAL_DOC_SCHEMA, CanonicalDocumentV2, PARSER_VERSION, campoVazio } from '../canonical/canonicalDocument';
 import { canonicalParaDocPreAlerta } from '../canonical/adapterDocPreAlerta';
 import { _limparMemoriaCanonico, chaveCanonico } from '../canonical/canonicalCache';
 import { parsearEvidencia } from '../parser/parserDeterministico';
@@ -49,7 +49,8 @@ import {
   preAlertaExigeGemini,
   versaoPipelineDocPb001,
 } from './extracaoPreAlerta';
-import { executarPreAlerta } from './index';
+import { MOTOR_PB001_VERSAO, executarPreAlerta } from './index';
+import { chaveOcr } from './ocrCache';
 import { ContainerDoc, DocPreAlerta, Evidencia, MedidaDoc, Operacao } from './modelo';
 import { familiaV003 } from './v003Containers';
 import { familiaV004 } from './v004Volumes';
@@ -428,7 +429,7 @@ test('20 · proveniência canônica exata (método, provedor, modelo, página)',
   assert.equal(c.schemaVersion, CANONICAL_DOC_SCHEMA);
   assert.equal(c.schemaVersion, 'canonical-doc/v2');
   assert.equal(c.parserVersion, PARSER_VERSION);
-  assert.equal(PARSER_VERSION, 'parser/v1.1');
+  assert.equal(PARSER_VERSION, 'parser/v1.2');
   assert.equal(c.ocrAssinatura, ev.assinatura);
   const f = c.containers[0].grossWeight;
   assert.equal(f.extractionMethod, 'deterministic');
@@ -649,6 +650,71 @@ test('cache · sem escopo de conta o canônico NÃO é lido nem gravado (fail cl
 test('cache · versão do pipeline separa documento determinístico × legado (PB-002 inalterado)', () => {
   assert.equal(versaoPipelineDocPb001({ modo: 'legado' }), undefined);
   assert.equal(versaoPipelineDocPb001({ modo: 'deterministico' }), `det|${PARSER_VERSION}|canonical-doc/v2|adapter-docprealerta/v1`);
+});
+
+test('cache · lista de pacotes aprovada → parser/v1.2 + motor/v3: chaves DERIVADAS novas; OCR reaproveitado (zero Mistral)', async () => {
+  const ANTERIOR = { parser: 'parser/v1.1', motor: 'motor/v2-unidades-incerteza' };
+  assert.equal(PARSER_VERSION, 'parser/v1.2');
+  assert.equal(MOTOR_PB001_VERSAO, 'motor/v3-pacotes-aprovados');
+
+  // Evidência de OCR JÁ guardada (Mistral) — a mesma para as duas versões.
+  const store = new Map<string, SourceOcrEvidenceV1>();
+  const parte = parteComEvidencia(store, 'HBL NO.: HVNSE2605099\nTOTAL: 600 BAGS 9000 KGS', 'aBags', 'HBL.pdf');
+
+  // Canônico da versão ANTERIOR (lista estreitada: "BAGS" não era tipo conhecido →
+  // a linha TOTAL não dava volumes) guardado sob a chave parser/v1.1.
+  const anterior = portasContadas(store, {
+    versao: ANTERIOR.parser,
+    parse: (ev) => {
+      const c = parsearEvidencia(ev);
+      return { ...c, parserVersion: ANTERIOR.parser, cargo: { ...c.cargo, packageQuantity: campoVazio(c.documentId), packageType: campoVazio(c.documentId) } };
+    },
+  });
+  const r0 = await extrairViaMistralCore([parte], 'HBL', 'HBL.pdf', { escopo: 'contaT', modo: 'deterministico' }, anterior.portas);
+  assert.equal(r0.doc?.qtdVolumesTotal, null);
+
+  // parser/v1.2: a MESMA evidência de OCR é relida (zero Mistral); o canônico v1.1 NÃO é servido.
+  const atual = portasContadas(store);
+  for (const [k, d] of anterior.canon) atual.canon.set(k, d);
+  const r1 = await extrairViaMistralCore([parte], 'HBL', 'HBL.pdf', { escopo: 'contaT', modo: 'deterministico' }, atual.portas);
+  assert.equal(r1.ocrAssinatura, r0.ocrAssinatura); // mesma evidência de OCR
+  assert.equal(r1.canonicalDeCache, false);
+  assert.equal(atual.n.parse, 1);
+  assert.equal(r1.canonical?.parserVersion, 'parser/v1.2');
+  assert.equal(r1.canonical?.cargo.packageType.normalizedValue, 'BAG');
+  assert.equal(r1.doc?.qtdVolumesTotal, 600);
+  assert.equal(r1.doc?.tipoVolume, 'BAGS'); // o motor recebe a grafia impressa
+  assert.ok(atual.canon.has(chaveCanonico(r1.ocrAssinatura!, ANTERIOR.parser)));
+  assert.ok(atual.canon.has(chaveCanonico(r1.ocrAssinatura!, PARSER_VERSION)));
+  assert.notEqual(chaveCanonico(r1.ocrAssinatura!, PARSER_VERSION), chaveCanonico(r1.ocrAssinatura!, ANTERIOR.parser));
+  const r2 = await extrairViaMistralCore([parte], 'HBL', 'HBL.pdf', { escopo: 'contaT', modo: 'deterministico' }, atual.portas);
+  assert.equal(r2.canonicalDeCache, true); // v1.2 já em cache → sem novo parse
+  assert.equal(atual.n.parse, 1);
+  assert.equal(anterior.n.ocr + atual.n.ocr, 0); // ZERO Mistral: OCR NUNCA invalidado
+  assert.equal(anterior.n.gemini + atual.n.gemini, 0);
+  assert.equal(store.size, 1); // evidência intacta (nada apagado, nada regravado)
+
+  // Documento DERIVADO: a chave inclui a versão do parser → nova.
+  const versaoDoc = versaoPipelineDocPb001({ modo: 'deterministico' })!;
+  const versaoDocAnterior = versaoDoc.replace(PARSER_VERSION, ANTERIOR.parser);
+  assert.notEqual(versaoDoc, versaoDocAnterior);
+  assert.notEqual(chaveOcr('contaT', [parte.ref], versaoDoc), chaveOcr('contaT', [parte.ref], versaoDocAnterior));
+
+  // RESULTADO: nova chave pela versão do motor — também no modo legado (só o motor muda).
+  const base = { escopoConta: 'contaT', processoBase: 'IM0099-26', assinaturaFontes: assinaturaFontesProcesso([{ tipo: 'HBL', emailId: 'm1', attachmentId: 'aBags', nome: 'HBL.pdf' }]) };
+  assert.notEqual(
+    chaveResultadoPreAlerta({ ...base, versaoDoc, motor: MOTOR_PB001_VERSAO }),
+    chaveResultadoPreAlerta({ ...base, versaoDoc: versaoDocAnterior, motor: ANTERIOR.motor }),
+  );
+  assert.notEqual(
+    chaveResultadoPreAlerta({ ...base, versaoDoc: undefined, motor: MOTOR_PB001_VERSAO }),
+    chaveResultadoPreAlerta({ ...base, versaoDoc: undefined, motor: ANTERIOR.motor }),
+  );
+
+  // Mesmos documentos → o motor v3 recomputa com a lista aprovada (BAGS × BAG = Consistente).
+  const h = r1.doc!;
+  const m = { ...h, tipo: 'MBL' as const, tipoVolume: 'BAG' };
+  assert.equal(sub(familiaV004({ processo: 'IM0099-26', master: m, houses: [h] }).evidencias, 'V-004.2')?.resultado, 'Consistente');
 });
 
 /* ------------------------------------------------------------------ *
