@@ -15,6 +15,7 @@ import { trackingRouter } from './routes/trackingRoutes';
 import { demurrageRouter } from './routes/demurrageRoutes';
 import { demurrageV2Router } from './routes/demurrageV2Routes';
 import { demurrageGestaoRouter } from './routes/demurrageGestaoRoutes';
+import { demurrageAcoesRouter } from './routes/demurrageAcoesRoutes';
 import { auditoriaRouter } from './routes/auditoriaRoutes';
 import { capturaRouter } from './routes/capturaRoutes';
 import { demurrageHandoffRouter } from './routes/demurrageHandoffRoutes';
@@ -81,6 +82,12 @@ app.use('/api/tracking', trackingRouter);
 // middleware duplicado. Nenhuma colisão de caminho: a V1 só tem '/' e
 // '/solicitar-minuta'.
 app.use('/api/demurrage/v2/gestao', demurrageGestaoRouter);
+// Produção P1 (Entrega 2) — rotas de AÇÃO operacional, montadas ANTES da V2
+// de leitura pela MESMA razão do comentário acima (gestao): '/acoes' é um
+// subcaminho mais específico de '/v2' — monta primeiro para nunca colidir
+// com os padrões de rota (`/containers/:containerId` etc.) do router de
+// leitura. Mesmo requireAuth/autorizarInterno (sessão interna, nunca Portal).
+app.use('/api/demurrage/v2/acoes', demurrageAcoesRouter);
 app.use('/api/demurrage/v2', demurrageV2Router);
 app.use('/api/demurrage', demurrageRouter);
 app.use('/api/auditoria', auditoriaRouter);

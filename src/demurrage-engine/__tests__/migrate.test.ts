@@ -48,6 +48,7 @@ test('migrations: aplica todas as migrations pendentes em um banco novo e é ide
       '0035_d15a_integridade_final_reabertura.sql',
       '0036_d15b_integridade_dados_excecoes.sql', '0037_d15c_integridade_tarifaria_e_filas.sql', '0038_d15c_v1_1_publicacao_tarifaria.sql',
       '0039_tracking_schedule_claims_fencing.sql', '0040_handoff_demurrage.sql', '0041_handoff_vinculo_processo.sql',
+      '0042_acoes_idempotencia.sql',
     ];
 
     const first = await runMigrations(pool);
