@@ -1,5 +1,10 @@
 # Produção P1 — Entrega 2 v1.2 (corretiva final de integridade)
 
+> **ATUALIZAÇÃO — decisão final do usuário:** a corretiva descrita abaixo foi
+> **APROVADA**. **A Entrega 2, como um todo, está APROVADA E CONGELADA.** Ver
+> `docs/demurrage-producao-p1-diagnostico.md` §6 para o status consolidado
+> da Produção P1.
+
 **Base:** branch `claude/practical-cerf-mnz7oj`, Entrega 2 v1.1 commit `86ad7fa`
 (aprovada, suíte completa 1090/1090). Migrations 0001–0043 **não foram
 tocadas**. Nenhum arquivo de frontend foi alterado. A Entrega 3 **não foi
@@ -342,6 +347,8 @@ módulo de ações, testes). Nenhum arquivo em `public/`, `.html` ou `.css`.
 - Entrega 3: **não iniciada**.
 - Frontend: **nenhum arquivo alterado**.
 
-Esta corretiva encerra o trabalho pedido para a Entrega 2 v1.2. A decisão de
-congelamento final da Entrega 2 (aprovar e seguir para a Entrega 3, ou pedir
-mais uma rodada de auditoria) é do solicitante — não é tomada aqui.
+**Decisão final do usuário (pós-entrega):** corretiva v1.2 aprovada; Entrega 2
+como um todo **APROVADA E CONGELADA**. Não alterar mais a superfície
+congelada da Entrega 2, salvo bug comprovado, falha de segurança/integridade,
+ou mudança explicitamente aprovada. A Entrega 3 permanece não iniciada,
+aguardando autorização explícita do usuário para começar.

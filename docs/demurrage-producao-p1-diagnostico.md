@@ -3,10 +3,11 @@
 **Baseline do backend congelado:** `d5b4fbc` (D16 v1.1). Este documento não altera nenhum arquivo de código — é o diagnóstico e o plano exigidos antes de qualquer implementação.
 
 > **Status da Produção P1 (atualizado após decisão final do usuário):**
-> **Entrega 1 — APROVADA E CONGELADA.** Entrega 2 e Entrega 3 — não iniciadas,
-> aguardando autorização explícita do usuário para começar. Produção P1 como
-> um todo **não está declarada completa**. Ver §6 para o detalhe do
-> congelamento e os relatórios de entrega.
+> **Entrega 1 — APROVADA E CONGELADA.** **Entrega 2 — APROVADA E CONGELADA**
+> (decisão final do usuário, após a corretiva v1.2). Entrega 3 — **não
+> iniciada**, aguardando autorização explícita do usuário para começar.
+> Produção P1 como um todo **não está declarada completa**. Ver §6 para o
+> detalhe do congelamento e os relatórios de entrega.
 
 ## 0. Status executivo
 
@@ -221,11 +222,34 @@ para reabrir a superfície congelada preventivamente.
 **Regressão final no congelamento (v1.3):** Demurrage Engine 1037/1037; V1 25/25; D13 UI 66/66; `tsc --noEmit` limpo; build limpo.
 
 ### Entrega 2 — Rotas de ação operacional
+
+**STATUS: APROVADA E CONGELADA (decisão final do usuário, após a corretiva v1.2).**
+Não alterar a superfície congelada desta entrega, salvo: bug comprovado;
+falha de segurança/integridade; ou mudança explicitamente aprovada pelo
+usuário. Relatórios, em ordem: `docs/demurrage-producao-p1-entrega-2.md`
+(implementação original — rotas finas sobre os sete serviços congelados do
+§3); `docs/demurrage-producao-p1-entrega-2-v1-1.md` (corretiva: regressão
+vermelha corrigida, idempotência atômica do registro de minuta — migration
+0043 —, verificação do tipo PERSISTIDO da pendência, auditoria de
+concorrência das outras seis ações); `docs/demurrage-producao-p1-entrega-2-v1-2.md`
+(corretiva final de integridade: migration 0044 — FK composta amarrando a
+organização da idempotência de minuta à organização real do contêiner,
+pelo banco —; guarda definitiva de minuta já processada movida para dentro
+de `ClosingService.validarMinuta`, não só na rota; contrato de transporte
+fechado para `Idempotency-Key`, com CHECK de banco como defesa em
+profundidade).
+
 **Escopo:** as rotas do §3 marcadas "obrigatório" (itens 1, 3, 4a, 5, 6, 7) — cada uma um wrapper fino sobre o serviço congelado correspondente, com RBAC/organização resolvidos na camada de rota (nunca regra de negócio nova); para o item 2 (tracking manual), acrescentar `membershipId` ao registro de auditoria antes de expor por rota.
 **Gate de aceitação:** cada rota produz exatamente os mesmos efeitos que o teste do serviço já prova hoje (reusar os cenários — não reescrever a regra); cada erro nomeado do serviço mapeia para um código HTTP estável e documentado; nenhuma rota duplica uma validação que o serviço já faz.
 **Regressão:** mesma suíte da entrega 1 + os testes novos da rota de handoff (não podem regredir) + novos testes de aceitação por rota, reusando os fixtures já citados no §3.
+**Regressão final no congelamento (v1.2):** Demurrage Engine 1107/1107; V1 25/25; D13 UI 66/66; `tsc --noEmit` limpo; build limpo; nenhum arquivo de frontend alterado.
 
 ### Entrega 3 — Leitura para o frontend redesenhado
+
+**STATUS: NÃO INICIADA.** Aguardando autorização explícita do usuário para
+começar — ver o relatório de status da Produção P1 para o que resta e os
+bloqueadores/pontos de validação.
+
 **Escopo:** as lacunas do §4.2 (lista de pendências com `id`; exposição de `reaberturaId`/`minutaId` pendentes) — só leitura, zero-escrita, mesma régua de paginação/assinatura/isolamento já estabelecida.
 **Gate de aceitação:** nova(s) rota(s) comprovadamente zero-escrita (mesmo padrão de fingerprint do D12 G7); isolamento organizacional idêntico ao resto de `/api/demurrage/v2`.
 **Regressão:** suíte completa + D13 UI (sem alterar a tela existente — só preparar o contrato que o redesenho futuro vai consumir).
