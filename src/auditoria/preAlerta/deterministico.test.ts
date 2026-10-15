@@ -812,17 +812,37 @@ test('fix6 · unidades: só o conjunto mínimo; demais grafias incertas (e não 
   assert.equal(ok.containers[0].cubage.normalizedUnit, 'CBM');
 });
 
-test('fix6 · sinônimos de pacote = EXATAMENTE a lista aprovada (sem PKGE, PC, PCS, BAGS…)', () => {
-  for (const g of ['CARTON', 'CARTONS', 'CARTON(S)', 'CTN', 'CTNS']) assert.equal(normalizarTipoPacote(g).chave, 'CARTON', g);
-  for (const g of ['PALLET', 'PALLETS', 'PLT', 'PLTS']) assert.equal(normalizarTipoPacote(g).chave, 'PALLET', g);
-  for (const g of ['PACKAGE', 'PACKAGES', 'PKG', 'PKGS']) assert.equal(normalizarTipoPacote(g).chave, 'PACKAGE', g);
-  for (const g of ['BOX', 'BOXES']) assert.equal(normalizarTipoPacote(g).chave, 'BOX', g);
-  for (const g of ['PKGE', 'PC', 'PCS', 'PIECES', 'BAG', 'BAGS', 'CASES', 'DRUMS', 'CAJAS']) {
-    assert.equal(normalizarTipoPacote(g).conhecido, false, g);
+test('fix6 · sinônimos de pacote = EXATAMENTE a lista aprovada (sem PKGE, PC)', () => {
+  const aprovada: Record<string, string[]> = {
+    CARTON: ['CARTON', 'CARTONS', 'CARTON(S)', 'CTN', 'CTNS'],
+    PALLET: ['PALLET', 'PALLETS', 'PLT', 'PLTS'],
+    PACKAGE: ['PACKAGE', 'PACKAGES', 'PKG', 'PKGS'],
+    BOX: ['BOX', 'BOXES'],
+    CASE: ['CASE', 'CASES'],
+    BAG: ['BAG', 'BAGS'],
+    ROLL: ['ROLL', 'ROLLS'],
+    DRUM: ['DRUM', 'DRUMS'],
+    CRATE: ['CRATE', 'CRATES'],
+    PIECE: ['PIECE', 'PIECES', 'PCS'],
+    BALE: ['BALE', 'BALES'],
+    SACK: ['SACK', 'SACKS'],
+    BUNDLE: ['BUNDLE', 'BUNDLES'],
+  };
+  for (const [canon, grafias] of Object.entries(aprovada)) {
+    for (const g of grafias) {
+      assert.equal(normalizarTipoPacote(g).conhecido, true, g);
+      assert.equal(normalizarTipoPacote(g).chave, canon, g);
+    }
   }
-  assert.equal(cmpTipoPacote('PCS', 'PIECES').resultado, 'ValidacaoHumana'); // sem alias herdado
+  // Extras NÃO aprovados continuam fora; equivalência desconhecida nunca é forçada.
+  for (const g of ['PKGE', 'PC', 'CAJAS']) assert.equal(normalizarTipoPacote(g).conhecido, false, g);
   assert.equal(cmpTipoPacote('PKGE', 'PACKAGES').resultado, 'ValidacaoHumana');
+  assert.equal(cmpTipoPacote('PC', 'PIECES').resultado, 'ValidacaoHumana');
+  assert.equal(cmpTipoPacote('BOXES', 'CAJAS').resultado, 'ValidacaoHumana');
   assert.equal(cmpTipoPacote('CTNS', 'CARTONS').resultado, 'Consistente');
+  assert.equal(cmpTipoPacote('PCS', 'PIECES').resultado, 'Consistente');
+  assert.equal(cmpTipoPacote('BAGS', 'BAG').resultado, 'Consistente');
+  assert.equal(cmpTipoPacote('BAGS', 'CARTONS').resultado, 'Divergencia'); // tipos aprovados diferentes
 });
 
 test('fix7 · Consignee em várias linhas: nome reconstruído por fronteiras determinísticas', () => {
