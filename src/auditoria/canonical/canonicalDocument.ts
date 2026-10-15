@@ -21,8 +21,13 @@ import { UnidadeMedida } from '../unidades';
 
 export const CANONICAL_DOC_SCHEMA = 'canonical-doc/v2' as const;
 
-/** Versão do parser determinístico (Fase 2). Mudou o parser → nova versão. */
-export const PARSER_VERSION = 'parser/v1' as const;
+/**
+ * Versão do parser determinístico (Fase 2). Mudou a SAÍDA do parser → nova versão
+ * (o canônico em cache da versão anterior deixa de ser servido; o OCR é reusado).
+ * v1.1: unidades mínimas, sem convenção numérica global, quantidade V-004.1,
+ * rótulos conservadores, título por anexo, Consignee multilinha.
+ */
+export const PARSER_VERSION = 'parser/v1.1' as const;
 
 export type ExtractionMethod =
   | 'deterministic' // parser determinístico resolveu

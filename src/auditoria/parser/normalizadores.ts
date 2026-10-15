@@ -33,47 +33,26 @@ const incerto = <T>(motivo: string, candidatos: string[] = [], regra: string | n
  * NÚMEROS — normalização CIENTE DO CAMPO (peso × cubagem × quantidade)
  * ------------------------------------------------------------------ */
 
-export type CampoNumerico = 'peso' | 'cubagem' | 'quantidade';
+/** Campos de MEDIDA (peso, cubagem). Quantidade de volumes tem regra própria. */
+export type CampoNumerico = 'peso' | 'cubagem';
 
 /**
- * Convenção numérica do DOCUMENTO, deduzida SÓ de evidência inequívoca: números
- * com os DOIS separadores em agrupamento válido. "1,234.567" = padrão US;
- * "1.234,567" = padrão BR. Ambos presentes ou nenhum → null (sem convenção).
- */
-export type ConvencaoNumerica = 'US' | 'BR' | null;
-
-const RE_US = /(?<![\d.,])[1-9]\d{0,2}(?:,\d{3})+\.\d+(?![\d.,])/g;
-const RE_BR = /(?<![\d.,])[1-9]\d{0,2}(?:\.\d{3})+,\d+(?![\d.,])/g;
-
-export function detectarConvencaoNumerica(texto: string): ConvencaoNumerica {
-  const us = (texto.match(RE_US) || []).length;
-  const br = (texto.match(RE_BR) || []).length;
-  if (us > 0 && br === 0) return 'US';
-  if (br > 0 && us === 0) return 'BR';
-  return null;
-}
-
-/**
- * Normaliza a leitura de um número segundo as regras do CAMPO (PB-001):
+ * Normaliza a leitura de um número de MEDIDA segundo as regras do CAMPO (PB-001).
+ * Usa SÓ o próprio token — nenhum outro número do documento (frete, moeda,
+ * fatura…) altera a interpretação de peso/cubagem.
  *  - O→0 em campo exclusivamente numérico ("2O000 KG" → 20000; "12,5O" → 12,50);
  *  - dois separadores: só com agrupamento válido e interpretação ÚNICA
  *    ("8.000,000" = 8000; "8,000.000" = 8000);
  *  - separador repetido = milhar ("1.234.567");
  *  - UM separador seguido de exatamente 3 dígitos (após 1–3 dígitos) é
- *    estruturalmente ambíguo — resolvido pelo CAMPO:
+ *    estruturalmente ambíguo — resolvido SÓ pela regra do campo:
  *      · cubagem: decimal ("28.000" = "28,000" = 28 — PB-001 V-007);
- *      · peso: ponto = milhar ("8.000 KG" = 8000; "17.637 LB" — PB-001 V-005),
- *        salvo documento em padrão US (conflito → incerto); vírgula = pela
- *        convenção do documento (US milhar / BR decimal), sem convenção → incerto;
- *      · quantidade: contagem é inteira — leitura decimal não inteira é inválida.
+ *      · peso, ponto: milhar ("8.000 KG" = 8000; "17.637 LB" — PB-001 V-005);
+ *      · peso, vírgula ("8,000"): ambíguo pelas regras aprovadas → incerto;
  *  - qualquer outra forma → decimal (não pode ser milhar).
  * Nunca escolhe entre duas leituras plausíveis: devolve incerto com candidatos.
  */
-export function normalizarNumeroCampo(
-  bruto: string,
-  campo: CampoNumerico,
-  conv: ConvencaoNumerica,
-): Leitura<number> {
+export function normalizarNumeroCampo(bruto: string, campo: CampoNumerico): Leitura<number> {
   const regras: string[] = [];
   let t = String(bruto || '').trim();
   if (!t) return { valor: null, regra: null, incerto: false, motivo: null, candidatos: [] };
@@ -86,12 +65,7 @@ export function normalizarNumeroCampo(
   if (!/^[0-9.,]+$/.test(t)) return incerto('caractere não numérico na leitura', [bruto]);
   if (!/^\d/.test(t) || !/\d$/.test(t)) return incerto('estrutura numérica inválida', [bruto]);
 
-  const fim = (valor: number, regra: string): Leitura<number> => {
-    if (campo === 'quantidade' && !Number.isInteger(valor)) {
-      return incerto('quantidade de volumes não inteira', [bruto]);
-    }
-    return ok(valor, [...regras, regra].join('+'));
-  };
+  const fim = (valor: number, regra: string): Leitura<number> => ok(valor, [...regras, regra].join('+'));
 
   const pontos = (t.match(/\./g) || []).length;
   const virgulas = (t.match(/,/g) || []).length;
@@ -123,31 +97,32 @@ export function normalizarNumeroCampo(
   if (!podeSerMilhar) return fim(decimal, `numero.decimal-${nomeSep}`);
 
   const milhar = Number(`${I}${F}`);
-  const ambos = [String(milhar), String(decimal)];
-  switch (campo) {
-    case 'cubagem':
-      return fim(decimal, `cubagem.${nomeSep}-decimal(PB-001:28.000=28,000=28)`);
-    case 'peso':
-      if (sep === '.') {
-        if (conv === 'US') {
-          return incerto('peso "X.ddd": milhar pelo Blueprint × decimal no padrão US do documento', ambos);
-        }
-        return fim(milhar, 'peso.ponto-milhar(PB-001:8.000KG=8000)');
-      }
-      if (conv === 'US') return fim(milhar, 'peso.virgula-milhar(documento-padrao-US)');
-      if (conv === 'BR') return fim(decimal, 'peso.virgula-decimal(documento-padrao-BR)');
-      return incerto('peso "X,ddd" ambíguo (milhar × decimal) sem convenção no documento', ambos);
-    case 'quantidade':
-      if (F !== '000') return fim(milhar, `quantidade.milhar-${nomeSep}(leitura-decimal-nao-inteira)`);
-      if (sep === '.') {
-        if (conv === 'US') return incerto('quantidade "X.000": milhar × decimal no padrão US do documento', ambos);
-        return fim(milhar, 'quantidade.ponto-milhar(Q8)');
-      }
-      if (conv === 'US') return fim(milhar, 'quantidade.virgula-milhar(documento-padrao-US)');
-      if (conv === 'BR') return fim(decimal, 'quantidade.virgula-decimal(documento-padrao-BR)');
-      return incerto('quantidade "X,000" ambígua (milhar × decimal) sem convenção no documento', ambos);
+  if (campo === 'cubagem') return fim(decimal, `cubagem.${nomeSep}-decimal(PB-001:28.000=28,000=28)`);
+  if (sep === '.') return fim(milhar, 'peso.ponto-milhar(PB-001:8.000KG=8000)');
+  return incerto('peso "X,ddd" ambíguo (milhar × decimal) pelas regras aprovadas', [String(milhar), String(decimal)]);
+}
+
+/**
+ * QUANTIDADE DE VOLUMES (PB-001 V-004.1 — "Normalização permitida: remoção de
+ * separadores e espaços"). Contagem é inteira: separadores/espaços entre grupos
+ * de milhar saem ("1 200" = "1.200" = "1,200" = 1200). Exige estrutura de
+ * contagem (grupos de 3 dígitos com o MESMO separador) — "12.5" ou "1.20" não é
+ * contagem válida → incerto. Regra EXCLUSIVA de quantidade (não vale p/ peso/cubagem).
+ */
+export function normalizarQuantidade(bruto: string): Leitura<number> {
+  const regras: string[] = [];
+  let t = String(bruto || '').trim();
+  if (!t) return { valor: null, regra: null, incerto: false, motivo: null, candidatos: [] };
+  if (/[Oo]/.test(t)) {
+    if (!/^[0-9Oo., ]+$/.test(t) || !/\d/.test(t)) return incerto('caractere não numérico na quantidade', [bruto]);
+    t = t.replace(/[Oo]/g, '0');
+    regras.push('numero.O-para-0(campo-numerico)');
   }
-  return incerto('campo numérico desconhecido', [bruto]);
+  if (/^\d+$/.test(t)) return ok(Number(t), [...regras, 'quantidade.inteiro'].join('+'));
+  if (/^[1-9]\d{0,2}([ .,])\d{3}(?:\1\d{3})*$/.test(t)) {
+    return ok(Number(t.replace(/[ .,]/g, '')), [...regras, 'quantidade.remocao-de-separadores-e-espacos(PB-001:V-004.1)'].join('+'));
+  }
+  return incerto('quantidade fora da estrutura de contagem', [bruto]);
 }
 
 /* ------------------------------------------------------------------ *

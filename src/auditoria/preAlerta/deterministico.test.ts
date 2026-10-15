@@ -24,22 +24,28 @@ import { canonicalParaDocPreAlerta } from '../canonical/adapterDocPreAlerta';
 import { _limparMemoriaCanonico, chaveCanonico } from '../canonical/canonicalCache';
 import { parsearEvidencia } from '../parser/parserDeterministico';
 import {
-  detectarConvencaoNumerica,
   normalizarContainer,
   normalizarLacre,
   normalizarNcm,
   normalizarNumeroCampo,
+  normalizarQuantidade,
 } from '../parser/normalizadores';
 import { normalizarUnidade } from '../unidades';
 import {
   Extracao,
   ParteComRef,
   PortasExtracao,
+  MSG_MISTRAL_INDISPONIVEL,
+  assinaturaFontesProcesso,
+  chaveResultadoPreAlerta,
   classificarPapel,
   consolidarPorConhecimento,
+  extrairDocPreAlertaMultiplo,
   extrairViaMistralCore,
+  indisponibilidadePreAlerta,
   modoExtracaoPb001,
   montarOperacao,
+  ordenarPaginasDoDocumento,
   preAlertaExigeGemini,
   versaoPipelineDocPb001,
 } from './extracaoPreAlerta';
@@ -50,9 +56,11 @@ import { familiaV004 } from './v004Volumes';
 import { familiaV005 } from './v005PesoBruto';
 import { familiaV007 } from './v007Cubagem';
 import { familiaV012 } from './v012Ncm';
+import { cmpTipoPacote, normalizarTipoPacote } from './comparadores';
 import { config } from '../../config';
 import { isAiConfigured } from '../../ai/geminiClient';
 import * as geminiClient from '../../ai/geminiClient';
+import * as graphService from '../../graph/graphService';
 
 /* ------------------------------------------------------------------ *
  * Fixtures sanitizadas
@@ -225,27 +233,25 @@ test('4 · multipágina/multianexo: cada campo aponta anexo + página exatos', (
 
 test('5 · peso: formatos equivalentes do PB-001 (8000 = 8000.00 = 8.000,000 = 8.000 KG)', () => {
   for (const s of ['8000', '8000.00', '8.000,000', '8.000']) {
-    assert.equal(normalizarNumeroCampo(s, 'peso', null).valor, 8000, s);
+    assert.equal(normalizarNumeroCampo(s, 'peso').valor, 8000, s);
   }
-  assert.equal(normalizarNumeroCampo('17.637', 'peso', null).valor, 17637); // "17.637 LB" do Blueprint
-  assert.equal(normalizarNumeroCampo('8.001', 'peso', null).valor, 8001); // ≠ 8.000 → divergência no motor
-  const o = normalizarNumeroCampo('2O000', 'peso', null); // O→0 em campo numérico
+  assert.equal(normalizarNumeroCampo('8,000.000', 'peso').valor, 8000); // dois separadores, leitura única
+  assert.equal(normalizarNumeroCampo('17.637', 'peso').valor, 17637); // "17.637 LB" do Blueprint
+  assert.equal(normalizarNumeroCampo('8.001', 'peso').valor, 8001); // ≠ 8.000 → divergência no motor
+  const o = normalizarNumeroCampo('2O000', 'peso'); // O→0 em campo numérico
   assert.equal(o.valor, 20000);
   assert.match(o.regra ?? '', /O-para-0/);
-  // "X,ddd" de peso: sem convenção no documento → incerto (não chuta); com convenção → único.
-  assert.equal(normalizarNumeroCampo('8,000', 'peso', null).incerto, true);
-  assert.equal(normalizarNumeroCampo('8,000', 'peso', 'US').valor, 8000);
-  assert.equal(normalizarNumeroCampo('8,000', 'peso', 'BR').valor, 8);
-  assert.equal(detectarConvencaoNumerica('GROSS 18,500.000 KGS'), 'US');
-  assert.equal(detectarConvencaoNumerica('BRUTO 18.500,000 KG'), 'BR');
-  assert.equal(detectarConvencaoNumerica('18,500.000 e 18.500,000'), null);
+  // "X,ddd" de peso: ambíguo pelas regras aprovadas → SEMPRE incerto (nenhum contexto o resolve).
+  const v = normalizarNumeroCampo('8,000', 'peso');
+  assert.equal(v.incerto, true);
+  assert.deepEqual(v.candidatos, ['8000', '8']);
 });
 
 test('6 · cubagem: formatos equivalentes do PB-001 (28 = 28.000 = 28,000 = 28.0; 28.5 = 28.500 = 28,500)', () => {
-  for (const s of ['28', '28.000', '28,000', '28.0']) assert.equal(normalizarNumeroCampo(s, 'cubagem', null).valor, 28, s);
-  for (const s of ['28.5', '28.500', '28,500', '28.5000']) assert.equal(normalizarNumeroCampo(s, 'cubagem', null).valor, 28.5, s);
-  assert.notEqual(normalizarNumeroCampo('28.000', 'cubagem', null).valor, 28000); // NUNCA 28000 CBM
-  assert.equal(normalizarNumeroCampo('12,5O', 'cubagem', null).valor, 12.5); // "12,5O CBM" → 12,50
+  for (const s of ['28', '28.000', '28,000', '28.0']) assert.equal(normalizarNumeroCampo(s, 'cubagem').valor, 28, s);
+  for (const s of ['28.5', '28.500', '28,500', '28.5000']) assert.equal(normalizarNumeroCampo(s, 'cubagem').valor, 28.5, s);
+  assert.notEqual(normalizarNumeroCampo('28.000', 'cubagem').valor, 28000); // NUNCA 28000 CBM
+  assert.equal(normalizarNumeroCampo('12,5O', 'cubagem').valor, 12.5); // "12,5O CBM" → 12,50
 });
 
 function docU(tipo: 'MBL' | 'HBL', nome: string, cont: MedidaDoc | null, total: MedidaDoc | null): DocPreAlerta {
@@ -388,13 +394,11 @@ test('17 · equivalência desconhecida NÃO é forçada (BOXES × CAJAS → conf
   assert.equal(sub(familiaV004({ processo: 'IMV', master: m, houses: [h] }).evidencias, 'V-004.2')?.resultado, 'ValidacaoHumana');
 });
 
-test('5b · milhar por ESPAÇO ("18 500,000 KGS", "1 200 CTNS") → incerto, nunca um número errado', () => {
-  // Documento com convenção BR (que faria "500,000" virar 500 kg se o espaço fosse ignorado).
-  const c = parse('B/L NO.: SHYY26075038\nFREIGHT 1.234,56\nGROSS WEIGHT: 18 500,000 KGS\nTOTAL PACKAGES: 1 200 CTNS');
+test('5b · milhar por ESPAÇO em PESO ("18 500,000 KGS") → incerto, nunca um número errado', () => {
+  const c = parse('B/L NO.: SHYY26075038\nGROSS WEIGHT: 18 500,000 KGS\nMEASUREMENT: 28 500 CBM');
   assert.equal(incerto(c.cargo.grossWeight), true);
   assert.equal(c.cargo.grossWeight.normalizedValue, null);
-  assert.equal(incerto(c.cargo.packageQuantity), true);
-  assert.equal(c.cargo.packageQuantity.normalizedValue, null);
+  assert.equal(incerto(c.cargo.cubage), true); // a regra de quantidade NÃO vale p/ medida
 });
 
 test('18 · campo ausente → nada inventado (sem peso líquido no documento)', () => {
@@ -423,7 +427,8 @@ test('20 · proveniência canônica exata (método, provedor, modelo, página)',
   const c = parsearEvidencia(ev);
   assert.equal(c.schemaVersion, CANONICAL_DOC_SCHEMA);
   assert.equal(c.schemaVersion, 'canonical-doc/v2');
-  assert.equal(c.parserVersion, 'parser/v1');
+  assert.equal(c.parserVersion, PARSER_VERSION);
+  assert.equal(PARSER_VERSION, 'parser/v1.1');
   assert.equal(c.ocrAssinatura, ev.assinatura);
   const f = c.containers[0].grossWeight;
   assert.equal(f.extractionMethod, 'deterministic');
@@ -522,10 +527,9 @@ test('23 · Gemini NÃO configurado → caminho determinístico funciona (portas
     assert.equal(r.erro, null);
     assert.equal(r.erroFonte, null);
     assert.equal(r.doc?.conhecimentoNumero, 'SHYY26075038');
-    // Rota: com Mistral + parser, o PB-001 não exige o Gemini.
-    assert.equal(preAlertaExigeGemini({ mistralLigado: true, modo: 'deterministico' }), false);
-    assert.equal(preAlertaExigeGemini({ mistralLigado: false, modo: 'deterministico' }), true);
-    assert.equal(preAlertaExigeGemini({ mistralLigado: true, modo: 'legado' }), true);
+    // Rota: o modo determinístico NUNCA exige o Gemini (nem sem Mistral) — só o rollback legado.
+    assert.equal(preAlertaExigeGemini({ modo: 'deterministico' }), false);
+    assert.equal(preAlertaExigeGemini({ modo: 'legado' }), true);
   } finally {
     (config.ai as { apiKey: string }).apiKey = chave;
     _limparMemoriaEvidencia();
@@ -643,7 +647,203 @@ test('cache · sem escopo de conta o canônico NÃO é lido nem gravado (fail cl
 });
 
 test('cache · versão do pipeline separa documento determinístico × legado (PB-002 inalterado)', () => {
-  assert.equal(versaoPipelineDocPb001({ mistralLigado: true, modo: 'legado' }), undefined);
-  assert.equal(versaoPipelineDocPb001({ mistralLigado: false, modo: 'deterministico' }), undefined);
-  assert.match(versaoPipelineDocPb001({ mistralLigado: true, modo: 'deterministico' }) ?? '', /^det\|parser\/v1\|canonical-doc\/v2\|adapter-docprealerta\/v1$/);
+  assert.equal(versaoPipelineDocPb001({ modo: 'legado' }), undefined);
+  assert.equal(versaoPipelineDocPb001({ modo: 'deterministico' }), `det|${PARSER_VERSION}|canonical-doc/v2|adapter-docprealerta/v1`);
+});
+
+/* ------------------------------------------------------------------ *
+ * Passada corretiva (revisão do PR #2) — uma regressão por item
+ * ------------------------------------------------------------------ */
+
+test('fix1 · determinístico SEM Mistral → indisponível explícito; Gemini só no rollback legado', () => {
+  assert.equal(indisponibilidadePreAlerta({ modo: 'deterministico', mistralLigado: false, geminiConfigurado: true }), MSG_MISTRAL_INDISPONIVEL);
+  assert.equal(indisponibilidadePreAlerta({ modo: 'deterministico', mistralLigado: true, geminiConfigurado: false }), null);
+  assert.equal(indisponibilidadePreAlerta({ modo: 'legado', mistralLigado: false, geminiConfigurado: true }), null);
+  assert.match(indisponibilidadePreAlerta({ modo: 'legado', mistralLigado: true, geminiConfigurado: false }) ?? '', /GEMINI_API_KEY/);
+});
+
+test('fix1 · Mistral indisponível + determinístico + Gemini CONFIGURADO → Gemini = 0 (controle: legado usa a visão)', async () => {
+  const gc = geminiClient as unknown as Record<string, unknown>;
+  const gs = graphService as unknown as Record<string, unknown>;
+  const nomes = ['generateStructured', 'generateStructuredFromDocument', 'generateStructuredFromDocuments'];
+  const origG = nomes.map((k) => gc[k]);
+  const origGraph = gs.getAttachmentContent;
+  const chave = config.ai.apiKey;
+  const mistralLigado = config.mistralOcr.enabled;
+  let gemini = 0;
+  let graph = 0;
+  nomes.forEach((k) => {
+    gc[k] = async () => {
+      gemini++;
+      throw new Error('Gemini NÃO deveria ser chamado');
+    };
+  });
+  gs.getAttachmentContent = async () => {
+    graph++;
+    return { contentBytes: Buffer.from('pdf').toString('base64'), contentType: 'application/pdf', name: 'MBL.pdf' };
+  };
+  (config.ai as { apiKey: string }).apiKey = 'chave-de-teste';
+  (config.mistralOcr as { enabled: boolean }).enabled = false; // Mistral indisponível
+  const paginas = [{ messageId: 'm1', attachmentId: 'a1', nome: 'MBL.pdf' }];
+  try {
+    assert.equal(isAiConfigured(), true);
+    const det = await extrairDocPreAlertaMultiplo('token', paginas, 'MBL', { escopo: 'contaT', modo: 'deterministico' });
+    assert.equal(det.indisponivel, true);
+    assert.equal(det.erro, MSG_MISTRAL_INDISPONIVEL);
+    assert.equal(gemini, 0); // nunca a visão do Gemini
+    assert.equal(graph, 0); // falha rápido: nem baixa anexos
+    // CONTROLE: só o modo legado (rollback) cai na visão — a instrumentação intercepta.
+    const leg = await extrairDocPreAlertaMultiplo('token', paginas, 'MBL', { escopo: 'contaT', modo: 'legado' });
+    assert.equal(gemini, 1);
+    assert.match(leg.erro ?? '', /visão/);
+  } finally {
+    nomes.forEach((k, i) => {
+      gc[k] = origG[i];
+    });
+    gs.getAttachmentContent = origGraph;
+    (config.ai as { apiKey: string }).apiKey = chave;
+    (config.mistralOcr as { enabled: boolean }).enabled = mistralLigado;
+  }
+});
+
+test('fix2 · convenção numérica NÃO vaza entre campos (frete/fatura não definem o peso)', () => {
+  for (const contexto of ['FREIGHT 1.234,56', 'FREIGHT 1,234.56', 'INVOICE VALUE USD 12,345.67', 'OCEAN FREIGHT BRL 9.876,54']) {
+    const c = parse(`B/L NO.: SHYY26075038\n${contexto}\nGROSS WEIGHT 8,000 KG`);
+    assert.equal(incerto(c.cargo.grossWeight), true, contexto);
+    assert.equal(c.cargo.grossWeight.normalizedValue, null, contexto);
+  }
+  // Cubagem e quantidade também dependem SÓ da própria leitura.
+  const c2 = parse('FREIGHT 1,234.56\nMEASUREMENT: 28,000 CBM\nTOTAL PACKAGES: 1,000 CTNS');
+  assert.equal(c2.cargo.cubage.normalizedValue, 28);
+  assert.equal(c2.cargo.packageQuantity.normalizedValue, 1000);
+});
+
+test('fix3 · quantidade (V-004.1): "1 200" = "1.200" = "1,200" = 1200; só para quantidade', () => {
+  for (const s of ['1 200', '1.200', '1,200', '1200']) assert.equal(normalizarQuantidade(s).valor, 1200, s);
+  assert.match(normalizarQuantidade('1 200').regra ?? '', /V-004\.1/);
+  assert.equal(normalizarQuantidade('12.5').incerto, true); // não é contagem
+  assert.equal(normalizarQuantidade('1.20').incerto, true);
+  const c = parse('B/L NO.: SHYY26075038\nTOTAL PACKAGES: 1 200 CTNS\nCONTAINER: MSCU1234503 1 200 CTNS 56 CBM');
+  assert.equal(c.cargo.packageQuantity.normalizedValue, 1200);
+  assert.equal(c.containers[0].packageQuantity.normalizedValue, 1200);
+  assert.equal(c.containers[0].cubage.normalizedValue, 56);
+  // NÃO generaliza para medida: espaço em peso continua incerto.
+  assert.equal(incerto(parse('GROSS WEIGHT: 18 500 KGS').cargo.grossWeight), true);
+});
+
+test('fix4 · assinatura do resultado = IDENTIDADE da fonte (mesmo nome, outro anexo/e-mail → outra chave)', () => {
+  const a = { tipo: 'MBL', emailId: 'msg-1', attachmentId: 'att-1', nome: 'MBL.pdf' };
+  const novaVersao = { ...a, attachmentId: 'att-2' }; // MESMO nome de arquivo
+  const outroEmail = { ...a, emailId: 'msg-2' };
+  const h = { tipo: 'HBL', emailId: 'msg-1', attachmentId: 'att-9', nome: 'HBL.pdf' };
+  const sA = assinaturaFontesProcesso([a, h]);
+  assert.notEqual(sA, assinaturaFontesProcesso([novaVersao, h]));
+  assert.notEqual(sA, assinaturaFontesProcesso([outroEmail, h]));
+  assert.equal(sA, assinaturaFontesProcesso([h, a])); // independe da ordem
+  const chave = (s: string) =>
+    chaveResultadoPreAlerta({ escopoConta: 'contaT', processoBase: 'IM0001-26', assinaturaFontes: s, versaoDoc: 'det|x', motor: 'motor/x' });
+  assert.notEqual(chave(sA), chave(assinaturaFontesProcesso([novaVersao, h])));
+});
+
+test('fix5 · ordem determinística: nº de página no nome; fallback estável', () => {
+  const id = (nome: string, attachmentId: string) => ({ nome, messageId: 'm1', attachmentId });
+  const ord = ordenarPaginasDoDocumento([id('IM1 MBL-3.jpg', 'c'), id('IM1 MBL-1.jpg', 'a'), id('IM1 MBL-2.jpg', 'b')], (x) => x);
+  assert.deepEqual(ord.map((x) => x.nome), ['IM1 MBL-1.jpg', 'IM1 MBL-2.jpg', 'IM1 MBL-3.jpg']);
+  const semMarcador = ordenarPaginasDoDocumento([id('B.pdf', 'z'), id('A.pdf', 'y'), id('A.pdf', 'x')], (x) => x);
+  assert.deepEqual(semMarcador.map((x) => x.attachmentId), ['x', 'y', 'z']);
+});
+
+test('fix5 · mesmas páginas em ordem INVERSA → mesmo canônico e mesma classificação', async () => {
+  const P1 = '# BILL OF LADING\nB/L NO.: SHYY26075038\nCONSIGNEE: ROCKET LOGISTICA E AGENCIAMENTO DE CARGAS S.A.\nPORT OF LOADING: SHANGHAI';
+  const P2 = 'B/L NO.: SHYY26075038\n\n| CONTAINER | SEAL | GROSS WEIGHT |\n| --- | --- | --- |\n| MSCU1234503 | ML1234567 | 9000 KGS |';
+  const rodar = async (inversa: boolean) => {
+    const store = new Map<string, SourceOcrEvidenceV1>();
+    const { portas } = portasContadas(store);
+    const p1 = parteComEvidencia(store, P1, 'att-p1', 'IM1 MBL-1.jpg');
+    const p2 = parteComEvidencia(store, P2, 'att-p2', 'IM1 MBL-2.jpg');
+    const partes = inversa ? [p2, p1] : [p1, p2];
+    // Como a rota: o nome do documento vem da ordem DETERMINÍSTICA das páginas.
+    const nome0 = ordenarPaginasDoDocumento(partes.map((p) => p.ref), (x) => x)[0].nome;
+    const r = await extrairViaMistralCore(partes, 'MBL', nome0, { escopo: 'contaT', modo: 'deterministico' }, portas);
+    const cls = classificarPapel({
+      temMBL: true, temHBL: false, tipoDetectado: r.tipoDetectado, nome: nome0, legivel: r.doc!.legivel,
+      qtdContainers: r.doc!.containers.length, consignee: r.doc!.consignee, numeroDoc: r.doc!.conhecimentoNumero,
+    });
+    return { r, cls };
+  };
+  const a = await rodar(false);
+  const b = await rodar(true);
+  assert.equal(JSON.stringify(a.r.canonical), JSON.stringify(b.r.canonical));
+  assert.deepEqual(a.r.doc, b.r.doc);
+  assert.equal(a.r.tipoDetectado, b.r.tipoDetectado);
+  assert.deepEqual(a.cls, b.cls);
+  assert.equal(a.r.canonical?.identification.documentKind.normalizedValue, 'BILL_OF_LADING');
+});
+
+test('fix6 · mapeamentos não aprovados ficam DE FORA (HS CODE ≠ NCM; PORTO DE DESTINO ≠ POD)', () => {
+  const c = parse('B/L NO.: SHYY26075038\nHS CODE: 392690\nPORTO DE DESTINO: SANTOS\nNCM: 39269090');
+  assert.deepEqual(c.cargo.ncm.map((n) => n.normalizedValue), ['39269090']); // só o NCM rotulado
+  assert.equal(c.route.pod.normalizedValue, null);
+  assert.equal(c.route.pod.rawValue, null);
+});
+
+test('fix6 · unidades: só o conjunto mínimo; demais grafias incertas (e não herdam a do cabeçalho)', () => {
+  const aprovadas: Array<[string, string]> = [
+    ['KG', 'KG'], ['KGS', 'KG'], ['LB', 'LB'], ['LBS', 'LB'], ['CBM', 'CBM'], ['M3', 'CBM'], ['M³', 'CBM'], ['CFT', 'CFT'], ['FT3', 'CFT'], ['FT³', 'CFT'],
+  ];
+  for (const [g, u] of aprovadas) assert.equal(normalizarUnidade(g).unidade, u, g);
+  for (const g of ['KGM', 'KILOS', 'KILOGRAMS', 'POUNDS', 'CUM', 'MTQ', 'CUFT', 'MT', 'TONS', 'K.G.S', 'M^3', 'FT^3', 'CU', 'FT']) {
+    assert.equal(normalizarUnidade(g).unidade, null, g);
+    assert.equal(normalizarUnidade(g).reconhecida, true, g); // reconhecida (não é texto qualquer), mas não aprovada
+  }
+  assert.equal(incerto(parse('B/L NO.: SHYY26075038\nGROSS WEIGHT: 8000 KILOS').cargo.grossWeight), true);
+  assert.equal(incerto(parse('B/L NO.: SHYY26075038\nMEASUREMENT: 28 M^3').cargo.cubage), true); // "^3" não vira M3/CBM
+  // Unidade impressa (não aprovada) NUNCA é trocada pela do cabeçalho "(KGS)"/"(CBM)".
+  const t = parse('| CONTAINER | GROSS WEIGHT (KGS) |\n| --- | --- |\n| MSCU1234503 | 9000 POUNDS |');
+  assert.equal(incerto(t.containers[0].grossWeight), true);
+  for (const cel of ['1000 FT^3', '1000 CU FT', '1000 FT']) {
+    const v = parse(`| CONTAINER | MEASUREMENT (CBM) |\n| --- | --- |\n| MSCU1234503 | ${cel} |`);
+    assert.equal(incerto(v.containers[0].cubage), true, cel);
+    assert.equal(v.containers[0].cubage.normalizedUnit, null, cel);
+  }
+  // Controle: sem unidade impressa, a do cabeçalho vale (alias aprovado).
+  const ok = parse('| CONTAINER | MEASUREMENT (CBM) |\n| --- | --- |\n| MSCU1234503 | 28 |');
+  assert.equal(ok.containers[0].cubage.normalizedValue, 28);
+  assert.equal(ok.containers[0].cubage.normalizedUnit, 'CBM');
+});
+
+test('fix6 · sinônimos de pacote = EXATAMENTE a lista aprovada (sem PKGE, PC, PCS, BAGS…)', () => {
+  for (const g of ['CARTON', 'CARTONS', 'CARTON(S)', 'CTN', 'CTNS']) assert.equal(normalizarTipoPacote(g).chave, 'CARTON', g);
+  for (const g of ['PALLET', 'PALLETS', 'PLT', 'PLTS']) assert.equal(normalizarTipoPacote(g).chave, 'PALLET', g);
+  for (const g of ['PACKAGE', 'PACKAGES', 'PKG', 'PKGS']) assert.equal(normalizarTipoPacote(g).chave, 'PACKAGE', g);
+  for (const g of ['BOX', 'BOXES']) assert.equal(normalizarTipoPacote(g).chave, 'BOX', g);
+  for (const g of ['PKGE', 'PC', 'PCS', 'PIECES', 'BAG', 'BAGS', 'CASES', 'DRUMS', 'CAJAS']) {
+    assert.equal(normalizarTipoPacote(g).conhecido, false, g);
+  }
+  assert.equal(cmpTipoPacote('PCS', 'PIECES').resultado, 'ValidacaoHumana'); // sem alias herdado
+  assert.equal(cmpTipoPacote('PKGE', 'PACKAGES').resultado, 'ValidacaoHumana');
+  assert.equal(cmpTipoPacote('CTNS', 'CARTONS').resultado, 'Consistente');
+});
+
+test('fix7 · Consignee em várias linhas: nome reconstruído por fronteiras determinísticas', () => {
+  const casos: Array<[string, string]> = [
+    ['CONSIGNEE\nROCKET LOGISTICA E AGENCIAMENTO\nDE CARGAS S.A.\nRUA EXEMPLO 100\nNOTIFY PARTY: SAME AS CONSIGNEE', 'ROCKET LOGISTICA E AGENCIAMENTO DE CARGAS S.A.'],
+    ['CONSIGNEE: ACME IMPORTADORA DE\nMAQUINAS LTDA\nCNPJ 12.345.678/0001-90', 'ACME IMPORTADORA DE MAQUINAS LTDA'],
+    ['CONSIGNEE: BRA TRADE COMERCIAL LTDA\nAV PAULISTA 1000', 'BRA TRADE COMERCIAL LTDA'],
+    ['CONSIGNEE\nACME COMERCIAL\nSAO PAULO SP', 'ACME COMERCIAL'], // sem evidência de continuação → não absorve a cidade
+    ['| CONSIGNEE | B/L NO. |\n| --- | --- |\n| XYZ TRADING AND<br>LOGISTICS CO., LTD.<br>ROOM 101, ABC BUILDING | SHYY26075038 |', 'XYZ TRADING AND LOGISTICS CO., LTD.'],
+    ['| CONSIGNEE<br>ROCKET LOGISTICA E AGENCIAMENTO<br>DE CARGAS S.A.<br>RUA EXEMPLO 100 |\n| --- |', 'ROCKET LOGISTICA E AGENCIAMENTO DE CARGAS S.A.'],
+    ['CONSIGNEE: XYZ TRADING CO.,\nLTD.\nROOM 101, ABC BUILDING', 'XYZ TRADING CO., LTD.'], // "CO.," não fecha o nome
+    ['CONSIGNEE: ACME COMERCIO LTDA,\nSAO PAULO - SP', 'ACME COMERCIO LTDA'], // vírgula sozinha não une a cidade
+  ];
+  for (const [md, esperado] of casos) assert.equal(parse(md).parties.consignee.name.normalizedValue, esperado, md);
+  const c = parse(casos[0][0]);
+  assert.equal(c.parties.consignee.name.rawValue, 'ROCKET LOGISTICA E AGENCIAMENTO\nDE CARGAS S.A.'); // bruto preserva a quebra
+  assert.match(c.parties.consignee.name.normalizationRule ?? '', /nome-em-2-linhas/);
+  // Precedência inalterada: o classificador atual recebe o nome completo.
+  const { doc } = canonicalParaDocPreAlerta(c, 'doc.pdf', 'HBL');
+  assert.deepEqual(
+    classificarPapel({ temMBL: false, temHBL: false, tipoDetectado: null, nome: 'doc.pdf', legivel: true, qtdContainers: 0, consignee: doc.consignee }),
+    { tipo: 'MBL', papelConfiavel: true },
+  );
 });

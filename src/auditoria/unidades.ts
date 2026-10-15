@@ -16,43 +16,48 @@ export type UnidadeMedida = UnidadePeso | UnidadeVolume;
 export type GrandezaMedida = 'peso' | 'volume';
 
 /** Versão da tabela de aliases (rastreabilidade da regra aplicada). */
-export const TABELA_UNIDADES_VERSAO = 'unidades/v1' as const;
+export const TABELA_UNIDADES_VERSAO = 'unidades/v2-minima' as const;
 
 /**
- * Aliases APROVADOS como formatação (chave = grafia limpa: maiúscula, sem
- * espaço/ponto/parênteses). Cada grafia aponta para UMA unidade — sem ambiguidade.
+ * Aliases APROVADOS — conjunto MÍNIMO desta fase (decisão do usuário). Cada
+ * grafia aponta para UMA unidade; só formatação, nunca conversão. Qualquer outra
+ * grafia fica SEM unidade normalizada (incerta) até ser validada em documentos reais.
  */
 const ALIASES: Record<string, UnidadeMedida> = {
-  // Quilograma
-  KG: 'KG', KGS: 'KG', KGM: 'KG', KILO: 'KG', KILOS: 'KG', KILOGRAM: 'KG', KILOGRAMS: 'KG',
-  KILOGRAMME: 'KG', KILOGRAMMES: 'KG', KILOGRAMO: 'KG', KILOGRAMOS: 'KG',
-  QUILO: 'KG', QUILOS: 'KG', QUILOGRAMA: 'KG', QUILOGRAMAS: 'KG',
-  // Libra (NÃO é convertida para KG)
-  LB: 'LB', LBS: 'LB', POUND: 'LB', POUNDS: 'LB', LIBRA: 'LB', LIBRAS: 'LB',
-  // Metro cúbico
-  CBM: 'CBM', M3: 'CBM', 'M³': 'CBM', CUM: 'CBM', MTQ: 'CBM',
-  CUBICMETER: 'CBM', CUBICMETERS: 'CBM', CUBICMETRE: 'CBM', CUBICMETRES: 'CBM',
-  METROCUBICO: 'CBM', METROSCUBICOS: 'CBM',
-  // Pé cúbico (NÃO é convertido para CBM)
-  CFT: 'CFT', FT3: 'CFT', 'FT³': 'CFT', CUFT: 'CFT', CUBICFOOT: 'CFT', CUBICFEET: 'CFT',
+  KG: 'KG', KGS: 'KG',
+  LB: 'LB', LBS: 'LB',
+  CBM: 'CBM', M3: 'CBM', 'M³': 'CBM',
+  CFT: 'CFT', FT3: 'CFT', 'FT³': 'CFT',
 };
 
 /**
- * Unidades CONHECIDAS mas NÃO aprovadas na tabela (ex.: tonelada — "TONS" pode
- * ser métrica/curta/longa). Reconhecidas como unidade (não como texto qualquer),
- * porém sem unidade normalizada → incerteza.
+ * Grafias RECONHECIDAS como unidade mas NÃO aprovadas: viram leitura incerta (a
+ * unidade fica registrada como lida). Reconhecê-las impede que a unidade do
+ * cabeçalho/rótulo seja aplicada por cima de uma unidade diferente impressa no
+ * valor (ex.: "9000 POUNDS" numa coluna "(KGS)" NUNCA vira KG).
  */
 const CONHECIDAS_NAO_APROVADAS = new Set([
+  // massa
+  'KGM', 'KILO', 'KILOS', 'KILOGRAM', 'KILOGRAMS', 'KILOGRAMME', 'KILOGRAMMES', 'KILOGRAMO', 'KILOGRAMOS',
+  'QUILO', 'QUILOS', 'QUILOGRAMA', 'QUILOGRAMAS', 'K.G', 'K.G.S', 'KG.S', 'K.GS',
+  'POUND', 'POUNDS', 'LIBRA', 'LIBRAS', 'L.B.S', 'LB.S',
   'MT', 'MTS', 'TON', 'TONS', 'TONNE', 'TONNES', 'TNE', 'T',
+  // volume (inclui grafias com "^3" e fragmentos sem o expoente: "CU FT", "FT", "M")
+  'CUM', 'CU.M', 'MTQ', 'CUBIC', 'CU.FT', 'CUFT', 'CBFT', 'M^3', 'FT^3', 'CU', 'FT', 'M',
   'LT', 'LTS', 'LTR', 'LTRS', 'LITER', 'LITERS', 'LITRE', 'LITRES',
 ]);
 
-/** Grafia limpa para consulta (não altera o valor bruto preservado). */
+/**
+ * Grafia para consulta: SÓ caixa, espaços e pontuação de borda ("(KGS)", "KGS.").
+ * Não remove pontos internos, não junta palavras nem reescreve expoente —
+ * "K.G.S" não vira "KGS"; "M^3" não vira "M3" (fica reconhecida, não aprovada).
+ */
 export function limparGrafiaUnidade(bruto: string): string {
   return String(bruto || '')
+    .trim()
     .toUpperCase()
-    .replace(/[\s.()[\]]/g, '')
-    .replace(/\^3/g, '3');
+    .replace(/^[([]+|[)\]]+$/g, '')
+    .replace(/\.+$/, '');
 }
 
 export interface LeituraUnidade {

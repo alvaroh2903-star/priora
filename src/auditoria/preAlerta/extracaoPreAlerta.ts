@@ -7,6 +7,7 @@
  * `DocPreAlerta`. Não toca no docExtractor/playbooks.ts (caminho antigo intacto).
  * Defensivo: qualquer falha vira documento ilegível (6.3 / degradar com elegância).
  */
+import crypto from 'crypto';
 import { z } from 'zod/v4';
 import {
   generateStructured,
@@ -209,11 +210,33 @@ export function modoExtracaoPb001(): ModoExtracao {
 }
 
 /**
- * O PB-001 precisa de chave do Gemini? Só sem Mistral (cai na visão do Gemini)
- * ou com o rollback legado ligado. Com Mistral + parser: NÃO. PURO.
+ * O PB-001 usa o Gemini? SÓ no rollback legado explícito
+ * (GEMINI_LEGACY_STRUCTURING_FALLBACK_ENABLED=true). No modo determinístico,
+ * NUNCA — nem como visão quando o Mistral falta. PURO.
  */
-export function preAlertaExigeGemini(p: { mistralLigado: boolean; modo: ModoExtracao }): boolean {
-  return !p.mistralLigado || p.modo === 'legado';
+export function preAlertaExigeGemini(p: { modo: ModoExtracao }): boolean {
+  return p.modo === 'legado';
+}
+
+/** Mensagem explícita: modo determinístico sem o OCR do Mistral (não cai no Gemini). */
+export const MSG_MISTRAL_INDISPONIVEL =
+  'OCR determinístico indisponível: o PB-001 exige o OCR do Mistral (MISTRAL_OCR_KEY e MISTRAL_OCR_ENABLED≠false). ' +
+  'O Gemini NÃO é usado no modo determinístico (rollback explícito: GEMINI_LEGACY_STRUCTURING_FALLBACK_ENABLED=true).';
+
+/**
+ * Condição de INDISPONIBILIDADE do PB-001 (→ 503 explícito), ou null se pode rodar.
+ *  - determinístico sem Mistral → indisponível (sem visão do Gemini);
+ *  - legado (rollback) sem chave do Gemini → indisponível. PURO.
+ */
+export function indisponibilidadePreAlerta(p: {
+  modo: ModoExtracao;
+  mistralLigado: boolean;
+  geminiConfigurado: boolean;
+}): string | null {
+  if (p.modo === 'deterministico') return p.mistralLigado ? null : MSG_MISTRAL_INDISPONIVEL;
+  return p.geminiConfigurado
+    ? null
+    : 'Rollback legado ligado (GEMINI_LEGACY_STRUCTURING_FALLBACK_ENABLED=true), mas a IA não está configurada (GEMINI_API_KEY).';
 }
 
 /**
@@ -221,9 +244,74 @@ export function preAlertaExigeGemini(p: { mistralLigado: boolean; modo: ModoExtr
  * documento derivado). Determinístico → parser + schema + adaptador; legado →
  * undefined (chave legada inalterada — compartilhada com o PB-002). PURO.
  */
-export function versaoPipelineDocPb001(p: { mistralLigado: boolean; modo: ModoExtracao }): string | undefined {
-  if (!p.mistralLigado || p.modo === 'legado') return undefined;
+export function versaoPipelineDocPb001(p: { modo: ModoExtracao }): string | undefined {
+  if (p.modo === 'legado') return undefined;
   return `det|${PARSER_VERSION}|${CANONICAL_DOC_SCHEMA}|${ADAPTER_VERSION}`;
+}
+
+/* ------------------------------------------------------------------ *
+ * Ordem DETERMINÍSTICA de páginas/anexos e identidade das fontes.
+ * ------------------------------------------------------------------ */
+
+/**
+ * Nº de página explícito no NOME do arquivo ("... MBL-2.jpg", "pag 3",
+ * "page3", "(4)"), ou null. Mesmos marcadores que `baseDoBL` remove. PURO.
+ */
+export function numeroPaginaDoNome(nome: string): number | null {
+  const s = (nome || '').toLowerCase().trim().replace(/\.[a-z0-9]{1,5}$/, '');
+  const m =
+    /(?:^|[\s._-])\(?(?:pg|pag|pagina|páginas?|paginas?|page|folha|fls?)\.?\s*(\d{1,3})\)?$/i.exec(s) ||
+    /\((\d{1,3})\)$/.exec(s) ||
+    /[\s._-]+(\d{1,3})$/.exec(s);
+  return m ? Number(m[1]) : null;
+}
+
+/**
+ * Ordena páginas/anexos de UM documento de forma DETERMINÍSTICA: nº de página
+ * explícito no nome (sem marcador = antes), depois nome, mensagem e anexo. Assim a
+ * ordem não depende da ordem arbitrária devolvida pelo Graph. PURO.
+ */
+export function ordenarPaginasDoDocumento<T>(
+  itens: T[],
+  id: (t: T) => { nome: string; messageId: string; attachmentId: string },
+): T[] {
+  const chave = (t: T) => {
+    const x = id(t);
+    return { p: numeroPaginaDoNome(x.nome) ?? 0, n: (x.nome || '').toLowerCase(), m: x.messageId || '', a: x.attachmentId || '' };
+  };
+  const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+  return [...itens].sort((ta, tb) => {
+    const a = chave(ta);
+    const b = chave(tb);
+    return a.p - b.p || cmp(a.n, b.n) || cmp(a.m, b.m) || cmp(a.a, b.a);
+  });
+}
+
+/**
+ * Assinatura das FONTES de um processo para o cache de RESULTADO: identidade
+ * estável de cada anexo (tipo + e-mail + anexo + nome), independente da ordem.
+ * Um BL reenviado com o MESMO nome (outro e-mail/anexo) gera assinatura nova —
+ * nunca recebe a auditoria antiga. PURO.
+ */
+export function assinaturaFontesProcesso(
+  docs: Array<{ tipo: string; emailId: string; attachmentId: string; nome: string }>,
+): string {
+  const base = docs
+    .map((d) => [d.tipo, d.emailId, d.attachmentId, d.nome].join('\u001f'))
+    .sort()
+    .join('\u001e');
+  return crypto.createHash('sha256').update(base).digest('hex');
+}
+
+/** Chave do cache persistente de RESULTADO do /pre-alerta (tenant + fontes + pipeline + motor). PURO. */
+export function chaveResultadoPreAlerta(p: {
+  escopoConta: string;
+  processoBase: string;
+  assinaturaFontes: string;
+  versaoDoc: string | undefined;
+  motor: string;
+}): string {
+  return `resultado:v3:${p.escopoConta}:prealerta:${p.processoBase}:${p.assinaturaFontes}|${p.versaoDoc ?? 'legado'}|${p.motor}`;
 }
 
 /* ------------------------------------------------------------------ *
@@ -329,7 +417,15 @@ export async function extrairViaMistralCore(
   let insuficiente: PaginaRef | null = null;
   let conflito: PaginaRef | null = null;
 
-  for (const parte of partes) {
+  // Modo determinístico: ordem DETERMINÍSTICA dos anexos (nº de página no nome →
+  // nome → ids), independente da ordem devolvida pelo Graph. A chave do canônico
+  // (assinatura do grupo) já independe da ordem — o conteúdo também precisa.
+  const ordenadas =
+    ctx.modo === 'deterministico'
+      ? ordenarPaginasDoDocumento(partes, (p) => ({ nome: p.ref.nome, messageId: p.ref.messageId, attachmentId: p.ref.attachmentId }))
+      : partes;
+
+  for (const parte of ordenadas) {
     const contentHash = hashBytes(parte.data);
     const sigFonte = assinaturaFonte({ escopo, source: parte.ref, contentHash, capturaVersao: 1 });
 
@@ -423,7 +519,9 @@ export async function extrairViaMistralCore(
   }
 
   // 2) COMPÕE o grupo (transitório) a partir dos anexos bem-sucedidos.
-  const grupo = comporGrupo(escopo, nome, fontesEv);
+  // Nome de exibição do grupo: no determinístico, o do 1º anexo na ordem DETERMINÍSTICA.
+  const nomeGrupo = ctx.modo === 'deterministico' && ordenadas.length ? ordenadas[0].ref.nome : nome;
+  const grupo = comporGrupo(escopo, nomeGrupo, fontesEv);
   const persistenceStatus: PersistenceStatus = !cacheavel
     ? 'no-scope'
     : ranks.length === 0
@@ -508,8 +606,24 @@ export async function extrairDocPreAlertaMultiplo(
   ocrObtido?: boolean;
   /** Durabilidade da evidência de OCR ('durable' só quando confirmada). */
   persistenceStatus?: PersistenceStatus | null;
+  /** Serviço INDISPONÍVEL (modo determinístico sem o OCR do Mistral) — não é "ilegível". */
+  indisponivel?: boolean;
 }> {
   const nome = paginas[0]?.nome ?? 'documento';
+  // Modo determinístico EXIGE o Mistral: sem ele, indisponível EXPLÍCITO — nunca
+  // cai na visão do Gemini (que só existe no modo legado/rollback). Checado ANTES
+  // de baixar anexos (nada de I/O inútil).
+  if (opts?.modo === 'deterministico' && !mistralOcrLigado()) {
+    return {
+      doc: docIlegivelPreAlerta(nome, tipo),
+      tipoDetectado: null,
+      modo: 'deterministico',
+      erro: MSG_MISTRAL_INDISPONIVEL,
+      erroFonte: 'mistral-ocr',
+      indisponivel: true,
+      paginasComBytes: 0,
+    };
+  }
   let comBytes = 0;
   let semMime = 0;
   try {
@@ -538,10 +652,12 @@ export async function extrairDocPreAlertaMultiplo(
       return { doc: docIlegivelPreAlerta(nome, tipo), tipoDetectado: null, erro, paginasComBytes: comBytes };
     }
 
-    // OCR pelo Mistral → estruturação pelo Gemini (texto). O Gemini-VISÃO está
-    // DESLIGADO no pipeline ativo: se o Mistral falhar, o documento sai ilegível
-    // (com o erro real no ?debug=1) — NÃO cai na visão do Gemini. O Gemini-visão
-    // abaixo só roda quando o Mistral está desligado (kill switch / sem chave).
+    // OCR pelo Mistral → parser determinístico (modo ativo) ou estruturação pelo
+    // Gemini-texto (rollback legado). O Gemini-VISÃO está DESLIGADO no pipeline
+    // ativo: se o Mistral falhar, o documento sai ilegível (com o erro real no
+    // ?debug=1) — NÃO cai na visão do Gemini. O Gemini-visão abaixo só roda no
+    // rollback LEGADO com o Mistral desligado (no determinístico, a guarda acima
+    // já devolveu "indisponível").
     if (mistralOcrLigado()) {
       // Escopo de conta/tenant (isola a evidência por caixa). SEM fallback 'mvp':
       // sem escopo, o core NÃO cacheia OCR bruto sob chave compartilhada (fail closed).

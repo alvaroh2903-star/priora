@@ -34,9 +34,7 @@ import { GrandezaMedida, UnidadeMedida, ehUnidadeReconhecida, grandezaDaUnidade,
 import { estruturarPagina, Tabela } from './markdown';
 import {
   CampoNumerico,
-  ConvencaoNumerica,
   Leitura,
-  detectarConvencaoNumerica,
   ehCodigoTamanhoTipo,
   ehTipoPacoteConhecido,
   encontrarContainers,
@@ -46,6 +44,7 @@ import {
   normalizarNomeParte,
   normalizarNumeroBL,
   normalizarNumeroCampo,
+  normalizarQuantidade,
   normalizarTextoPorto,
   normalizarTipoPacoteCanonico,
   pareceTokenNcm,
@@ -157,13 +156,13 @@ const ROTULOS: Array<{ campo: CampoRotulo; re: RegExp }> = [
   { campo: 'consignee', re: /\bCONSIGNEE\b(?:\s*\([^)]*\))?|\bCONSIGNAT[AÁ]RIO\b|\bCONSIGNED\s+TO\b/g },
   {
     campo: 'limite',
-    re: /\b(?:ALSO\s+)?NOTIFY(?:\s+PART(?:Y|IES))?\b|\bSHIPPER\b(?:\s*\([^)]*\))?|\bEXPORTER\b|\bEMBARCADOR\b|\bFINAL\s+DESTINATION\b|\b(?:OCEAN\s+)?VESSEL\b|\bVOYAGE\b|\bPRE-?\s*CARRIAGE\s+BY\b|\bFORWARDING\s+AGENT\b|\bDELIVERY\s+AGENT\b|\bDESCRIPTION\s+OF\s+(?:GOODS|PACKAGES)\b|\bMARKS\s+(?:AND|&)\s+N(?:UMBER)?(?:OS|O|S)?\b|\bFREIGHT\s+(?:AND\s+CHARGES|PAYABLE|PREPAID|COLLECT)\b|\bPLACE\s+(?:AND|&)\s+DATE\s+OF\s+ISSUE\b|\bNUMBER\s+OF\s+ORIGINAL/g,
+    re: /\b(?:ALSO\s+)?NOTIFY(?:\s+PART(?:Y|IES))?\b|\bSHIPPER\b(?:\s*\([^)]*\))?|\bEXPORTER\b|\bEMBARCADOR\b|\bFINAL\s+DESTINATION\b|\b(?:OCEAN\s+)?VESSEL\b|\bVOYAGE\b|\bPRE-?\s*CARRIAGE\s+BY\b|\bFORWARDING\s+AGENT\b|\bDELIVERY\s+AGENT\b|\bDESCRIPTION\s+OF\s+(?:GOODS|PACKAGES)\b|\bMARKS\s+(?:AND|&)\s+N(?:UMBER)?(?:OS|O|S)?\b|\bFREIGHT\s+(?:AND\s+CHARGES|PAYABLE|PREPAID|COLLECT)\b|\bPLACE\s+(?:AND|&)\s+DATE\s+OF\s+ISSUE\b|\bNUMBER\s+OF\s+ORIGINAL|\bH\s*\.?\s*S\s*\.?\s*CODES?\b|\bHS(?=\s*[:#])|\bPORTO\s+DE\s+DESTINO\b/g,
   },
   { campo: 'por', re: /\bPLACE\s+OF\s+RECEIPT\b(?:\s+BY\s+PRE-?\s*CARRIER)?|\bLOCAL\s+DE\s+RECEBIMENTO\b/g },
   { campo: 'pol', re: /\bPORT\s+OF\s+LOADING\b|\bPORT\s+OF\s+LOAD\b|\bLOADING\s+PORT\b|\bPORTO\s+DE\s+EMBARQUE\b|\bPOL\b/g },
   {
     campo: 'pod',
-    re: /\bPORT\s+OF\s+DISCHARG(?:E|ING)\b|\bDISCHARGE\s+PORT\b|\bPORTO\s+DE\s+(?:DESCARGA|DESEMBARQUE|DESTINO)\b|\bPOD\b/g,
+    re: /\bPORT\s+OF\s+DISCHARG(?:E|ING)\b|\bDISCHARGE\s+PORT\b|\bPORTO\s+DE\s+(?:DESCARGA|DESEMBARQUE)\b|\bPOD\b/g,
   },
   { campo: 'podel', re: /\b(?:FINAL\s+)?PLACE\s+OF\s+DELIVERY\b|\bLOCAL\s+DE\s+ENTREGA\b/g },
   {
@@ -177,7 +176,8 @@ const ROTULOS: Array<{ campo: CampoRotulo; re: RegExp }> = [
     campo: 'volumes',
     re: /\b(?:TOTAL\s+)?(?:(?:NO|NUMBER)\s*\.?\s*OF\s+)?(?:PKGS?|PACKAGES)\b\.?|\bQUANTIDADE\s+DE\s+VOLUMES\b|\bVOLUMES\b/g,
   },
-  { campo: 'ncm', re: /\bN\s*\.?\s*C\s*\.?\s*M\b\.?|\bH\s*\.?\s*S\s*\.?\s*CODES?\b|\bHS(?=\s*[:#])|\bH\.S\.(?=\s)/g },
+  // Só NCM. "HS CODE" NÃO é tratado como NCM nesta fase (é só limite — ver 'limite').
+  { campo: 'ncm', re: /\bN\s*\.?\s*C\s*\.?\s*M\b\.?/g },
   { campo: 'lacre', re: new RegExp(String.raw`\bSEALS?\b${NUM_SUFIXO}?|\bLACRES?\b`, 'g') },
   {
     campo: 'container',
@@ -263,7 +263,8 @@ interface TokenMedida {
 /** Números com unidade reconhecida adjacente (quando houver). */
 function tokensMedida(texto: string): TokenMedida[] {
   const out: TokenMedida[] = [];
-  const re = /(\d[\dOo.,]*[\dOo]|\d)(\s*)([A-Za-z³][A-Za-z³3.]{0,13})?/g;
+  // A grafia da unidade inclui "^" ("M^3", "FT^3"): lida inteira, nunca cortada em "M"/"FT".
+  const re = /(\d[\dOo.,]*[\dOo]|\d)(\s*)([A-Za-z³][A-Za-z³3.^]{0,13})?/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(texto))) {
     const antes = texto[m.index - 1];
@@ -295,7 +296,6 @@ const CAMPO_NUM: Record<'bruto' | 'liquido' | 'cubagem', { grandeza: GrandezaMed
 function lerMedida(
   valor: string,
   campo: 'bruto' | 'liquido' | 'cubagem',
-  conv: ConvencaoNumerica,
   ref: EvidencePageRef,
   hintExterno: string | null,
 ): CandMedida | null {
@@ -313,7 +313,7 @@ function lerMedida(
   const leituras = escolhidos.map((t) => {
     const unitRaw = t.unitRaw ?? hint;
     const nu = normalizarUnidade(unitRaw);
-    const n = normalizarNumeroCampo(t.numRaw, num, conv);
+    const n = normalizarNumeroCampo(t.numRaw, num);
     let motivo: string | null = n.motivo;
     let inc = n.incerto;
     if (!inc && t.grupoPorEspaco) {
@@ -364,16 +364,19 @@ function lerMedida(
 /** Palavras que seguem a quantidade mas NÃO são tipo de pacote. */
 const NAO_E_TIPO = new Set(['SAID', 'STC', 'TO', 'OF', 'THE', 'AND', 'ONLY', 'IN', 'ON', 'WITH', 'TOTAL', 'CONTAIN', 'CONTAINS', 'CONTAINING', 'X', 'SAY']);
 
-function lerVolumes(valor: string, conv: ConvencaoNumerica, ref: EvidencePageRef): { qtd: Cand<number> | null; tipo: Cand<string> | null } {
-  const m = /(?<![A-Za-z0-9])(\d[\dOo.,]*[\dOo]|\d)\s*([A-Za-z][A-Za-z().'\/-]{1,20})?/.exec(valor);
+/**
+ * Número de QUANTIDADE: grupos de milhar separados por espaço/ponto/vírgula
+ * ("1 200", "1.200", "1,200") são UM número — PB-001 V-004.1 permite remover
+ * separadores e espaços. Só para quantidade (peso/cubagem têm regra própria).
+ */
+const RE_NUM_QTD = String.raw`(?<![A-Za-z0-9.,])([1-9]\d{0,2}(?:([ .,])\d{3})(?:\2\d{3})*(?![\d.,])|\d[\dOo.,]*[\dOo]|\d)`;
+
+function lerVolumes(valor: string, ref: EvidencePageRef): { qtd: Cand<number> | null; tipo: Cand<string> | null } {
+  const m = new RegExp(`${RE_NUM_QTD}\\s*([A-Za-z][A-Za-z().'\\/-]{1,20})?`).exec(valor);
   if (!m) return { qtd: null, tipo: null };
-  // "1 200 CTNS": o espaço pode ser separador de milhar — quantidade incerta (sem chute).
-  const espaco = /^ \d{3}(?!\d)/.test(valor.slice(m.index + m[1].length));
-  const qtd = espaco
-    ? cand<number>({ valor: null, regra: null, incerto: true, motivo: 'possível separador de milhar por espaço (leitura não única)', candidatos: [valor.trim()] }, valor.trim(), ref)
-    : cand(normalizarNumeroCampo(m[1], 'quantidade', conv), m[1], ref);
+  const qtd = cand(normalizarQuantidade(m[1]), m[1], ref);
   let tipo: Cand<string> | null = null;
-  const tok = (m[2] || '').replace(/[.'\/-]+$/, '');
+  const tok = (m[3] || '').replace(/[.'\/-]+$/, '');
   const limpo = tok.toUpperCase().replace(/[^A-Z]/g, '');
   if (tok && !ehUnidadeReconhecida(tok) && !NAO_E_TIPO.has(limpo) && limpo.length >= 2) {
     tipo = cand(normalizarTipoPacoteCanonico(tok), tok, ref);
@@ -429,7 +432,6 @@ function aplicarCampo(
   alvo: AccContainer | null,
   campo: CampoRotulo,
   valor: string,
-  conv: ConvencaoNumerica,
   ref: EvidencePageRef,
   hintUnidade: string | null,
   sufixoRegra = '',
@@ -439,12 +441,12 @@ function aplicarCampo(
     case 'bruto':
     case 'liquido':
     case 'cubagem': {
-      const m = lerMedida(valor, campo, conv, ref, hintUnidade);
+      const m = lerMedida(valor, campo, ref, hintUnidade);
       if (m) (alvo ? alvo[campo] : acc[campo]).push(anexa(m) as CandMedida);
       return;
     }
     case 'volumes': {
-      const { qtd, tipo } = lerVolumes(valor, conv, ref);
+      const { qtd, tipo } = lerVolumes(valor, ref);
       if (qtd) (alvo ? alvo.qtd : acc.qtd).push(anexa(qtd));
       if (tipo) (alvo ? alvo.tipo : acc.tipo).push(anexa(tipo));
       return;
@@ -466,6 +468,59 @@ function aplicarCampo(
   }
 }
 
+/* Nome de PARTE quebrado em várias linhas — fronteiras determinísticas. */
+const SUFIXO_SOCIETARIO =
+  /(?:\b(?:LTDA|LTD|LIMITED|INC|CORP|CORPORATION|COMPANY|GMBH|EIRELI|EPP|LLC|PLC|SRL|PTE|PTY|CO)\b\.?|\bS\.?\s*\/?\s*A\b\.?|\bS\.R\.L\.?|\bB\.V\.?|\bN\.V\.?),?\s*$/i;
+const CONECTOR_FINAL = /(?:\b(?:DE|DA|DO|DAS|DOS|E|AND|OF|THE|FOR)|&)\s*$/i;
+const ENDERECO_OU_CONTATO =
+  /\b(?:RUA|R\.|AV|AV\.|AVENIDA|ALAMEDA|RODOVIA|ROD\.|ESTRADA|TRAVESSA|PRACA|PRAÇA|ROAD|RD|STREET|ST\.|AVENUE|AVE|BLVD|BUILDING|BLDG|FLOOR|ROOM|RM|SUITE|UNIT|DISTRICT|ZONE|CEP|ZIP|POSTAL|P\.?\s*O\.?\s*BOX|CNPJ|CPF|TAX\s*ID|VAT|EIN|USCC|TEL|PHONE|FAX|E-?MAIL|CONTACT|ATTN)\b|@|\d{3,}/i;
+
+/**
+ * Linhas do NOME de uma parte (ex.: Consignee) que pode quebrar em linhas. A 1ª
+ * linha (sempre a PRIMEIRA recebida — vazia = sem nome) é o início do nome; uma
+ * linha seguinte só é unida com EVIDÊNCIA de continuação — a anterior termina em
+ * conector ("… E AGENCIAMENTO DE") ou a seguinte FECHA o nome com sufixo
+ * societário ("DE CARGAS S.A."). Sufixo seguido de vírgula ("… CO.,") não fecha o
+ * nome ("CO.,\nLTD."). Para em rótulo, endereço/contato/identificador (ou ≥3
+ * dígitos) e após 3 linhas. PURO.
+ */
+function linhasDoNomeDaParte(linhas: string[]): string[] {
+  const out: string[] = [];
+  for (const bruta of linhas) {
+    const l = bruta.trim();
+    if (!out.length) {
+      if (!l) break;
+      out.push(l);
+      continue;
+    }
+    if (out.length >= 3 || !l || segmentos(l).length > 0 || ENDERECO_OU_CONTATO.test(l)) break;
+    const anterior = out[out.length - 1];
+    const fechado = SUFIXO_SOCIETARIO.test(anterior) && !CONECTOR_FINAL.test(anterior) && !/,\s*$/.test(anterior);
+    if (fechado) break;
+    if (CONECTOR_FINAL.test(anterior) || SUFIXO_SOCIETARIO.test(l)) {
+      out.push(l);
+      continue;
+    }
+    break;
+  }
+  return out;
+}
+
+/**
+ * Valor de um campo de TEXTO do documento: na mesma linha do rótulo ou na linha
+ * seguinte (rótulo sozinho). O nome do Consignee pode continuar nas linhas
+ * seguintes (fronteiras de `linhasDoNomeDaParte`) — só quando o rótulo é o único
+ * da linha (com vários rótulos na linha, as linhas de baixo podem ser de outra coluna).
+ */
+function valorTexto(s: Segmento, segs: Segmento[], linhas: string[], i: number): string {
+  const sozinho = segs.length === 1;
+  let inicio: string[];
+  if (s.valor) inicio = sozinho ? [s.valor, ...linhas.slice(i + 1)] : [s.valor];
+  else if (sozinho && i + 1 < linhas.length && segmentos(linhas[i + 1]).length === 0) inicio = linhas.slice(i + 1);
+  else return '';
+  return s.campo === 'consignee' ? linhasDoNomeDaParte(inicio).join('\n') : inicio[0];
+}
+
 function aplicarDocTexto(acc: Acc, campo: CampoRotulo, valor: string, ref: EvidencePageRef): void {
   const linha1 = valor.split('\n')[0].trim();
   if (!linha1 || /^\(.*\)$/.test(linha1)) return; // vazio ou instrução "(...)"
@@ -473,9 +528,16 @@ function aplicarDocTexto(acc: Acc, campo: CampoRotulo, valor: string, ref: Evide
     case 'bl':
       acc.bl.push(cand(normalizarNumeroBL(linha1), linha1, ref));
       return;
-    case 'consignee':
-      acc.consignee.push(cand(normalizarNomeParte(linha1), linha1, ref));
+    case 'consignee': {
+      // O valor pode trazer o nome em várias linhas (já delimitado): bruto preserva
+      // as quebras; normalizado as junta com espaço.
+      const linhasNome = valor.split('\n').map((l) => l.trim()).filter(Boolean);
+      const bruto = linhasNome.join('\n');
+      const l = normalizarNomeParte(bruto);
+      const regra = l.regra && linhasNome.length > 1 ? `${l.regra}+nome-em-${linhasNome.length}-linhas` : l.regra;
+      acc.consignee.push(cand({ ...l, regra }, bruto, ref));
       return;
+    }
     case 'por':
     case 'pol':
     case 'pod':
@@ -523,7 +585,6 @@ function linhasParaBuscaDeContainer(linhas: string[]): string[] {
 function processarLinhas(
   acc: Acc,
   linhas: string[],
-  conv: ConvencaoNumerica,
   ref: EvidencePageRef,
   escopoCelula: boolean,
   somenteDocTexto = false,
@@ -540,8 +601,7 @@ function processarLinhas(
     if (somenteDocTexto) {
       for (const s of segs) {
         if (!DOC_TEXTO.has(s.campo)) continue;
-        let valor = s.valor;
-        if (!valor && segs.length === 1 && i + 1 < linhas.length && segmentos(linhas[i + 1]).length === 0) valor = linhas[i + 1];
+        const valor = valorTexto(s, segs, linhas, i);
         if (valor) aplicarDocTexto(acc, s.campo, valor, ref);
       }
       continue;
@@ -564,7 +624,7 @@ function processarLinhas(
         const alvo = contProx.length === 1 ? registrarContainer(acc, contProx[0], ref) : null;
         segs.forEach((s, k) => {
           if (DOC_TEXTO.has(s.campo)) aplicarDocTexto(acc, s.campo, partes[k], ref);
-          else if (ESCOPO_CONTAINER.has(s.campo)) aplicarCampo(acc, alvo, s.campo, partes[k], conv, ref, null);
+          else if (ESCOPO_CONTAINER.has(s.campo)) aplicarCampo(acc, alvo, s.campo, partes[k], ref, null);
         });
         i++;
         continue;
@@ -583,51 +643,54 @@ function processarLinhas(
       for (const t of tokensMedida(semCont)) {
         const u = normalizarUnidade(t.unitRaw);
         if (u.unidade && grandezaDaUnidade(u.unidade) === 'volume') {
-          aplicarCampo(acc, alvoLinha, 'cubagem', `${t.numRaw} ${t.unitRaw}`, conv, ref, null, '+atribuicao:unidade-de-volume-na-linha-do-container');
+          aplicarCampo(acc, alvoLinha, 'cubagem', `${t.numRaw} ${t.unitRaw}`, ref, null, '+atribuicao:unidade-de-volume-na-linha-do-container');
         }
       }
-      const vol = /(?<![A-Za-z0-9])(\d[\d.,]*)\s*([A-Za-z]{2,12})\b/g;
+      const vol = new RegExp(`${RE_NUM_QTD}\\s*([A-Za-z]{2,12})\\b`, 'g');
       let mv: RegExpExecArray | null;
       while ((mv = vol.exec(semCont))) {
-        if (ehTipoPacoteConhecido(mv[2])) {
-          aplicarCampo(acc, alvoLinha, 'volumes', `${mv[1]} ${mv[2]}`, conv, ref, null, '+atribuicao:quantidade-e-tipo-na-linha-do-container');
+        if (ehTipoPacoteConhecido(mv[3])) {
+          aplicarCampo(acc, alvoLinha, 'volumes', `${mv[1]} ${mv[3]}`, ref, null, '+atribuicao:quantidade-e-tipo-na-linha-do-container');
           break;
         }
       }
     }
 
     for (const s of segs) {
+      if (DOC_TEXTO.has(s.campo)) {
+        const v = valorTexto(s, segs, linhas, i);
+        if (v) aplicarDocTexto(acc, s.campo, v, ref);
+        continue;
+      }
       let valor = s.valor;
       // Rótulo sozinho na linha → valor na PRÓXIMA linha (se ela não for rótulo).
       if (!valor && segs.length === 1 && i + 1 < linhas.length && segmentos(linhas[i + 1]).length === 0) {
         valor = linhas[i + 1];
       }
       if (!valor) continue;
-      if (DOC_TEXTO.has(s.campo)) {
-        aplicarDocTexto(acc, s.campo, valor, ref);
-      } else if (s.campo === 'total') {
-        aplicarTotalLivre(acc, valor, conv, ref);
+      if (s.campo === 'total') {
+        aplicarTotalLivre(acc, valor, ref);
       } else if (ESCOPO_CONTAINER.has(s.campo)) {
         if (escopoAmbiguo) {
-          if (s.campo === 'ncm') aplicarCampo(acc, null, 'ncm', valor, conv, ref, null);
+          if (s.campo === 'ncm') aplicarCampo(acc, null, 'ncm', valor, ref, null);
           continue; // vários contêineres no escopo: relação não provada
         }
-        aplicarCampo(acc, alvoLinha, s.campo, valor, conv, ref, null);
+        aplicarCampo(acc, alvoLinha, s.campo, valor, ref, null);
       }
     }
   }
 }
 
 /** Linha "TOTAL: 1200 CTNS 18500 KGS 56 CBM": só o que a unidade/tipo identifica. */
-function aplicarTotalLivre(acc: Acc, valor: string, conv: ConvencaoNumerica, ref: EvidencePageRef): void {
+function aplicarTotalLivre(acc: Acc, valor: string, ref: EvidencePageRef): void {
   for (const t of tokensMedida(valor)) {
     const u = normalizarUnidade(t.unitRaw);
     if (u.unidade && grandezaDaUnidade(u.unidade) === 'volume') {
-      aplicarCampo(acc, null, 'cubagem', `${t.numRaw} ${t.unitRaw}`, conv, ref, null, '+linha-total');
+      aplicarCampo(acc, null, 'cubagem', `${t.numRaw} ${t.unitRaw}`, ref, null, '+linha-total');
     }
   }
-  const mv = /(?<![A-Za-z0-9])(\d[\d.,]*)\s*([A-Za-z]{2,12})\b/.exec(valor);
-  if (mv && ehTipoPacoteConhecido(mv[2])) aplicarCampo(acc, null, 'volumes', `${mv[1]} ${mv[2]}`, conv, ref, null, '+linha-total');
+  const mv = new RegExp(`${RE_NUM_QTD}\\s*([A-Za-z]{2,12})\\b`).exec(valor);
+  if (mv && ehTipoPacoteConhecido(mv[3])) aplicarCampo(acc, null, 'volumes', `${mv[1]} ${mv[3]}`, ref, null, '+linha-total');
 }
 
 /* ------------------------------------------------------------------ *
@@ -643,7 +706,7 @@ function papeisDaCelula(celula: string): { campos: CampoRotulo[]; soRotulo: bool
 
 const ehLinhaTotal = (cs: string[]): boolean => cs.some((c, k) => k <= 1 && /^\s*TOTA(?:L|IS)\b/i.test(c));
 
-function processarTabela(acc: Acc, t: Tabela, conv: ConvencaoNumerica, ref: EvidencePageRef): void {
+function processarTabela(acc: Acc, t: Tabela, ref: EvidencePageRef): void {
   const papeis = t.cabecalho.map(papeisDaCelula);
   const colDe = (campo: CampoRotulo): number[] =>
     papeis.map((p, j) => (p.soRotulo && p.campos.includes(campo) ? j : -1)).filter((j) => j >= 0);
@@ -664,10 +727,10 @@ function processarTabela(acc: Acc, t: Tabela, conv: ConvencaoNumerica, ref: Evid
         if (!celula) continue;
         if (campo === 'lacre' && papeis[j].campos.includes('container')) {
           // Coluna combinada "CONTAINER/SEAL": lacre = o que sobra além do contêiner/tipo.
-          aplicarCampo(acc, alvo, 'lacre', celula, conv, ref, null, sufixo);
+          aplicarCampo(acc, alvo, 'lacre', celula, ref, null, sufixo);
           continue;
         }
-        aplicarCampo(acc, alvo, campo, celula, conv, ref, unidadeCitada(t.cabecalho[j]), sufixo);
+        aplicarCampo(acc, alvo, campo, celula, ref, unidadeCitada(t.cabecalho[j]), sufixo);
       }
     }
   };
@@ -726,7 +789,12 @@ function processarTabela(acc: Acc, t: Tabela, conv: ConvencaoNumerica, ref: Evid
       const p = papeisDaCelula(celula);
       if (p.soRotulo && p.campos.length === 1 && DOC_TEXTO.has(p.campos[0])) {
         const abaixo = todas[r + 1]?.[j];
-        if (abaixo && !papeisDaCelula(abaixo).soRotulo) aplicarDocTexto(acc, p.campos[0], abaixo, ref);
+        if (abaixo && !papeisDaCelula(abaixo).soRotulo) {
+          const campo = p.campos[0];
+          // Célula de valor pode trazer o nome do Consignee quebrado em linhas (+ endereço).
+          const valor = campo === 'consignee' ? linhasDoNomeDaParte(abaixo.split('\n')).join('\n') : abaixo;
+          aplicarDocTexto(acc, campo, valor, ref);
+        }
       }
     });
   }
@@ -735,7 +803,7 @@ function processarTabela(acc: Acc, t: Tabela, conv: ConvencaoNumerica, ref: Evid
   todas.forEach((cs, r) => {
     cs.forEach((celula, j) => {
       if (!celula || celulasDeReferencia.has(`${r}:${j}`)) return;
-      processarLinhas(acc, celula.split('\n'), conv, ref, true, colunasPapel.length > 0);
+      processarLinhas(acc, celula.split('\n'), ref, true, colunasPapel.length > 0);
     });
   });
 }
@@ -878,23 +946,29 @@ export function parsearEvidencia(ev: OcrEvidenceV1): CanonicalDocumentV2 {
   const doc = canonicalDesdeEvidencia(ev);
   doc.parserVersion = PARSER_VERSION;
   const meta: Meta = { documentId: ev.documentId, model: ev.model };
-  const conv = detectarConvencaoNumerica(ev.pages.map((p) => p.markdown || '').join('\n'));
   const acc: Acc = {
     bl: [], consignee: [], por: [], pol: [], pod: [], podel: [], ts: [],
     bruto: [], liquido: [], cubagem: [], qtd: [], tipo: [], ncm: [],
     lacresSoltos: [], kind: [], role: [], containers: new Map(),
   };
 
-  ev.pages.forEach((pagina, idx) => {
+  // Título lido na 1ª página de CADA anexo (não só do anexo que veio primeiro):
+  // a natureza/papel não depende da ordem em que o Graph devolveu os anexos —
+  // sinais concordantes consolidam; conflitantes viram incerteza.
+  const anexosComTitulo = new Set<string>();
+  ev.pages.forEach((pagina) => {
     const ref: EvidencePageRef = {
       documentId: ev.documentId,
       attachmentId: pagina.sourceAttachmentId,
       pageIndex: pagina.sourcePageIndex,
     };
     const est = estruturarPagina(pagina.markdown || '');
-    if (idx === 0) lerTitulo(acc, est.titulos, est.primeirasLinhas, ref);
-    processarLinhas(acc, est.linhasTexto, conv, ref, false);
-    for (const t of est.tabelas) processarTabela(acc, t, conv, ref);
+    if (!anexosComTitulo.has(pagina.sourceAttachmentId)) {
+      anexosComTitulo.add(pagina.sourceAttachmentId);
+      lerTitulo(acc, est.titulos, est.primeirasLinhas, ref);
+    }
+    processarLinhas(acc, est.linhasTexto, ref, false);
+    for (const t of est.tabelas) processarTabela(acc, t, ref);
   });
 
   // Lacre "solto" (fora de linha de contêiner) só é do contêiner quando o

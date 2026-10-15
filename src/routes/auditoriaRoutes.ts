@@ -23,8 +23,11 @@ import {
   pareceArmadorPorNome,
   mistralOcrLigado,
   modoExtracaoPb001,
-  preAlertaExigeGemini,
+  indisponibilidadePreAlerta,
   versaoPipelineDocPb001,
+  ordenarPaginasDoDocumento,
+  assinaturaFontesProcesso,
+  chaveResultadoPreAlerta,
 } from '../auditoria/preAlerta/extracaoPreAlerta';
 import { executarPreAlerta, DocPreAlerta, TipoDoc, MOTOR_PB001_VERSAO } from '../auditoria/preAlerta';
 import { executarCeMercante, ehComponenteCE, numeroBaseDoNome } from '../auditoria/ceMercante';
@@ -836,20 +839,19 @@ const preAlertaCache = new Map<string, { sig: string; payload: unknown }>();
 
 auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, next) => {
   try {
-    // Fase 2: com Mistral + parser determinístico o PB-001 NÃO usa o Gemini — a
-    // falta de GEMINI_API_KEY (ou cota 429) não bloqueia. Só exige o Gemini sem
-    // Mistral (visão) ou com o rollback legado explicitamente ligado.
+    // Fase 2: o modo determinístico EXIGE o OCR do Mistral e NUNCA usa o Gemini
+    // (sem Mistral → 503 explícito; nada de visão do Gemini). O Gemini só entra com
+    // o rollback legado explícito (GEMINI_LEGACY_STRUCTURING_FALLBACK_ENABLED=true).
     const modoExtracao = modoExtracaoPb001();
-    const pipeline = { mistralLigado: mistralOcrLigado(), modo: modoExtracao };
-    if (preAlertaExigeGemini(pipeline) && !isAiConfigured()) {
-      return res.status(503).json({
-        error:
-          'A leitura de documentos exige o OCR do Mistral (MISTRAL_OCR_KEY) — ou, sem ele (ou com o rollback legado ligado), a IA (GEMINI_API_KEY).',
-      });
-    }
+    const indisponivel = indisponibilidadePreAlerta({
+      modo: modoExtracao,
+      mistralLigado: mistralOcrLigado(),
+      geminiConfigurado: isAiConfigured(),
+    });
+    if (indisponivel) return res.status(503).json({ error: indisponivel });
     // Versão do pipeline que deriva o documento: separa caches de documento/resultado
     // produzidos pelo parser determinístico dos produzidos pelo caminho legado.
-    const versaoDoc = versaoPipelineDocPb001(pipeline);
+    const versaoDoc = versaoPipelineDocPb001({ modo: modoExtracao });
     const alvoProcesso = String(req.params.processo || '').toUpperCase();
     const alvoBase = processBase(alvoProcesso);
     if (config.auditoriaOcultar.includes(alvoBase)) {
@@ -873,13 +875,17 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
         !nomeNaoConhecimento(d.nome) &&
         isDocumentAttachment(d.nome, d.contentType, false),
     );
-    const candidatos = [...bls, ...genericos].slice(0, 8); // permite multi-House
+    // Ordem DETERMINÍSTICA (independe da ordem do Graph), mantendo BLs antes dos genéricos.
+    const idDoc = (d: DocRef) => ({ nome: d.nome, messageId: d.emailId, attachmentId: d.attachmentId });
+    const candidatos = [...ordenarPaginasDoDocumento(bls, idDoc), ...ordenarPaginasDoDocumento(genericos, idDoc)].slice(0, 8); // permite multi-House
 
     if (candidatos.length === 0) {
       return res.json({ processo: proc.processo, cliente: proc.cliente, semDocumentos: true, resultado: null });
     }
 
-    const sig = candidatos.map((d) => `${d.tipo}:${d.nome}`).sort().join('|');
+    // Assinatura das FONTES por identidade estável (tipo + e-mail + anexo + nome):
+    // um BL reenviado com o MESMO nome não recebe a auditoria antiga.
+    const sig = assinaturaFontesProcesso(candidatos);
     const refresh = String(req.query.refresh || '') === '1';
     // ?debug=1 → raio-x por documento (ver abaixo). NUNCA usa o cache do payload
     // (senão devolveria uma auditoria antiga, sem o diagnóstico) e não o grava.
@@ -894,7 +900,13 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
     // outro pipeline.
     const sigResultado = `${sig}|${versaoDoc ?? 'legado'}|${MOTOR_PB001_VERSAO}`;
     const chaveResultado = escopoConta
-      ? `resultado:v2:${escopoConta}:prealerta:${alvoBase}:${sigResultado}`
+      ? chaveResultadoPreAlerta({
+          escopoConta,
+          processoBase: alvoBase,
+          assinaturaFontes: sig,
+          versaoDoc,
+          motor: MOTOR_PB001_VERSAO,
+        })
       : null;
     const cached = chaveMem ? preAlertaCache.get(chaveMem) : undefined;
     if (!refresh && !debug && cached && cached.sig === sigResultado) {
@@ -954,7 +966,10 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
       persistenceStatus: string | null;
       modoExtracao: string;
     }> = [];
-    const extraidos = await mapLimit(listaGrupos, 3, async (grupo) => {
+    const extraidos = await mapLimit(listaGrupos, 3, async (grupoBruto) => {
+      // Páginas do documento em ordem DETERMINÍSTICA (nº de página no nome → nome → ids):
+      // o nome-base e a classificação não dependem da ordem do Graph.
+      const grupo = ordenarPaginasDoDocumento(grupoBruto, idDoc);
       const temHBL = grupo.some((d) => d.tipo === 'HBL');
       const temMBL = grupo.some((d) => d.tipo === 'MBL');
       const hint: TipoDoc = temHBL && !temMBL ? 'HBL' : 'MBL';

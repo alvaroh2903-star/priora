@@ -55,23 +55,18 @@ export function cmpNumeroExato(
     : { resultado: 'Divergencia', motivo: `Divergência: ${a}${u} × ${b}${u} (sem tolerância).` };
 }
 
-// Sinônimos de TIPO DE PACOTE → forma canônica. Resolve falsos positivos de
-// grafia (CARTONS × CARTON(S), CTNS × CARTONS, PLTS × PALLETS…) sem forçar
-// consistência entre tipos realmente diferentes (CARTON × PALLET = divergência).
+// Sinônimos de TIPO DE PACOTE → forma canônica — EXATAMENTE a lista explícita
+// aprovada pelo usuário (CARTON/CARTONS/CARTON(S)/CTN/CTNS, PALLET/PALLETS/PLT/
+// PLTS, PACKAGE/PACKAGES/PKG/PKGS, BOX/BOXES). Resolve falsos positivos de grafia
+// sem forçar consistência entre tipos diferentes (CARTON × PALLET = divergência).
+// Qualquer outra grafia (ex.: BAGS, PCS, CAJAS) NÃO tem equivalência automática
+// → "confirmar equivalência" (Validação Humana), nunca vermelho automático.
+// Fonte ÚNICA: usada pelo motor (V-004.2) E pelo parser determinístico.
 const PACOTE_SINONIMOS: Record<string, string> = {
   CARTON: 'CARTON', CARTONS: 'CARTON', CTN: 'CARTON', CTNS: 'CARTON',
   PALLET: 'PALLET', PALLETS: 'PALLET', PLT: 'PALLET', PLTS: 'PALLET',
-  PACKAGE: 'PACKAGE', PACKAGES: 'PACKAGE', PKG: 'PACKAGE', PKGS: 'PACKAGE', PKGE: 'PACKAGE',
+  PACKAGE: 'PACKAGE', PACKAGES: 'PACKAGE', PKG: 'PACKAGE', PKGS: 'PACKAGE',
   BOX: 'BOX', BOXES: 'BOX',
-  CASE: 'CASE', CASES: 'CASE',
-  BAG: 'BAG', BAGS: 'BAG',
-  ROLL: 'ROLL', ROLLS: 'ROLL',
-  DRUM: 'DRUM', DRUMS: 'DRUM',
-  CRATE: 'CRATE', CRATES: 'CRATE',
-  PIECE: 'PIECE', PIECES: 'PIECE', PCS: 'PIECE', PC: 'PIECE',
-  BALE: 'BALE', BALES: 'BALE',
-  SACK: 'SACK', SACKS: 'SACK',
-  BUNDLE: 'BUNDLE', BUNDLES: 'BUNDLE',
 };
 
 /**
