@@ -392,19 +392,48 @@ test('v1.2 #13: replay de evento concluído continua sendo leitura pura (zero es
 });
 
 /* ========================================================================= *
- * 14 — migrações 0001-0041 permanecem intactas e válidas (nenhuma migration
- * nova nesta corretiva: v1.2 é só aplicação + configuração de pool).
+ * 14 — migrações 0001-0041 permanecem intactas (nenhuma migration nova NESTA
+ * CORRETIVA: v1.2 é só aplicação + configuração de pool) — corrigido em
+ * Entrega 2 v1.1 (achado #1 da auditoria): a asserção original proibia
+ * QUALQUER migration 0042+ para sempre, inclusive as de entregas futuras
+ * legítimas (Entrega 2 introduziu a 0042, autorizada pelo usuário) — uma
+ * asserção global que nenhuma migration subsequente poderia satisfazer. O
+ * invariante HISTÓRICO real desta corretiva é só sobre 0001..0041: a prova
+ * agora delimita a aplicação em 0041 (`until`) e confirma que nada além dela
+ * entra nessa faixa — migrations de entregas POSTERIORES (0042+) são
+ * esperadas e continuam permitidas numa segunda passada, e a cadeia atual
+ * completa aplica e reaplica sem erro.
  * ========================================================================= */
 
-test('v1.2 #14: migrações 0001→0041 permanecem intactas e válidas — nenhuma migration nova nesta corretiva', { skip: !url }, async () => {
+test('v1.2 #14: migrações 0001→0041 permanecem intactas — a corretiva v1.2 não introduziu nada nessa faixa; 0042+ (entregas posteriores) é permitida; a cadeia atual aplica limpa', { skip: !url }, async () => {
   const pool = testPool();
   try {
     await resetSchema(pool);
-    const r = await runMigrations(pool);
-    assert.ok(r.applied.includes('0041_handoff_vinculo_processo.sql'));
-    assert.ok(!r.applied.some((nome) => nome.startsWith('0042')), 'nenhuma migration 0042+ foi introduzida — esta corretiva é só de aplicação/configuração');
-    const r2 = await runMigrations(pool);
-    assert.deepEqual(r2.applied, [], 'reaplicar é um no-op — 0040/0041 continuam exatamente como estavam');
+
+    // Prova 1 (histórica, escopo da v1.2): delimitando em 0041, a lista
+    // aplicada termina EXATAMENTE em 0041 — nenhum arquivo entre 0001 e 0041
+    // foi acrescentado por esta corretiva.
+    const ate41 = await runMigrations(pool, { until: '0041_handoff_vinculo_processo.sql' });
+    assert.ok(ate41.applied.includes('0041_handoff_vinculo_processo.sql'));
+    assert.equal(
+      ate41.applied[ate41.applied.length - 1], '0041_handoff_vinculo_processo.sql',
+      'delimitado em 0041, nenhum arquivo além dela é aplicado — a corretiva v1.2 não introduziu nada novo em 0001..0041',
+    );
+
+    // Prova 2 (futuro permitido): migrations de entregas POSTERIORES (0042
+    // da Entrega 2, e qualquer 0043+ de corretivas futuras) são esperadas —
+    // continuando a aplicação sem o limite, só arquivos ESTRITAMENTE
+    // posteriores a 0041 entram nesta segunda passada.
+    const posteriores = await runMigrations(pool);
+    assert.ok(posteriores.applied.length > 0, 'migrations de entregas posteriores a 0041 existem e são aplicadas sem conflito');
+    assert.ok(
+      posteriores.applied.every((nome) => nome > '0041_handoff_vinculo_processo.sql'),
+      'só migrations posteriores a 0041 aparecem nesta segunda passada',
+    );
+
+    // Prova 3 (cadeia atual completa, limpa e idempotente).
+    const semMudanca = await runMigrations(pool);
+    assert.deepEqual(semMudanca.applied, [], 'reexecutar a cadeia completa atual não reaplica nada');
   } finally { await pool.end(); }
 });
 

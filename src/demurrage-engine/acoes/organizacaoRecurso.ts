@@ -47,10 +47,13 @@ export async function organizacaoDaReabertura(pool: Pool, reaberturaId: string):
   return rows[0]?.organization_id ?? null;
 }
 
-export async function organizacaoDaPendencia(pool: Pool, pendenciaId: string): Promise<string | null> {
-  const { rows } = await pool.query(`SELECT organization_id FROM demurrage_pendencias WHERE id = $1`, [pendenciaId]);
-  return rows[0]?.organization_id ?? null;
-}
+/**
+ * Entrega 2 v1.1: substituída, para a rota de pendência, por
+ * `acoes/pendenciaVerificacao.ts`'s `buscarPendenciaPersistida` — a MESMA
+ * leitura, mas já trazendo `tipo`/`estado` junto da organização (achado #3
+ * da auditoria: a rota precisa do tipo persistido para verificar contra o
+ * tipo pedido, não só da organização).
+ */
 
 /** Busca `numeroProcesso` + `numero` do contêiner, já conferindo a organização (usado pelo adaptador de fallback manual). */
 export async function processoENumeroDoContainer(
