@@ -5,7 +5,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ContainerDoc, DocPreAlerta, Evidencia } from '../preAlerta/modelo';
-import { executarCeMercante, OperacaoCE, ehComponenteCE, numeroBaseDoNome } from './index';
+import {
+  executarCeMercante,
+  OperacaoCE,
+  ehComponenteCE,
+  numeroBaseDoNome,
+  chaveResultadoCeMercante,
+} from './index';
+import { assinaturaFontesProcesso } from '../preAlerta/extracaoPreAlerta';
 
 const C1 = 'BMOU9784013';
 const C2 = 'TEMU1234565';
@@ -68,6 +75,51 @@ test('CE Mercante: container do CE Master diverge do MBL → Divergencia', () =>
   };
   const r = executarCeMercante(op);
   assert.equal(r.resultado, 'Divergencia');
+});
+
+// ---- Regressão: identidade de FONTE no cache de resultado (PB-002) --------
+// Bug: a assinatura usava só `tipo:nome`. Um CE/BL reenviado com o MESMO nome
+// (outro e-mail/anexo — ex.: CE ou BL corrigido) colidia e recebia o resultado
+// ANTIGO. Correção: assinatura por identidade de fonte (tipo + e-mail + anexo +
+// nome), independente da ordem, e chave persistente em v2 (aposenta o v1).
+type Fonte = { tipo: string; emailId: string; attachmentId: string; nome: string };
+const fonte = (over: Partial<Fonte> = {}): Fonte => ({
+  tipo: 'CE_MASTER',
+  emailId: 'email-1',
+  attachmentId: 'att-1',
+  nome: 'SHYY26010120 dados básicos.pdf',
+  ...over,
+});
+
+test('assinaturaFontesProcesso: MESMO nome/tipo + anexo/e-mail diferente → assinatura DIFERENTE', () => {
+  const original = [fonte()];
+  const reenviado = [fonte({ emailId: 'email-2', attachmentId: 'att-2' })]; // mesmo tipo+nome, fonte nova
+  assert.notEqual(assinaturaFontesProcesso(original), assinaturaFontesProcesso(reenviado));
+
+  // A assinatura ANTIGA (só tipo:nome) colidia — exatamente o bug que a correção mata.
+  const sigAntiga = (ds: Fonte[]) => ds.map((d) => `${d.tipo}:${d.nome}`).sort().join('|');
+  assert.equal(sigAntiga(original), sigAntiga(reenviado));
+});
+
+test('assinaturaFontesProcesso: mesmo conjunto em ORDEM diferente → MESMA assinatura', () => {
+  const a = fonte({ tipo: 'CE_MASTER', nome: 'A.pdf', attachmentId: 'a' });
+  const b = fonte({ tipo: 'CE_HOUSE', nome: 'B.pdf', attachmentId: 'b' });
+  const c = fonte({ tipo: 'HBL', nome: 'C.pdf', attachmentId: 'c' });
+  assert.equal(assinaturaFontesProcesso([a, b, c]), assinaturaFontesProcesso([c, a, b]));
+});
+
+test('chaveResultadoCeMercante: v2 + fontes diferentes/contas diferentes → chaves diferentes', () => {
+  const sigOrig = assinaturaFontesProcesso([fonte()]);
+  const sigReenv = assinaturaFontesProcesso([fonte({ emailId: 'email-2', attachmentId: 'att-2' })]);
+  const kOrig = chaveResultadoCeMercante({ escopoConta: 'contaA', processoBase: 'IM0001', assinaturaFontes: sigOrig });
+  const kReenv = chaveResultadoCeMercante({ escopoConta: 'contaA', processoBase: 'IM0001', assinaturaFontes: sigReenv });
+
+  assert.match(kOrig, /^resultado:v2:contaA:cemercante:IM0001:/); // aposenta o v1 filename-only
+  assert.notEqual(kOrig, kReenv); // reenvio com mesmo nome → chave nova, nunca o resultado antigo
+
+  // Tenant-scope: contas diferentes nunca compartilham chave (mesmo processo+fontes).
+  const kOutraConta = chaveResultadoCeMercante({ escopoConta: 'contaB', processoBase: 'IM0001', assinaturaFontes: sigOrig });
+  assert.notEqual(kOrig, kOutraConta);
 });
 
 test('CE Mercante: part lot — mesmo container em 2 Houses NÃO é duplicidade; Σ peso = Master', () => {
