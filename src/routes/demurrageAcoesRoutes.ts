@@ -14,10 +14,10 @@ import {
 } from '../demurrage-engine/acoes/organizacaoRecurso';
 import { buscarFechamentoMaisRecente, buscarReaberturaPorId } from '../demurrage-engine/acoes/leituraIdempotente';
 import { registrarMinutaIdempotente } from '../demurrage-engine/acoes/minutaIdempotencia';
+import { normalizarIdempotencyKey, IdempotencyKeyInvalida } from '../demurrage-engine/acoes/idempotencyKey';
 import { buscarPendenciaPersistida, verificarTipoPendenciaPersistido } from '../demurrage-engine/acoes/pendenciaVerificacao';
 import { comLockPorChave } from '../demurrage-engine/acoes/serializacaoPorChave';
 import { ErroRotaAcao, classificarFalhaAcao, tratarErroRotaAcao } from '../demurrage-engine/acoes/erros';
-import { MinutaRepository } from '../demurrage-engine/persistence/minutaRepository';
 import { ReaberturaRepository } from '../demurrage-engine/persistence/reaberturaRepository';
 import { hojeOperacional } from '../demurrage-engine/time/operationalDate';
 
@@ -173,8 +173,15 @@ export function criarDemurrageAcoesRouter(deps: DemurrageAcoesRoutesDeps = {}): 
       const orgDoRecurso = await organizacaoDoContainer(pool(), containerId);
       if (orgDoRecurso !== org) { res.status(404).json({ error: 'nao_encontrado' }); return; }
 
-      const chaveIdempotencia = req.get('idempotency-key');
-      if (!chaveIdempotencia) throw new ErroRotaAcao(400, 'idempotency_key_obrigatoria');
+      const chaveBruta = req.get('idempotency-key');
+      if (!chaveBruta) throw new ErroRotaAcao(400, 'idempotency_key_obrigatoria');
+      let chaveIdempotencia: string;
+      try {
+        chaveIdempotencia = normalizarIdempotencyKey(chaveBruta);
+      } catch (e) {
+        if (e instanceof IdempotencyKeyInvalida) throw new ErroRotaAcao(400, 'idempotency_key_invalida');
+        throw e;
+      }
 
       const corpo = corpoOuVazio(req);
       const resultado = await registrarMinutaIdempotente(pool(), {
@@ -193,17 +200,20 @@ export function criarDemurrageAcoesRouter(deps: DemurrageAcoesRoutesDeps = {}): 
 
   /* ====================================================================== *
    * 3b — Validação de minuta (MANAGER/ADMIN, verificado pelo próprio serviço).
-   *      Idempotente por PRÉ-LEITURA: uma minuta já VALIDADA/REJEITADA nunca
-   *      é reenviada ao serviço (evitaria duplicar `closing_events`/recálculo
-   *      — ver docs/demurrage-producao-p1-entrega-2.md §idempotência).
-   *      Entrega 2 v1.1 (corretiva, auditoria de concorrência): a sequência
-   *      "ler o estado atual → decidir se chama o serviço" é serializada por
-   *      `minutaId` (`acoes/serializacaoPorChave.ts`) — sem isso, duas
-   *      chamadas CONCORRENTES podiam ambas passar pela pré-leitura (ambas
-   *      veem `RECEBIDA`) e ambas chamar `ClosingService.validarMinuta`, que
-   *      NÃO tem nenhum guard interno contra processar a MESMA minuta duas
-   *      vezes — duplicaria `closing_events`/recálculo mesmo serializado
-   *      pelo lock consultivo interno do serviço.
+   *      Entrega 2 v1.2 (corretiva, achado #2): a guarda definitiva de
+   *      já-processada agora vive DENTRO de `ClosingService.validarMinuta`
+   *      — depois do lock consultivo e da releitura travada da minuta —,
+   *      não só aqui na rota. A v1.1 fazia uma PRÉ-LEITURA fora do serviço
+   *      (e serializava "ler → decidir" com `comLockPorChave`) porque o
+   *      serviço, sozinho, reprocessava uma minuta já VALIDADA/REJEITADA; a
+   *      pré-leitura virou redundante e foi removida — a rota agora só
+   *      chama o serviço e traduz o resultado típado (que já inclui
+   *      `ja_validada`/`ja_rejeitada` como réplicas idempotentes, sem
+   *      evento/recálculo/escrita novos). `comLockPorChave` é mantido só
+   *      como serialização de REQUISIÇÃO (reduz contenção/trabalho
+   *      duplicado sob concorrência na mesma minuta) — a corretude não
+   *      depende mais dele: uma chamada direta ao serviço, sem rota e sem
+   *      esse lock, tem exatamente a mesma garantia.
    * ====================================================================== */
   router.post('/minutas/:minutaId/validar', async (req: AutorizedRequest, res: Response, next: NextFunction) => {
     try {
@@ -213,25 +223,13 @@ export function criarDemurrageAcoesRouter(deps: DemurrageAcoesRoutesDeps = {}): 
       if (orgDoRecurso !== org) { res.status(404).json({ error: 'nao_encontrado' }); return; }
 
       const corpo = corpoOuVazio(req);
-      const resultado = await comLockPorChave(pool(), `demurrage:acoes:minuta_validar:${minutaId}`, async () => {
-        const minutaRepo = new MinutaRepository(pool());
-        const atual = await minutaRepo.findById(minutaId);
-        if (!atual) return { tipo: 'nao_encontrado' as const };
-        if (atual.estado !== 'RECEBIDA') return { tipo: 'ja_processada' as const, atual };
-
+      const r = await comLockPorChave(pool(), `demurrage:acoes:minuta_validar:${minutaId}`, async () => {
         const svc = new ClosingService(pool());
-        const r = await svc.validarMinuta({
+        return svc.validarMinuta({
           minutaId, membershipId: req.autorizacao!.membershipId, config: { hoje: hojeOperacional() }, aceitarDivergencia: corpo.aceitarDivergencia === true,
         });
-        return { tipo: 'processado' as const, r };
       });
 
-      if (resultado.tipo === 'nao_encontrado') { res.status(404).json({ error: 'nao_encontrado' }); return; }
-      if (resultado.tipo === 'ja_processada') {
-        res.status(200).json({ resultado: 'ja_processada', estado: resultado.atual.estado, dataValidada: resultado.atual.dataValidada, divergente: resultado.atual.divergenteDoTracking });
-        return;
-      }
-      const r = resultado.r;
       if (r.ok) { res.status(200).json(r); return; }
       const status = r.motivo === 'apenas_manager_admin' ? 403 : (r.motivo === 'minuta_nao_encontrada' || r.motivo === 'container_nao_encontrado') ? 404 : 409;
       res.status(status).json({ error: r.motivo });

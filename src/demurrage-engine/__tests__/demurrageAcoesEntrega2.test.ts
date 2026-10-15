@@ -461,10 +461,13 @@ test('Entrega 2 #17/#18: validação de minuta usa o closingService; divergênci
     assert.equal(container2[0].trackingReturnDate, '2026-09-10', 'tracking AINDA preservado mesmo depois da aceitação');
     assert.equal(container2[0].effectiveReturnDate, '2026-09-12', 'a minuta validada agora é a devolução efetiva');
 
-    // Retry idempotente: minuta já processada não é reenviada ao serviço.
+    // Retry idempotente: minuta já VALIDADA — a Entrega 2 v1.2 move essa
+    // guarda definitiva para dentro do próprio ClosingService.validarMinuta
+    // (achado #2 da auditoria de v1.2); a rota não faz mais pré-leitura, só
+    // traduz o resultado típado `ja_validada` que o serviço devolve.
     const retry = await post(app.base, `/minutas/${minutaId}/validar`, { aceitarDivergencia: true }, homeManager);
     assert.equal(retry.status, 200);
-    assert.equal((await retry.json()).resultado, 'ja_processada');
+    assert.equal((await retry.json()).resultado, 'ja_validada');
     const { rows: eventos } = await pool.query(`SELECT count(*)::int n FROM closing_events WHERE container_id = $1 AND tipo_evento = 'MINUTA_VALIDADA'`, [containerId]);
     assert.equal(eventos[0].n, 1, 'retry nunca duplica o evento de auditoria');
   } finally { await app.close(); await pool.end(); }

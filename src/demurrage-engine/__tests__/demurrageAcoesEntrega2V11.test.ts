@@ -690,13 +690,14 @@ test('v1.1 #24: nenhum arquivo de frontend (public/, .html, .css) está entre as
  * 25-26 — migrations
  * ========================================================================= */
 
-test('v1.1 #25: migração limpa 0001→0043 aplica em ordem e reexecutar é um no-op', { skip: !url }, async () => {
+test('v1.1 #25: migração limpa 0001→0044 aplica em ordem e reexecutar é um no-op', { skip: !url }, async () => {
   const pool = testPool();
   try {
     await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
     const r1 = await runMigrations(pool);
     assert.ok(r1.applied.includes('0043_acoes_minuta_idempotencia_atomica.sql'));
-    assert.equal(r1.applied[r1.applied.length - 1], '0043_acoes_minuta_idempotencia_atomica.sql');
+    assert.ok(r1.applied.includes('0044_acoes_minuta_idempotencia_tenant_e_chave.sql'));
+    assert.equal(r1.applied[r1.applied.length - 1], '0044_acoes_minuta_idempotencia_tenant_e_chave.sql');
     const r2 = await runMigrations(pool);
     assert.deepEqual(r2.applied, [], 'reexecutar não reaplica nada');
   } finally { await pool.end(); }

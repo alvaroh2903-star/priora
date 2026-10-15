@@ -168,7 +168,14 @@ export class ClosingService {
     aceitarDivergencia?: boolean;
     /** SÓ TESTE — ver nota de cabeçalho do arquivo. */
     _testeFalhaEntreValidacaoERecalculo?: () => void | Promise<void>;
-  }): Promise<{ ok: true; resultado: 'validada'; dataValidada: CivilDate; divergente: boolean } | { ok: true; resultado: 'rejeitada'; motivo: string } | { ok: true; resultado: 'divergencia_pendente'; dataInformada: CivilDate; trackingReturnDate: CivilDate | null } | Falha> {
+  }): Promise<
+    | { ok: true; resultado: 'validada'; dataValidada: CivilDate; divergente: boolean }
+    | { ok: true; resultado: 'rejeitada'; motivo: string }
+    | { ok: true; resultado: 'divergencia_pendente'; dataInformada: CivilDate; trackingReturnDate: CivilDate | null }
+    | { ok: true; resultado: 'ja_validada'; dataValidada: CivilDate; divergente: boolean }
+    | { ok: true; resultado: 'ja_rejeitada'; motivo: string }
+    | Falha
+  > {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
@@ -215,6 +222,33 @@ export class ClosingService {
         numeroInformado: mRow.numero_informado, dataInformada: mRow.data_informada,
         divergenteDoTracking: mRow.divergente_do_tracking,
       };
+
+      // Fase D15-A v1.2 (corretiva, achado #2 da auditoria de Entrega 2 v1.2):
+      // guard DEFINITIVO de já-processada, DENTRO do próprio serviço — logo
+      // depois do lock consultivo (passo 2) e da releitura travada da minuta
+      // (passo 4b), ANTES de qualquer outro gate. A v1.1 só tinha essa guarda
+      // na rota HTTP (pré-leitura sob `comLockPorChave`); um chamador direto
+      // do serviço — outro processo, um job futuro, outra rota, uma chamada
+      // de teste — reprocessava uma minuta já VALIDADA/REJEITADA e duplicava
+      // `closing_events`/recálculo. Agora QUALQUER chamador, com ou sem lock
+      // de rota, recebe um resultado típado IDEMPOTENTE: nenhum evento é
+      // registrado, nenhum recálculo roda, nenhuma linha é escrita.
+      if (m.estado === 'VALIDADA') {
+        await client.query('ROLLBACK');
+        return { ok: true, resultado: 'ja_validada', dataValidada: mRow.data_validada, divergente: mRow.divergente_do_tracking };
+      }
+      if (m.estado === 'REJEITADA') {
+        await client.query('ROLLBACK');
+        return { ok: true, resultado: 'ja_rejeitada', motivo: mRow.motivo_rejeicao };
+      }
+      if (m.estado !== 'RECEBIDA') {
+        // Defesa em profundidade: a CHECK da migration 0016 já restringe
+        // `estado_minuta` a RECEBIDA/VALIDADA/REJEITADA — este ramo nunca é
+        // alcançável em produção, mas devolve uma falha típica FECHADA em vez
+        // de deixar o fluxo seguir sobre um estado desconhecido.
+        await client.query('ROLLBACK');
+        return { ok: false, motivo: 'minuta_estado_nao_suportado' };
+      }
 
       const ator = await this.resolverAtor(client, ci.organization_id, input.membershipId);
       if (!ator || !ehGestor(ator.papel)) { await client.query('ROLLBACK'); return { ok: false, motivo: 'apenas_manager_admin' }; }
