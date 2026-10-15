@@ -30,7 +30,7 @@ import {
   chaveResultadoPreAlerta,
 } from '../auditoria/preAlerta/extracaoPreAlerta';
 import { executarPreAlerta, DocPreAlerta, TipoDoc, MOTOR_PB001_VERSAO } from '../auditoria/preAlerta';
-import { executarCeMercante, ehComponenteCE, numeroBaseDoNome } from '../auditoria/ceMercante';
+import { executarCeMercante, ehComponenteCE, numeroBaseDoNome, chaveResultadoCeMercante } from '../auditoria/ceMercante';
 import { mapLimit } from '../browser/carriers/concurrency';
 import {
   chaveOcr,
@@ -589,10 +589,16 @@ auditoriaRouter.get('/:processo/auditoria', async (req: AuthedRequest, res, next
       : [];
     const candidatos: DocRef[] = [...selecionados, ...extras].slice(0, 6);
 
-    const sig = candidatos.map((d) => `${d.tipo}:${d.nome}`).sort().join('|');
+    // Assinatura das FONTES por identidade estável (tipo + e-mail + anexo + nome),
+    // independente da ordem — igual a /pre-alerta e /ce-mercante.
+    const sig = assinaturaFontesProcesso(candidatos);
     const refresh = String(req.query.refresh || '') === '1';
-    const cacheKey = `${alvoBase}`;
-    const cached = auditCache.get(cacheKey);
+    // Escopo = conta autenticada. SEM chave compartilhada entre contas: sem
+    // conta, o cache fica DESLIGADO (fail closed) — duas contas que pedem o
+    // MESMO processo jamais recebem o payload uma da outra.
+    const escopoConta = req.session.homeAccountId;
+    const cacheKey = escopoConta ? `${escopoConta}:${alvoBase}` : null;
+    const cached = cacheKey ? auditCache.get(cacheKey) : undefined;
     if (!refresh && cached && cached.sig === sig) {
       return res.json(cached.payload);
     }
@@ -677,7 +683,7 @@ auditoriaRouter.get('/:processo/auditoria', async (req: AuthedRequest, res, next
       clara,
       data: proc.data,
     };
-    auditCache.set(cacheKey, { sig, at: Date.now(), payload });
+    if (cacheKey) auditCache.set(cacheKey, { sig, at: Date.now(), payload });
     res.json(payload);
   } catch (err) {
     next(err);
@@ -1197,14 +1203,20 @@ auditoriaRouter.get('/:processo/ce-mercante', async (req: AuthedRequest, res, ne
     }
 
     const selecionados = [...ceComps, ...mblDocs, ...hblDocs].slice(0, 16);
-    const sig = selecionados.map((d) => `${d.tipo}:${d.nome}`).sort().join('|');
+    // Assinatura das FONTES por identidade estável (tipo + e-mail + anexo + nome),
+    // independente da ordem: um CE/BL reenviado com o MESMO nome (outro
+    // e-mail/anexo — ex.: CE/BL corrigido) gera assinatura nova e NÃO recebe a
+    // auditoria antiga. Antes era só `tipo:nome` → reenvio colidia.
+    const sig = assinaturaFontesProcesso(selecionados);
     const refresh = String(req.query.refresh || '') === '1';
     // Escopo = conta autenticada. SEM fallback 'mvp': sem conta, caches de dado
     // sensível ficam DESLIGADOS (fail closed).
     const escopoConta = req.session.homeAccountId;
     const chaveMem = escopoConta ? `${escopoConta}:${alvoBase}` : null;
+    // Chave persistente em v2 (aposenta o v1 filename-only): nada gravado sob a
+    // assinatura antiga volta a ser servido.
     const chaveResultado = escopoConta
-      ? `resultado:v1:${escopoConta}:cemercante:${alvoBase}:${sig}`
+      ? chaveResultadoCeMercante({ escopoConta, processoBase: alvoBase, assinaturaFontes: sig })
       : null;
     const cached = chaveMem ? ceMercanteCache.get(chaveMem) : undefined;
     if (!refresh && cached && cached.sig === sig) {

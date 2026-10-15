@@ -48,6 +48,23 @@ export function numeroBaseDoNome(nome: string): string {
   return s.toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
 
+/**
+ * Chave do cache persistente de RESULTADO do /ce-mercante (tenant + fontes). PURA.
+ *
+ * `assinaturaFontes` deve vir de `assinaturaFontesProcesso` (identidade estável
+ * de cada fonte: tipo + e-mail + anexo + nome) — NUNCA do nome do arquivo
+ * sozinho. A versão `v2` aposenta o antigo `v1`, cuja assinatura era só
+ * tipo+nome: um CE/BL reenviado com o MESMO nome recebia o resultado antigo.
+ * Nada gravado sob o `v1` (filename-only) volta a ser servido.
+ */
+export function chaveResultadoCeMercante(p: {
+  escopoConta: string;
+  processoBase: string;
+  assinaturaFontes: string;
+}): string {
+  return `resultado:v2:${p.escopoConta}:cemercante:${p.processoBase}:${p.assinaturaFontes}`;
+}
+
 /** Operação do CE Mercante: BLs (referência) + CE Mercante (auditado). */
 export interface OperacaoCE {
   processo: string;
