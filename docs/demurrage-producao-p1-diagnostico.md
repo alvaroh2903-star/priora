@@ -4,9 +4,12 @@
 
 > **Status da Produção P1 (atualizado após decisão final do usuário):**
 > **Entrega 1 — APROVADA E CONGELADA.** **Entrega 2 — APROVADA E CONGELADA**
-> (decisão final do usuário, após a corretiva v1.2). Entrega 3 — **não
-> iniciada**, aguardando autorização explícita do usuário para começar.
-> Produção P1 como um todo **não está declarada completa**. Ver §6 para o
+> (decisão final do usuário, após a corretiva v1.2). **Entrega 3 —
+> IMPLEMENTADA, aguardando auditoria final e decisão de congelamento do
+> usuário** (ver `docs/demurrage-producao-p1-entrega-3.md`) — ainda não
+> declarada aprovada. Produção P1 como um todo **não está declarada
+> completa**; o backend está pronto para aceitação, mas o frontend não foi
+> iniciado e requer aprovação explícita de design do usuário. Ver §6 para o
 > detalhe do congelamento e os relatórios de entrega.
 
 ## 0. Status executivo
@@ -246,13 +249,20 @@ profundidade).
 
 ### Entrega 3 — Leitura para o frontend redesenhado
 
-**STATUS: NÃO INICIADA.** Aguardando autorização explícita do usuário para
-começar — ver o relatório de status da Produção P1 para o que resta e os
-bloqueadores/pontos de validação.
+**STATUS: IMPLEMENTADA — aguardando auditoria final e decisão de
+congelamento do usuário.** Não aprovada ainda; ver
+`docs/demurrage-producao-p1-entrega-3.md` para o relatório completo
+(contratos finais, matriz de campos seguros, matriz de papel/capacidade,
+contrato de cursor, decisão de índice com evidência de EXPLAIN ANALYZE,
+totais de regressão).
 
 **Escopo:** as lacunas do §4.2 (lista de pendências com `id`; exposição de `reaberturaId`/`minutaId` pendentes) — só leitura, zero-escrita, mesma régua de paginação/assinatura/isolamento já estabelecida.
 **Gate de aceitação:** nova(s) rota(s) comprovadamente zero-escrita (mesmo padrão de fingerprint do D12 G7); isolamento organizacional idêntico ao resto de `/api/demurrage/v2`.
 **Regressão:** suíte completa + D13 UI (sem alterar a tela existente — só preparar o contrato que o redesenho futuro vai consumir).
+**Regressão desta entrega:** Demurrage Engine 1130/1130; V1 25/25; D13 UI
+66/66; `tsc --noEmit` limpo; build limpo; nenhum arquivo de frontend
+alterado. Migration aditiva: `0045_leitura_operacional_indices.sql` (dois
+índices, justificados por EXPLAIN ANALYZE — ver relatório).
 
 Nenhuma das três entregas toca cálculo, relógio, tarifa, cadência de tracking ou regra de responsabilidade/fechamento — todas são fios novos sobre serviços já congelados e já testados.
 

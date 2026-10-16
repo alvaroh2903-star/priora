@@ -225,7 +225,7 @@ test('auditoria read-only: herança da 0033 → lista as decisões que violam o 
     // definitiva (sem IF NOT EXISTS) — remove o scaffold antes para não colidir.
     await pool.query('ALTER TABLE tariff_tables DROP COLUMN ativada_em');
     const r = await runMigrations(pool);
-    assert.deepEqual(r.applied, ['0034_responsabilidade_v1_2_agregado.sql', '0035_d15a_integridade_final_reabertura.sql', '0036_d15b_integridade_dados_excecoes.sql', '0037_d15c_integridade_tarifaria_e_filas.sql', '0038_d15c_v1_1_publicacao_tarifaria.sql', '0039_tracking_schedule_claims_fencing.sql', '0040_handoff_demurrage.sql', '0041_handoff_vinculo_processo.sql', '0042_acoes_idempotencia.sql', '0043_acoes_minuta_idempotencia_atomica.sql', '0044_acoes_minuta_idempotencia_tenant_e_chave.sql']);
+    assert.deepEqual(r.applied, ['0034_responsabilidade_v1_2_agregado.sql', '0035_d15a_integridade_final_reabertura.sql', '0036_d15b_integridade_dados_excecoes.sql', '0037_d15c_integridade_tarifaria_e_filas.sql', '0038_d15c_v1_1_publicacao_tarifaria.sql', '0039_tracking_schedule_claims_fencing.sql', '0040_handoff_demurrage.sql', '0041_handoff_vinculo_processo.sql', '0042_acoes_idempotencia.sql', '0043_acoes_minuta_idempotencia_atomica.sql', '0044_acoes_minuta_idempotencia_tenant_e_chave.sql', '0045_leitura_operacional_indices.sql']);
 
     const antes = (await pool.query(IMPRESSAO)).rows[0].h;
     const avisos = await executarAuditoria(pool);

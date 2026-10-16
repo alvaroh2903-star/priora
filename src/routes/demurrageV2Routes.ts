@@ -8,6 +8,10 @@ import { buscarDetalheContainer, buscarDetalheProcesso } from '../demurrage-engi
 import { buscarTimelineProcesso } from '../demurrage-engine/leitura/timeline';
 import { normalizarFiltrosFila, buscarOpcoesFiltros } from '../demurrage-engine/leitura/filtros';
 import { ErroLeitura } from '../demurrage-engine/leitura/contrato';
+import { organizacaoDoProcesso } from '../demurrage-engine/acoes/organizacaoRecurso';
+import { buscarPendenciasProcesso, normalizarFiltrosPendencias } from '../demurrage-engine/leitura/pendenciasOperacionais';
+import { buscarReaberturas, normalizarFiltrosReaberturas } from '../demurrage-engine/leitura/reaberturasOperacionais';
+import { buscarMinutas, normalizarFiltrosMinutas } from '../demurrage-engine/leitura/minutasOperacionais';
 
 /**
  * Fase D12 (Gate G7) — rotas internas (SOMENTE LEITURA) da Demurrage V2.
@@ -20,6 +24,12 @@ import { ErroLeitura } from '../demurrage-engine/leitura/contrato';
  *
  * NENHUMA rota grava ou recalcula: todas são `GET`, e cada handler só chama
  * uma função de `leitura/*`, que só faz `SELECT`.
+ *
+ * Produção P1 (Entrega 3): acrescenta `/processos/:processoId/pendencias`,
+ * `/reaberturas` e `/minutas` — leituras operacionais que dão ao operador
+ * os IDs exigidos pelas rotas de ação já congeladas (Entrega 2). Mesma
+ * disciplina zero-escrita; paginação por cursor KEYSET assinado (nunca
+ * OFFSET), ver `leitura/cursorKeyset.ts`.
  */
 
 const RE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -120,6 +130,63 @@ export function criarDemurrageV2Router(deps: DemurrageV2RoutesDeps = {}): Router
         return;
       }
       res.json(detalhe);
+    } catch (err) {
+      tratarErroLeitura(err, res, next);
+    }
+  });
+
+  /* ====================================================================== *
+   * Produção P1 (Entrega 3) — leituras operacionais zero-escrita que dão ao
+   * operador os IDs exigidos pelas rotas de ação já congeladas (Entrega 2):
+   * pendências de um processo, reaberturas aguardando autorização, minutas
+   * aguardando validação. Mesmo padrão G6/G7 das rotas acima: `autorizarInterno`
+   * já resolveu `req.autorizacao` (organização NUNCA da requisição); cada
+   * handler só valida filtros/paginação e chama UMA função de `leitura/*`
+   * (só `SELECT`, custo constante por página, cursor keyset assinado).
+   * ====================================================================== */
+
+  /** GET /processos/:processoId/pendencias — pendências ACIONÁVEIS de um processo conhecido. */
+  router.get('/processos/:processoId/pendencias', async (req: AutorizedRequest, res: Response, next: NextFunction) => {
+    try {
+      const processoId = idOuErro(req.params.processoId, 'processoId');
+      const org = req.autorizacao!.organizationId;
+      const orgDoRecurso = await organizacaoDoProcesso(pool(), processoId);
+      if (orgDoRecurso !== org) { res.status(404).json({ error: 'nao_encontrado' }); return; }
+
+      const filtros = normalizarFiltrosPendencias(req.query as Record<string, unknown>);
+      const { limite, cursor } = paginacaoDaQuery(req.query);
+      const resposta = await buscarPendenciasProcesso(pool(), {
+        organizationId: org, processoId, filtros, limite, cursor, papel: req.autorizacao!.papel,
+      });
+      res.json(resposta);
+    } catch (err) {
+      tratarErroLeitura(err, res, next);
+    }
+  });
+
+  /** GET /reaberturas — reaberturas da organização (padrão: SOLICITADA, aguardando autorização). */
+  router.get('/reaberturas', async (req: AutorizedRequest, res: Response, next: NextFunction) => {
+    try {
+      const filtros = normalizarFiltrosReaberturas(req.query as Record<string, unknown>);
+      const { limite, cursor } = paginacaoDaQuery(req.query);
+      const resposta = await buscarReaberturas(pool(), {
+        organizationId: req.autorizacao!.organizationId, filtros, limite, cursor, papel: req.autorizacao!.papel,
+      });
+      res.json(resposta);
+    } catch (err) {
+      tratarErroLeitura(err, res, next);
+    }
+  });
+
+  /** GET /minutas — minutas da organização (padrão: RECEBIDA, aguardando validação). */
+  router.get('/minutas', async (req: AutorizedRequest, res: Response, next: NextFunction) => {
+    try {
+      const filtros = normalizarFiltrosMinutas(req.query as Record<string, unknown>);
+      const { limite, cursor } = paginacaoDaQuery(req.query);
+      const resposta = await buscarMinutas(pool(), {
+        organizationId: req.autorizacao!.organizationId, filtros, limite, cursor, papel: req.autorizacao!.papel,
+      });
+      res.json(resposta);
     } catch (err) {
       tratarErroLeitura(err, res, next);
     }

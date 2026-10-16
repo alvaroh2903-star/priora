@@ -186,6 +186,7 @@ test('migration 0006: compatibilidade com registros existentes do vínculo antig
       '0039_tracking_schedule_claims_fencing.sql', '0040_handoff_demurrage.sql', '0041_handoff_vinculo_processo.sql',
       '0042_acoes_idempotencia.sql', '0043_acoes_minuta_idempotencia_atomica.sql',
       '0044_acoes_minuta_idempotencia_tenant_e_chave.sql',
+      '0045_leitura_operacional_indices.sql',
     ]);
 
     const processos = new ProcessoRepository(pool);

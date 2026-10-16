@@ -1,0 +1,29 @@
+-- Demurrage Engine V2 — migration ADITIVA (Produção P1, Entrega 3 — leituras
+-- operacionais). 0001-0044 NÃO são reescritas. Nenhuma regra de negócio
+-- muda — só dois índices, justificados por EXPLAIN ANALYZE (evidência no
+-- relatório `docs/demurrage-producao-p1-entrega-3.md`).
+--
+-- `GET /reaberturas` e `GET /minutas` (novas nesta entrega) filtram pelo
+-- ESTADO (padrão: 'SOLICITADA'/'RECEBIDA') no nível da ORGANIZAÇÃO INTEIRA
+-- — ao contrário de `GET /processos/:id/pendencias`, que já é limitada a
+-- UM processo e usa eficientemente o índice único parcial existente
+-- (`demurrage_pendencias_aberta_unica`, migration 0028) sem precisar de
+-- nada novo.
+--
+-- Sem um índice por `estado`, o plano observado (10.000 processos/contêineres
+-- na organização, EXPLAIN ANALYZE real) varria TODOS os processos/contêineres
+-- da organização primeiro (via índice de organização já existente) e só
+-- depois filtrava por estado linha a linha — custo que cresce com o
+-- TAMANHO TOTAL da organização, não com o número de linhas que realmente
+-- importam (as poucas `SOLICITADA`/`RECEBIDA`). Com o índice, o plano passa
+-- a filtrar por estado PRIMEIRO (poucas linhas) e só então junta com
+-- processos/contêineres — medido: reaberturas 7,0ms → 0,31ms (10.000
+-- processos, 200 `SOLICITADA`); minutas 7,3ms → 0,56ms (10.000 contêineres,
+-- 200 `RECEBIDA`). Evidência completa (antes/depois) no relatório.
+--
+-- `criado_em`/`id` compostos no mesmo índice: a ORDEM OFICIAL de cada rota
+-- (`criado_em ASC, id ASC`) e o cursor keyset (`leitura/cursorKeyset.ts`)
+-- usam exatamente essas duas colunas — o índice já nasce na ordem que a
+-- consulta de página realmente percorre.
+CREATE INDEX reaberturas_estado_criado_idx ON reaberturas (estado, criado_em, id);
+CREATE INDEX minutas_estado_criado_idx ON minutas (estado_minuta, criado_em, id);
