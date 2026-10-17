@@ -18,6 +18,7 @@ informa = `null`.
 | `btp` | BTP (Santos/SP) | `POST /ConsultasLivres/ListaAtracacao` (jTable) | Exige a sessão da página + o token antifalsificação do formulário (sem eles: 302). O reCAPTCHA v3 não é exigido. Datas-coringa (31/12/2030…) viram null. |
 | `tecon-riogrande` | Tecon Rio Grande (Wilson Sons, RS) | `api.teconline.com.br/API/ProgNavio` (Navis N4) | Página e API atrás da **Akamai** → API de Scrape da Scrapfly com ASP, **sem navegador** (`render_js=false`): 1 crédito por consulta. `teconline.com.br` (com ou sem www) é o app de **Rio Grande** ("RIG"), não de Salvador. |
 | `salvador` | Porto de Salvador (CODEBA, BA) — inclui o **Tecon Salvador** | Página pública da CODEBA (`site.php?secao=tportos_salvador`) | Tabelas ESPERADOS/ATRACADOS. Colunas IMO e Viagem estão comentadas no HTML (tirar comentários antes de ler). ISO-8859-1 sem charset. Só previsões (ETA/ETB/ETD) — ATA/ATB/ATD null. Aratu/Ilhéus têm o mesmo formato (`fetchCodeba`), mas são granéis. |
+| `portonave` | Portonave (Navegantes/SC) | JSON `extranet.portonave.com.br/lineup/list/{atracados,esperados,saidos,omitidos}` | A página fica atrás do WAF da XLabs (impressão digital do navegador), mas o JSON responde a requisição simples com o cabeçalho `x-crypt: false` (o mesmo que a página pública manda). Esperados trazem `LINEUP_CONFIG`: `mostraX=false` = a página mostra "a confirmar" → null; `dataX` substitui o bruto; sem config, o deadline do esperado é "a confirmar" → null. Se o terminal ligar a cifra (`{cryptData}`), a fonte acusa erro em vez de inventar. |
 
 ## Uso
 
@@ -32,5 +33,4 @@ informa = `null`.
 
 | Porto | Bloqueio | Caminho |
 |---|---|---|
-| Portonave | WAF XLabs com impressão digital | navegador remoto (difícil) |
 | JBS Terminais | página 404 do lado deles | aguardar / portal do cliente |

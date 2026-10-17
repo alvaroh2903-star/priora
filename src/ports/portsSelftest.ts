@@ -8,6 +8,7 @@ import { parseSantosBrasil } from './santosBrasil';
 import { parseBtp, btpFormValues } from './btp';
 import { parseTeconRioGrande, extractJson } from './teconRioGrande';
 import { parseCodeba } from './codeba';
+import { parsePortonaveList } from './portonave';
 import { matchVessel, normVessel, PORTS } from './index';
 
 /**
@@ -132,8 +133,26 @@ check('sem datas reais (a página só publica previsões)', sv.every((c) => c.at
 check('Tecon Salvador presente', sv.some((c) => c.terminal === 'TECON SALVADOR S/A'));
 check('ISO-8859-1 decodificado (Ç/Ã)', new TextDecoder('latin1').decode(Uint8Array.from([0x50, 0x52, 0x4f, 0x47, 0x52, 0x41, 0x4d, 0x41, 0xc7, 0xc3, 0x4f])) === 'PROGRAMAÇÃO');
 
+console.log('[selftest] Portonave');
+const pnFx = JSON.parse(fx('portonave.json')) as Record<string, Array<Record<string, unknown>>>;
+const pn = Object.entries(pnFx).flatMap(([list, rows]) => parsePortonaveList(rows, list));
+const pns = (s: string) => pn.filter((c) => c.status === s);
+check('listas → status (atracado, esperado, desatracado, omitido)', pns('atracado').length === 1 && pns('esperado').length === 3 && pns('desatracado').length === 2 && pns('omitido').length === 1, pn.map((c) => c.status));
+const cosco = pns('atracado')[0];
+check('atracado: chegada e atracação reais, viagem e armador', Boolean(cosco?.ata && cosco?.atb) && cosco?.viagem === '011E' && cosco?.armador === 'COS', cosco);
+check('saído: desatracação real (ATD)', pns('desatracado').every((c) => c.atd), pns('desatracado'));
+const escondido = pn.find((c) => c.navio === 'MSC LETIZIA');
+check('mostraGateDry=false → gate null ("a confirmar" na página)', escondido !== undefined && escondido.aberturaGate === null, escondido?.aberturaGate);
+const ajustado = pn.find((c) => c.navio === 'LOG IN EXPERIENCE');
+check('dataGateDry ajustada pelo terminal substitui o bruto', ajustado?.aberturaGate === '2026-10-14T11:00:00-03:00', ajustado?.aberturaGate);
+const semCfg = pn.find((c) => c.navio === 'BREMERHAVEN EXPRESS');
+check('esperado sem LINEUP_CONFIG: deadline null (página mostra "a confirmar")', semCfg !== undefined && semCfg.deadline === null, semCfg?.deadline);
+const chegou = parsePortonaveList([{ ...pnFx.esperados[0], CHEGADA: '2026-10-17 22:00:00.0' }], 'esperados')[0];
+check('esperado que já chegou à barra → ao_largo', chegou?.status === 'ao_largo' && chegou?.ata === '2026-10-17T22:00:00-03:00', chegou);
+check('omitido não tem atracação real', pns('omitido').every((c) => c.atb === null));
+
 console.log('[selftest] registro');
-check('9 fontes de porto ligadas', PORTS.length === 9, PORTS.map((p) => p.id));
+check('10 fontes de porto ligadas', PORTS.length === 10, PORTS.map((p) => p.id));
 check('ids únicos', new Set(PORTS.map((p) => p.id)).size === PORTS.length);
 
 console.log('[selftest] busca de navio');
@@ -144,7 +163,7 @@ check('viagem pelo código do terminal', matchVessel(it, 'MAERSK KARUN', 'MSKKA6
 check('acha na APPA por nome', matchVessel(ap, 'Xiamen Express').length === 1);
 check('nome vazio → nada', matchVessel(it, '').length === 0);
 
-if (failures === 0) console.log('\n[selftest] ✅ line-up dos portos (Itapoá, Rio Brasil, APPA, Santos Brasil, BTP, Tecon Rio Grande, Salvador) OK');
+if (failures === 0) console.log('\n[selftest] ✅ line-up dos portos (Itapoá, Rio Brasil, APPA, Santos Brasil, BTP, Tecon Rio Grande, Salvador, Portonave) OK');
 else {
   console.log(`\n[selftest] ❌ ${failures} verificação(ões) falharam`);
   process.exit(1);

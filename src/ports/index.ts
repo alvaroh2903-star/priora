@@ -6,6 +6,7 @@ import { fetchSantosBrasil } from './santosBrasil';
 import { fetchBtp } from './btp';
 import { fetchTeconRioGrande } from './teconRioGrande';
 import { fetchCodeba } from './codeba';
+import { fetchPortonave } from './portonave';
 
 /**
  * Priora — Registro dos PORTOS com line-up automático + cache.
@@ -35,6 +36,7 @@ export const PORTS: PortSource[] = [
   // Akamai: vai pela API de Scrape da Scrapfly (1 crédito/consulta, sem navegador).
   { id: 'tecon-riogrande', name: 'Tecon Rio Grande (Wilson Sons)', uf: 'RS', cobre: 'Terminal de contêineres Tecon Rio Grande', fetchCalls: () => fetchTeconRioGrande() },
   { id: 'salvador', name: 'Porto de Salvador (CODEBA)', uf: 'BA', cobre: 'Todo o Porto de Salvador, inclusive o Tecon Salvador (Wilson Sons)', fetchCalls: () => fetchCodeba('salvador') },
+  { id: 'portonave', name: 'Portonave (Navegantes)', uf: 'SC', cobre: 'Terminal de contêineres Portonave, Navegantes', fetchCalls: () => fetchPortonave() },
 ];
 
 /**
