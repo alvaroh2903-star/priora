@@ -85,7 +85,8 @@ export async function fetchTeconRioGrande(now = new Date()): Promise<PortCall[]>
     country: 'br',
     headers: { Origin: SITE.replace(/\/$/, ''), Referer: SITE },
     costBudget: 30,
-    timeoutMs: 90_000,
+    // Sem `timeout`: a Scrapfly recusa tempo customizado com a repetição
+    // automática ligada (ERR::SCRAPE::CONFIG_ERROR, visto em 17/10/2026).
   });
   if (!r.ok) throw new Error(`Tecon Rio Grande: ${r.error || `HTTP ${r.upstreamStatus}`}`);
   return parseTeconRioGrande(extractJson(r.html));
