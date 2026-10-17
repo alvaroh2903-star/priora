@@ -4,6 +4,7 @@ import { fetchRioBrasil } from './rioBrasil';
 import { fetchAppa } from './appa';
 import { fetchSantosBrasil } from './santosBrasil';
 import { fetchBtp } from './btp';
+import { fetchTeconRioGrande } from './teconRioGrande';
 
 /**
  * Priora — Registro dos PORTOS com line-up automático + cache.
@@ -30,6 +31,8 @@ export const PORTS: PortSource[] = [
   { id: 'btp', name: 'BTP (Santos)', uf: 'SP', cobre: 'Brasil Terminal Portuário, Santos', fetchCalls: () => fetchBtp() },
   { id: 'santosbrasil-imbituba', name: 'Tecon Imbituba (Santos Brasil)', uf: 'SC', cobre: 'Terminal de contêineres da Santos Brasil em Imbituba', fetchCalls: () => fetchSantosBrasil('tecon-imbituba') },
   { id: 'santosbrasil-vila-do-conde', name: 'Tecon Vila do Conde (Santos Brasil)', uf: 'PA', cobre: 'Terminal de contêineres da Santos Brasil em Vila do Conde', fetchCalls: () => fetchSantosBrasil('tecon-vila-do-conde') },
+  // Akamai: vai pela API de Scrape da Scrapfly (1 crédito/consulta, sem navegador).
+  { id: 'tecon-riogrande', name: 'Tecon Rio Grande (Wilson Sons)', uf: 'RS', cobre: 'Terminal de contêineres Tecon Rio Grande', fetchCalls: () => fetchTeconRioGrande() },
 ];
 
 /**

@@ -6,6 +6,7 @@ import { parseRioBrasil, extractApimKey, rioBrasilBundleUrl } from './rioBrasil'
 import { parseAppa } from './appa';
 import { parseSantosBrasil } from './santosBrasil';
 import { parseBtp, btpFormValues } from './btp';
+import { parseTeconRioGrande, extractJson } from './teconRioGrande';
 import { matchVessel, normVessel, PORTS } from './index';
 
 /**
@@ -107,8 +108,20 @@ check('id e token do formulário', form.id === '999' && form.token === 'TOKEN-FA
 check('formulário sem token → null', btpFormValues('<input id="hdnId" value="1">').token === null);
 check('resposta não-OK → []', parseBtp({ Result: 'ERROR' }).length === 0);
 
+console.log('[selftest] Tecon Rio Grande (Navis N4, via Scrapfly)');
+const tr = parseTeconRioGrande(JSON.parse(fx('tecon-riogrande.json')));
+const trs = (s: string) => tr.filter((c) => c.status === s);
+check('6 escalas: 2 esperadas, 1 atracada (50COMPLETE), 2 desatracadas, 1 omitida', tr.length === 6 && trs('esperado').length === 2 && trs('atracado').length === 1 && trs('desatracado').length === 2 && trs('omitido').length === 1, tr.map((c) => c.status));
+const fechado = tr.find((c) => c.situacaoOriginal?.includes('70CLOSED'));
+check('fechado: chegada à barra, atracação e partida reais', Boolean(fechado?.ata && fechado?.atb && fechado?.atd), fechado);
+check('viagem sem o código do navio ("BTD0641N" → "0641N")', tr.every((c) => !c.viagem || !c.viagemTerminal || c.viagemTerminal.endsWith(c.viagem)), tr.map((c) => [c.viagemTerminal, c.viagem]));
+check('cancelada não tem atracação/partida real', trs('omitido').every((c) => c.atb === null && c.atd === null));
+check('nome sem espaço sobrando ("WIELAND ")', tr.every((c) => c.navio === c.navio.trim()));
+check('IMO pelo LloydsId', tr.every((c) => /^\d{7}$/.test(c.imo || '')), tr.map((c) => c.imo));
+check('JSON embrulhado em <pre> com &quot;', (extractJson('<html><pre>{&quot;Data&quot;:[]}</pre></html>') as { Data: unknown[] }).Data.length === 0);
+
 console.log('[selftest] registro');
-check('7 fontes de porto ligadas', PORTS.length === 7, PORTS.map((p) => p.id));
+check('8 fontes de porto ligadas', PORTS.length === 8, PORTS.map((p) => p.id));
 check('ids únicos', new Set(PORTS.map((p) => p.id)).size === PORTS.length);
 
 console.log('[selftest] busca de navio');
@@ -119,7 +132,7 @@ check('viagem pelo código do terminal', matchVessel(it, 'MAERSK KARUN', 'MSKKA6
 check('acha na APPA por nome', matchVessel(ap, 'Xiamen Express').length === 1);
 check('nome vazio → nada', matchVessel(it, '').length === 0);
 
-if (failures === 0) console.log('\n[selftest] ✅ line-up dos portos (Itapoá, Rio Brasil, APPA, Santos Brasil, BTP) OK');
+if (failures === 0) console.log('\n[selftest] ✅ line-up dos portos (Itapoá, Rio Brasil, APPA, Santos Brasil, BTP, Tecon Rio Grande) OK');
 else {
   console.log(`\n[selftest] ❌ ${failures} verificação(ões) falharam`);
   process.exit(1);

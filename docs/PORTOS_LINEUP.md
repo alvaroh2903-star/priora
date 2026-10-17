@@ -16,6 +16,7 @@ informa = `null`.
 | `paranagua` | Porto de Paranaguá (APPA) | Relatório HTML público "Line Up" | Uma tabela por situação. Cobre **todos os terminais, inclusive a TCP** (coluna Operador). Substitui praticoszp21.com.br (domínio tomado — abre loja falsa). |
 | `santosbrasil-santos` · `santosbrasil-imbituba` · `santosbrasil-vila-do-conde` | Santos Brasil (Tecon Santos/SP, Imbituba/SC, Vila do Conde/PA) | JSON `/v2021/lista-de-atracacao/pesquisa` do site | A página fica atrás da Akamai para navegador automatizado, mas o JSON responde a requisição simples. O reCAPTCHA só esconde a tabela na tela (o token não vai ao servidor). Resposta limitada a 100 linhas → janelas de 15 dias. Datas `/Date(ms)/` em UTC. |
 | `btp` | BTP (Santos/SP) | `POST /ConsultasLivres/ListaAtracacao` (jTable) | Exige a sessão da página + o token antifalsificação do formulário (sem eles: 302). O reCAPTCHA v3 não é exigido. Datas-coringa (31/12/2030…) viram null. |
+| `tecon-riogrande` | Tecon Rio Grande (Wilson Sons, RS) | `api.teconline.com.br/API/ProgNavio` (Navis N4) | Página e API atrás da **Akamai** → API de Scrape da Scrapfly com ASP, **sem navegador** (`render_js=false`): 1 crédito por consulta. `teconline.com.br` (com ou sem www) é o app de **Rio Grande** ("RIG"), não de Salvador. |
 
 ## Uso
 
@@ -30,6 +31,6 @@ informa = `null`.
 
 | Porto | Bloqueio | Caminho |
 |---|---|---|
-| Tecon (Wilson Sons — Salvador/Rio Grande) | Akamai na página e na API (`api.teconline.com.br/API/ProgNavio`) | API de Scrape da Scrapfly (como a ZIM). `teconline.com.br` sem www serve o app configurado para Rio Grande ("RIG") |
+| Tecon Salvador (Wilson Sons, BA) | portal próprio (o teconline.com.br é o de Rio Grande) | achar o endereço do line-up de Salvador |
 | Portonave | WAF XLabs com impressão digital | navegador remoto (difícil) |
 | JBS Terminais | página 404 do lado deles | aguardar / portal do cliente |
