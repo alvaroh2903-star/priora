@@ -4,7 +4,9 @@ import { toIsoBrt } from './dates';
 import { parseItapoa, extractItapoaToken, itapoaScriptUrls } from './itapoa';
 import { parseRioBrasil, extractApimKey, rioBrasilBundleUrl } from './rioBrasil';
 import { parseAppa } from './appa';
-import { matchVessel, normVessel } from './index';
+import { parseSantosBrasil } from './santosBrasil';
+import { parseBtp, btpFormValues } from './btp';
+import { matchVessel, normVessel, PORTS } from './index';
 
 /**
  * Priora — Self-test OFFLINE do line-up dos PORTOS, com respostas REAIS
@@ -78,6 +80,37 @@ check('JS do site, bundle minificado primeiro, sem terceiros', scripts.length ==
 check('chave do Rio Brasil', extractApimKey('headers:{"Content-Type":"application/json","Ocp-Apim-Subscription-Key":"0123456789abcdef0123456789abcdef"}') === '0123456789abcdef0123456789abcdef');
 check('bundle do Rio Brasil', rioBrasilBundleUrl('<script defer="defer" src="/static/js/main.766564d7.js"></script>') === 'https://servicosabertosriobrasil.azurewebsites.net/static/js/main.766564d7.js');
 
+console.log('[selftest] datas "/Date(ms)/" do .NET (UTC → -03:00)');
+check('/Date(1791812160000)/ → 12/10 10:36 BRT (bate com a "PrevisaoChegada" em texto da BTP)', toIsoBrt('/Date(1791812160000)/') === '2026-10-12T10:36:00-03:00', toIsoBrt('/Date(1791812160000)/'));
+check('texto com segundos "12/10/2026 10:36:00"', toIsoBrt('12/10/2026 10:36:00') === '2026-10-12T10:36:00-03:00');
+
+console.log('[selftest] Santos Brasil (Tecon Santos)');
+const sb = parseSantosBrasil(JSON.parse(fx('santosbrasil.json')), 'tecon-santos');
+const sbs = (s: string) => sb.filter((c) => c.status === s).length;
+check('6 escalas: 2 desatracadas, 1 atracada, 1 ao largo, 2 esperadas', sb.length === 6 && sbs('desatracado') === 2 && sbs('atracado') === 1 && sbs('ao_largo') === 1 && sbs('esperado') === 2, sb.map((c) => c.status));
+check('portId/terminal da unidade', sb.every((c) => c.portId === 'santosbrasil-santos' && /Tecon Santos/.test(c.terminal || '')));
+check('viagem sem a repetição ("251N   251N" → "251N")', sb.every((c) => !c.viagem || !/\s/.test(c.viagem)), sb.map((c) => c.viagem));
+const sbAtr = sb.find((c) => c.status === 'atracado');
+check('atracado: ATB real, sem ATD', Boolean(sbAtr?.atb) && sbAtr?.atd === null, sbAtr);
+check('esperado: sem chegada real (não inventa)', sb.filter((c) => c.status === 'esperado').every((c) => c.ata === null && c.atb === null));
+check('resposta com Success=false → []', parseSantosBrasil({ Success: false }, 'tecon-santos').length === 0);
+
+console.log('[selftest] BTP');
+const bt = parseBtp(JSON.parse(fx('btp.json')));
+check('8 escalas lidas', bt.length === 8, bt.length);
+check('situação pelas datas reais', bt.filter((c) => c.status === 'atracado').length === 2 && bt.filter((c) => c.status === 'desatracado').length === 2);
+const coringa = bt.find((c) => c.navio === 'TBN SANTANA');
+check('data-coringa 01/01/2030 vira null (não é previsão)', coringa !== undefined && coringa.eta === null, coringa?.eta);
+check('agência, berço e serviço', bt.filter((c) => c.status !== 'esperado').every((c) => c.agencia && c.berco && c.servico));
+const form = btpFormValues(fx('btp-form.html'));
+check('id e token do formulário', form.id === '999' && form.token === 'TOKEN-FALSO-123', form);
+check('formulário sem token → null', btpFormValues('<input id="hdnId" value="1">').token === null);
+check('resposta não-OK → []', parseBtp({ Result: 'ERROR' }).length === 0);
+
+console.log('[selftest] registro');
+check('7 fontes de porto ligadas', PORTS.length === 7, PORTS.map((p) => p.id));
+check('ids únicos', new Set(PORTS.map((p) => p.id)).size === PORTS.length);
+
 console.log('[selftest] busca de navio');
 check('nome normalizado', normVessel('Maersk  Karun!') === 'MAERSKKARUN');
 check('acha por nome (minúsculo) + viagem', matchVessel(it, 'maersk karun', '638n').length === 1);
@@ -86,7 +119,7 @@ check('viagem pelo código do terminal', matchVessel(it, 'MAERSK KARUN', 'MSKKA6
 check('acha na APPA por nome', matchVessel(ap, 'Xiamen Express').length === 1);
 check('nome vazio → nada', matchVessel(it, '').length === 0);
 
-if (failures === 0) console.log('\n[selftest] ✅ line-up dos portos (Itapoá, Rio Brasil, APPA) OK');
+if (failures === 0) console.log('\n[selftest] ✅ line-up dos portos (Itapoá, Rio Brasil, APPA, Santos Brasil, BTP) OK');
 else {
   console.log(`\n[selftest] ❌ ${failures} verificação(ões) falharam`);
   process.exit(1);

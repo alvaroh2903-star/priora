@@ -43,7 +43,7 @@ leia-o para o desenho pretendido. Este arquivo resume o **estado atual** e as
   `/health/fix-login` só com `DIAG_FIX_LOGIN_ENABLED=true`. Login: 10 tentativas/15 min.
 - **Line-up dos portos** (`src/ports/`, doc [docs/PORTOS_LINEUP.md](docs/PORTOS_LINEUP.md)): Itapoá e Rio
   Brasil (APIs JSON dos próprios sites; token/chave lidos do JS público em execução, nunca no código)
-  e Paranaguá/APPA (HTML; cobre a TCP). `GET /api/ports/*` (login Priora), diag `/health/port-lineup`.
+  e Paranaguá/APPA (HTML; cobre a TCP), Santos Brasil (Tecon Santos/Imbituba/Vila do Conde) e BTP. `GET /api/ports/*` (login Priora), diag `/health/port-lineup`.
 - **Lotes em duas pistas** (`enrichMany`/`mapLanes`): CMA/ZIM (API da Scrapfly) em paralelo
   (`BOT_API_CONCURRENCY`, 3) junto da pista de navegador (`BOT_CONCURRENCY`, 1).
 

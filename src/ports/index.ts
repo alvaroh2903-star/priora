@@ -2,6 +2,8 @@ import { PortCall, PortLineup } from './types';
 import { fetchItapoa } from './itapoa';
 import { fetchRioBrasil } from './rioBrasil';
 import { fetchAppa } from './appa';
+import { fetchSantosBrasil } from './santosBrasil';
+import { fetchBtp } from './btp';
 
 /**
  * Priora — Registro dos PORTOS com line-up automático + cache.
@@ -24,6 +26,27 @@ export const PORTS: PortSource[] = [
   { id: 'itapoa', name: 'Porto Itapoá', uf: 'SC', cobre: 'Terminal Porto Itapoá', fetchCalls: () => fetchItapoa() },
   { id: 'riobrasil', name: 'Rio Brasil Terminal', uf: 'RJ', cobre: 'Terminal Rio Brasil (Porto do Rio)', fetchCalls: () => fetchRioBrasil() },
   { id: 'paranagua', name: 'Porto de Paranaguá (APPA)', uf: 'PR', cobre: 'Todos os terminais de Paranaguá, inclusive a TCP', fetchCalls: () => fetchAppa() },
+  { id: 'santosbrasil-santos', name: 'Tecon Santos (Santos Brasil)', uf: 'SP', cobre: 'Terminal de contêineres da Santos Brasil em Santos', fetchCalls: () => fetchSantosBrasil('tecon-santos') },
+  { id: 'btp', name: 'BTP (Santos)', uf: 'SP', cobre: 'Brasil Terminal Portuário, Santos', fetchCalls: () => fetchBtp() },
+  { id: 'santosbrasil-imbituba', name: 'Tecon Imbituba (Santos Brasil)', uf: 'SC', cobre: 'Terminal de contêineres da Santos Brasil em Imbituba', fetchCalls: () => fetchSantosBrasil('tecon-imbituba') },
+  { id: 'santosbrasil-vila-do-conde', name: 'Tecon Vila do Conde (Santos Brasil)', uf: 'PA', cobre: 'Terminal de contêineres da Santos Brasil em Vila do Conde', fetchCalls: () => fetchSantosBrasil('tecon-vila-do-conde') },
+];
+
+/**
+ * Domínios dos sites de porto (os já ligados e os próximos) — o diagnóstico
+ * (`?url=`) pode abri-los além dos portais de armador (ver diagUrlPolicy).
+ */
+export const PORT_SITE_DOMAINS = [
+  'portoitapoa.com',
+  'servicosabertosriobrasil.azurewebsites.net',
+  'servicosabertosapim.azure-api.net',
+  'appa.pr.gov.br',
+  'santosbrasil.com.br',
+  'btp.com.br',
+  'teconline.com.br',
+  'tcp.com.br',
+  'portonave.com.br',
+  'jbsterminais.com.br',
 ];
 
 const CACHE_TTL_MS = Math.max(1, parseInt(process.env.PORTS_CACHE_MIN || '30', 10)) * 60_000;

@@ -19,10 +19,25 @@ function build(y: number, mo: number, d: number, h?: number, mi?: number, s?: nu
   return `${date}T${pad(h)}:${pad(mi ?? 0)}:${pad(s ?? 0)}${OFFSET}`;
 }
 
+/**
+ * Instante UTC (epoch ms) → ISO no horário de Brasília. É o "/Date(ms)/" do
+ * .NET (Santos Brasil, BTP): o valor é UTC de verdade — as próprias páginas o
+ * convertem para a hora local do navegador (conferido em 17/10: "Chegada"
+ * /Date/ da BTP bate com a "PrevisaoChegada" em texto, hora local).
+ */
+export function epochMsToIsoBrt(ms: number): string | null {
+  if (!Number.isFinite(ms)) return null;
+  const d = new Date(ms - 3 * 3_600_000); // UTC → -03:00
+  return build(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate(), d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds());
+}
+
 export function toIsoBrt(v: unknown): string | null {
   if (v === null || v === undefined) return null;
   const t = String(v).trim();
   if (!t) return null;
+  // "/Date(1791812160000)/" (.NET)
+  const dn = t.match(/^\/?Date\((-?\d+)(?:[+-]\d{4})?\)\/?$/);
+  if (dn) return epochMsToIsoBrt(+dn[1]);
   // 2026-09-15[ T]05:30[:00]
   let m = t.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?/);
   if (m) return build(+m[1], +m[2], +m[3], m[4] !== undefined ? +m[4] : undefined, m[5] !== undefined ? +m[5] : undefined, m[6] !== undefined ? +m[6] : undefined);

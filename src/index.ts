@@ -923,7 +923,7 @@ app.get('/health/scrape-sb-async', (req, res) => {
  * parsers da produção.
  *
  * Uso: /health/scrapfly-api-async?token=<DIAG_TOKEN>&ref=<BL>[&url=][&find=][&htmlwin=]
- *      [&scenario=<base64url(JSON)>][&wait=<ms>][&country=br][&budget=<créditos>]
+ *      [&scenario=<base64url(JSON)>][&wait=<ms>][&country=br][&budget=<créditos>][&render=0][&origin=<url>]
  */
 app.get('/health/scrapfly-api-async', (req, res) => {
   const token = requireDiagToken(req, res);
@@ -960,10 +960,14 @@ app.get('/health/scrapfly-api-async', (req, res) => {
     const r = await scrapflyScrape({
       url,
       jsScenario,
-      renderingWait: wait || undefined,
+      renderingWait: q('render') === '0' ? undefined : wait || undefined,
       country: q('country') || undefined,
       costBudget: parseInt(q('budget') || '0', 10) || undefined,
       timeoutMs: 150_000,
+      // render=0: sem navegador (API JSON de SPA atrás de anti-bot). origin=<url>:
+      // manda Origin/Referer do site, como a própria SPA faria.
+      renderJs: q('render') === '0' ? false : undefined,
+      headers: q('origin') ? { Origin: q('origin').replace(/\/$/, ''), Referer: q('origin') } : undefined,
     });
     let events: unknown[] = [];
     let containers: unknown[] = [];

@@ -45,6 +45,9 @@ for (const u of [
 ]) {
   check(`libera ${new URL(u).hostname}`, isAllowedDiagUrl(u));
 }
+check('site de porto liberado (Tecon/Wilson Sons)', isAllowedDiagUrl('https://www.teconline.com.br/programacao-navios'));
+check('API do porto liberada (api.teconline)', isAllowedDiagUrl('https://api.teconline.com.br/API/ProgNavio'));
+check('host do Rio Brasil sim, outro *.azurewebsites.net não', isAllowedDiagUrl('https://servicosabertosriobrasil.azurewebsites.net/Lineup') && !isAllowedDiagUrl('https://evil.azurewebsites.net/'));
 for (const u of [
   'https://example.com/',
   'http://www.maersk.com/tracking/1', // sem https

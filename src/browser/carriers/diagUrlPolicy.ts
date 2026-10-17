@@ -1,4 +1,5 @@
 import { CARRIERS } from './registry';
+import { PORT_SITE_DOMAINS } from '../../ports';
 
 /**
  * Priora — quais URLs as rotas de DIAGNÓSTICO podem abrir (`?url=`).
@@ -6,7 +7,8 @@ import { CARRIERS } from './registry';
  * Sem isto, quem tivesse o DIAG_TOKEN usava o nosso navegador remoto (e os
  * créditos da Scrapfly/Bright Data) para abrir QUALQUER site — inclusive
  * endereços internos. Agora só os domínios dos portais dos armadores do
- * registro (tirados do `trackingUrl` e do `buildTrackingUrl` de cada um) e os
+ * registro (tirados do `trackingUrl` e do `buildTrackingUrl` de cada um), os
+ * sites dos PORTOS (PORT_SITE_DOMAINS, src/ports) e os
  * que o operador liberar em `DIAG_URL_ALLOW` (lista separada por vírgula, ex.:
  * `example.com,httpbin.org`). Só https.
  */
@@ -61,10 +63,10 @@ export function isAllowedDiagUrl(raw: string): boolean {
   }
   if (u.protocol !== 'https:') return false;
   const host = u.hostname.toLowerCase();
-  const allowed = [...carrierPortalDomains(), ...extraAllowed()];
+  const allowed = [...carrierPortalDomains(), ...PORT_SITE_DOMAINS, ...extraAllowed()];
   return allowed.some((d) => host === d || host.endsWith(`.${d}`));
 }
 
 /** Mensagem padrão de recusa (rota de diagnóstico). */
 export const DIAG_URL_REFUSED =
-  'url fora dos portais de armador. Use ref=<BL> ou, para liberar outro domínio, defina DIAG_URL_ALLOW no ambiente.';
+  'url fora dos portais de armador e dos sites de porto. Use ref=<BL> ou, para liberar outro domínio, defina DIAG_URL_ALLOW no ambiente.';

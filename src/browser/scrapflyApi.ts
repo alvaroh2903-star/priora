@@ -49,6 +49,8 @@ export interface ScrapflyScrapeOptions {
   timeoutMs?: number;
   /** Teto de créditos desta chamada (proteção de custo). */
   costBudget?: number;
+  /** Cabeçalhos extras enviados ao site (ex.: Origin/Referer de uma API de SPA). */
+  headers?: Record<string, string>;
 }
 
 export interface ScrapflyScrapeResult {
@@ -83,6 +85,7 @@ export async function scrapflyScrape(opts: ScrapflyScrapeOptions): Promise<Scrap
   if (opts.proxyPool) p.set('proxy_pool', opts.proxyPool);
   if (opts.timeoutMs) p.set('timeout', String(opts.timeoutMs));
   if (opts.costBudget) p.set('cost_budget', String(opts.costBudget));
+  for (const [k, v] of Object.entries(opts.headers || {})) p.set(`headers[${k}]`, v);
 
   try {
     const res = await fetch(`${API}?${p.toString()}`, {
