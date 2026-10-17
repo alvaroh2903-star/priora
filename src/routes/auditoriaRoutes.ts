@@ -21,8 +21,15 @@ import {
   consolidarPorConhecimento,
   docIlegivelPreAlerta,
   pareceArmadorPorNome,
+  mistralOcrLigado,
+  modoExtracaoPb001,
+  indisponibilidadePreAlerta,
+  versaoPipelineDocPb001,
+  ordenarPaginasDoDocumento,
+  assinaturaFontesProcesso,
+  chaveResultadoPreAlerta,
 } from '../auditoria/preAlerta/extracaoPreAlerta';
-import { executarPreAlerta, DocPreAlerta, TipoDoc } from '../auditoria/preAlerta';
+import { executarPreAlerta, DocPreAlerta, TipoDoc, MOTOR_PB001_VERSAO } from '../auditoria/preAlerta';
 import { executarCeMercante, ehComponenteCE, numeroBaseDoNome } from '../auditoria/ceMercante';
 import { mapLimit } from '../browser/carriers/concurrency';
 import {
@@ -832,11 +839,19 @@ const preAlertaCache = new Map<string, { sig: string; payload: unknown }>();
 
 auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, next) => {
   try {
-    if (!isAiConfigured()) {
-      return res.status(503).json({
-        error: 'A leitura de documentos (OCR) exige a IA. Defina GEMINI_API_KEY no servidor.',
-      });
-    }
+    // Fase 2: o modo determinístico EXIGE o OCR do Mistral e NUNCA usa o Gemini
+    // (sem Mistral → 503 explícito; nada de visão do Gemini). O Gemini só entra com
+    // o rollback legado explícito (GEMINI_LEGACY_STRUCTURING_FALLBACK_ENABLED=true).
+    const modoExtracao = modoExtracaoPb001();
+    const indisponivel = indisponibilidadePreAlerta({
+      modo: modoExtracao,
+      mistralLigado: mistralOcrLigado(),
+      geminiConfigurado: isAiConfigured(),
+    });
+    if (indisponivel) return res.status(503).json({ error: indisponivel });
+    // Versão do pipeline que deriva o documento: separa caches de documento/resultado
+    // produzidos pelo parser determinístico dos produzidos pelo caminho legado.
+    const versaoDoc = versaoPipelineDocPb001({ modo: modoExtracao });
     const alvoProcesso = String(req.params.processo || '').toUpperCase();
     const alvoBase = processBase(alvoProcesso);
     if (config.auditoriaOcultar.includes(alvoBase)) {
@@ -860,13 +875,17 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
         !nomeNaoConhecimento(d.nome) &&
         isDocumentAttachment(d.nome, d.contentType, false),
     );
-    const candidatos = [...bls, ...genericos].slice(0, 8); // permite multi-House
+    // Ordem DETERMINÍSTICA (independe da ordem do Graph), mantendo BLs antes dos genéricos.
+    const idDoc = (d: DocRef) => ({ nome: d.nome, messageId: d.emailId, attachmentId: d.attachmentId });
+    const candidatos = [...ordenarPaginasDoDocumento(bls, idDoc), ...ordenarPaginasDoDocumento(genericos, idDoc)].slice(0, 8); // permite multi-House
 
     if (candidatos.length === 0) {
       return res.json({ processo: proc.processo, cliente: proc.cliente, semDocumentos: true, resultado: null });
     }
 
-    const sig = candidatos.map((d) => `${d.tipo}:${d.nome}`).sort().join('|');
+    // Assinatura das FONTES por identidade estável (tipo + e-mail + anexo + nome):
+    // um BL reenviado com o MESMO nome não recebe a auditoria antiga.
+    const sig = assinaturaFontesProcesso(candidatos);
     const refresh = String(req.query.refresh || '') === '1';
     // ?debug=1 → raio-x por documento (ver abaixo). NUNCA usa o cache do payload
     // (senão devolveria uma auditoria antiga, sem o diagnóstico) e não o grava.
@@ -876,11 +895,21 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
     // uma chave compartilhada entre contas.
     const escopoConta = req.session.homeAccountId;
     const chaveMem = escopoConta ? `${escopoConta}:${alvoBase}` : null;
+    // Resultado já comparado: chave inclui o pipeline do documento e a versão do
+    // MOTOR — mudou parser/regras → recompara (sem OCR); nunca serve resultado de
+    // outro pipeline.
+    const sigResultado = `${sig}|${versaoDoc ?? 'legado'}|${MOTOR_PB001_VERSAO}`;
     const chaveResultado = escopoConta
-      ? `resultado:v1:${escopoConta}:prealerta:${alvoBase}:${sig}`
+      ? chaveResultadoPreAlerta({
+          escopoConta,
+          processoBase: alvoBase,
+          assinaturaFontes: sig,
+          versaoDoc,
+          motor: MOTOR_PB001_VERSAO,
+        })
       : null;
     const cached = chaveMem ? preAlertaCache.get(chaveMem) : undefined;
-    if (!refresh && !debug && cached && cached.sig === sig) {
+    if (!refresh && !debug && cached && cached.sig === sigResultado) {
       return res.json(cached.payload);
     }
     // Cache PERSISTENTE do resultado (Supabase): sobrevive a deploy/sleep. Um
@@ -888,7 +917,7 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
     if (!refresh && !debug && chaveResultado && chaveMem) {
       const salvo = await lerCacheJson<Record<string, unknown>>(chaveResultado);
       if (salvo) {
-        preAlertaCache.set(chaveMem, { sig, payload: salvo });
+        preAlertaCache.set(chaveMem, { sig: sigResultado, payload: salvo });
         return res.json(salvo);
       }
     }
@@ -935,8 +964,12 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
       erroFonte: ErroFonte;
       estruturacaoPendente: boolean | null;
       persistenceStatus: string | null;
+      modoExtracao: string;
     }> = [];
-    const extraidos = await mapLimit(listaGrupos, 3, async (grupo) => {
+    const extraidos = await mapLimit(listaGrupos, 3, async (grupoBruto) => {
+      // Páginas do documento em ordem DETERMINÍSTICA (nº de página no nome → nome → ids):
+      // o nome-base e a classificação não dependem da ordem do Graph.
+      const grupo = ordenarPaginasDoDocumento(grupoBruto, idDoc);
       const temHBL = grupo.some((d) => d.tipo === 'HBL');
       const temMBL = grupo.some((d) => d.tipo === 'MBL');
       const hint: TipoDoc = temHBL && !temMBL ? 'HBL' : 'MBL';
@@ -947,7 +980,7 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
         nome: d.nome,
       }));
       // Cache persistente: se já lemos este documento antes, não paga OCR de novo.
-      const chave = chaveOcr(escopoOcr, paginas);
+      const chave = chaveOcr(escopoOcr, paginas, versaoDoc);
       let doc: DocPreAlerta | null;
       let tipoDetectado: string | null;
       let deCache = false;
@@ -965,7 +998,7 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
       } else {
         const r = await withTimeout(
           // Escopo de conta/tenant também isola a EVIDÊNCIA de OCR (dado sensível).
-          extrairDocPreAlertaMultiplo(req.accessToken!, paginas, hint, { escopo: escopoOcr }),
+          extrairDocPreAlertaMultiplo(req.accessToken!, paginas, hint, { escopo: escopoOcr, modo: modoExtracao }),
           60000,
           'ocr',
         ).catch((e) => ({
@@ -1027,6 +1060,7 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
           erroFonte,
           estruturacaoPendente,
           persistenceStatus,
+          modoExtracao,
         });
       }
       if (!cls) return null;
@@ -1066,7 +1100,7 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
       };
       // Não cacheia o payload de diagnóstico nem quando a IA está bloqueada.
       if (!debug && !avisoIA && chaveMem && chaveResultado) {
-        preAlertaCache.set(chaveMem, { sig, payload: payloadFalta });
+        preAlertaCache.set(chaveMem, { sig: sigResultado, payload: payloadFalta });
         await gravarCacheJson(chaveResultado, payloadFalta, alvoBase);
       }
       return res.json(payloadFalta);
@@ -1089,7 +1123,7 @@ auditoriaRouter.get('/:processo/pre-alerta', async (req: AuthedRequest, res, nex
     };
     // Não cacheia payload com bloqueio de IA (é transitório: some quando o limite subir).
     if (!debug && !avisoIA && chaveMem && chaveResultado) {
-      preAlertaCache.set(chaveMem, { sig, payload });
+      preAlertaCache.set(chaveMem, { sig: sigResultado, payload });
       await gravarCacheJson(chaveResultado, payload, alvoBase); // persiste o já-comparado
     }
     res.json(payload);

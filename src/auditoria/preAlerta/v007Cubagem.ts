@@ -10,5 +10,8 @@ export function familiaV007(op: Operacao, relacoes: RelacaoContainer[]): Resulta
     valorContainer: (c) => c.cubagemM3,
     valorTotal: (d) => d.cubagemTotalM3,
     campoIncerto: 'cubagemM3',
+    medidaContainer: (c) => c.medidas?.cubagem ?? null,
+    medidaTotal: (d) => d.medidas?.cubagemTotal ?? null,
+    campoIncertoTotal: 'cubagemTotalM3',
   });
 }

@@ -10,5 +10,8 @@ export function familiaV005(op: Operacao, relacoes: RelacaoContainer[]): Resulta
     valorContainer: (c) => c.pesoBrutoKg,
     valorTotal: (d) => d.pesoBrutoTotalKg,
     campoIncerto: 'pesoBrutoKg',
+    medidaContainer: (c) => c.medidas?.pesoBruto ?? null,
+    medidaTotal: (d) => d.medidas?.pesoBrutoTotal ?? null,
+    campoIncertoTotal: 'pesoBrutoTotalKg',
   });
 }

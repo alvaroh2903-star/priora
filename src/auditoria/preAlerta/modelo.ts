@@ -7,23 +7,43 @@
  * (docExtractor) será mapeada para este modelo num passo posterior de wiring.
  */
 import { ResultadoValidacao, Criticidade } from './estados';
+import { UnidadeMedida } from '../unidades';
 
 export type TipoDoc = 'MBL' | 'HBL';
+
+/**
+ * Medida COM unidade explícita (extensão TÉCNICA aditiva da Fase 2). `valor`
+ * está NA `unidade` informada — nunca convertido (PB-001: KG ≠ LB). `unidade`
+ * null = ausente/não aprovada (nunca presumida KG/CBM). `incerta` = leitura
+ * presente porém ambígua (→ Validação Humana).
+ */
+export interface MedidaDoc {
+  valor: number | null;
+  unidade: UnidadeMedida | null;
+  incerta?: boolean;
+}
 
 /** Um contêiner conforme representado em um documento. */
 export interface ContainerDoc {
   numero: string | null; // valor bruto extraído (evidência)
+  /** Só recebe valor medido em KG — um valor em LB NUNCA vai aqui (ver `medidas`). */
   pesoBrutoKg: number | null;
   pesoLiquidoKg: number | null;
+  /** Só recebe valor medido em CBM — um valor em FT³ NUNCA vai aqui. */
   cubagemM3: number | null;
   lacre: string | null;
   ncm: string[]; // NCMs vinculados ao contêiner, quando o documento os traz por item
   /**
    * Campos que o OCR sinalizou como leitura incerta (ex.: ['numero','lacre']).
-   * Na Fase 2 (confiança por campo) isto roteia a comparação para Validação
-   * Humana. No v1 documental fica opcional/vazio.
+   * Roteia a comparação para Validação Humana.
    */
   leituraIncerta?: string[];
+  /**
+   * Medidas com unidade (parser determinístico). Quando presentes, V-005/006/007
+   * comparam por aqui: mesma unidade → comparação numérica; unidades diferentes
+   * → Divergência; unidade ausente/incerta → Validação Humana.
+   */
+  medidas?: { pesoBruto: MedidaDoc | null; pesoLiquido: MedidaDoc | null; cubagem: MedidaDoc | null };
 }
 
 /** Um conhecimento (MBL ou HBL) já extraído. */
@@ -48,6 +68,7 @@ export interface DocPreAlerta {
   consignee?: string | null;
   containers: ContainerDoc[];
   // Totais / campos no nível do conhecimento (Dados Gerais).
+  // Os campos *Kg / *M3 só recebem valores medidos em KG / CBM (ver `medidas`).
   pesoBrutoTotalKg: number | null;
   pesoLiquidoTotalKg: number | null;
   cubagemTotalM3: number | null;
@@ -63,6 +84,8 @@ export interface DocPreAlerta {
   transbordos: string[]; // portos de transbordo, quando informados
   /** Campos do conhecimento com leitura incerta (ex.: ['qtdVolumesTotal']). */
   leituraIncerta?: string[];
+  /** Totais com unidade (parser determinístico) — ver `ContainerDoc.medidas`. */
+  medidas?: { pesoBrutoTotal: MedidaDoc | null; pesoLiquidoTotal: MedidaDoc | null; cubagemTotal: MedidaDoc | null };
   /**
    * O papel MBL/HBL foi determinado com CONFIANÇA (rótulo explícito no nome —
    * OMBL/OHBL/MBL/HBL — ou pelo conteúdo lido pela IA)? Quando false, o papel foi
