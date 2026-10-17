@@ -17,7 +17,7 @@ export class HttpError extends Error {
 
 export async function httpText(
   url: string,
-  init: { method?: string; headers?: Record<string, string>; body?: string; timeoutMs?: number } = {},
+  init: { method?: string; headers?: Record<string, string>; body?: string; timeoutMs?: number; encoding?: 'utf-8' | 'latin1' } = {},
 ): Promise<string> {
   const r = await fetch(url, {
     method: init.method || 'GET',
@@ -26,8 +26,9 @@ export async function httpText(
     signal: AbortSignal.timeout(init.timeoutMs ?? 30_000),
   });
   if (!r.ok) throw new HttpError(r.status, url);
-  // Decodifica como UTF-8 explicitamente (a APPA não declara charset).
-  return new TextDecoder('utf-8').decode(await r.arrayBuffer());
+  // Decodificação explícita: a APPA não declara charset (é UTF-8) e a CODEBA
+  // serve ISO-8859-1 sem declarar — o padrão "adivinhado" estragaria acentos.
+  return new TextDecoder(init.encoding || 'utf-8').decode(await r.arrayBuffer());
 }
 
 /** Janela de datas em torno de hoje (dias negativos = passado). */

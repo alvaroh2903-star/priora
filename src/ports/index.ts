@@ -5,6 +5,7 @@ import { fetchAppa } from './appa';
 import { fetchSantosBrasil } from './santosBrasil';
 import { fetchBtp } from './btp';
 import { fetchTeconRioGrande } from './teconRioGrande';
+import { fetchCodeba } from './codeba';
 
 /**
  * Priora — Registro dos PORTOS com line-up automático + cache.
@@ -33,6 +34,7 @@ export const PORTS: PortSource[] = [
   { id: 'santosbrasil-vila-do-conde', name: 'Tecon Vila do Conde (Santos Brasil)', uf: 'PA', cobre: 'Terminal de contêineres da Santos Brasil em Vila do Conde', fetchCalls: () => fetchSantosBrasil('tecon-vila-do-conde') },
   // Akamai: vai pela API de Scrape da Scrapfly (1 crédito/consulta, sem navegador).
   { id: 'tecon-riogrande', name: 'Tecon Rio Grande (Wilson Sons)', uf: 'RS', cobre: 'Terminal de contêineres Tecon Rio Grande', fetchCalls: () => fetchTeconRioGrande() },
+  { id: 'salvador', name: 'Porto de Salvador (CODEBA)', uf: 'BA', cobre: 'Todo o Porto de Salvador, inclusive o Tecon Salvador (Wilson Sons)', fetchCalls: () => fetchCodeba('salvador') },
 ];
 
 /**
@@ -50,6 +52,7 @@ export const PORT_SITE_DOMAINS = [
   'tcp.com.br',
   'portonave.com.br',
   'jbsterminais.com.br',
+  'codeba.gov.br',
 ];
 
 const CACHE_TTL_MS = Math.max(1, parseInt(process.env.PORTS_CACHE_MIN || '30', 10)) * 60_000;

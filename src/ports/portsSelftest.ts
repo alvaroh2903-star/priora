@@ -7,6 +7,7 @@ import { parseAppa } from './appa';
 import { parseSantosBrasil } from './santosBrasil';
 import { parseBtp, btpFormValues } from './btp';
 import { parseTeconRioGrande, extractJson } from './teconRioGrande';
+import { parseCodeba } from './codeba';
 import { matchVessel, normVessel, PORTS } from './index';
 
 /**
@@ -120,8 +121,19 @@ check('nome sem espaço sobrando ("WIELAND ")', tr.every((c) => c.navio === c.na
 check('IMO pelo LloydsId', tr.every((c) => /^\d{7}$/.test(c.imo || '')), tr.map((c) => c.imo));
 check('JSON embrulhado em <pre> com &quot;', (extractJson('<html><pre>{&quot;Data&quot;:[]}</pre></html>') as { Data: unknown[] }).Data.length === 0);
 
+console.log('[selftest] Salvador (CODEBA, inclui o Tecon Salvador)');
+const sv = parseCodeba(fx('codeba-salvador.html'), 'salvador');
+check('esperados e atracados lidos (4 + 3)', sv.filter((c) => c.status === 'esperado').length === 4 && sv.filter((c) => c.status === 'atracado').length === 3, sv.map((c) => c.status));
+check('legenda ignorada', !sv.some((c) => /LEGENDA/i.test(c.navio)));
+const carolina = sv.find((c) => c.navio === 'MSC CAROLINA');
+check('colunas comentadas no HTML não desalinham (agência, berço, operador, carga)', carolina?.agencia === 'MSC MEDITERRANEAN SHIPPING DO BRASIL LTD' && carolina?.berco === 'CAIS SANTA DULCE' && carolina?.terminal === 'TECON SALVADOR S/A' && carolina?.mercadoria === 'CONTEINERES', carolina);
+check('ETA com hora, ETD só data', carolina?.eta === '2026-10-12T15:00:00-03:00' && carolina?.etd === '2026-10-14', carolina && [carolina.eta, carolina.etd]);
+check('sem datas reais (a página só publica previsões)', sv.every((c) => c.ata === null && c.atb === null && c.atd === null));
+check('Tecon Salvador presente', sv.some((c) => c.terminal === 'TECON SALVADOR S/A'));
+check('ISO-8859-1 decodificado (Ç/Ã)', new TextDecoder('latin1').decode(Uint8Array.from([0x50, 0x52, 0x4f, 0x47, 0x52, 0x41, 0x4d, 0x41, 0xc7, 0xc3, 0x4f])) === 'PROGRAMAÇÃO');
+
 console.log('[selftest] registro');
-check('8 fontes de porto ligadas', PORTS.length === 8, PORTS.map((p) => p.id));
+check('9 fontes de porto ligadas', PORTS.length === 9, PORTS.map((p) => p.id));
 check('ids únicos', new Set(PORTS.map((p) => p.id)).size === PORTS.length);
 
 console.log('[selftest] busca de navio');
@@ -132,7 +144,7 @@ check('viagem pelo código do terminal', matchVessel(it, 'MAERSK KARUN', 'MSKKA6
 check('acha na APPA por nome', matchVessel(ap, 'Xiamen Express').length === 1);
 check('nome vazio → nada', matchVessel(it, '').length === 0);
 
-if (failures === 0) console.log('\n[selftest] ✅ line-up dos portos (Itapoá, Rio Brasil, APPA, Santos Brasil, BTP, Tecon Rio Grande) OK');
+if (failures === 0) console.log('\n[selftest] ✅ line-up dos portos (Itapoá, Rio Brasil, APPA, Santos Brasil, BTP, Tecon Rio Grande, Salvador) OK');
 else {
   console.log(`\n[selftest] ❌ ${failures} verificação(ões) falharam`);
   process.exit(1);
