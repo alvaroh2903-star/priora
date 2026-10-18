@@ -9,10 +9,10 @@ import { servir } from '../../../operacional/__tests__/http';
 import { resetCourierStore } from '../../../couriers/courierStore';
 import { vinculoDoProcesso } from '../../../auditoria/fatos/vinculos';
 import { criarCourierRouter } from '../../../routes/courierRoutes';
-import { EntradaAvaliacao, avaliarProcesso } from '../../dominio';
+import { avaliarProcesso, decidirProcesso, projetarNaL1a } from '../../dominio';
 import {
-  FonteTerminal, GatilhosLiberacao, ProjecaoLiberacao, avaliarLiberacao, canonico, carregarEntrada, disponibilidadeDoCourier,
-  gatilhosLiberacaoPadrao, impressaoMaterial, obterLiberacaoDoProcesso, recalcularLiberacaoProcesso,
+  FonteTerminal, GatilhosLiberacao, ProjecaoLiberacao, avaliarLiberacao, canonico, carregarEntrada, disponibilidadeDoCourier, entradaDaDecisao,
+  gatilhosLiberacaoPadrao, impressaoMaterial, obterLiberacaoDoProcesso, recalcularLiberacaoProcesso, vistaMaterial,
 } from '..';
 import {
   cenarioConfirmado, conferir, envelope, eventos, fatosDeps, gatilhos, idDoProcesso, msg, poolQueFalhaNaLinhaAtual, poolQuebrado,
@@ -36,9 +36,9 @@ test('L2 — projeção real da Liberação', { skip: !url }, async (t) => {
       assert.equal(r.status, 'PRIMEIRA_AVALIACAO');
       const pr = await projecao(pool, a, p);
       const av = pr.avaliacao;
-      assert.deepEqual(av.master.resolucao, { tipo: 'NAO_CONFIRMAVEL', fonte: 'COURIER', motivo: 'SEM_OBSERVACAO' });
+      assert.deepEqual(av.master.l1a.resolucao, { tipo: 'NAO_CONFIRMAVEL', fonte: 'COURIER', motivo: 'SEM_OBSERVACAO' });
       assert.equal(av.master.masterId, null);
-      assert.deepEqual(av.house, { tipo: 'NAO_DETERMINAVEL', semFonteIntegrada: ['PORTAL_FOTO_HBL', 'EMAIL_TELEX'], fontesIndisponiveis: [] });
+      assert.deepEqual(av.house.l1a, { tipo: 'NAO_DETERMINAVEL', semFonteIntegrada: ['PORTAL_FOTO_HBL', 'EMAIL_TELEX'], fontesIndisponiveis: [] });
       assert.deepEqual(av.progresso, []);
       assert.equal(av.etapa.tipo, 'NAO_DETERMINAVEL');
       assert.equal(av.bloqueador.tipo, 'NAO_DETERMINAVEL', 'nenhum bloqueador conhecido inventado');
@@ -51,10 +51,11 @@ test('L2 — projeção real da Liberação', { skip: !url }, async (t) => {
       assert.equal(pr.terminal, false);
       semInvencao(pr);
       assert.equal(await eventos(pool, p), 1, 'primeira avaliação → um evento');
-      // Igual à saída da L1a, sem "melhorar" nada.
-      const { entrada } = (await carregarEntrada(pool, a.orgId, p))!;
-      assert.equal(canonico(av), canonico({ ...avaliarProcesso(entrada), divergencias: [] }));
-      assert.equal(canonico(av), canonico(avaliarLiberacao((await carregarEntrada(pool, a.orgId, p))!)));
+      // É a decisão da L1b para os fatos vigentes, sem "melhorar" nada; projetada na L1a congelada, é a própria L1a.
+      const c = (await carregarEntrada(pool, a.orgId, p))!;
+      assert.equal(canonico(av), canonico({ ...decidirProcesso(entradaDaDecisao(c, av.agora)), divergencias: [] }));
+      assert.equal(canonico(av), canonico(avaliarLiberacao(c, av.agora)));
+      assert.equal(canonico(projetarNaL1a(av)), canonico(avaliarProcesso(c.entrada)));
     });
 
     await t.test('2. MBL físico recebido no Courier → Master resolvido refletido (via gatilho do S1)', async () => {
@@ -65,7 +66,7 @@ test('L2 — projeção real da Liberação', { skip: !url }, async (t) => {
       const mbl = await conferir(pool, a, 'DHL 7002', 'IM7002-26', 'MBL', 'RECEBIDO');
       await gatilhos(pool).conferenciaRegistrada(a.orgId, mbl);
       const pr = await projecao(pool, a, p);
-      const res = pr.avaliacao.master.resolucao;
+      const res = pr.avaliacao.master.l1a.resolucao;
       assert.equal(res.tipo, 'RESOLVIDO');
       if (res.tipo === 'RESOLVIDO') {
         assert.equal(res.via, 'CONFERENCIA_DO_PROPRIO_PROCESSO');
@@ -73,7 +74,7 @@ test('L2 — projeção real da Liberação', { skip: !url }, async (t) => {
       }
       assert.deepEqual(pr.avaliacao.progresso.map((m) => m.marco), ['MASTER_RESOLVIDO']);
       assert.equal(pr.fontes.courier.mblFatoId, mbl);
-      assert.equal(pr.avaliacao.master.fisicoDoProcesso.envelope?.valor, 'ENTREGUE');
+      assert.equal(pr.avaliacao.master.l1a.fisicoDoProcesso.envelope?.valor, 'ENTREGUE');
       const { rows: [ev] } = await pool.query(`SELECT gatilho, acionado_por_membership_id FROM liberacao_avaliacao_eventos WHERE processo_id = $1`, [p]);
       assert.deepEqual(ev, { gatilho: 'COURIER_CONFERENCIA', acionado_por_membership_id: null }, 'recálculo interno sem ator humano');
     });
@@ -87,9 +88,9 @@ test('L2 — projeção real da Liberação', { skip: !url }, async (t) => {
       await conferir(pool, a, 'DHL 7003', 'IM7003-26', 'HBL_ORIGINAL', 'RECEBIDO');
       await recalcularLiberacaoProcesso(pool, a.orgId, p);
       const pr = await projecao(pool, a, p);
-      assert.equal(pr.avaliacao.master.fisicoDoProcesso.envelope?.valor, 'ENTREGUE');
-      assert.equal(pr.avaliacao.master.fisicoDoProcesso.mbl, null);
-      assert.deepEqual(pr.avaliacao.master.resolucao, { tipo: 'NAO_RESOLVIDO' });
+      assert.equal(pr.avaliacao.master.l1a.fisicoDoProcesso.envelope?.valor, 'ENTREGUE');
+      assert.equal(pr.avaliacao.master.l1a.fisicoDoProcesso.mbl, null);
+      assert.deepEqual(pr.avaliacao.master.l1a.resolucao, { tipo: 'NAO_RESOLVIDO' });
       assert.equal(pr.avaliacao.bloqueador.tipo, 'NAO_DETERMINAVEL', 'não é "Master físico não recebido"');
       assert.ok(!JSON.stringify(pr.avaliacao.master).includes('AUSENTE'));
       semInvencao(pr);
@@ -99,13 +100,13 @@ test('L2 — projeção real da Liberação', { skip: !url }, async (t) => {
       await conferir(pool, a, 'DHL 7004', 'IM7004-26', 'HBL_ORIGINAL', 'AUSENTE_NA_CONFERENCIA');
       await recalcularLiberacaoProcesso(pool, a.orgId, q);
       const pq = await projecao(pool, a, q);
-      assert.equal(pq.avaliacao.master.fisicoDoProcesso.envelope, null, 'Identificado não vira EM_TRANSITO');
-      assert.deepEqual(pq.avaliacao.master.resolucao, { tipo: 'NAO_CONFIRMAVEL', fonte: 'COURIER', motivo: 'SEM_OBSERVACAO' });
+      assert.equal(pq.avaliacao.master.l1a.fisicoDoProcesso.envelope, null, 'Identificado não vira EM_TRANSITO');
+      assert.deepEqual(pq.avaliacao.master.l1a.resolucao, { tipo: 'NAO_CONFIRMAVEL', fonte: 'COURIER', motivo: 'SEM_OBSERVACAO' });
       assert.equal(pq.fontes.courier.envelopeFatoId, null);
       semInvencao(pq);
     });
 
-    await t.test('4. MBL ausente na conferência → bloqueador conhecido só quando a L1a o legitima', async () => {
+    await t.test('4. MBL ausente na conferência → bloqueador conhecido só quando a decisão o legitima', async () => {
       await truncateAll(pool);
       const a = await cenarioConfirmado(pool, 'l2-ausente');
       const p = await processo(pool, a, 'IM7005-26');
@@ -113,26 +114,26 @@ test('L2 — projeção real da Liberação', { skip: !url }, async (t) => {
       const aus = await conferir(pool, a, 'DHL 7005', 'IM7005-26', 'MBL', 'AUSENTE_NA_CONFERENCIA');
       await recalcularLiberacaoProcesso(pool, a.orgId, p);
       const pr = await projecao(pool, a, p);
-      assert.equal(pr.avaliacao.master.fisicoDoProcesso.mbl?.valor, 'AUSENTE_NA_CONFERENCIA', 'conhecimento positivo preservado');
-      assert.deepEqual(pr.avaliacao.master.resolucao, { tipo: 'NAO_RESOLVIDO' });
+      assert.equal(pr.avaliacao.master.l1a.fisicoDoProcesso.mbl?.valor, 'AUSENTE_NA_CONFERENCIA', 'conhecimento positivo preservado');
+      assert.deepEqual(pr.avaliacao.master.l1a.resolucao, { tipo: 'NAO_RESOLVIDO' });
       assert.equal(pr.avaliacao.master.modalidadeIdentificada, null, 'a L2 não inventa modalidade');
       assert.equal(pr.avaliacao.bloqueador.tipo, 'NAO_DETERMINAVEL', 'sem modalidade física identificada não há bloqueador conhecido');
       assert.equal(pr.fontes.courier.mblFatoId, aus);
-      // A mesma entrada, com a modalidade física identificada (fonte futura), é o que a L1a exige para o bloqueador.
-      const { entrada } = (await carregarEntrada(pool, a.orgId, p))!;
-      assert.equal(entrada.fatosDoMaster.length, 0);
-      const comModalidade: EntradaAvaliacao = {
-        ...entrada,
-        vinculo: { processoId: p, masterId: 'm-futuro', vinculadoEm: '2026-09-01T00:00:00.000Z', evidencia: { fonte: 'teste', ref: 'v' } },
-        fatosDoMaster: [{ tipo: 'MODALIDADE_IDENTIFICADA', masterId: 'm-futuro', modalidade: 'FISICO', acaoEm: '2026-09-01T00:00:00.000Z', evidencia: { fonte: 'teste', ref: 'mod' } }],
-      };
-      assert.equal(avaliarProcesso(comModalidade).bloqueador.tipo, 'CONHECIDO');
+      // A mesma entrada, com a modalidade física identificada (fonte futura), é o que a L1b exige para o bloqueador.
+      const c = (await carregarEntrada(pool, a.orgId, p))!;
+      assert.equal(c.entrada.fatosDoMaster.length, 0);
+      const vinculo = { processoId: p, masterId: 'm-futuro', vinculadoEm: '2026-09-01T00:00:00.000Z', evidencia: { fonte: 'teste', ref: 'v' } };
+      const comModalidade = decidirProcesso({
+        ...entradaDaDecisao(c, pr.avaliacao.agora), vinculo: { tipo: 'VINCULADO', vinculo },
+        fatosDoMasterL1a: [{ tipo: 'MODALIDADE_IDENTIFICADA', masterId: 'm-futuro', modalidade: 'FISICO', acaoEm: '2026-09-01T00:00:00.000Z', evidencia: { fonte: 'teste', ref: 'mod' } }],
+      });
+      assert.equal(comModalidade.bloqueador.tipo, 'CONHECIDO');
       // Marca de linha não oficial (inferida) não publica fato negativo.
       const q = await processo(pool, a, 'IM7006-26');
       const inferida = await conferir(pool, a, 'DHL 7006', 'IM7006-26', 'MBL', 'AUSENTE_NA_CONFERENCIA', 'INFERIDA');
       await recalcularLiberacaoProcesso(pool, a.orgId, q);
       const pq = await projecao(pool, a, q);
-      assert.equal(pq.avaliacao.master.fisicoDoProcesso.mbl, null);
+      assert.equal(pq.avaliacao.master.l1a.fisicoDoProcesso.mbl, null);
       assert.deepEqual(pq.fontes.courier.naoPublicadosFatoIds, [inferida]);
     });
 
@@ -144,10 +145,10 @@ test('L2 — projeção real da Liberação', { skip: !url }, async (t) => {
       const hbl = await conferir(pool, a, 'DHL 7007', 'IM7007-26', 'HBL_ORIGINAL', 'RECEBIDO');
       await recalcularLiberacaoProcesso(pool, a.orgId, p);
       const pr = await projecao(pool, a, p);
-      assert.equal(pr.avaliacao.house.tipo, 'RESOLVIDO');
-      if (pr.avaliacao.house.tipo === 'RESOLVIDO') {
-        assert.equal(pr.avaliacao.house.caminho, 'B_ORIGINAL_RECEBIDO_PELA_ROCKET');
-        assert.deepEqual(pr.avaliacao.house.evidencia, { fonte: 'courier', ref: `courier_fato:${hbl}` });
+      assert.equal(pr.avaliacao.house.l1a.tipo, 'RESOLVIDO');
+      if (pr.avaliacao.house.l1a.tipo === 'RESOLVIDO') {
+        assert.equal(pr.avaliacao.house.l1a.caminho, 'B_ORIGINAL_RECEBIDO_PELA_ROCKET');
+        assert.deepEqual(pr.avaliacao.house.l1a.evidencia, { fonte: 'courier', ref: `courier_fato:${hbl}` });
       }
       assert.deepEqual(pr.avaliacao.progresso.map((m) => m.marco), ['HOUSE_RESOLVIDO']);
       assert.equal(pr.fontes.courier.hblOriginalFatoId, hbl);
@@ -169,17 +170,17 @@ test('L2 — projeção real da Liberação', { skip: !url }, async (t) => {
       const rp = await recalcularLiberacaoProcesso(pool, a.orgId, p);
       assert.equal(rp.status, 'MUDANCA_MATERIAL');
       const pp = await projecao(pool, a, p);
-      assert.equal(pp.avaliacao.master.resolucao.tipo, 'RESOLVIDO', 'o fato confirmado permanece');
-      assert.equal(pp.avaliacao.master.fonteCourier.disponivel, false);
-      assert.deepEqual(pp.avaliacao.house.tipo === 'NAO_DETERMINAVEL' && pp.avaliacao.house.fontesIndisponiveis, ['COURIER']);
+      assert.equal(pp.avaliacao.master.l1a.resolucao.tipo, 'RESOLVIDO', 'o fato confirmado permanece');
+      assert.equal(pp.avaliacao.master.l1a.fonteCourier.disponivel, false);
+      assert.deepEqual(pp.avaliacao.house.l1a.tipo === 'NAO_DETERMINAVEL' && pp.avaliacao.house.l1a.fontesIndisponiveis, ['COURIER']);
       assert.equal(await eventos(pool, p), 2);
       // Q (Master e House resolvidos): só o eco da disponibilidade muda → linha atualizada, sem evento.
       const rq = await recalcularLiberacaoProcesso(pool, a.orgId, q);
       assert.deepEqual([rq.status, rq.status === 'SEM_MUDANCA_MATERIAL' && rq.atualizada], ['SEM_MUDANCA_MATERIAL', true]);
       const pq = await projecao(pool, a, q);
-      assert.equal(pq.avaliacao.master.fonteCourier.disponivel, false);
-      assert.equal(pq.avaliacao.master.resolucao.tipo, 'RESOLVIDO');
-      assert.equal(pq.avaliacao.house.tipo, 'RESOLVIDO');
+      assert.equal(pq.avaliacao.master.l1a.fonteCourier.disponivel, false);
+      assert.equal(pq.avaliacao.master.l1a.resolucao.tipo, 'RESOLVIDO');
+      assert.equal(pq.avaliacao.house.l1a.tipo, 'RESOLVIDO');
       assert.equal(await eventos(pool, q), 1);
       // De volta disponível: P volta (um evento); Q segue sem evento.
       await pool.query(`UPDATE email_caixas SET token_estado = 'disponivel', token_verificado_em = now() WHERE id = $1`, [a.caixaId]);
@@ -189,10 +190,10 @@ test('L2 — projeção real da Liberação', { skip: !url }, async (t) => {
       // Caixa pausada também é indisponível (estado do servidor, não do cliente).
       await pool.query(`UPDATE email_caixas SET estado = 'pausada' WHERE id = $1`, [a.caixaId]);
       await recalcularLiberacaoProcesso(pool, a.orgId, p);
-      assert.equal((await projecao(pool, a, p)).avaliacao.master.fonteCourier.disponivel, false);
+      assert.equal((await projecao(pool, a, p)).avaliacao.master.l1a.fonteCourier.disponivel, false);
     });
 
-    await t.test('7. vínculo Processo↔Master válido alimenta a L1a (via gatilho da Auditoria)', async () => {
+    await t.test('7. vínculo Processo↔Master válido alimenta a decisão (via gatilho da Auditoria)', async () => {
       await truncateAll(pool);
       const a = await cenarioConfirmado(pool, 'l2-vinc');
       const res = await vincular(pool, a, 'IM7010-26', 'MEDU7010001');
@@ -232,13 +233,22 @@ test('L2 — projeção real da Liberação', { skip: !url }, async (t) => {
       await recalcularLiberacaoProcesso(pool, a.orgId, p);
       const pr = await projecao(pool, a, p);
       assert.equal(pr.avaliacao.master.masterId, null, 'nem o mais novo, nem o mais antigo, nem o primeiro');
-      assert.notEqual(pr.avaliacao.master.resolucao.tipo, 'RESOLVIDO');
+      assert.notEqual(pr.avaliacao.master.l1a.resolucao.tipo, 'RESOLVIDO');
       assert.deepEqual(pr.avaliacao.progresso, []);
       assert.equal(pr.fontes.vinculo.situacao, 'CONFLITO');
       if (pr.fontes.vinculo.situacao === 'CONFLITO') assert.equal(pr.fontes.vinculo.masterIds.length, 2);
       assert.equal(pr.fontes.masterFisico, null);
-      const { entrada } = (await carregarEntrada(pool, a.orgId, p))!;
-      assert.deepEqual([entrada.vinculo, entrada.fatosDoMaster], [null, []]);
+      const c = (await carregarEntrada(pool, a.orgId, p))!;
+      assert.deepEqual([c.entrada.vinculo, c.entrada.fatosDoMaster], [null, []]);
+      // A L1b recebe o CONFLITO como tal (P3): Preparação para Liberação, conflito de identidade, Rocket, classe C.
+      assert.deepEqual(c.vinculo, { tipo: 'CONFLITO', masterIds: pr.fontes.vinculo.situacao === 'CONFLITO' ? pr.fontes.vinculo.masterIds : [] });
+      assert.deepEqual(pr.avaliacao.etapa, { tipo: 'DETERMINADA', etapa: 'PREPARACAO_PARA_LIBERACAO' });
+      assert.equal(pr.avaliacao.bloqueador.tipo, 'CONHECIDO');
+      if (pr.avaliacao.bloqueador.tipo === 'CONHECIDO') {
+        const i = pr.avaliacao.bloqueador.item;
+        assert.deepEqual([i.motivo, i.responsavel, i.acao, i.classe], ['CONFLITO_DE_IDENTIDADE_DO_MASTER', 'ROCKET', 'RESOLVER_CONFLITO_DE_IDENTIDADE_DO_MASTER', 'C']);
+      }
+      assert.deepEqual([pr.avaliacao.masterId, pr.avaliacao.master.resolucoes, c.vinculados], [null, [], []], 'nada propaga a partir dos candidatos');
     });
 
     await t.test('9. vínculo tardio preserva observadoEm (documento) × vinculadoEm (Priora) — N-15', async () => {
@@ -255,7 +265,7 @@ test('L2 — projeção real da Liberação', { skip: !url }, async (t) => {
       const { rows: [v2] } = await pool.query(`SELECT observado_em, vinculado_em, extracao_id FROM processo_master_vinculos WHERE processo_id = $1`, [p2]);
       const { rows: [c1] } = await pool.query(`SELECT registrado_em FROM courier_fatos WHERE id = $1`, [mbl]);
       assert.equal(new Date(v2.observado_em).toISOString(), '2026-01-05T00:00:00.000Z', 'data do documento continua no S2');
-      const res = pr.avaliacao.master.resolucao;
+      const res = pr.avaliacao.master.l1a.resolucao;
       assert.equal(res.tipo, 'RESOLVIDO');
       if (res.tipo === 'RESOLVIDO') {
         assert.equal(res.via, 'MASTER_VINCULADO');
@@ -297,7 +307,7 @@ test('L2 — projeção real da Liberação', { skip: !url }, async (t) => {
           WHERE processo_id = $1 ORDER BY sequencia`, [p]);
       assert.equal(evs[1].impressao_anterior, evs[0].impressao_nova, 'cadeia de impressões');
       assert.equal(canonico(evs[1].avaliacao_anterior), canonico(antes.avaliacao), 'projeção anterior preservada');
-      assert.equal(evs[1].avaliacao_nova.master.resolucao.evidencia.ref, `courier_fato:${mbl}`);
+      assert.equal(evs[1].avaliacao_nova.master.l1a.resolucao.evidencia.ref, `courier_fato:${mbl}`);
       assert.equal((await projecao(pool, a, p)).sequencia, 2);
 
       // Recebido → Em Conferência → Concluído: o envelope continua entregue desde a mesma confirmação → sem evento.
@@ -347,7 +357,7 @@ test('L2 — projeção real da Liberação', { skip: !url }, async (t) => {
       const antesOutra = await projecao(pool, b, outraOrg);
       const mbl = await conferir(pool, a, 'DHL 7017', 'IM7017-26', 'MBL', 'RECEBIDO');
       await gatilhos(pool).conferenciaRegistrada(a.orgId, mbl);
-      assert.equal((await projecao(pool, a, pa)).avaliacao.master.resolucao.tipo, 'RESOLVIDO');
+      assert.equal((await projecao(pool, a, pa)).avaliacao.master.l1a.resolucao.tipo, 'RESOLVIDO');
       assert.deepEqual(await projecao(pool, a, pb), antesB, 'B intocado');
       assert.deepEqual(await projecao(pool, b, outraOrg), antesOutra, 'mesmo código em outra organização intocado');
       assert.equal((await recalcularLiberacaoProcesso(pool, a.orgId, pb)).status, 'SEM_MUDANCA_MATERIAL');
@@ -370,10 +380,16 @@ test('L2 — projeção real da Liberação', { skip: !url }, async (t) => {
       const mbl = await conferir(pool, a, 'DHL 7019', 'IM7019-26', 'MBL', 'RECEBIDO');
       await gatilhos(pool).conferenciaRegistrada(a.orgId, mbl);
       const [r1, r2] = [await projecao(pool, a, p1), await projecao(pool, a, p2)];
-      const via = (p: ProjecaoLiberacao) => (p.avaliacao.master.resolucao.tipo === 'RESOLVIDO' ? p.avaliacao.master.resolucao.via : null);
+      const via = (p: ProjecaoLiberacao) => (p.avaliacao.master.l1a.resolucao.tipo === 'RESOLVIDO' ? p.avaliacao.master.l1a.resolucao.via : null);
       assert.deepEqual([via(r1), via(r2)], ['CONFERENCIA_DO_PROPRIO_PROCESSO', 'MASTER_VINCULADO']);
-      assert.deepEqual([r1.avaliacao.house.tipo, r2.avaliacao.house.tipo], ['NAO_DETERMINAVEL', 'RESOLVIDO'], 'House é de cada processo');
-      assert.notEqual(canonico(r1.avaliacao.etapa), canonico(r2.avaliacao.etapa), 'etapa individual preservada');
+      assert.deepEqual([r1.avaliacao.house.l1a.tipo, r2.avaliacao.house.l1a.tipo], ['NAO_DETERMINAVEL', 'RESOLVIDO'], 'House é de cada processo');
+      // Etapa e bloqueador são de cada processo (decididos um a um, N-13): sem armador integrado, os dois ficam
+      // "não determinável — armador"; o que falta a cada um continua individual (a House de P1 ainda não tem fonte).
+      for (const r of [r1, r2]) {
+        const c = (await carregarEntrada(pool, a.orgId, r.processoId))!;
+        assert.equal(canonico(vistaMaterial(r.avaliacao)), canonico(vistaMaterial(avaliarLiberacao(c, r.avaliacao.agora))));
+      }
+      assert.notEqual(canonico(r1.avaliacao.indeterminacao), canonico(r2.avaliacao.indeterminacao), 'informação que falta é de cada processo');
       assert.notEqual(canonico(r1.avaliacao.bloqueador), canonico(r2.avaliacao.bloqueador));
       const gatilhoDe = async (p: string) => (await pool.query(
         `SELECT gatilho FROM liberacao_avaliacao_eventos WHERE processo_id = $1 ORDER BY sequencia DESC LIMIT 1`, [p])).rows[0].gatilho;
@@ -555,11 +571,12 @@ test('L2 — projeção real da Liberação', { skip: !url }, async (t) => {
         const r = await recalcularLiberacaoProcesso(pool, a.orgId, p);
         assert.deepEqual([r.status, r.status === 'SEM_MUDANCA_MATERIAL' && r.atualizada], ['SEM_MUDANCA_MATERIAL', true]);
         const nova = await projecao(pool, a, p);
-        assert.equal(canonico(nova.avaliacao), canonico(originais[i].avaliacao));
+        // Mesmo significado; só o relógio da nova avaliação (`agora`) é outro.
+        assert.equal(canonico(vistaMaterial(nova.avaliacao)), canonico(vistaMaterial(originais[i].avaliacao)));
         assert.equal(canonico(nova.fontes), canonico(originais[i].fontes));
         assert.deepEqual([nova.impressaoMaterial, nova.sequencia, nova.alteradoEm], [originais[i].impressaoMaterial, originais[i].sequencia, originais[i].alteradoEm]);
-        // E é exatamente o que a L1a diz hoje para os fatos vigentes.
-        assert.equal(impressaoMaterial(avaliarLiberacao((await carregarEntrada(pool, a.orgId, p))!)), nova.impressaoMaterial);
+        // E é exatamente o que a L1b decide hoje para os fatos vigentes, a qualquer hora.
+        assert.equal(impressaoMaterial(avaliarLiberacao((await carregarEntrada(pool, a.orgId, p))!, '2030-01-01T00:00:00.000Z')), nova.impressaoMaterial);
       }
       assert.deepEqual([await eventos(pool, p1), await eventos(pool, p2)], nEventos, 'reconstrução não duplica histórico');
     });
@@ -582,9 +599,9 @@ test('L2 — projeção real da Liberação', { skip: !url }, async (t) => {
       const { entrada } = (await carregarEntrada(pool, a.orgId, p))!;
       assert.equal(entrada.courier.fonte.disponivel, false);
       let pr = await projecao(pool, a, p);
-      assert.equal(pr.avaliacao.master.fonteCourier.disponivel, false);
-      assert.equal(pr.avaliacao.master.resolucao.tipo === 'NAO_CONFIRMAVEL' && pr.avaliacao.master.resolucao.motivo, 'FONTE_INDISPONIVEL');
-      assert.deepEqual(pr.avaliacao.house.tipo === 'NAO_DETERMINAVEL' && pr.avaliacao.house.fontesIndisponiveis, ['COURIER']);
+      assert.equal(pr.avaliacao.master.l1a.fonteCourier.disponivel, false);
+      assert.equal(pr.avaliacao.master.l1a.resolucao.tipo === 'NAO_CONFIRMAVEL' && pr.avaliacao.master.l1a.resolucao.motivo, 'FONTE_INDISPONIVEL');
+      assert.deepEqual(pr.avaliacao.house.l1a.tipo === 'NAO_DETERMINAVEL' && pr.avaliacao.house.l1a.fontesIndisponiveis, ['COURIER']);
       assert.deepEqual([pr.fontes.disponibilidadeCourier, pr.fontes.caixaIds], ['DESCONHECIDO', [a.caixaId]]);
       semInvencao(pr);
       // Um fato oficial já confirmado continua valendo, sem tornar a fonte disponível.
@@ -592,14 +609,14 @@ test('L2 — projeção real da Liberação', { skip: !url }, async (t) => {
       await conferir(pool, a, 'DHL 7032', 'IM7032-26', 'MBL', 'RECEBIDO');
       await recalcularLiberacaoProcesso(pool, a.orgId, q);
       const pq = await projecao(pool, a, q);
-      assert.deepEqual([pq.avaliacao.master.resolucao.tipo, pq.avaliacao.master.fonteCourier.disponivel], ['RESOLVIDO', false]);
+      assert.deepEqual([pq.avaliacao.master.l1a.resolucao.tipo, pq.avaliacao.master.l1a.fonteCourier.disponivel], ['RESOLVIDO', false]);
 
       // Confirmada → disponível: a L1a passa a distinguir "sem observação".
       await tokenDaCaixa('disponivel');
       assert.deepEqual(await estado(), ['DISPONIVEL', true]);
       assert.equal((await recalcularLiberacaoProcesso(pool, a.orgId, p)).status, 'MUDANCA_MATERIAL');
       pr = await projecao(pool, a, p);
-      assert.deepEqual(pr.avaliacao.master.resolucao, { tipo: 'NAO_CONFIRMAVEL', fonte: 'COURIER', motivo: 'SEM_OBSERVACAO' });
+      assert.deepEqual(pr.avaliacao.master.l1a.resolucao, { tipo: 'NAO_CONFIRMAVEL', fonte: 'COURIER', motivo: 'SEM_OBSERVACAO' });
       assert.equal(pr.fontes.disponibilidadeCourier, 'DISPONIVEL');
 
       // Indisponível explícita → indisponível.
@@ -607,7 +624,7 @@ test('L2 — projeção real da Liberação', { skip: !url }, async (t) => {
       assert.deepEqual(await estado(), ['INDISPONIVEL', false]);
       assert.equal((await recalcularLiberacaoProcesso(pool, a.orgId, p)).status, 'MUDANCA_MATERIAL');
       pr = await projecao(pool, a, p);
-      assert.equal(pr.avaliacao.master.resolucao.tipo === 'NAO_CONFIRMAVEL' && pr.avaliacao.master.resolucao.motivo, 'FONTE_INDISPONIVEL');
+      assert.equal(pr.avaliacao.master.l1a.resolucao.tipo === 'NAO_CONFIRMAVEL' && pr.avaliacao.master.l1a.resolucao.motivo, 'FONTE_INDISPONIVEL');
       assert.equal(pr.fontes.disponibilidadeCourier, 'INDISPONIVEL');
       // De volta a desconhecido: mesma saída da L1a (indisponível) → só metadados, sem evento.
       const n = await eventos(pool, p);
@@ -667,8 +684,8 @@ test('L2 — projeção real da Liberação', { skip: !url }, async (t) => {
         r = await srv.chamar('POST', '/4444444444/conferencia', { processo: 'IM7029-26', documento: 'mbl', status: 'recebido', linha: env.linhas['IM7029-26'] });
         assert.deepEqual([r.status, r.body.duravel.proveniencia], [200, 'CITADA']);
         const pr = await projecao(pool, a, p);
-        assert.equal(pr.avaliacao.master.resolucao.tipo, 'RESOLVIDO');
-        assert.equal(pr.avaliacao.master.fisicoDoProcesso.envelope?.valor, 'ENTREGUE');
+        assert.equal(pr.avaliacao.master.l1a.resolucao.tipo, 'RESOLVIDO');
+        assert.equal(pr.avaliacao.master.l1a.fisicoDoProcesso.envelope?.valor, 'ENTREGUE');
         // Estado do envelope muda depois: gatilho do envelope; só frescor → nenhum evento novo.
         r = await srv.chamar('POST', '/4444444444/estado', { estado: 'Em Conferência' });
         assert.equal(r.status, 200);

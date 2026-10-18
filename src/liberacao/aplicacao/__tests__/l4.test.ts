@@ -27,7 +27,7 @@ import {
 
 const url = testDatabaseUrl();
 
-const resolucao = (p: ProjecaoLiberacao) => p.avaliacao.master.resolucao;
+const resolucao = (p: ProjecaoLiberacao) => p.avaliacao.master.l1a.resolucao;
 const via = (p: ProjecaoLiberacao) => (resolucao(p).tipo === 'RESOLVIDO' ? (resolucao(p) as { via: string }).via : null);
 const operacional = (p: ProjecaoLiberacao) => canonico([p.avaliacao.etapa, p.avaliacao.bloqueador, p.avaliacao.proximaAcao]);
 
@@ -130,7 +130,7 @@ test('L4 — fatos de Courier e Auditoria com propagação (dados persistidos)',
       await envelope(pool, a, 'DHL 8002', 'Recebido');
       const hbl = await conferir(pool, a, 'DHL 8002', 'IM8002-26', 'HBL_ORIGINAL', 'RECEBIDO');
       await gatilhos(pool).conferenciaRegistrada(a.orgId, hbl);
-      const { house, progresso } = (await projecao(pool, a, p)).avaliacao;
+      const { house: { l1a: house }, progresso } = (await projecao(pool, a, p)).avaliacao;
       assert.equal(house.tipo, 'RESOLVIDO');
       if (house.tipo === 'RESOLVIDO') {
         assert.equal(house.caminho, 'B_ORIGINAL_RECEBIDO_PELA_ROCKET');
@@ -150,7 +150,7 @@ test('L4 — fatos de Courier e Auditoria com propagação (dados persistidos)',
       await gatilhos(pool).conferenciaRegistrada(a.orgId, await conferir(pool, a, 'DHL 8003', 'IM8003-26', 'MBL', 'RECEBIDO'));
       const [r1, r2, r3] = [await projecao(pool, a, p1), await projecao(pool, a, p2), await projecao(pool, a, p3)];
       assert.deepEqual([via(r1), via(r2), via(r3)], ['CONFERENCIA_DO_PROPRIO_PROCESSO', 'MASTER_VINCULADO', 'MASTER_VINCULADO']);
-      assert.deepEqual([r2.avaliacao.house.tipo, r3.avaliacao.house.tipo], ['RESOLVIDO', 'NAO_DETERMINAVEL'], 'House é de cada processo');
+      assert.deepEqual([r2.avaliacao.house.l1a.tipo, r3.avaliacao.house.l1a.tipo], ['RESOLVIDO', 'NAO_DETERMINAVEL'], 'House é de cada processo');
       assert.notEqual(operacional(r2), operacional(r3), 'etapa individual');
       const { rows } = await pool.query(
         `SELECT DISTINCT ON (processo_id) processo_id, gatilho FROM liberacao_avaliacao_eventos
@@ -198,14 +198,19 @@ test('L4 — fatos de Courier e Auditoria com propagação (dados persistidos)',
       const [pp, pq] = [await projecao(pool, a, p), await projecao(pool, a, q)];
       assert.equal(resolucao(pp).tipo, 'RESOLVIDO', 'fato confirmado permanece');
       assert.equal((resolucao(pp) as any).resolvidoEm, (resolucao(antes) as any).resolvidoEm, 'mesmo instante da confirmação');
-      assert.equal(pp.avaliacao.master.fonteCourier.disponivel, false, 'só a disponibilidade mudou');
+      assert.equal(pp.avaliacao.master.l1a.fonteCourier.disponivel, false, 'só a disponibilidade mudou');
       assert.deepEqual(resolucao(pq), {
         tipo: 'NAO_CONFIRMAVEL', fonte: 'COURIER', motivo: 'FONTE_INDISPONIVEL', indisponivelDesde: (resolucao(pq) as any).indisponivelDesde,
       });
-      for (const pr of [pp, pq]) {
-        assert.notEqual(pr.avaliacao.bloqueador.tipo, 'CONHECIDO', 'nunca "não recebido"');
-        semInvencao(pr);
+      // Nunca "não recebido": P tem o Master resolvido pela própria conferência, mas sem vínculo publicado no S2 — a L1b
+      // aponta só isso (sem responsável, ação nem classe); Q fica sem bloqueio conhecido.
+      assert.equal(pp.avaliacao.bloqueador.tipo, 'CONHECIDO');
+      if (pp.avaliacao.bloqueador.tipo === 'CONHECIDO') {
+        const i = pp.avaliacao.bloqueador.item;
+        assert.deepEqual([i.motivo, i.responsavel, i.acao, i.classe], ['VINCULO_COM_MASTER_NAO_PUBLICADO', null, null, null]);
       }
+      assert.notEqual(pq.avaliacao.bloqueador.tipo, 'CONHECIDO');
+      for (const pr of [pp, pq]) semInvencao(pr);
     });
 
     await t.test('6. evidência válida contrária ao Recebido abre divergência e não sobrescreve o fato oficial (cap. 22, N-14, N-16)', async () => {
@@ -260,7 +265,7 @@ test('L4 — fatos de Courier e Auditoria com propagação (dados persistidos)',
         const of = await conferir(pool, a, `DHL 801${i + 1}`, ref, 'HBL_ORIGINAL', 'RECEBIDO');
         await gatilhos(pool).conferenciaRegistrada(a.orgId, await conferir(pool, a, `DHL 801${i + 1}`, ref, 'HBL_ORIGINAL', 'AUSENTE_NA_CONFERENCIA', assoc));
         const pq = await projecao(pool, a, q);
-        assert.equal(pq.avaliacao.house.tipo === 'RESOLVIDO' && pq.avaliacao.house.evidencia.ref, `courier_fato:${of}`, `${assoc}: House mantida`);
+        assert.equal(pq.avaliacao.house.l1a.tipo === 'RESOLVIDO' && pq.avaliacao.house.l1a.evidencia.ref, `courier_fato:${of}`, `${assoc}: House mantida`);
         assert.deepEqual(pq.avaliacao.divergencias.map((x) => [x.documento, x.divergencia.estado, x.divergencia.valorDivergente]),
           [['HBL_ORIGINAL', 'ABERTA', 'AUSENTE_NA_CONFERENCIA']]);
       }
@@ -408,7 +413,7 @@ test('L4 — fatos de Courier e Auditoria com propagação (dados persistidos)',
       assert.deepEqual([s1.mbl?.valor, s1.mbl?.evidencia.ref], ['AUSENTE_NA_CONFERENCIA', `courier_fato:${ausente}`], 'oficial passa a AUSENTE');
       const pr = await projecao(pool, a, p);
       assert.notEqual(resolucao(pr).tipo, 'RESOLVIDO');
-      assert.equal(pr.avaliacao.master.fisicoDoProcesso.mbl?.valor, 'AUSENTE_NA_CONFERENCIA');
+      assert.equal(pr.avaliacao.master.l1a.fisicoDoProcesso.mbl?.valor, 'AUSENTE_NA_CONFERENCIA');
       assert.deepEqual(pr.avaliacao.divergencias, [], 'mudança da própria fonte não é divergência com o próprio histórico');
       assert.equal(await eventos(pool, p), 2, 'uma mudança oficial: um evento');
       assert.equal(await contar(pool, `SELECT count(*) n FROM courier_fatos WHERE id = $1 AND valor = 'RECEBIDO'`, [recebido]), 1,
@@ -449,7 +454,7 @@ test('L4 — fatos de Courier e Auditoria com propagação (dados persistidos)',
       await conferir(pool, a, 'DHL 9004', 'IM9004-026', 'MBL', 'AUSENTE_NA_CONFERENCIA');
       await conferir(pool, a, 'DHL 9004', 'IM9004-026', 'HBL_ORIGINAL', 'RECEBIDO', 'INFERIDA');
       await recalcularLiberacaoProcesso(pool, a.orgId, p);
-      assert.equal((await projecao(pool, a, p)).avaliacao.master.fisicoDoProcesso.mbl?.valor, 'AUSENTE_NA_CONFERENCIA', 'pelo alias vigente');
+      assert.equal((await projecao(pool, a, p)).avaliacao.master.l1a.fisicoDoProcesso.mbl?.valor, 'AUSENTE_NA_CONFERENCIA', 'pelo alias vigente');
       const origem = (await pool.query(`SELECT * FROM courier_fatos ORDER BY id`)).rows;
 
       await invalidarEvidenciaDeReferencia(pool, a.orgId, {
@@ -461,7 +466,7 @@ test('L4 — fatos de Courier e Auditoria com propagação (dados persistidos)',
       assert.deepEqual(await referenciasDoAssunto(pool, a, p), [['DHL9004', 'MBL', ['IM9004-26']]], 'só o código vigente participa');
       const pr = await projecao(pool, a, p);
       assert.equal((resolucao(pr) as any).evidencia?.ref, `courier_fato:${recebido}`, 'volta a valer o RECEBIDO do código');
-      assert.equal(pr.avaliacao.house.tipo, 'NAO_DETERMINAVEL', 'a marca feita só pelo alias deixou de participar');
+      assert.equal(pr.avaliacao.house.l1a.tipo, 'NAO_DETERMINAVEL', 'a marca feita só pelo alias deixou de participar');
       assert.deepEqual(pr.avaliacao.divergencias, []);
       assert.deepEqual((await pool.query(`SELECT * FROM courier_fatos ORDER BY id`)).rows, origem, 'nenhuma linha do Courier mudou');
     });
@@ -481,7 +486,7 @@ test('L4 — fatos de Courier e Auditoria com propagação (dados persistidos)',
       assert.deepEqual((await referenciasDoAssunto(pool, a, p2)).map((x) => x[2]), [['IM9006-026'], ['IM9006-026']]);
       assert.deepEqual(await projecao(pool, a, p1), antes, 'o mesmo envelope com outro processo não toca P1');
       const pr2 = await projecao(pool, a, p2);
-      assert.equal(pr2.avaliacao.master.fisicoDoProcesso.mbl?.valor, 'AUSENTE_NA_CONFERENCIA');
+      assert.equal(pr2.avaliacao.master.l1a.fisicoDoProcesso.mbl?.valor, 'AUSENTE_NA_CONFERENCIA');
       assert.deepEqual([antes.avaliacao.divergencias, pr2.avaliacao.divergencias], [[], []], 'nenhuma divergência cruzada entre processos');
     });
 
@@ -670,7 +675,7 @@ test('L4 — fatos de Courier e Auditoria com propagação (dados persistidos)',
       assert.equal(Date.parse(linhaComum.instante), linhaComum.registradoEm.getTime());
       await recalcularLiberacaoProcesso(pool, a.orgId, p);
       const pr = await projecao(pool, a, p);
-      assert.equal(pr.avaliacao.house.tipo, 'RESOLVIDO');
+      assert.equal(pr.avaliacao.house.l1a.tipo, 'RESOLVIDO');
       assert.equal((resolucao(pr) as any).resolvidoEm, '2026-10-13T10:00:00.123Z', 'a projeção visível continua em ms');
     });
   } finally {

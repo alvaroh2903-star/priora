@@ -112,7 +112,15 @@ test('L11a — tela da Liberação: garantias estáticas da página', async (t) 
   await t.test('somente leitura e linguagem do D-6: nenhuma ação operacional, nenhum negativo inventado', () => {
     const botoes = [...HTML.matchAll(/<button[^>]*>([\s\S]*?)<\/button>/g)].map((m) => m[1].replace(/<[^>]+>/g, '').trim());
     for (const b of botoes) assert.ok(!/confirmar|liberar|resolver|override|aprovar|encerrar|apresentar|analisar/i.test(b), `botão "${b}"`);
-    semNegativoInventado(HTML);
+    // Fora da tradução dos códigos da decisão oficial (L1b), a página não escreve negativo nenhum. Na tradução, cada texto
+    // só aparece quando o servidor traz o código; o único termo da lista é o rótulo do cap. 25, que a L1b só emite com
+    // Courier, Wave e emissão no destino integrados (D-6). Nas telas com dados reais, `semNegativoInventado` vale para tudo.
+    const ini = HTML.indexOf('/* rotulos-l1b:inicio');
+    const fim = HTML.indexOf('/* rotulos-l1b:fim */');
+    assert.ok(ini > 0 && fim > ini, 'tradução da L1b delimitada');
+    semNegativoInventado(HTML.slice(0, ini) + HTML.slice(fim));
+    assert.deepEqual(PROIBIDAS.filter((f) => HTML.slice(ini, fim).toLowerCase().includes(f)), ['master não localizado']);
+    assert.ok(HTML.includes("MASTER_NAO_LOCALIZADO:'Master não localizado'"));
     assert.ok(HTML.includes('Fonte não integrada') && HTML.includes('Não determinável — marcos posteriores sem fonte'));
     assert.ok(!HTML.includes('Em construção'));
   });
@@ -441,14 +449,22 @@ test('L11a — contrato de leitura e tela com dados persistidos', { skip: !url }
         [['Não confirmável — Courier indisponível', 'Sem fato confirmado'], ['—', 'Sem fato confirmado']]);
       assert.equal(d.master.dims.celulas[2].valor, 'Courier: caixa não verificada');
       assert.equal(d.fonte.texto, 'Courier: caixa não verificada');
-      assert.deepEqual(d.saidas.map((s: any) => s.titulo), Array(3).fill('Não determinável — marcos posteriores sem fonte'));
-      // Cada linha vem da lista da projeção (L1a), uma a uma — a tela não acrescenta nem tira fonte.
-      const av = det.projecao.avaliacao;
-      [av.etapa, av.bloqueador, av.proximaAcao].forEach((s: any, i: number) =>
-        assert.equal(d.saidas[i].linhas.length, s.semFonteIntegrada.length + s.fontesIndisponiveis.length + (s.semObservacao ?? []).length));
-      assert.deepEqual(d.saidas[0].linhas,
-        ['Fonte não integrada: Wave (e-mail do agente)', 'Fonte não integrada: Emissão no destino (e-mail)', 'Fonte indisponível: Courier']);
-      assert.ok(d.saidas[2].linhas.includes('Fonte não integrada: HeadCargo (Termo e financeiro do cliente)'));
+      // As quatro respostas da decisão oficial (L1b): nada determinável, e nenhum responsável inventado.
+      assert.deepEqual(d.saidas.map((s: any) => s.rotulo), ['Etapa', 'O que impede o avanço', 'Responsável pela próxima ação', 'Próxima ação']);
+      assert.deepEqual(det.decisao.responsavel, { tipo: 'NAO_DETERMINAVEL', doItem: null }, 'nada inferido: não determinável');
+      assert.deepEqual(d.saidas.map((s: any) => s.titulo), ['Não determinável — marcos posteriores sem fonte', 'Não determinável — marcos posteriores sem fonte',
+        'Não determinável', 'Não determinável — marcos posteriores sem fonte']);
+      // A etapa diz do que depende (a lista da própria etapa na decisão).
+      assert.deepEqual(det.decisao.etapa, { tipo: 'NAO_DETERMINAVEL', semFonteIntegrada: ['EMAIL_WAVE', 'EMAIL_EMISSAO_DESTINO'], fontesIndisponiveis: ['COURIER'], semObservacao: [] });
+      assert.deepEqual(d.saidas[0].linhas, ['Depende de: Wave (e-mail do agente), Emissão no destino (e-mail), Courier']);
+      // O que falta aparece UMA vez, fonte a fonte, como a decisão listou — a tela não acrescenta nem tira fonte.
+      const ind = det.decisao.indeterminacao;
+      assert.equal(d.faltam.linhas.length, ind.semFonteIntegrada.length + ind.fontesIndisponiveis.length + ind.semObservacao.length);
+      assert.ok(d.faltam.on && d.faltam.linhas.includes('Fonte indisponível: Courier'));
+      assert.ok(d.faltam.linhas.includes('Fonte não integrada: Termo Único (HeadCargo)'));
+      assert.ok(d.faltam.linhas.includes('Fonte não integrada: Pagamento ou prazo do cliente (HeadCargo)'));
+      assert.ok(d.saidas.slice(1).every((s: any) => !s.linhas.some((l: string) => l.startsWith('Fonte'))), 'o que falta não se repete em cada saída');
+      assert.deepEqual([d.atencoes, d.outros], [[], []]);
       assert.ok(d.house.caminhos.some((c: any) => c.rotulo === 'Telex (e-mail do agente)' && c.valor === 'Fonte não integrada'));
       assert.ok(v.fonteAgora.foraOn && v.fonteAgora.texto.includes('ainda não teve o acesso verificado'));
       semNegativoInventado(JSON.stringify(v));
@@ -649,42 +665,73 @@ test('L11a — contrato de leitura e tela com dados persistidos', { skip: !url }
       const agora = { fonte: 'COURIER', estado: 'INDISPONIVEL', desde: '2026-10-12T00:00:00Z' };
       const dims = { estadoOficial: { tipo: 'NAO_CONFIRMAVEL', motivo: 'SEM_OBSERVACAO', confirmado: false }, frescor: null,
         fonte: { ...agora, naAvaliacao: 'DISPONIVEL', mudouDesdeAAvaliacao: true } };
+      // A decisão (lida pelo servidor da decisão gravada) diz Preparação operacional, nada pendente; a projeção bruta
+      // "sugere" outra coisa (etapa não determinável, um item, um marco). A tela segue a decisão, não os campos brutos.
+      const nada = { tipo: 'NAO_DETERMINAVEL', semFonteIntegrada: [], fontesIndisponiveis: [], semObservacao: [] };
       const det = {
         processoId: id, processo: { id, codigo: 'IM9999-26', aliases: [], pendencias: [] }, motivosDeInclusao: ['AVALIACAO_GRAVADA'],
-        fonteCourier: agora, contexto: { processos: {}, evidencias: {} },
+        fonteCourier: agora, contexto: { processos: {}, evidencias: {} }, reavaliacaoPendente: false,
         master: { origem: 'AVALIACAO', identidade: null, emConflito: [],
           fisico: { resolucao: { tipo: 'NAO_CONFIRMAVEL', fonte: 'COURIER', motivo: 'SEM_OBSERVACAO' }, origemDoFato: null, evidencia: null, dimensoes: dims } },
         house: { situacao: { tipo: 'NAO_DETERMINAVEL', semFonteIntegrada: ['PORTAL_FOTO_HBL', 'EMAIL_TELEX'], fontesIndisponiveis: [] }, evidencia: null,
           dimensoes: { ...dims, estadoOficial: { tipo: 'NAO_DETERMINAVEL', motivo: null, confirmado: false } } },
+        decisao: {
+          etapa: { tipo: 'DETERMINADA', etapa: 'PREPARACAO_OPERACIONAL' }, subEtapa: null, bloqueador: { tipo: 'NENHUM' }, proximaAcao: { tipo: 'NENHUMA' },
+          mesmoItem: false, responsavel: { tipo: 'NENHUM' }, atencoes: [], indeterminacao: nada, outrosItens: [], progresso: [],
+        },
         projecao: {
-          avaliadoEm: '2026-10-13T10:00:00.000Z', terminal: false,
+          avaliadoEm: '2026-10-13T10:00:00.000Z', terminal: false, versaoProjecao: 3,
           fontes: { vinculo: { situacao: 'SEM_VINCULO' }, courier: { mblFatoId: null, hblOriginalFatoId: null, envelopeFatoId: null, naoPublicadosFatoIds: [] },
             masterFisico: null, caixaIds: [], disponibilidadeCourier: 'DISPONIVEL' },
           avaliacao: {
-            master: { masterId: null, modalidadeIdentificada: null, fonteCourier: { disponivel: true, desde: '2026-10-01T00:00:00Z' },
+            master: { masterId: null, modalidadeIdentificada: null, l1a: { masterId: null, modalidadeIdentificada: null, fonteCourier: { disponivel: true, desde: '2026-10-01T00:00:00Z' },
               fisicoDoProcesso: { envelope: null, mbl: { valor: 'RECEBIDO', vigenteDesde: '2026-10-01T00:00:00Z', ultimaConfirmacaoEm: '2026-10-01T00:00:00Z', evidencia: { fonte: 'x', ref: 'y' } } },
-              resolucao: { tipo: 'NAO_CONFIRMAVEL', fonte: 'COURIER', motivo: 'SEM_OBSERVACAO' } },
-            house: { tipo: 'NAO_DETERMINAVEL', semFonteIntegrada: ['PORTAL_FOTO_HBL', 'EMAIL_TELEX'], fontesIndisponiveis: [] },
-            progresso: [], etapa: { tipo: 'DETERMINADA', etapa: 'PREPARACAO_OPERACIONAL' }, bloqueador: { tipo: 'NENHUM' }, proximaAcao: { tipo: 'NENHUMA' },
+              resolucao: { tipo: 'NAO_CONFIRMAVEL', fonte: 'COURIER', motivo: 'SEM_OBSERVACAO' } } },
+            house: { l1a: { tipo: 'NAO_DETERMINAVEL', semFonteIntegrada: ['PORTAL_FOTO_HBL', 'EMAIL_TELEX'], fontesIndisponiveis: [] } },
+            progresso: [{ marco: 'MASTER_RESOLVIDO', escopo: 'MASTER', em: '2026-10-01T00:00:00Z', evidencia: { fonte: 'x', ref: 'y' } }],
+            etapa: { ...nada, semFonteIntegrada: ['ARMADOR'] }, bloqueador: { ...nada, semFonteIntegrada: ['ARMADOR'] }, proximaAcao: { ...nada, semFonteIntegrada: ['ARMADOR'] },
+            itens: [{ motivo: 'ARMADOR_DO_MASTER_NAO_IDENTIFICADO', natureza: 'BLOQUEIO', responsavel: 'ROCKET', acao: 'IDENTIFICAR_ARMADOR_DO_MASTER', classe: 'C' }],
             divergencias: [],
           },
         },
       };
       const tela = montarTela((u) => (u.includes('/processos/') ? { status: 200, corpo: det }
-        : { status: 200, corpo: { processos: [{ processoId: id, codigo: 'IM9999-26', avaliado: true, motivosDeInclusao: ['AVALIACAO_GRAVADA'], resumo: {
+        : { status: 200, corpo: { processos: [{ processoId: id, codigo: 'IM9999-26', avaliado: true, reavaliacaoPendente: false, motivosDeInclusao: ['AVALIACAO_GRAVADA'], resumo: {
           master: { situacao: 'NAO_CONFIRMAVEL', via: null, motivo: 'SEM_OBSERVACAO' }, house: { situacao: 'NAO_DETERMINAVEL' },
-          etapa: { tipo: 'DETERMINADA', etapa: 'PREPARACAO_OPERACIONAL' }, divergenciasAtivas: 0, terminal: false, alteradoEm: '2026-10-13T10:00:00.000Z' } }],
+          etapa: { tipo: 'DETERMINADA', etapa: 'PREPARACAO_OPERACIONAL' }, bloqueio: { tipo: 'NENHUM', motivo: null }, proximaAcao: { tipo: 'NENHUMA', acao: null, responsavel: null },
+          divergenciasAtivas: 0, terminal: false, alteradoEm: '2026-10-13T10:00:00.000Z' } }],
         fonteCourier: agora } }),
       { module: 'liberacao', id });
       await tela.esperar();
       const d = tela.vm().d;
       assert.equal(d.master.titulo, 'Não confirmável — o Courier ainda não observou este processo', 'não "corrige" a avaliação');
-      assert.deepEqual(d.saidas.map((s: any) => s.titulo), ['Preparação operacional', 'Nenhum bloqueador conhecido', 'Nenhuma']);
+      assert.deepEqual(d.saidas.map((s: any) => s.titulo), ['Preparação operacional', 'Nenhum bloqueio conhecido', 'Ninguém — nenhuma ação pendente', 'Nenhuma']);
+      assert.equal(d.saidas[2].rotulo, 'Responsável pela próxima ação');
+      assert.deepEqual([d.faltam.on, d.outros, d.atencoes], [false, [], []], 'nada vem dos campos brutos da projeção');
       assert.deepEqual(d.marcos, [], 'nenhum marco inventado a partir do fato bruto');
       assert.deepEqual([d.fonte.texto, d.master.dims.celulas[2].valor], ['Courier indisponível', 'Courier indisponível'],
         'a fonte vem das dimensões do servidor, não da disponibilidade gravada na projeção');
       assert.ok(d.master.dims.celulas[2].sub.includes('na avaliação: Courier disponível'));
       assert.deepEqual([d.master.dims.celulas[1].valor, d.master.dims.celulas[0].sub], ['—', 'Sem fato confirmado'], 'frescor só do servidor');
+    });
+
+    await t.test('14c. avaliação anterior ao motor oficial: a tela diz "aguardando reavaliação" e não mostra decisão nenhuma', async () => {
+      const id = '00000000-0000-4000-8000-000000000002';
+      const agora = { fonte: 'COURIER', estado: 'DISPONIVEL', desde: '2026-10-12T00:00:00Z' };
+      const det = {
+        processoId: id, processo: { id, codigo: 'IM9998-26', aliases: [], pendencias: [] }, motivosDeInclusao: ['AVALIACAO_GRAVADA'],
+        fonteCourier: agora, contexto: { processos: {}, evidencias: {} }, projecao: null, reavaliacaoPendente: true, decisao: null,
+        master: { origem: null, identidade: null, emConflito: [], fisico: null }, house: null,
+      };
+      const tela = montarTela((u) => (u.includes('/processos/') ? { status: 200, corpo: det }
+        : { status: 200, corpo: { processos: [{ processoId: id, codigo: 'IM9998-26', avaliado: true, reavaliacaoPendente: true, motivosDeInclusao: ['AVALIACAO_GRAVADA'], resumo: null }],
+          fonteCourier: agora } }), { module: 'liberacao', id });
+      await tela.esperar();
+      const v = tela.vm();
+      assert.deepEqual([v.d.avaliado, v.d.naoAvaliado, v.d.naoAvaliadoTitulo, v.d.avaliadoEm], [false, true, 'Aguardando reavaliação pelo motor oficial', 'Aguardando reavaliação']);
+      assert.deepEqual([v.d.saidas, v.d.marcos, v.d.faltam.on], [[], [], false], 'nenhuma etapa, ação ou marco da avaliação antiga');
+      assert.deepEqual(v.itens[0].chips.map((c: any) => c.texto), ['Aguardando reavaliação']);
+      semNegativoInventado(JSON.stringify(v));
     });
   } finally {
     for (const s of servidores) await s.fechar();

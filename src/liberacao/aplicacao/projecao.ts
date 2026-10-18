@@ -2,40 +2,60 @@ import { createHash } from 'crypto';
 import { Pool, PoolClient } from 'pg';
 import { Db } from '../../identidade';
 import { mastersCitadosPeloProcesso, processosVinculadosAoMaster } from '../../auditoria/fatos/vinculos';
-import { AvaliacaoProcesso, avaliarProcesso } from '../dominio';
+import { DecisaoDoProcesso, EntradaDecisao, Instante, aplicarPortaoCompartilhado, decidirProcesso, entradaSemIntegracoes } from '../dominio';
 import { DivergenciaDeConferencia, divergenciasDoCourier } from './divergencias';
-import { EntradaCarregada, FontesDaAvaliacao, FonteTerminal, SEM_PRODUTOR_TERMINAL, carregarEntrada } from './entrada';
+import {
+  EntradaCarregada, FontesDaAvaliacao, FontesPosteriores, FonteTerminal, ParticipanteDaDecisao, SEM_FONTES_POSTERIORES, SEM_PRODUTOR_TERMINAL,
+  carregarEntrada,
+} from './entrada';
 
 /**
  * L2 — projeção persistida da Liberação. Fluxo único e reconstruível:
- *   fatos vigentes (S1, S2, S6) → adaptador → L1a → comparação → gravação.
+ *   fatos vigentes (S1, S2, S6) → adaptador → L1b (+ passo compartilhado do N-13) → comparação → gravação.
  *
- * Material × frescor: a impressão material é o sha256 da avaliação da L1a SEM
- * o que é só frescor ou eco de disponibilidade (`ultimaConfirmacaoEm`,
- * `fonteCourier`, `indisponivelDesde`). Assim:
- *  - mesma avaliação → nada é gravado;
+ * Material × frescor: a impressão material é o sha256 da decisão SEM o que é
+ * só frescor ou eco de disponibilidade (`ultimaConfirmacaoEm`, `fonteCourier`,
+ * `indisponivelDesde`) e sem o `agora` da decisão (o relógio da avaliação, não
+ * um resultado). Assim:
+ *  - mesma decisão → nada é gravado, a qualquer hora;
  *  - só frescor/ponteiros mudaram → a linha atual é atualizada, sem evento;
- *  - disponibilidade da fonte só vira evento se mudar uma saída da L1a
- *    (resolução, House, etapa, bloqueador, próxima ação);
+ *  - disponibilidade da fonte só vira evento se mudar uma saída da decisão;
  *  - mudança material → linha atual + UM evento, na mesma transação.
  * Tudo sob bloqueio por processo: reexecução e retentativa são idempotentes.
  * Terminal (LIBERADO) nunca é reaberto: o recálculo devolve a projeção como está.
  */
 
-/** 2: a avaliação passa a levar as divergências do físico (L4). */
-export const VERSAO_PROJECAO = 2;
+/** 2: a avaliação passa a levar as divergências do físico (L4). 3: a decisão é a da L1b (motor oficial). */
+export const VERSAO_PROJECAO = 3;
 
 /**
- * Avaliação da Liberação de um processo: a saída da L1a (`avaliarProcesso`)
- * mais as divergências do físico, também da L1a (`aplicarObservacao`). As
- * divergências não mudam o fato oficial nem a etapa: só ficam registradas.
+ * Avaliação da Liberação de um processo: a decisão da L1b (`decidirProcesso`,
+ * com o passo compartilhado do N-13 sobre os processos ativos do mesmo Master)
+ * mais as divergências do físico, da L1a (`aplicarObservacao`). As divergências
+ * não mudam o fato oficial nem a decisão: só ficam registradas.
  */
-export interface AvaliacaoLiberacao extends AvaliacaoProcesso {
+export interface AvaliacaoLiberacao extends DecisaoDoProcesso {
   divergencias: DivergenciaDeConferencia[];
 }
 
-export function avaliarLiberacao(c: EntradaCarregada): AvaliacaoLiberacao {
-  return { ...avaliarProcesso(c.entrada), divergencias: divergenciasDoCourier(c.assuntos, c.entrada.courier.fonte) };
+/**
+ * Entrada da L1b: a entrada "sem integrações" da própria L1b (`entradaSemIntegracoes`) com o que a aplicação
+ * tem — Courier, vínculo, fato físico do Master, terminal — e as fontes posteriores que a porta fornecer.
+ * Este arquivo é o ÚNICO adaptador de aplicação que chama a L1b (R33, desde a G-3).
+ */
+export function entradaDaDecisao(p: ParticipanteDaDecisao, agora: Instante): EntradaDecisao {
+  const { entrada } = p;
+  return {
+    ...entradaSemIntegracoes(entrada.processoId, agora, entrada.courier), ...p.posteriores,
+    vinculo: p.vinculo, fatosDoMasterL1a: entrada.fatosDoMaster, liberado: entrada.liberado,
+  };
+}
+
+export function avaliarLiberacao(c: EntradaCarregada, agora: Instante): AvaliacaoLiberacao {
+  const decisoes = [c, ...c.vinculados].map((p) => decidirProcesso(entradaDaDecisao(p, agora)));
+  // N-13: a ação de Master só é execução normal com TODOS os ativos vinculados aptos; a etapa continua individual.
+  const [decisao] = aplicarPortaoCompartilhado(decisoes);
+  return { ...decisao, divergencias: divergenciasDoCourier(c.assuntos, c.entrada.courier.fonte) };
 }
 
 export type GatilhoRecalculo =
@@ -45,7 +65,10 @@ export type GatilhoRecalculo =
 export interface ProjecaoLiberacao {
   organizationId: string;
   processoId: string;
-  /** Saída da L1a, como ela devolveu (inclusive NAO_DETERMINAVEL / NAO_CONFIRMAVEL), com as divergências do físico. */
+  /**
+   * Decisão da L1b, como ela devolveu (inclusive NAO_DETERMINAVEL), com as divergências do físico. Linha
+   * gravada por versão anterior (`versaoProjecao` < 3) tem o formato antigo e não é decisão vigente.
+   */
   avaliacao: AvaliacaoLiberacao;
   fontes: FontesDaAvaliacao;
   impressaoMaterial: string;
@@ -70,6 +93,8 @@ export interface OpcoesRecalculo {
   /** Só na reconstrução pedida por uma pessoa (S4); recálculo interno não tem ator. */
   acionadoPorMembershipId?: string | null;
   terminal?: FonteTerminal;
+  /** Fontes posteriores à L1a. Padrão: nenhuma (todas NAO_INTEGRADA). */
+  posteriores?: FontesPosteriores;
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -98,13 +123,20 @@ export function canonico(v: unknown): string {
   return JSON.stringify(v);
 }
 
-/** O significado operacional da avaliação, sem frescor nem eco de disponibilidade. */
-export const vistaMaterial = (avaliacao: AvaliacaoProcesso): unknown => podar(avaliacao);
+/** A avaliação sem o `agora` da decisão: o relógio da avaliação, não um resultado. */
+const semRelogio = (avaliacao: AvaliacaoLiberacao): Omit<AvaliacaoLiberacao, 'agora'> => {
+  const { agora: _relogio, ...decisao } = avaliacao;
+  return decisao;
+};
 
-export const impressaoMaterial = (avaliacao: AvaliacaoProcesso): string =>
+/** O significado operacional da avaliação, sem frescor, sem eco de disponibilidade e sem o relógio da decisão. */
+export const vistaMaterial = (avaliacao: AvaliacaoLiberacao): unknown => podar(semRelogio(avaliacao));
+
+export const impressaoMaterial = (avaliacao: AvaliacaoLiberacao): string =>
   createHash('sha256').update(canonico(vistaMaterial(avaliacao))).digest('hex');
 
-const ehTerminal = (avaliacao: AvaliacaoProcesso): boolean => avaliacao.etapa.tipo === 'DETERMINADA' && avaliacao.etapa.etapa === 'LIBERADO';
+const ehTerminal = (avaliacao: Pick<AvaliacaoLiberacao, 'etapa'>): boolean =>
+  avaliacao.etapa.tipo === 'DETERMINADA' && avaliacao.etapa.etapa === 'LIBERADO';
 
 /* ----------------------------------- leitura ----------------------------------- */
 
@@ -202,12 +234,14 @@ export async function recalcularLiberacaoProcesso(
       return { status: 'TERMINAL_PRESERVADO', projecao };
     }
 
-    const carregada = await carregarEntrada(c, organizationId, processoId, opcoes.terminal ?? SEM_PRODUTOR_TERMINAL);
+    const carregada = await carregarEntrada(
+      c, organizationId, processoId, opcoes.terminal ?? SEM_PRODUTOR_TERMINAL, opcoes.posteriores ?? SEM_FONTES_POSTERIORES,
+    );
     if (!carregada) return { status: 'PROCESSO_NAO_ENCONTRADO' };
-    const avaliacao = avaliarLiberacao(carregada);
+    const { rows: [{ agora }] } = await c.query(`SELECT now() AS agora`);
+    const avaliacao = avaliarLiberacao(carregada, new Date(agora).toISOString());
     const { fontes } = carregada;
     const impressao = impressaoMaterial(avaliacao);
-    const { rows: [{ agora }] } = await c.query(`SELECT now() AS agora`);
 
     const referencia = atual
       ? { impressao: atual.impressao_material as string, avaliacao: atual.avaliacao, sequencia: atual.sequencia as number, alteradoEm: atual.alterado_em }
@@ -216,8 +250,9 @@ export async function recalcularLiberacaoProcesso(
         : null;
 
     if (referencia && referencia.impressao === impressao) {
+      // O relógio da decisão sozinho não regrava a linha: a gravada continua com o `agora` da avaliação que a produziu (= avaliadoEm).
       const identica = atual && atual.versao_projecao === VERSAO_PROJECAO
-        && canonico(atual.avaliacao) === canonico(avaliacao) && canonico(atual.fontes) === canonico(fontes);
+        && canonico(semRelogio(atual.avaliacao)) === canonico(semRelogio(avaliacao)) && canonico(atual.fontes) === canonico(fontes);
       if (identica) return { status: 'SEM_MUDANCA_MATERIAL', atualizada: false, projecao: projecaoDaLinha(atual) };
       const projecao = await gravarLinha(c, organizationId, processoId, {
         avaliacao, fontes, impressao, sequencia: referencia.sequencia, avaliadoEm: agora, alteradoEm: referencia.alteradoEm,

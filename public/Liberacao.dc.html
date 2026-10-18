@@ -22,7 +22,7 @@
 </style>
 </helmet>
 <main style="flex:1;min-width:0;display:flex;flex-direction:column">
-    <dc-import name="Topbar" title="Liberação" subtitle="O que a Priora já comprovou sobre a liberação de cada processo, com evidência. O que ainda não tem fonte aparece como não determinável." icon-path="M9 11l3 3L20 5 M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" hint-size="100%,110px"></dc-import>
+    <dc-import name="Topbar" title="Liberação" subtitle="A decisão operacional de cada processo, com evidência. O que ainda não tem fonte aparece como não determinável." icon-path="M9 11l3 3L20 5 M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" hint-size="100%,110px"></dc-import>
 
     <!-- CARREGANDO -->
     <sc-if value="{{ showLoading }}" hint-placeholder-val="{{ true }}">
@@ -111,7 +111,7 @@
         <sc-if value="{{ semSelecao }}" hint-placeholder-val="{{ false }}">
           <div style="background:#fff;border:1px solid #EAEBF4;border-radius:20px;padding:44px 30px;text-align:center">
             <div style="font-size:16px;font-weight:800;color:#161A2E;margin-bottom:6px">Escolha um processo</div>
-            <div style="font-size:13.5px;color:#6B7192;line-height:1.6">Você verá o que a Priora já comprovou sobre o Master, a House e a etapa — e o que ainda não tem fonte.</div>
+            <div style="font-size:13.5px;color:#6B7192;line-height:1.6">Você verá a etapa, o que impede o avanço, o responsável e a próxima ação — e o que ainda não tem fonte.</div>
           </div>
         </sc-if>
 
@@ -147,7 +147,7 @@
             </div>
             <sc-if value="{{ d.naoAvaliado }}" hint-placeholder-val="{{ false }}">
               <div style="margin-top:16px;background:#F8F7FE;border:1px solid #ECE9FB;border-radius:12px;padding:14px 16px">
-                <div style="font-size:13.5px;font-weight:800;color:#161A2E">Ainda não avaliado</div>
+                <div style="font-size:13.5px;font-weight:800;color:#161A2E">{{ d.naoAvaliadoTitulo }}</div>
                 <div style="font-size:12.5px;color:#6B7192;line-height:1.55;margin-top:4px">{{ d.naoAvaliadoTexto }}</div>
               </div>
             </sc-if>
@@ -171,11 +171,11 @@
           </div>
 
           <sc-if value="{{ d.avaliado }}" hint-placeholder-val="{{ false }}">
-            <!-- AVALIAÇÃO ATUAL (saída da L1a, sem reinterpretação) -->
+            <!-- DECISÃO OPERACIONAL OFICIAL (L1b, sem reinterpretação): etapa, o que impede, responsável e próxima ação -->
             <div style="background:#fff;border:1px solid #EAEBF4;border-radius:20px;padding:20px 22px">
-              <h3 style="font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:#161A2E;margin-bottom:14px">Avaliação atual</h3>
-              <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px">
-                <sc-for list="{{ d.saidas }}" as="s" hint-placeholder-count="3">
+              <h3 style="font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:#161A2E;margin-bottom:14px">Decisão operacional</h3>
+              <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px">
+                <sc-for list="{{ d.saidas }}" as="s" hint-placeholder-count="4">
                   <div style="background:{{ s.fundo }};border:1px solid {{ s.borda }};border-radius:14px;padding:14px 15px">
                     <div style="font-size:10.5px;font-weight:700;color:#9AA0B4;text-transform:uppercase;letter-spacing:.05em">{{ s.rotulo }}</div>
                     <div style="font-size:14.5px;font-weight:800;color:{{ s.cor }};margin-top:5px;line-height:1.35">{{ s.titulo }}</div>
@@ -185,6 +185,33 @@
                   </div>
                 </sc-for>
               </div>
+              <!-- Atenções de consistência da decisão (nunca avançam etapa) -->
+              <sc-for list="{{ d.atencoes }}" as="a" hint-placeholder-count="1">
+                <div style="margin-top:12px;display:flex;align-items:flex-start;gap:10px;background:#FFFBF3;border:1px solid #F5E6C8;border-radius:12px;padding:11px 13px">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#B9760A" stroke-width="2" style="flex-shrink:0;margin-top:1px"><path d="M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
+                  <div style="font-size:12.5px;color:#7A5A12;line-height:1.5">{{ a.texto }}</div>
+                </div>
+              </sc-for>
+              <!-- Outras pendências da mesma decisão -->
+              <sc-if value="{{ d.temOutros }}" hint-placeholder-val="{{ false }}">
+                <div style="margin-top:14px">
+                  <div style="font-size:11px;font-weight:700;color:#9AA0B4;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Também pendente</div>
+                  <div style="display:flex;flex-direction:column;gap:6px">
+                    <sc-for list="{{ d.outros }}" as="o" hint-placeholder-count="1">
+                      <div style="display:flex;justify-content:space-between;gap:12px;font-size:12px"><span style="color:#161A2E;font-weight:700">{{ o.titulo }}</span><span style="color:#6B7192;text-align:right">{{ o.sub }}</span></div>
+                    </sc-for>
+                  </div>
+                </div>
+              </sc-if>
+              <!-- O que a Priora ainda não sabe (D-6, N-17): uma vez só -->
+              <sc-if value="{{ d.faltam.on }}" hint-placeholder-val="{{ false }}">
+                <div style="margin-top:14px;background:#F7F8FC;border:1px solid #ECEDF4;border-radius:12px;padding:12px 14px">
+                  <div style="font-size:12.5px;font-weight:800;color:#5A6076">{{ d.faltam.titulo }}</div>
+                  <div style="display:flex;flex-direction:column;gap:3px;margin-top:6px">
+                    <sc-for list="{{ d.faltam.linhas }}" as="l" hint-placeholder-count="3"><div style="font-size:11.5px;color:#6B7192;line-height:1.4">{{ l }}</div></sc-for>
+                  </div>
+                </div>
+              </sc-if>
             </div>
           </sc-if>
 
@@ -368,10 +395,12 @@ class Component extends DCLogic {
   /*
    * L11a — tela SÓ DE LEITURA. Este código busca, seleciona, formata e
    * exibe. Não decide nada: quais processos entram, resolução do Master,
-   * House, etapa, bloqueador, próxima ação, divergência, pendências de
-   * identidade e as três dimensões do N-17 (estado oficial, frescor e
-   * disponibilidade atual da fonte) vêm prontos do servidor. Aqui só se
-   * traduz cada valor em texto.
+   * House, a decisão operacional oficial (L1b: etapa, bloqueio, responsável,
+   * próxima ação, atenções e o que ainda não se sabe), divergência,
+   * pendências de identidade e as três dimensões do N-17 (estado oficial,
+   * frescor e disponibilidade atual da fonte) vêm prontos do servidor. Aqui
+   * só se traduz cada valor em texto. Avaliação anterior ao motor oficial
+   * nunca é mostrada como decisão.
    */
   state = { lista:null, fonteCourier:null, carregando:true, falha:null, filtro:'', selecionado:null, detalhe:null, carregandoDetalhe:false,
     erroDetalhe:null, focoNaoEncontrado:null, semContexto:null };
@@ -386,8 +415,68 @@ class Component extends DCLogic {
     PORTAL_FOTO_HBL:'Foto do HBL pelo Portal do Cliente', EMAIL_TELEX:'Telex (e-mail do agente)',
     HEADCARGO:'HeadCargo (Termo e financeiro do cliente)', PROCEDIMENTO_AGENCIA:'Procedimento da agência e apresentação',
     SISCARGA:'SISCARGA (desbloqueio e conclusão)' };
-  BLOQUEIO = { MASTER_FISICO_NAO_RECEBIDO:'Master físico ainda não recebido (escopo Master)' };
-  MARCO = { MASTER_RESOLVIDO:'Master resolvido', HOUSE_RESOLVIDO:'House resolvida', MASTER_APRESENTADO:'Master apresentado', LIBERADO:'Liberado' };
+  MARCO = { MASTER_RESOLVIDO:'Master resolvido', HOUSE_RESOLVIDO:'House resolvida', CLIENTE_CONCLUIDO:'Obrigações do cliente concluídas',
+    PROCEDIMENTO_INICIADO:'Procedimento da agência iniciado', BL_ENCAMINHADO_PARA_APRESENTACAO:'BL encaminhado para apresentação',
+    MASTER_APRESENTADO:'Master apresentado', CONDICAO_FINANCEIRA_DO_ARMADOR:'Condição financeira do armador resolvida', LIBERADO:'Liberado' };
+  /* rotulos-l1b:inicio — tradução dos códigos da decisão oficial (L1b); um texto só aparece se o servidor trouxer o código. */
+  FONTE_L1B = { COURIER:'Courier', MODALIDADE_BL:'Modalidade do HBL/MBL informada pelo agente', PRE_ALERTA:'Confirmação do pré-alerta',
+    EMAIL_WAVE:'Wave (e-mail do agente)', EMAIL_EMISSAO_DESTINO:'Emissão no destino (e-mail)', EMAIL_TELEX:'Telex (e-mail do agente)',
+    PORTAL_FOTO_HBL:'Foto do HBL pelo Portal do Cliente', HEADCARGO_TERMO_UNICO:'Termo Único (HeadCargo)',
+    PORTAL_TERMO_EMBARQUE:'Termo por Embarque (Portal do Cliente)', HEADCARGO_FINANCEIRO_CLIENTE:'Pagamento ou prazo do cliente (HeadCargo)',
+    ARMADOR:'Armador do Master', PROCEDIMENTO_AGENCIA:'Procedimento da agência e apresentação', HEADCARGO_PAGAMENTO_ARMADOR:'Pagamento ao armador (HeadCargo)',
+    VIAGEM:'Viagem (ETA, chegada e atracação)', ROTA_E_RETIFICACAO:'Alteração de rota e retificação de CE', AUDITORIA_CE_HOUSE:'CE House e desconsolidação',
+    SISCARGA_FRETE:'SISCARGA — frete', SISCARGA_FISCAL:'SISCARGA — fiscal' };
+  RESPONSAVEL = { ROCKET:'Rocket (Analista)', ROCKET_FINANCEIRO:'Financeiro da Rocket', GESTOR:'Gestor', CLIENTE:'Cliente', AGENTE:'Agente de origem',
+    ARMADOR:'Armador', AGENCIA:'Agência', DESCONSOLIDACAO:'Desconsolidação', TERCEIRO:'Terceiro (espera externa)' };
+  ACAO = { VERIFICAR_SITUACAO_DO_MASTER:'Verificar a situação do Master', SOLICITAR_MODALIDADE_AO_AGENTE:'Solicitar a modalidade ao agente',
+    AGUARDAR_RESPOSTA_DE_MODALIDADE:'Aguardar a resposta do agente sobre a modalidade', RESOLVER_CONFLITO_DE_IDENTIDADE_DO_MASTER:'Resolver o conflito de identidade do Master',
+    AGUARDAR_MASTER_FISICO_EM_TRANSITO:'Aguardar o Master físico em trânsito', CONFERIR_MBL_NO_COURIER:'Conferir o MBL no Courier',
+    ACOMPANHAR_MBL_AUSENTE_COM_O_AGENTE:'Acompanhar com o agente o MBL ausente', AGUARDAR_CONFIRMACAO_DO_WAVE:'Aguardar a confirmação do Wave',
+    CONSULTAR_ARMADOR_EMISSAO_DESTINO:'Consultar o armador sobre a emissão no destino', AGUARDAR_AUTORIZACAO_DA_ORIGEM:'Aguardar a autorização da origem',
+    VALIDAR_HBL_FISICO:'Validar o HBL físico', AGUARDAR_NOVA_FOTO_DO_HBL:'Aguardar nova foto do HBL', AGUARDAR_FOTO_DO_HBL:'Aguardar a foto do HBL',
+    AGUARDAR_TELEX_DO_AGENTE:'Aguardar o Telex do agente', CONFERIR_HBL_NO_COURIER:'Conferir o HBL no Courier', AGUARDAR_HBL_FISICO:'Aguardar o HBL físico',
+    ACOMPANHAR_HBL_AUSENTE_COM_O_AGENTE:'Acompanhar com o agente o HBL ausente', IDENTIFICAR_MODALIDADE_DO_HOUSE:'Identificar a modalidade do House',
+    AGUARDAR_TERMO_DO_CLIENTE:'Aguardar o Termo do cliente', REVISAR_TERMO_POR_EMBARQUE:'Revisar o Termo por Embarque',
+    AGUARDAR_CORRECAO_DO_TERMO:'Aguardar a correção do Termo', AGUARDAR_NOVO_TERMO_DO_CLIENTE:'Aguardar novo Termo do cliente',
+    AGUARDAR_PAGAMENTO_OU_PRAZO_DO_CLIENTE:'Aguardar pagamento ou prazo do cliente',
+    VALIDAR_MAPEAR_PROCEDIMENTO_DE_APRESENTACAO:'Validar e mapear o procedimento de apresentação', IDENTIFICAR_ARMADOR_DO_MASTER:'Identificar o armador do Master',
+    AGENDAR_NO_PORTAL:'Agendar no portal da agência', AGUARDAR_CONFIRMACAO_DO_AGENDAMENTO:'Aguardar a confirmação do agendamento', APRESENTAR_MASTER:'Apresentar o Master',
+    AGUARDAR_STATUS_FINALIZADO:'Aguardar o status Finalizado no portal', PREPARAR_MEMORANDO:'Preparar o memorando', ENVIAR_PARA_APRESENTACAO:'Enviar para apresentação',
+    AGUARDAR_MEMORANDO_CARIMBADO:'Aguardar o memorando carimbado', PREPARAR_MEMORANDO_E_AVISAR_APRESENTACAO:'Preparar o memorando e avisar a apresentação',
+    AGUARDAR_ATRACACAO:'Aguardar a atracação', APRESENTAR_EVERGREEN:'Apresentar o Master na Evergreen', AGUARDAR_PROTOCOLO_CARIMBADO:'Aguardar o protocolo carimbado',
+    CONFIRMAR_APRESENTACAO:'Confirmar a apresentação', ANALISAR_ENCAMINHAMENTO_INCOMPATIVEL:'Analisar o encaminhamento incompatível com a matriz',
+    PAGAR_ARMADOR:'Pagar o armador', AGUARDAR_CONFIRMACAO_DO_PAGAMENTO_AO_ARMADOR:'Aguardar a confirmação do pagamento ao armador',
+    ACOMPANHAR_DESBLOQUEIO_NO_SISCARGA:'Acompanhar o desbloqueio no SISCARGA', COBRAR_ARMADOR_DESBLOQUEIO:'Cobrar o desbloqueio do armador',
+    AGUARDAR_CE_HOUSE:'Aguardar o CE House', VERIFICAR_POSSIVEL_ROLAGEM:'Verificar possível rolagem', VERIFICAR_DESCONSOLIDACAO:'Verificar a desconsolidação',
+    SOLICITAR_DESBLOQUEIO_FISCAL_NO_ECAC:'Solicitar o desbloqueio fiscal no e-CAC', RECONSULTAR_PENDENCIA_FISCAL:'Reconsultar a pendência fiscal',
+    AGUARDAR_RETIFICACAO_DO_CE_MASTER:'Aguardar a retificação do CE Master', RETIFICAR_CE_HOUSE:'Retificar o CE House' };
+  MOTIVO = { DIVERGENCIA_DE_VIAGEM:'Divergência de viagem entre os contêineres', MASTER_NAO_LOCALIZADO:'Master não localizado',
+    CONFLITO_DE_IDENTIDADE_DO_MASTER:'Conflito de identidade do Master na Auditoria', MASTER_FISICO_EM_TRANSITO:'Master físico em trânsito',
+    CONFERENCIA_DO_MBL_PENDENTE:'Envelope entregue; falta conferir o MBL', MBL_AUSENTE_NA_CONFERENCIA:'MBL ausente na conferência do Courier',
+    WAVE_AGUARDANDO_CONFIRMACAO:'Wave aguardando confirmação do agente', EMISSAO_DESTINO_SEM_CONSULTA_AO_ARMADOR:'Emissão no destino sem consulta ao armador',
+    EMISSAO_DESTINO_AGUARDANDO_AUTORIZACAO:'Emissão no destino aguardando a autorização da origem', MODALIDADE_DO_MASTER_DESCONHECIDA:'Modalidade do Master desconhecida',
+    FOTO_DO_HBL_AGUARDANDO_ANALISTA:'Foto do HBL aguardando o Analista', FOTO_DO_HBL_REPROVADA:'Foto do HBL reprovada', FOTO_DO_HBL_PENDENTE:'Foto do HBL ainda não enviada',
+    TELEX_AGUARDANDO_AGENTE:'Telex aguardando o agente', HBL_FISICO_EM_TRANSITO:'HBL físico em trânsito', CONFERENCIA_DO_HBL_PENDENTE:'Envelope entregue; falta conferir o HBL',
+    HBL_AUSENTE_NA_CONFERENCIA:'HBL ausente na conferência do Courier', HBL_FISICO_AGUARDANDO:'HBL físico aguardado', MODALIDADE_DO_HOUSE_DESCONHECIDA:'Modalidade do House desconhecida',
+    TERMO_POR_EMBARQUE_PENDENTE:'Termo por Embarque ainda não enviado pelo cliente', TERMO_POR_EMBARQUE_REPROVADO:'Termo por Embarque reprovado',
+    TERMO_POR_EMBARQUE_PENDENTE_DE_CORRECAO:'Termo por Embarque com campos a corrigir', TERMO_POR_EMBARQUE_EM_REVISAO:'Termo por Embarque em revisão pelo Analista',
+    FINANCEIRO_SEM_PAGAMENTO_E_SEM_PRAZO:'Cliente sem pagamento e sem prazo aprovado', PAGAMENTO_AO_ARMADOR_PENDENTE:'Pagamento ao armador a fazer',
+    PAGAMENTO_AO_ARMADOR_AGUARDANDO_CONFIRMACAO:'Pagamento ao armador aguardando a confirmação', PAGAMENTO_AO_ARMADOR_INFORMACAO_INDISPONIVEL:'Pagamento ao armador: informação indisponível',
+    DESBLOQUEIO_NAO_OCORREU_NA_JANELA_DE_48H:'Desbloqueio não ocorreu na janela de 48h', AGUARDANDO_CE_HOUSE:'Aguardando o CE House',
+    AGUARDANDO_DESBLOQUEIO:'Aguardando o desbloqueio do armador', PENDENCIA_FISCAL:'Pendência fiscal', VERIFICACAO_FINAL_DO_SISCARGA_PENDENTE:'Verificação final do SISCARGA a fazer',
+    VINCULO_COM_MASTER_NAO_PUBLICADO:'Vínculo com o Master ainda não publicado pela Auditoria', ARMADOR_DO_MASTER_NAO_IDENTIFICADO:'Armador do Master não identificado',
+    PROCEDIMENTO_DE_APRESENTACAO_NAO_MAPEADO:'Procedimento de apresentação não mapeado', ENCAMINHAMENTO_COM_AGENCIA_INCOMPATIVEL:'Encaminhamento com agência incompatível com a matriz',
+    ACAO_DA_ROCKET_DISPONIVEL:'Nada impede: ação da Rocket disponível', AGUARDANDO_STATUS_FINALIZADO:'Aguardando o status Finalizado no portal',
+    AGUARDANDO_CONFIRMACAO_DO_AGENDAMENTO:'Aguardando a confirmação do agendamento', MEMORANDO_CARIMBADO_RECEBIDO:'Memorando carimbado recebido',
+    AGUARDANDO_MEMORANDO_CARIMBADO:'Aguardando o memorando carimbado', AGUARDANDO_ATRACACAO:'Aguardando a atracação', PROTOCOLO_CARIMBADO_RECEBIDO:'Protocolo carimbado recebido',
+    AGUARDANDO_PROTOCOLO_CARIMBADO:'Aguardando o protocolo carimbado', MASTER_BLOQUEADO_POR_PROCESSOS_VINCULADOS:'Master tecnicamente apto, mas bloqueado por processos vinculados',
+    ACAO_DE_MASTER_NAO_DETERMINAVEL_PELOS_VINCULADOS:'Ação de Master não determinável: falta informação de processos vinculados' };
+  DIMENSAO = { TERMO:'Termo do cliente', FINANCEIRO:'Pagamento ou prazo do cliente', HOUSE:'House' };
+  MOTIVO_DIMENSAO = { SEM_OBSERVACAO:'sem observação da fonte', FONTE_INDISPONIVEL:'fonte indisponível', RECONFIRMACAO_NECESSARIA:'reconfirmação necessária',
+    RECONFIRMACAO_NECESSARIA_FONTE_INDISPONIVEL:'reconfirmação necessária — fonte indisponível' };
+  /* Lista: bloqueio oficial que muda o que o chip da etapa pode afirmar. Só traduz o bloqueio gravado; nada se deduz dos vinculados. */
+  BLOQUEIO_NA_LISTA = { MASTER_BLOQUEADO_POR_PROCESSOS_VINCULADOS:{ etapa:'Apto tecnicamente', aviso:'Bloqueado por processo vinculado' } };
+  /* rotulos-l1b:fim */
   DOC = { MBL:'MBL (Master)', HBL_ORIGINAL:'HBL original (House)' };
   VALOR = { RECEBIDO:'Recebido', RECEBIDO_E_CONFERIDO:'Recebido e conferido', AUSENTE_NA_CONFERENCIA:'Ausente na conferência',
     DESMARCADO:'Marca retirada', ENTREGUE:'Entregue' };
@@ -480,22 +569,66 @@ class Component extends DCLogic {
   }
   textoEvid(e){ if (!e) return 'Evidência registrada'; var dt=this.detalheEvid(e); return e.rotulo+(dt?(' · '+dt):''); }
   fonteDe(evidencia, d){ return evidencia ? this.textoEvid(this.evid(evidencia.ref, d)) : '—'; }
-  indeterminado(x){
-    var self=this, linhas=[];
-    (x.semFonteIntegrada||[]).forEach(function(f){ linhas.push('Fonte não integrada: '+self.rotulo(self.FONTE,f)); });
-    (x.fontesIndisponiveis||[]).forEach(function(){ linhas.push('Fonte indisponível: Courier'); });
-    (x.semObservacao||[]).forEach(function(){ linhas.push('Sem observação do Courier para este processo'); });
-    var titulo = (x.semFonteIntegrada||[]).length ? 'Não determinável — marcos posteriores sem fonte'
-      : (x.fontesIndisponiveis||[]).length ? 'Não determinável — fonte indisponível' : 'Não determinável — sem observação do Courier';
-    return { titulo:titulo, linhas:linhas };
+  /* ---------------- decisão operacional (L1b): só tradução ---------------- */
+  humano(codigo){ var t=String(codigo||'').toLowerCase().replace(/_/g,' '); return t ? t.charAt(0).toUpperCase()+t.slice(1) : '—'; }
+  rotuloMotivo(m){
+    if (this.MOTIVO[m]) return this.MOTIVO[m];
+    var dim=String(m||'').split('_')[0], resto=String(m||'').slice(dim.length+1);
+    if (this.DIMENSAO[dim] && this.MOTIVO_DIMENSAO[resto]) return this.DIMENSAO[dim]+': '+this.MOTIVO_DIMENSAO[resto];
+    return this.humano(m);
   }
-  saida(rotulo, s, tipoNada, textoNada){
-    var c=this.COR;
-    if (s.tipo==='NAO_DETERMINAVEL'){ var i=this.indeterminado(s); return Object.assign({ rotulo:rotulo, titulo:i.titulo, linhas:i.linhas }, c.neutro); }
-    if (s.tipo==='DETERMINADA') return Object.assign({ rotulo:rotulo, titulo:this.rotulo(this.ETAPA,s.etapa), linhas:[] }, c.roxo);
-    if (s.tipo==='CONHECIDO') return Object.assign({ rotulo:rotulo, titulo:this.rotulo(this.BLOQUEIO,s.motivo), linhas:[] }, c.ambar);
-    if (s.tipo===tipoNada) return Object.assign({ rotulo:rotulo, titulo:textoNada, linhas:[] }, c.verde);
-    return Object.assign({ rotulo:rotulo, titulo:s.tipo, linhas:[] }, c.neutro);
+  rotuloAcao(a){ return this.ACAO[a] || this.humano(a); }
+  rotuloFonte(f){ return this.FONTE_L1B[f] || this.humano(f); }
+  /* Título de uma saída "não determinável", pelo tipo do que falta (D-6, N-17). */
+  tituloIndeterminado(x){
+    return (x.semFonteIntegrada||[]).length ? 'Não determinável — marcos posteriores sem fonte'
+      : (x.fontesIndisponiveis||[]).length ? 'Não determinável — fonte indisponível' : 'Não determinável — sem observação da fonte';
+  }
+  /* O que falta, fonte a fonte, como a decisão listou (nenhuma fonte acrescentada ou tirada). */
+  linhasDoQueFalta(x){
+    var self=this, linhas=[];
+    (x.semFonteIntegrada||[]).forEach(function(f){ linhas.push('Fonte não integrada: '+self.rotuloFonte(f)); });
+    (x.fontesIndisponiveis||[]).forEach(function(f){ linhas.push('Fonte indisponível: '+self.rotuloFonte(f)); });
+    (x.semObservacao||[]).forEach(function(f){ linhas.push('Sem observação da fonte: '+self.rotuloFonte(f)); });
+    return linhas;
+  }
+  /* Detalhe de um item da decisão, só com o que o item traz. */
+  linhasDoItem(i, d, jaExibidas){
+    var self=this, linhas=[], det=i.detalhe||{};
+    if (i.escopo==='MASTER') linhas.push('Ação de escopo Master: vale para os processos vinculados');
+    if (i.desde) linhas.push('Desde '+this.quando(i.desde));
+    if (typeof det.mensagem==='string' && det.mensagem!==this.rotuloMotivo(i.motivo) && jaExibidas.indexOf(det.mensagem)<0) linhas.push(det.mensagem);
+    (det.bloqueios||[]).forEach(function(b){ linhas.push(self.codigoDe(b.processoId, d)+': '+(b.pendencias||[]).map(function(p){ return self.DIMENSAO[p]||p; }).join(', ')); });
+    (det.indeterminados||[]).forEach(function(x){ linhas.push(self.codigoDe(x.processoId, d)+': informação ainda indisponível'); });
+    if ((det.impacta||[]).length) linhas.push('Impacta: '+det.impacta.map(function(id){ return self.codigoDe(id, d); }).join(', '));
+    return linhas;
+  }
+  saidas(dec, d){
+    var self=this, c=this.COR, e=dec.etapa, b=dec.bloqueador, a=dec.proximaAcao, r=dec.responsavel;
+    // As mensagens das atenções já aparecem uma vez, logo abaixo: não se repetem no detalhe dos itens.
+    var avisos=(dec.atencoes||[]).map(function(x){ return x.mensagem; });
+    var dependeDe = function(x){ return [].concat(x.semFonteIntegrada||[], x.fontesIndisponiveis||[], x.semObservacao||[]).map(function(f){ return self.rotuloFonte(f); }); };
+    var etapa = e.tipo==='DETERMINADA'
+      ? Object.assign({ rotulo:'Etapa', titulo:this.rotulo(this.ETAPA,e.etapa), linhas: dec.subEtapa ? [dec.subEtapa.mensagem] : [] }, c.roxo)
+      : Object.assign({ rotulo:'Etapa', titulo:this.tituloIndeterminado(e), linhas:['Depende de: '+dependeDe(e).join(', ')] }, c.neutro);
+    var bloqueio = b.tipo==='CONHECIDO' ? Object.assign({ rotulo:'O que impede o avanço', titulo:this.rotuloMotivo(b.item.motivo), linhas:this.linhasDoItem(b.item, d, avisos) }, c.ambar)
+      : b.tipo==='NENHUM' ? Object.assign({ rotulo:'O que impede o avanço', titulo:'Nenhum bloqueio conhecido', linhas:[] }, c.verde)
+        : Object.assign({ rotulo:'O que impede o avanço', titulo:this.tituloIndeterminado(b), linhas:['Veja abaixo o que a Priora ainda não sabe.'] }, c.neutro);
+    // O rótulo diz de qual item é o responsável: o da próxima ação ou, sem ação, o do impedimento (vem pronto do servidor).
+    var rotuloResp = r.doItem==='BLOQUEIO' ? 'Responsável pelo impedimento' : 'Responsável pela próxima ação';
+    var responsavel = r.tipo==='CONHECIDO' ? Object.assign({ rotulo:rotuloResp, titulo:this.rotulo(this.RESPONSAVEL,r.quem), linhas:[] }, c.roxo)
+      : r.tipo==='NENHUM' ? Object.assign({ rotulo:rotuloResp, titulo:'Ninguém — nenhuma ação pendente', linhas:[] }, c.verde)
+        : Object.assign({ rotulo:rotuloResp, titulo:'Não determinável', linhas:[] }, c.neutro);
+    var proxima = a.tipo==='CONHECIDA'
+      ? Object.assign({ rotulo:'Próxima ação', titulo:this.rotuloAcao(a.item.acao), linhas: dec.mesmoItem ? [] : this.linhasDoItem(a.item, d, avisos) }, c.roxo)
+      : a.tipo==='NENHUMA' ? Object.assign({ rotulo:'Próxima ação', titulo:'Nenhuma', linhas:[] }, c.verde)
+        : Object.assign({ rotulo:'Próxima ação', titulo:this.tituloIndeterminado(a), linhas:['Veja abaixo o que a Priora ainda não sabe.'] }, c.neutro);
+    return [etapa, bloqueio, responsavel, proxima];
+  }
+  quandoMarco(m){
+    var mo=m.momento;
+    if (mo && mo.precisao==='DATA') return String(mo.data).split('-').reverse().join('/');
+    return this.quando(m.em || (mo && mo.instante));
   }
   /* Fato oficial com o seu próprio frescor (valores da projeção, só formatados). */
   fatoComFrescor(f){ return this.rotulo(this.VALOR,f.valor)+' · desde '+this.quando(f.vigenteDesde)+' · última confirmação '+this.quando(f.ultimaConfirmacaoEm); }
@@ -556,7 +689,7 @@ class Component extends DCLogic {
       return out;
     }
     out.on = true;
-    var r=m.fisico.resolucao, av=p.avaliacao.master;
+    var r=m.fisico.resolucao, av=p.avaliacao.master.l1a;
     if (r.tipo==='RESOLVIDO'){
       Object.assign(out, c.verde, { selo:'Resolvido' });
       out.titulo = 'Master físico recebido';
@@ -629,34 +762,43 @@ class Component extends DCLogic {
 
   vmDetalhe(){
     var st=this.state, d=st.detalhe, self=this;
-    var vazio = { on:false, avaliado:false, naoAvaliado:false, fonte:{}, saidas:[], master:{ on:false, tardio:{}, dims:{ celulas:[] } },
-      house:{ dims:{ celulas:[] } }, divergencias:[], marcos:[], evidencias:[], pendencias:[] };
+    var vazio = { on:false, avaliado:false, naoAvaliado:false, fonte:{}, saidas:[], atencoes:[], outros:[], temOutros:false, faltam:{ on:false, linhas:[] },
+      master:{ on:false, tardio:{}, dims:{ celulas:[] } }, house:{ dims:{ celulas:[] } }, divergencias:[], marcos:[], evidencias:[], pendencias:[] };
     if (!d) return vazio;
     var base = Object.assign({}, vazio, { on:true, codigo:d.processo.codigo||'Processo sem código',
       aliases:(d.processo.aliases||[]).join(', '), temAliases:(d.processo.aliases||[]).length>0,
       pendencias:(d.processo.pendencias||[]).map(function(p){ return self.vmPendencia(p, d); }), fonte:this.vmFonteAgora(d.fonteCourier) });
     base.temPendencias = base.pendencias.length>0;
     base.master = this.vmMaster(d);
-    var p=d.projecao;
-    if (!p) {
+    var p=d.projecao, dec=d.decisao;
+    if (!p || !dec) {
+      if (d.reavaliacaoPendente) {
+        // Avaliação gravada antes do motor oficial: nunca é mostrada como decisão.
+        return Object.assign(base, { naoAvaliado:true, avaliadoEm:'Aguardando reavaliação', naoAvaliadoTitulo:'Aguardando reavaliação pelo motor oficial',
+          naoAvaliadoTexto:'A avaliação gravada deste processo é anterior ao motor oficial de decisão da Liberação e não é exibida. A etapa, o que impede o avanço, o responsável e a próxima ação aparecem quando a Priora reavaliar o processo.' });
+      }
       var fatos=(d.motivosDeInclusao||[]).map(function(m){ return self.rotulo(self.MOTIVO_INCLUSAO,m); }).join('; ');
-      return Object.assign(base, { naoAvaliado:true, avaliadoEm:'Ainda não avaliado',
+      return Object.assign(base, { naoAvaliado:true, avaliadoEm:'Ainda não avaliado', naoAvaliadoTitulo:'Ainda não avaliado',
         naoAvaliadoTexto:'A Liberação ainda não avaliou este processo, mas já há fatos dele na Priora: '+fatos+'. Nenhuma situação é presumida até a avaliação.' });
     }
-    var av=p.avaliacao;
     base.avaliado = true;
     base.avaliadoEm = 'Avaliado em '+this.quando(p.avaliadoEm);
-    base.saidas = [
-      this.saida('Etapa', av.etapa, '', ''),
-      this.saida('Bloqueador', av.bloqueador, 'NENHUM', 'Nenhum bloqueador conhecido'),
-      this.saida('Próxima ação', av.proximaAcao, 'NENHUMA', 'Nenhuma'),
-    ];
+    base.saidas = this.saidas(dec, d);
+    base.atencoes = (dec.atencoes||[]).map(function(a){ return { texto:a.mensagem }; });
+    base.outros = (dec.outrosItens||[]).map(function(i){
+      return { titulo:self.rotuloMotivo(i.motivo),
+        sub:[i.responsavel ? self.rotulo(self.RESPONSAVEL,i.responsavel) : '', i.acao ? self.rotuloAcao(i.acao) : ''].filter(Boolean).join(' · ') || 'Sem responsável nem ação atribuídos' };
+    });
+    base.temOutros = base.outros.length>0;
+    var falta = this.linhasDoQueFalta(dec.indeterminacao);
+    base.faltam = { on:falta.length>0, titulo:'O que a Priora ainda não sabe', linhas:falta };
     base.house = this.vmHouse(d);
     base.divergencias = this.vmDivergencias(d);
     base.temDivergencias = base.divergencias.length>0;
-    base.marcos = (av.progresso||[]).map(function(m){
+    base.marcos = (dec.progresso||[]).map(function(m){
       return { titulo:self.rotulo(self.MARCO,m.marco)+(m.escopo==='MASTER'?' · escopo Master':' · este processo'),
-        sub:self.quando(m.em)+' · '+self.fonteDe(m.evidencia, d)+(m.vinculoTardio?' · vínculo posterior ao fato':''), ref:m.evidencia.ref };
+        sub:self.quandoMarco(m)+' · '+self.fonteDe(m.evidencia, d)+(m.ator?(' · registrado por '+m.ator):'')+(m.vinculoTardio?' · vínculo posterior ao fato':''),
+        ref:m.evidencia ? m.evidencia.ref : '' };
     });
     base.semMarcos = base.marcos.length===0;
     var ev = d.contexto.evidencias||{};
@@ -669,10 +811,17 @@ class Component extends DCLogic {
 
   vmItem(it){
     var c=this.COR, self=this, sel=this.state.selecionado===it.processoId, chips=[], r=it.resumo;
-    if (!it.avaliado) {
+    if (it.reavaliacaoPendente) {
+      chips.push({ texto:'Aguardando reavaliação', cor:c.neutro.cor, fundo:c.neutro.fundo });
+    } else if (!it.avaliado || !r) {
       chips.push({ texto:'Ainda não avaliado', cor:c.neutro.cor, fundo:c.neutro.fundo });
       (it.motivosDeInclusao||[]).forEach(function(m){ if (self.CHIP_INCLUSAO[m]) chips.push({ texto:self.CHIP_INCLUSAO[m], cor:c.roxo.cor, fundo:c.roxo.fundo }); });
     } else {
+      var trava = r.bloqueio && r.bloqueio.tipo==='CONHECIDO' && Object.prototype.hasOwnProperty.call(this.BLOQUEIO_NA_LISTA, r.bloqueio.motivo)
+        ? this.BLOQUEIO_NA_LISTA[r.bloqueio.motivo] : null;
+      if (trava) { chips.push(Object.assign({ texto:trava.etapa }, c.roxo)); chips.push(Object.assign({ texto:trava.aviso }, c.vermelho)); }
+      else chips.push(r.etapa.tipo==='DETERMINADA' ? Object.assign({ texto:this.rotulo(this.ETAPA,r.etapa.etapa) }, c.roxo) : Object.assign({ texto:'Etapa não determinável' }, c.neutro));
+      if (r.proximaAcao.tipo==='CONHECIDA') chips.push(Object.assign({ texto:this.rotuloAcao(r.proximaAcao.acao) }, c.ambar));
       var m = r.master.situacao==='RESOLVIDO' ? Object.assign({ texto: r.master.via==='MASTER_VINCULADO' ? 'Master recebido (pelo vínculo)' : 'Master recebido' }, c.verde)
         : r.master.situacao==='NAO_RESOLVIDO' ? Object.assign({ texto:'Master não resolvido' }, c.ambar) : Object.assign({ texto:'Master não confirmável' }, c.neutro);
       chips.push(m);

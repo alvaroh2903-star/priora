@@ -1,16 +1,89 @@
 import { Db, ErroIdentidade, resolverMaster, resolverProcesso } from '../../identidade';
 import { processosVinculadosAoMaster, vinculoDoProcesso } from '../../auditoria/fatos/vinculos';
 import { fatosCourierDoProcesso } from '../../couriers/fatos/courierFatos';
+import {
+  Atencao, CodigoAcao, IndeterminacaoL1b, ItemOperacional, MarcoConfirmadoL1b, Responsavel, SaidaBloqueadorL1b, SaidaEtapaL1b, SaidaProximaAcaoL1b,
+  SubEtapa,
+} from '../dominio';
 import { EstadoDisponibilidadeCourier, disponibilidadeDoCourier } from './entrada';
-import { ProjecaoLiberacao, ehUuid, obterLiberacaoDoProcesso } from './projecao';
+import { AvaliacaoLiberacao, ProjecaoLiberacao, VERSAO_PROJECAO, canonico, ehUuid, obterLiberacaoDoProcesso } from './projecao';
 
 /**
  * L11a — contrato de LEITURA da tela da Liberação. Só lê: a projeção L2/L4
  * persistida e, para exibição, os donos de cada dado (S6 identidade e
  * pendências, S2 vínculo, S1 Courier, Auditoria, caixa monitorada, membros) —
  * sem copiar nada para a L2 e sem recalcular. A tela não decide nada: tudo o
- * que ela mostra, inclusive as três dimensões do N-17, vem pronto daqui.
+ * que ela mostra, inclusive as três dimensões do N-17 e a decisão operacional
+ * oficial (L1b), vem pronto daqui.
+ *
+ * Projeção gravada por versão anterior ao motor oficial (`versaoProjecao` < 3, formato da L1a) nunca é
+ * apresentada como decisão: o processo aparece como "aguardando reavaliação", sem etapa nem ação.
  */
+
+/** A projeção gravada é a decisão vigente do motor oficial (L1b)? */
+const ehDecisaoVigente = (p: Pick<ProjecaoLiberacao, 'versaoProjecao'>): boolean => p.versaoProjecao >= VERSAO_PROJECAO;
+
+/* ------------------------------ decisão operacional (L1b) ------------------------------ */
+
+/**
+ * A decisão operacional oficial pronta para exibir: os valores que a L1b gravou, copiados sem regra nova.
+ * Etapa, bloqueio e próxima ação continuam saídas independentes (cap. 4). O responsável é o do próprio item
+ * da L1b, e a tela diz de qual: o da próxima ação quando ela é conhecida ("Responsável pela próxima ação");
+ * senão, o do bloqueio conhecido ("Responsável pelo impedimento"). Item sem responsável, ou fatos
+ * insuficientes, é "não determinável": nada se deduz do MBL, da identidade, da tela ou da falta de dado.
+ */
+export interface DecisaoOperacional {
+  etapa: SaidaEtapaL1b;
+  subEtapa: SubEtapa | null;
+  bloqueador: SaidaBloqueadorL1b;
+  proximaAcao: SaidaProximaAcaoL1b;
+  /** O bloqueio e a próxima ação são o MESMO item da L1b (o detalhe do item aparece uma vez). */
+  mesmoItem: boolean;
+  /**
+   * CONHECIDO: o item atribui um responsável. NENHUM: nada pendente (sem bloqueio nem ação, e nada a determinar).
+   * NAO_DETERMINAVEL: fatos insuficientes (`doItem` null) ou o item não atribui responsável (ex.: informação
+   * indisponível, ação de Master bloqueada pelos vinculados).
+   */
+  responsavel:
+    | { tipo: 'CONHECIDO'; quem: Responsavel; doItem: 'PROXIMA_ACAO' | 'BLOQUEIO' }
+    | { tipo: 'NENHUM' }
+    | { tipo: 'NAO_DETERMINAVEL'; doItem: 'PROXIMA_ACAO' | 'BLOQUEIO' | null };
+  /** Atenções de consistência da L1b (não são etapa, classe nem apresentação). */
+  atencoes: Atencao[];
+  /** O que a Priora ainda não sabe com as fontes atuais (D-6, N-17): uma vez só, como a L1b devolveu. */
+  indeterminacao: IndeterminacaoL1b;
+  /** Os demais itens da decisão, além do bloqueio e da próxima ação, como a L1b os devolveu. */
+  outrosItens: ItemOperacional[];
+  progresso: MarcoConfirmadoL1b[];
+}
+
+function responsavelDo(
+  de: { item: ItemOperacional; doItem: 'PROXIMA_ACAO' | 'BLOQUEIO' } | null, nadaPendente: boolean,
+): DecisaoOperacional['responsavel'] {
+  if (de) return de.item.responsavel ? { tipo: 'CONHECIDO', quem: de.item.responsavel, doItem: de.doItem } : { tipo: 'NAO_DETERMINAVEL', doItem: de.doItem };
+  return nadaPendente ? { tipo: 'NENHUM' } : { tipo: 'NAO_DETERMINAVEL', doItem: null };
+}
+
+export function decisaoOperacionalDe(a: AvaliacaoLiberacao): DecisaoOperacional {
+  const bloqueio = a.bloqueador.tipo === 'CONHECIDO' ? canonico(a.bloqueador.item) : null;
+  const acao = a.proximaAcao.tipo === 'CONHECIDA' ? canonico(a.proximaAcao.item) : null;
+  return {
+    etapa: a.etapa,
+    subEtapa: a.subEtapa,
+    bloqueador: a.bloqueador,
+    proximaAcao: a.proximaAcao,
+    mesmoItem: bloqueio !== null && bloqueio === acao,
+    responsavel: responsavelDo(
+      a.proximaAcao.tipo === 'CONHECIDA' ? { item: a.proximaAcao.item, doItem: 'PROXIMA_ACAO' }
+        : a.bloqueador.tipo === 'CONHECIDO' ? { item: a.bloqueador.item, doItem: 'BLOQUEIO' } : null,
+      a.bloqueador.tipo === 'NENHUM' && a.proximaAcao.tipo === 'NENHUMA',
+    ),
+    atencoes: a.atencoes,
+    indeterminacao: a.indeterminacao,
+    outrosItens: a.itens.filter((i) => canonico(i) !== bloqueio && canonico(i) !== acao),
+    progresso: a.progresso,
+  };
+}
 
 /* ------------------------------ inclusão na Liberação ------------------------------ */
 
@@ -74,11 +147,14 @@ async function motivosDoProcesso(db: Db, organizationId: string, processoId: str
 
 /* ------------------------------------ lista ------------------------------------ */
 
-/** Resumo para a lista, lido da projeção gravada (nada recalculado, nada presumido). */
+/** Resumo para a lista, lido da decisão gravada (nada recalculado, nada presumido). */
 export interface ResumoDaLiberacao {
   master: { situacao: string; via: string | null; motivo: string | null };
   house: { situacao: string };
   etapa: { tipo: string; etapa: string | null };
+  /** Bloqueio e próxima ação da L1b: o motivo e a ação quando conhecidos (null = nenhum ou não determinável, em `tipo`). */
+  bloqueio: { tipo: string; motivo: string | null };
+  proximaAcao: { tipo: string; acao: CodigoAcao | null; responsavel: Responsavel | null };
   /** Divergências em ABERTA ou EM_ANALISE (N-14). */
   divergenciasAtivas: number;
   terminal: boolean;
@@ -91,6 +167,8 @@ export interface ItemDaLista {
   codigo: string | null;
   /** false = há contexto de Liberação, mas a avaliação ainda não foi gravada (não quer dizer que não há fatos). */
   avaliado: boolean;
+  /** true = a avaliação gravada é anterior ao motor oficial (L1b): não é decisão vigente e não tem resumo. */
+  reavaliacaoPendente: boolean;
   motivosDeInclusao: MotivoDeInclusao[];
   resumo: ResumoDaLiberacao | null;
 }
@@ -104,11 +182,15 @@ const ATIVAS = ['ABERTA', 'EM_ANALISE'];
 
 function resumir(p: ProjecaoLiberacao): ResumoDaLiberacao {
   const a = p.avaliacao;
-  const r = a.master.resolucao as { tipo: string; via?: string; motivo?: string };
+  const r = a.master.l1a.resolucao as { tipo: string; via?: string; motivo?: string };
   return {
     master: { situacao: r.tipo, via: r.via ?? null, motivo: r.motivo ?? null },
-    house: { situacao: a.house.tipo },
+    house: { situacao: a.house.l1a.tipo },
     etapa: { tipo: a.etapa.tipo, etapa: a.etapa.tipo === 'DETERMINADA' ? a.etapa.etapa : null },
+    bloqueio: { tipo: a.bloqueador.tipo, motivo: a.bloqueador.tipo === 'CONHECIDO' ? a.bloqueador.item.motivo : null },
+    proximaAcao: a.proximaAcao.tipo === 'CONHECIDA'
+      ? { tipo: a.proximaAcao.tipo, acao: a.proximaAcao.item.acao, responsavel: a.proximaAcao.item.responsavel }
+      : { tipo: a.proximaAcao.tipo, acao: null, responsavel: null },
     divergenciasAtivas: (a.divergencias ?? []).filter((d) => ATIVAS.includes(d.divergencia.estado)).length,
     terminal: p.terminal,
     alteradoEm: p.alteradoEm,
@@ -135,8 +217,9 @@ export async function listarLiberacao(db: Db, organizationId: string): Promise<L
       processoId: r.id,
       codigo: r.numero_processo ?? null,
       avaliado: r.avaliado,
+      reavaliacaoPendente: r.avaliado && !ehDecisaoVigente({ versaoProjecao: r.versao_projecao }),
       motivosDeInclusao: ORDEM_MOTIVOS.filter((m) => motivos.get(r.id)!.has(m)),
-      resumo: r.avaliado
+      resumo: r.avaliado && ehDecisaoVigente({ versaoProjecao: r.versao_projecao })
         ? resumir({
           organizationId, processoId: r.id, avaliacao: r.avaliacao, fontes: r.fontes, impressaoMaterial: r.impressao_material,
           versaoProjecao: r.versao_projecao, sequencia: r.sequencia, terminal: r.terminal,
@@ -342,9 +425,9 @@ export interface LeituraDoMaster {
   identidade: IdentidadeDoMaster | null;
   /** Vínculo em CONFLITO no S2: os Masters envolvidos, nenhum escolhido. */
   emConflito: IdentidadeDoMaster[];
-  /** Resolução física (L1a, gravada pela L2) com as três dimensões; null = ainda não avaliado. */
+  /** Resolução física (visão da L1a dentro da decisão gravada pela L2) com as três dimensões; null = ainda não avaliado. */
   fisico: {
-    resolucao: ProjecaoLiberacao['avaliacao']['master']['resolucao'];
+    resolucao: ProjecaoLiberacao['avaliacao']['master']['l1a']['resolucao'];
     /** Processo cuja conferência estabeleceu o fato do Master (quando veio pelo vínculo). */
     origemDoFato: { processoId: string; codigo: string | null } | null;
     evidencia: EvidenciaLegivel | null;
@@ -353,7 +436,7 @@ export interface LeituraDoMaster {
 }
 
 export interface LeituraDaHouse {
-  situacao: ProjecaoLiberacao['avaliacao']['house'];
+  situacao: ProjecaoLiberacao['avaliacao']['house']['l1a'];
   evidencia: EvidenciaLegivel | null;
   dimensoes: TresDimensoes;
 }
@@ -403,8 +486,15 @@ export interface DetalheDaLiberacao {
   processo: { id: string; codigo: string | null; aliases: string[]; pendencias: PendenciaDeIdentidade[] };
   motivosDeInclusao: MotivoDeInclusao[];
   fonteCourier: FonteCourierAgora;
-  /** null = há contexto de Liberação, mas a avaliação ainda não foi gravada: nenhuma avaliação é fabricada. */
+  /**
+   * null = há contexto de Liberação, mas não há decisão vigente gravada: ainda não avaliado, ou avaliado por
+   * versão anterior ao motor oficial (`reavaliacaoPendente`). Nenhuma avaliação é fabricada.
+   */
   projecao: ProjecaoLiberacao | null;
+  /** A avaliação gravada é anterior ao motor oficial (L1b) e não é exibida como decisão. */
+  reavaliacaoPendente: boolean;
+  /** Decisão operacional oficial (L1b) pronta para exibir; null sem decisão vigente. */
+  decisao: DecisaoOperacional | null;
   master: LeituraDoMaster;
   house: LeituraDaHouse | null;
   contexto: {
@@ -428,8 +518,11 @@ export async function detalharLiberacao(db: Db, organizationId: string, processo
     `SELECT id, numero_processo FROM processos WHERE id = $1 AND organization_id = $2`, [processoId, organizationId],
   );
   if (!proc) return { status: 'NAO_ENCONTRADO' };
-  const projecao = await obterLiberacaoDoProcesso(db, organizationId, processoId);
-  const motivosDeInclusao = await motivosDoProcesso(db, organizationId, processoId, !!projecao);
+  const gravada = await obterLiberacaoDoProcesso(db, organizationId, processoId);
+  // Só a decisão do motor oficial é decisão vigente; a linha antiga continua contexto, sem ser exibida como decisão.
+  const projecao = gravada && ehDecisaoVigente(gravada) ? gravada : null;
+  const reavaliacaoPendente = !!gravada && !projecao;
+  const motivosDeInclusao = await motivosDoProcesso(db, organizationId, processoId, !!gravada);
   const identidadeCentral = { id: proc.id as string, codigo: (proc.numero_processo ?? null) as string | null };
   if (!motivosDeInclusao.length) return { status: 'SEM_CONTEXTO', processo: identidadeCentral };
 
@@ -472,20 +565,22 @@ export async function detalharLiberacao(db: Db, organizationId: string, processo
   const detalhe: DetalheDaLiberacao = {
     processoId,
     processo: { ...identidadeCentral, aliases, pendencias: await pendenciasDoProcesso(db, organizationId, processoId) },
-    motivosDeInclusao, fonteCourier, projecao, master, house: null, contexto: { processos: {}, evidencias: {} },
+    motivosDeInclusao, fonteCourier, projecao, reavaliacaoPendente, decisao: projecao ? decisaoOperacionalDe(projecao.avaliacao) : null,
+    master, house: null, contexto: { processos: {}, evidencias: {} },
   };
   if (!projecao) return { status: 'OK', detalhe };
 
   const citados: string[] = [];
   if (projecao.fontes.masterFisico) citados.push(projecao.fontes.masterFisico.origemProcessoId);
-  for (const m of JSON.stringify(projecao.avaliacao).matchAll(/"processosVinculadosNaAcao":\[([^\]]*)\]/g)) {
-    citados.push(...(m[1].match(/[0-9a-f-]{36}/g) ?? []));
-  }
+  // Processos citados pela decisão: vinculados na ação, impactados pela ação de Master e os listados pelo N-13.
+  const json = JSON.stringify(projecao.avaliacao);
+  for (const m of json.matchAll(/"(?:processosVinculadosNaAcao|impacta)":\[([^\]]*)\]/g)) citados.push(...(m[1].match(/[0-9a-f-]{36}/g) ?? []));
+  for (const m of json.matchAll(/"processoId":"([0-9a-f-]{36})"/g)) citados.push(m[1]);
   detalhe.contexto.processos = await codigosDosProcessos(db, organizationId, citados);
   detalhe.contexto.evidencias = await evidenciasLegiveis(db, organizationId, projecao);
   const evid = (ref: string | undefined) => (ref ? detalhe.contexto.evidencias[ref] ?? null : null);
 
-  const r = projecao.avaliacao.master.resolucao;
+  const r = projecao.avaliacao.master.l1a.resolucao;
   const mf = projecao.fontes.masterFisico;
   master.fisico = {
     resolucao: r,
@@ -498,7 +593,7 @@ export async function detalharLiberacao(db: Db, organizationId: string, processo
       fonteCourier, projecao,
     ),
   };
-  const h = projecao.avaliacao.house;
+  const h = projecao.avaliacao.house.l1a;
   detalhe.house = {
     situacao: h,
     evidencia: h.tipo === 'RESOLVIDO' ? evid(h.evidencia.ref) : null,

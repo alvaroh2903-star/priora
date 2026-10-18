@@ -4,15 +4,16 @@ import {
 } from '../../couriers/fatos/courierFatos';
 import { SituacaoVinculo, processosVinculadosAoMaster, vinculoDoProcesso } from '../../auditoria/fatos/vinculos';
 import {
-  ConferenciaHblOriginal, CourierDoProcesso, DisponibilidadeFonte, EntradaAvaliacao, FatoDoMaster, FatoOficial, Instante, Liberado,
-  VinculoProcessoMaster, fatoFisicoDoMaster,
+  ConferenciaHblOriginal, CourierDoProcesso, DisponibilidadeFonte, EntradaAvaliacao, EntradaDecisao, FatoDoMaster, FatoOficial, Instante, Liberado,
+  SituacaoVinculoL1b, VinculoProcessoMaster, fatoFisicoDoMaster,
 } from '../dominio';
 
 /**
  * L2 — adaptador de entrada: reúne, para UM processo, os fatos vigentes dos
- * donos e os converte nos tipos da L1a. Não interpreta nada: quem decide é a
- * L1a (`avaliarProcesso`, `fatoFisicoDoMaster`). Aqui não há regra de
- * negócio, só leitura e conversão de tipos:
+ * donos e os converte nos tipos do domínio. Não interpreta nada: quem decide é
+ * a L1b, o motor oficial (chamado só pela projeção), sobre o fato físico do
+ * Master da L1a (`fatoFisicoDoMaster`). Aqui não há regra de negócio, só
+ * leitura e conversão de tipos:
  *  - identidade: `processos` (S6) — sem tabela própria de processo;
  *  - vínculo Processo↔Master: `vinculoDoProcesso` (S2). CONFLITO → nenhum
  *    Master escolhido (vínculo null para a L1a). `vinculadoEm` é quando a
@@ -21,8 +22,11 @@ import {
  *  - Courier: `fatosCourierDoProcesso` (S1), só linhas oficiais;
  *  - disponibilidade do Courier: estado da caixa monitorada em `email_caixas`
  *    (só a confirmada é disponível; desconhecida não);
- *  - terminal (LIBERADO): sem produtor na Vertical 1 (L5/SISCARGA, depois).
- * Nada desconhecido vira fato: o que não tem fonte chega à L1a como ausência.
+ *  - terminal (LIBERADO): sem produtor na Vertical 1 (L5/SISCARGA, depois);
+ *  - fontes posteriores à L1a (armador, procedimento, cliente, viagem,
+ *    SISCARGA…): só pela porta `FontesPosteriores`, cujo padrão não fornece
+ *    nenhuma — todas chegam à L1b como NAO_INTEGRADA (D-6).
+ * Nada desconhecido vira fato: o que não tem fonte chega à L1b como "não integrada".
  */
 
 /** Ponteiros (ids) para as linhas de origem usadas. Nunca os valores. */
@@ -53,11 +57,31 @@ export type EstadoDisponibilidadeCourier = 'DISPONIVEL' | 'INDISPONIVEL' | 'DESC
 export type FonteTerminal = (db: Db, organizationId: string, processoId: string) => Promise<Liberado | null>;
 export const SEM_PRODUTOR_TERMINAL: FonteTerminal = async () => null;
 
-export interface EntradaCarregada {
+/**
+ * Fatos das fontes posteriores à L1a, no vocabulário da L1b. Campo ausente = fonte não integrada: vale o
+ * padrão de `entradaSemIntegracoes`. Identidade, relógio, vínculo, Courier, fato do Master e terminal não
+ * entram por aqui (vêm dos donos já lidos acima).
+ */
+export type FatosPosteriores = Partial<Omit<EntradaDecisao, 'processoId' | 'agora' | 'vinculo' | 'fatosDoMasterL1a' | 'courier' | 'liberado'>>;
+
+/** Produtor das fontes posteriores de UM processo. A Vertical 1 não tem nenhum: tudo NAO_INTEGRADA. */
+export type FontesPosteriores = (db: Db, organizationId: string, processoId: string) => Promise<FatosPosteriores>;
+export const SEM_FONTES_POSTERIORES: FontesPosteriores = async () => ({});
+
+/** O que a decisão de UM processo consome: os fatos já convertidos, o vínculo da L1b e as fontes posteriores. */
+export interface ParticipanteDaDecisao {
   entrada: EntradaAvaliacao;
+  /** Vínculo no vocabulário da L1b: o CONFLITO do S2 segue explícito (P3), sem nenhum Master escolhido. */
+  vinculo: SituacaoVinculoL1b;
+  posteriores: FatosPosteriores;
+}
+
+export interface EntradaCarregada extends ParticipanteDaDecisao {
   fontes: FontesDaAvaliacao;
   /** Assuntos de conferência do próprio processo (S1, append-only), para a divergência do físico (L4). */
   assuntos: AssuntoConferencia[];
+  /** Os outros processos com vínculo válido e publicado ao mesmo Master (S2): o passo compartilhado do N-13 os considera. */
+  vinculados: ParticipanteDaDecisao[];
 }
 
 const iso = (d: Date): Instante => d.toISOString();
@@ -167,12 +191,15 @@ function ponteirosDoVinculo(s: SituacaoVinculo): FontesDaAvaliacao['vinculo'] {
 }
 
 /**
- * Entrada da L1a para (organização, processo), ou null se o processo não
+ * Entrada da decisão para (organização, processo), ou null se o processo não
  * existe NESSA organização. `db` deve ser o mesmo cliente da transação do
- * recálculo, para ler tudo sob o mesmo bloqueio.
+ * recálculo, para ler tudo sob o mesmo bloqueio. Com vínculo publicado, traz
+ * também os outros processos vinculados ao mesmo Master (mesmas leituras que o
+ * fato físico do Master já fazia), para o passo compartilhado do N-13.
  */
 export async function carregarEntrada(
   db: Db, organizationId: string, processoId: string, terminal: FonteTerminal = SEM_PRODUTOR_TERMINAL,
+  posteriores: FontesPosteriores = SEM_FONTES_POSTERIORES,
 ): Promise<EntradaCarregada | null> {
   const { rows: [proc] } = await db.query(`SELECT id FROM processos WHERE id = $1 AND organization_id = $2`, [processoId, organizationId]);
   if (!proc) return null;
@@ -183,8 +210,12 @@ export async function carregarEntrada(
   const situacao = await vinculoDoProcesso(db, organizationId, processoId);
 
   let vinculo: VinculoProcessoMaster | null = null;
+  // CONFLITO: nenhum Master é escolhido (nem o mais novo, nem o mais antigo, nem o primeiro); a L1b o recebe como tal (P3).
+  const vinculoL1b: SituacaoVinculoL1b = situacao.tipo === 'CONFLITO'
+    ? { tipo: 'CONFLITO', masterIds: situacao.masters.map((m) => m.masterId).sort() } : { tipo: 'SEM_VINCULO' };
   const fatosDoMaster: FatoDoMaster[] = [];
   let masterFisico: FontesDaAvaliacao['masterFisico'] = null;
+  const participantes: ParticipanteDaDecisao[] = [];
   if (situacao.tipo === 'VINCULADO') {
     vinculo = vinculoParaL1a(situacao);
     // Fato de escopo Master: a L1a deriva das conferências de MBL dos processos vinculados ao mesmo Master.
@@ -205,12 +236,24 @@ export async function carregarEntrada(
         };
       }
     }
+    for (const v of outros) {
+      participantes.push({
+        entrada: {
+          processoId: v.processoId, vinculo: vinculoParaL1a(v), fatosDoMaster, courier: courierPorProcesso.get(v.processoId)!,
+          liberado: await terminal(db, organizationId, v.processoId),
+        },
+        vinculo: { tipo: 'VINCULADO', vinculo: vinculoParaL1a(v) },
+        posteriores: await posteriores(db, organizationId, v.processoId),
+      });
+    }
   }
-  // CONFLITO: nenhum Master é escolhido (nem o mais novo, nem o mais antigo, nem o primeiro).
 
   return {
     entrada: { processoId, vinculo, fatosDoMaster, courier, liberado: await terminal(db, organizationId, processoId) },
+    vinculo: vinculo ? { tipo: 'VINCULADO', vinculo } : vinculoL1b,
+    posteriores: await posteriores(db, organizationId, processoId),
     fontes: { vinculo: ponteirosDoVinculo(situacao), courier: ponteiros, masterFisico, caixaIds, disponibilidadeCourier },
     assuntos: proprios.assuntos,
+    vinculados: participantes,
   };
 }
