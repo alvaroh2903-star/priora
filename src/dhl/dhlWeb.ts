@@ -105,6 +105,31 @@ async function trackingText(page: Page): Promise<string> {
   return text.slice(Math.max(at, 0), Math.max(at, 0) + 400).trim() || '(vazia)';
 }
 
+/**
+ * ECONOMIA (o IP residencial cobra por MB): além da mídia, corta CSS e tudo que
+ * não é da DHL (analytics, tags, chat). O script da Akamai é do próprio
+ * dhl.com e passa. Só `abort()` — nada é reemitido com `continue()` (isso
+ * quebrava módulos JS no navegador remoto, ver blockHeavyResources).
+ */
+const THIRD_PARTY_RE = /^https?:\/\/(?![^/?#]*\bdhl\.com(?:[:/?#]|$))[^/?#]+/i;
+const CSS_RE = /\.css(?:[?#]|$)/i;
+
+async function blockNonEssential(page: Page): Promise<void> {
+  await blockHeavyResources(page, 'media');
+  await page.route(THIRD_PARTY_RE, (route) => route.abort().catch(() => undefined)).catch(() => undefined);
+  await page.route(CSS_RE, (route) => route.abort().catch(() => undefined)).catch(() => undefined);
+}
+
+/** KB baixados pela página (Resource Timing; terceiro sem Timing-Allow-Origin conta 0). */
+async function pageKb(page: Page): Promise<number | null> {
+  return page
+    .evaluate(() => {
+      const all = [...performance.getEntriesByType('navigation'), ...performance.getEntriesByType('resource')];
+      return Math.round(all.reduce((s, e) => s + ((e as PerformanceResourceTiming).transferSize || 0), 0) / 1024);
+    })
+    .catch(() => null);
+}
+
 async function fetchInPage(page: Page, n: string): Promise<Omit<DhlWebRaw, 'number'>> {
   return page
     .evaluate(async (url) => {
@@ -125,7 +150,7 @@ async function fetchDhlWebSession(numbers: string[]): Promise<DhlWebSession> {
   const mark = (s: string) => trace.push(`${((Date.now() - t0) / 1000).toFixed(1)}s ${s}`);
   return withRemotePage(
     async (page: Page) => {
-      await blockHeavyResources(page, 'media');
+      await blockNonEssential(page);
       await page.goto(PAGE_URL(numbers[0]), { waitUntil: 'domcontentloaded', timeout: 60_000 });
       mark('página aberta');
       await page.waitForTimeout(AKAMAI_SETTLE_MS);
@@ -146,6 +171,7 @@ async function fetchDhlWebSession(numbers: string[]): Promise<DhlWebSession> {
         await page.waitForTimeout(800);
       }
       if (!raws.some(answered)) mark(`tela: ${await trackingText(page)}`);
+      mark(`baixado: ${(await pageKb(page)) ?? '—'} KB`);
       return { raws, ms: Date.now() - t0, trace };
     },
     { pool: 'residential_unblock', targetUrl: PAGE_URL(numbers[0]), country: 'br' },
