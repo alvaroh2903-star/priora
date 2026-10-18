@@ -132,7 +132,9 @@ test('0007 — organization_id imutável nas tabelas de tenant', { skip: !url },
       // Liberação G-3c (0107_liberacao_reconstrucao): fila da reconstrução, posses perdidas e revisão, mesma regra.
       'liberacao_reconstrucoes', 'liberacao_reconstrucao_posses_perdidas', 'liberacao_revisoes',
       // Liberação L2 (0103_liberacao_projecao): projeção atual e histórico material, mesma regra.
-      'liberacao_avaliacoes', 'liberacao_avaliacao_eventos'];
+      'liberacao_avaliacoes', 'liberacao_avaliacao_eventos',
+      // S4 — Outlook do próprio Analista (0105_s4_outlook_da_pessoa): mesma regra.
+      'outlook_conexoes_pessoa'];
     const { rows } = await pool.query(`
       SELECT c.table_name,
              EXISTS (SELECT 1 FROM pg_trigger tg

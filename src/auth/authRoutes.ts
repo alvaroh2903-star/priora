@@ -16,6 +16,11 @@ import {
   resolverAcessoDaPessoa,
   usuarioVinculado,
 } from './pessoa';
+import { ChavesCache, carregarChavesDoAmbiente } from './cacheCrypto';
+import {
+  ESCOPO_ENVIO_PELA_PRIORA, conexaoDaPessoa, contaEhCaixaMonitorada, desconectarOutlook, escopoCurto, escoposDoConsentimento, gravarConexao,
+  revogarOutlookDaPessoa,
+} from './outlookPessoa';
 
 /**
  * CSRF do OAuth SEM depender da sessão: o `state` é ASSINADO e carrega
@@ -45,7 +50,15 @@ export interface AuthRouterDeps {
   contaAtiva?: () => ActiveAccount | null;
   conectarCaixa?: typeof connectMicrosoftAccount;
   desconectarCaixa?: typeof disconnectMicrosoftAccount;
+  /** Chaves do armazenamento cifrado (null = ausente/inválida: nenhum token de pessoa é guardado). */
+  chavesCache?: () => ChavesCache | null;
+  relogio?: () => Date;
 }
+
+const chavesDoAmbiente = (): ChavesCache | null => {
+  const c = carregarChavesDoAmbiente();
+  return 'erro' in c ? null : c;
+};
 
 /** Escapa texto para interpolar com segurança no HTML (evita XSS refletido). */
 function esc(s: string | undefined): string {
@@ -112,6 +125,8 @@ export function criarAuthRouter(deps: AuthRouterDeps = {}): Router {
   const contaAtiva = deps.contaAtiva ?? getActiveAccount;
   const conectarCaixa = deps.conectarCaixa ?? connectMicrosoftAccount;
   const desconectarCaixa = deps.desconectarCaixa ?? disconnectMicrosoftAccount;
+  const chavesCache = deps.chavesCache ?? chavesDoAmbiente;
+  const relogio = deps.relogio ?? (() => new Date());
 
   const azureAusente = (res: import('express').Response) =>
     res
@@ -153,6 +168,122 @@ export function criarAuthRouter(deps: AuthRouterDeps = {}): Router {
       next(err);
     }
   });
+
+  /** Acesso operacional da pessoa da sessão, resolvido no servidor (organização da caixa monitorada → membership). */
+  async function acessoDaSessao(req: Request) {
+    if (!req.session.pessoa) return null;
+    const r = await resolverAcessoDaPessoa(pool(), req.session.pessoa, contaAtiva()?.homeAccountId ?? null);
+    return r.ok ? r.acesso : null;
+  }
+
+  /**
+   * S4 — consentimento DELEGADO para o Outlook da PRÓPRIA pessoa (decisão 4.3).
+   * Só para pessoa já identificada e com acesso operacional; `?envio=1` pede
+   * também o envio pela Priora (Mail.Send). A conta Microsoft é escolhida pela
+   * pessoa, mas o retorno só é aceito se for a conta vinculada a ela.
+   */
+  router.get('/outlook/conectar', async (req, res, next) => {
+    try {
+      if (!azureConfigurado()) return azureAusente(res);
+      const acesso = await acessoDaSessao(req);
+      if (!acesso) return loginErrorPage(res, 401, 'Entre com a sua conta', 'Entre na Priora com a sua conta pessoal antes de conectar o seu Outlook.', '/auth/entrar');
+      if (!chavesCache()) return loginErrorPage(res, 503, 'Armazenamento seguro indisponível', 'O Outlook não pode ser conectado agora. Avise o administrador.', '/');
+      const envio = req.query.envio === '1';
+      const url = await msalPessoa().getAuthCodeUrl({
+        scopes: escoposDoConsentimento(envio),
+        redirectUri: config.azure.redirectUri,
+        state: criarEstadoAuth(segredo(), envio ? 'outlook_envio' : 'outlook'),
+        prompt: 'select_account',
+      });
+      res.redirect(url);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /** Estado da conexão do Outlook da pessoa (sem token algum). */
+  router.get('/outlook/estado', async (req, res) => {
+    try {
+      const acesso = await acessoDaSessao(req);
+      if (!acesso) return res.status(401).json({ conectado: false, motivo: 'PESSOA_NECESSARIA' });
+      const c = await conexaoDaPessoa(pool(), acesso.organizationId, acesso.membershipId);
+      const conectado = !!c && c.estado === 'CONECTADA' && c.homeAccountId === acesso.homeAccountId;
+      return res.json({
+        conectado, conta: conectado ? c!.username : null,
+        envioPelaPriora: conectado && c!.escopos.map(escopoCurto).includes(ESCOPO_ENVIO_PELA_PRIORA),
+        // Por que não está conectado (desconectado pela pessoa, revogado pela administração ou invalidado pela Microsoft).
+        motivoDesconexao: !conectado && c?.estado === 'DESCONECTADA' ? c.motivoDesconexao : null,
+      });
+    } catch {
+      return res.status(503).json({ conectado: false, motivo: 'INDISPONIVEL' });
+    }
+  });
+
+  /** Desconecta o Outlook da pessoa: o cache cifrado é apagado. Não mexe na sessão nem na caixa monitorada. */
+  router.post('/outlook/desconectar', async (req, res, next) => {
+    try {
+      const acesso = await acessoDaSessao(req);
+      if (!acesso) return res.status(401).json({ error: 'Entre com a sua conta pessoal.', motivo: 'PESSOA_NECESSARIA' });
+      const desconectado = await desconectarOutlook(pool(), acesso.organizationId, acesso.membershipId, relogio());
+      return res.json({ status: desconectado ? 'desconectado' : 'nao_conectado' });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
+   * DOC-21: revogação pela ADMINISTRAÇÃO da conexão de uma pessoa da MESMA organização (saída da empresa, conta
+   * comprometida). Só ADMIN; a organização vem da sessão, nunca do corpo. Os tokens saem na hora; a pessoa só
+   * volta a usar o Outlook conectando de novo.
+   */
+  router.post('/outlook/revogar', async (req, res, next) => {
+    try {
+      const acesso = await acessoDaSessao(req);
+      if (!acesso) return res.status(401).json({ error: 'Entre com a sua conta pessoal.', motivo: 'PESSOA_NECESSARIA' });
+      if (acesso.papel !== 'ADMIN') return res.status(403).json({ error: 'Só a administração da organização revoga conexões.', motivo: 'EXIGE_ADMIN' });
+      const alvo = typeof req.body?.membershipId === 'string' ? req.body.membershipId : '';
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(alvo)) return res.status(400).json({ error: 'Pessoa inválida.', motivo: 'PESSOA_INVALIDA' });
+      const revogada = await revogarOutlookDaPessoa(pool(), acesso.organizationId, alvo, acesso.membershipId, relogio());
+      return res.json({ status: revogada ? 'revogada' : 'nao_conectado' });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
+   * Outlook da pessoa: troca o código num cliente MSAL NOVO e em memória;
+   * aceita só a conta vinculada à pessoa da sessão, nunca a de uma caixa
+   * monitorada, e só com Mail.ReadWrite concedido. O cache (com o token de
+   * renovação) vai cifrado para a conexão desta pessoa; nada fica na sessão.
+   */
+  async function callbackOutlook(req: Request, res: import('express').Response, code: string, envio: boolean): Promise<void> {
+    const acesso = await acessoDaSessao(req);
+    if (!acesso) return loginErrorPage(res, 401, 'Entre com a sua conta', 'A sessão terminou antes de concluir a conexão do Outlook.', '/auth/entrar');
+    const chaves = chavesCache();
+    if (!chaves) return loginErrorPage(res, 503, 'Armazenamento seguro indisponível', 'O Outlook não pode ser conectado agora. Avise o administrador.', '/');
+    const cliente = msalPessoa();
+    const result = await cliente.acquireTokenByCode({ code, scopes: escoposDoConsentimento(envio), redirectUri: config.azure.redirectUri });
+    const conta = result?.account;
+    const descartar = async () => { if (conta) await cliente.getTokenCache().removeAccount(conta).catch(() => undefined); };
+    if (!conta || conta.homeAccountId !== acesso.homeAccountId) {
+      await descartar();
+      return loginErrorPage(res, 403, 'Conta diferente da sua', 'Conecte o Outlook com a MESMA conta Microsoft com que você entrou na Priora.', '/auth/outlook/conectar');
+    }
+    if (await contaEhCaixaMonitorada(pool(), conta.homeAccountId)) {
+      await descartar();
+      return loginErrorPage(res, 403, 'Esta é a caixa monitorada', 'A caixa monitorada não pode ser usada como o Outlook de uma pessoa.', '/');
+    }
+    // Só o que foi PEDIDO nesta conexão vale: o Azure devolve também escopos consentidos antes (ex.: Mail.Send de uma
+    // conexão anterior), e o envio pela Priora é uma opção explícita da pessoa a cada conexão.
+    const pedidos = new Set(escoposDoConsentimento(envio));
+    const escopos = [...new Set((result.scopes ?? []).map(escopoCurto))].filter((e) => pedidos.has(e));
+    if (!escopos.includes('Mail.ReadWrite')) {
+      await descartar();
+      return loginErrorPage(res, 403, 'Permissão não concedida', 'Sem a permissão de rascunho no seu Outlook, a Priora não pode preparar os e-mails.', '/auth/outlook/conectar');
+    }
+    await gravarConexao(pool(), chaves, acesso, { homeAccountId: conta.homeAccountId, username: conta.username }, escopos, cliente.getTokenCache().serialize(), relogio());
+    res.redirect('/');
+  }
 
   /**
    * Pessoa: identifica pela conta devolvida no próprio login (sem chamar o
@@ -289,6 +420,7 @@ export function criarAuthRouter(deps: AuthRouterDeps = {}): Router {
         );
       }
       if (modo === 'pessoa') return await callbackPessoa(req, res, code);
+      if (modo === 'outlook' || modo === 'outlook_envio') return await callbackOutlook(req, res, code, modo === 'outlook_envio');
       return await callbackCaixa(req, res, code);
     } catch (err) {
       next(err);

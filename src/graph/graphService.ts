@@ -389,6 +389,141 @@ export async function sendMail(
 }
 
 /* --------------------------------------------------------------------------
+ * Rascunho NOVO com anexos, leitura do estado da mensagem, envio e descarte de
+ * um rascunho (Liberação — documentos de apresentação). Funções ADITIVAS: nada
+ * acima foi alterado. Os ids pedidos como ImmutableId continuam os mesmos
+ * depois do envio (o rascunho vira o item de Itens Enviados), o que permite
+ * conferir depois, pela própria mensagem, se ela foi enviada.
+ * Anexos vão no próprio pedido (limite do Graph para anexos inline: 3 MB).
+ * O token é o da conta em cuja caixa a mensagem está (`/me`).
+ * ------------------------------------------------------------------------ */
+
+const IMMUTABLE_ID = 'IdType="ImmutableId"';
+
+export interface DraftFileAttachment {
+  name: string;
+  contentType: string;
+  /** Conteúdo em base64. */
+  contentBytes: string;
+}
+
+export interface CreateDraftInput {
+  subject: string;
+  body: string;
+  contentType?: 'Text' | 'HTML';
+  to: string[];
+  cc?: string[];
+  attachments?: DraftFileAttachment[];
+}
+
+/** Cria um rascunho em "Rascunhos" (nada é enviado). */
+export async function createDraftMessage(
+  accessToken: string,
+  input: CreateDraftInput,
+): Promise<{ id: string; internetMessageId: string | null; conversationId: string | null; changeKey: string | null; webLink: string | null }> {
+  const client = getGraphClient(accessToken);
+  const draft = await client
+    .api('/me/messages')
+    .header('Prefer', IMMUTABLE_ID)
+    .post({
+      subject: input.subject,
+      body: { contentType: input.contentType || 'Text', content: input.body },
+      toRecipients: toRecipientList(input.to),
+      ccRecipients: toRecipientList(input.cc),
+      attachments: (input.attachments || []).map((a) => ({
+        '@odata.type': '#microsoft.graph.fileAttachment',
+        name: a.name,
+        contentType: a.contentType,
+        contentBytes: a.contentBytes,
+      })),
+    });
+  return {
+    id: draft?.id,
+    internetMessageId: draft?.internetMessageId || null,
+    conversationId: draft?.conversationId || null,
+    changeKey: draft?.changeKey || null,
+    webLink: draft?.webLink || null,
+  };
+}
+
+export interface MessageSendState {
+  id: string;
+  isDraft: boolean;
+  sentDateTime: string | null;
+  internetMessageId: string | null;
+  conversationId: string | null;
+  changeKey: string | null;
+  subject: string;
+  toRecipients: string[];
+  ccRecipients: string[];
+}
+
+/** Estado atual de uma mensagem pelo id imutável; null quando ela não existe mais (404). */
+const CAMPOS_DO_ESTADO_DE_ENVIO = 'id,isDraft,sentDateTime,internetMessageId,conversationId,changeKey,subject,toRecipients,ccRecipients';
+
+function paraEstadoDeEnvio(m: any): MessageSendState {
+  const enderecos = (l: any[] | undefined) => (l || []).map((r) => String(r?.emailAddress?.address || ''));
+  return {
+    id: m.id, isDraft: !!m.isDraft, sentDateTime: m.sentDateTime || null, internetMessageId: m.internetMessageId || null,
+    conversationId: m.conversationId || null, changeKey: m.changeKey || null, subject: m.subject || '',
+    toRecipients: enderecos(m.toRecipients), ccRecipients: enderecos(m.ccRecipients),
+  };
+}
+
+export async function getMessageSendState(accessToken: string, messageId: string): Promise<MessageSendState | null> {
+  const client = getGraphClient(accessToken);
+  try {
+    const m: any = await client
+      .api(`/me/messages/${messageId}`)
+      .header('Prefer', IMMUTABLE_ID)
+      .select(CAMPOS_DO_ESTADO_DE_ENVIO)
+      .get();
+    return paraEstadoDeEnvio(m);
+  } catch (err: any) {
+    if (err?.statusCode === 404) return null;
+    throw err;
+  }
+}
+
+/**
+ * Busca independente do id: todas as mensagens da caixa (todas as pastas)
+ * com o cabeçalho Internet Message ID dado. Usada na conciliação, quando a
+ * leitura pelo id não encontra a mensagem.
+ */
+export async function findMessagesByInternetMessageId(accessToken: string, internetMessageId: string): Promise<MessageSendState[]> {
+  const client = getGraphClient(accessToken);
+  const res: any = await client
+    .api('/me/messages')
+    .header('Prefer', IMMUTABLE_ID)
+    .filter(`internetMessageId eq '${internetMessageId.replace(/'/g, "''")}'`)
+    .select(CAMPOS_DO_ESTADO_DE_ENVIO)
+    .top(25)
+    .get();
+  return ((res?.value as any[]) || []).map(paraEstadoDeEnvio);
+}
+
+/** Anexos de arquivo de uma mensagem (conteúdo em base64), pelo id imutável. */
+export async function getMessageFileAttachments(accessToken: string, messageId: string): Promise<AttachmentContent[]> {
+  const client = getGraphClient(accessToken);
+  const res: any = await client.api(`/me/messages/${messageId}/attachments`).header('Prefer', IMMUTABLE_ID).get();
+  return ((res?.value as any[]) || [])
+    .filter((a) => a['@odata.type'] === '#microsoft.graph.fileAttachment' && a.contentBytes)
+    .map((a) => ({ name: a.name || 'anexo', contentType: a.contentType || 'application/octet-stream', contentBytes: a.contentBytes }));
+}
+
+/** Envia um rascunho existente. */
+export async function sendDraftMessage(accessToken: string, messageId: string): Promise<void> {
+  const client = getGraphClient(accessToken);
+  await client.api(`/me/messages/${messageId}/send`).header('Prefer', IMMUTABLE_ID).post({});
+}
+
+/** Apaga um rascunho (usado só para descartar um rascunho que a Priora criou e que continua rascunho). */
+export async function deleteDraftMessage(accessToken: string, messageId: string): Promise<void> {
+  const client = getGraphClient(accessToken);
+  await client.api(`/me/messages/${messageId}`).header('Prefer', IMMUTABLE_ID).delete();
+}
+
+/* --------------------------------------------------------------------------
  * Captura automática do pré-alerta (polling incremental): páginas cruas do
  * Graph para `messages/delta` (Inbox/Sent Items) e para listagem por período
  * (backfill). Só metadados — nunca corpo completo ou anexo nesta camada; a

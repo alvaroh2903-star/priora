@@ -5,11 +5,14 @@ import crypto from 'crypto';
  * sessão (a instância pode reciclar entre /login e /callback). Carrega um
  * timestamp (validade) e, desde o S4, o MODO do fluxo:
  *  - 'caixa': conectar a caixa Microsoft monitorada (o fluxo legado `/auth/login`);
- *  - 'pessoa': identificar a pessoa (`/auth/entrar`), sem tocar na caixa.
+ *  - 'pessoa': identificar a pessoa (`/auth/entrar`), sem tocar na caixa;
+ *  - 'outlook' / 'outlook_envio': consentimento DELEGADO da pessoa para o
+ *    Outlook dela (`/auth/outlook/conectar`), sem e com o envio pela Priora.
  * Formato: `nonce.ts.modo.assinatura` (a assinatura cobre o modo). O formato
  * legado `nonce.ts.assinatura` continua válido e é sempre 'caixa'.
  */
-export type ModoAuth = 'caixa' | 'pessoa';
+export type ModoAuth = 'caixa' | 'pessoa' | 'outlook' | 'outlook_envio';
+const MODOS: ReadonlyArray<ModoAuth> = ['caixa', 'pessoa', 'outlook', 'outlook_envio'];
 
 export const VALIDADE_ESTADO_MS = 15 * 60 * 1000; // 15 min para concluir o login
 
@@ -39,9 +42,9 @@ export function lerEstadoAuth(segredo: string, estado: string | undefined, agora
     ts = t;
   } else if (partes.length === 4) {
     const [nonce, t, m, sig] = partes;
-    if (m !== 'caixa' && m !== 'pessoa') return null;
+    if (!MODOS.includes(m as ModoAuth)) return null;
     if (!igual(sig, assinar(segredo, `${nonce}.${t}.${m}`))) return null;
-    modo = m;
+    modo = m as ModoAuth;
     ts = t;
   } else {
     return null;
