@@ -1,6 +1,6 @@
 import { config } from '../config';
 import { normalize, trackNumber, trackDhlCached, dhlUsage, resetDhlStateForTest, DhlLimitError, DhlAuthError } from './dhlClient';
-import { parseDhlWebRaw, setDhlWebFetcherForTest, trackDhlWeb, DhlWebSession } from './dhlWeb';
+import { parseDhlWebRaw, setDhlWebFetcherForTest, trackDhlWeb, urlForNumber, DhlWebSession } from './dhlWeb';
 
 /**
  * Priora — Self-test OFFLINE do rastreio DHL (fetch simulado, nada sai da máquina).
@@ -130,6 +130,9 @@ async function main(): Promise<void> {
   check('página HTML (bloqueio) → erro, não "não encontrado"', parseDhlWebRaw({ number: 'S3', status: 200, body: '<html>Access Denied</html>' }) instanceof Error);
   check('403 → erro', parseDhlWebRaw({ number: 'S4', status: 403, body: '{}' }) instanceof Error);
   check('número inválido na página → found false com aviso', (() => { const r = parseDhlWebRaw({ number: 'S5', status: null, body: '', invalid: true }); return !(r instanceof Error) && !r.found && /inválido/.test(r.error || ''); })());
+
+  check('URL do 2º número troca só o parâmetro do 1º', urlForNumber('https://www.dhl.com/utapi?trackingNumber=AAA111&language=pt&source=tt', 'AAA111', 'BBB222') === 'https://www.dhl.com/utapi?trackingNumber=BBB222&language=pt&source=tt');
+  check('rota com outro nome de parâmetro também', urlForNumber('https://www.dhl.com/x?id=AAA111', 'AAA111', 'BBB222') === 'https://www.dhl.com/x?id=BBB222');
 
   console.log('[selftest] site — pedidos simultâneos vão numa sessão só');
   const sessions: string[][] = [];

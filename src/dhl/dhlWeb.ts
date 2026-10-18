@@ -23,7 +23,8 @@ import { normalize } from './dhlParse';
 const PAGE_URL = (n: string) =>
   `https://www.dhl.com/br-pt/home/rastreamento.html?tracking-id=${encodeURIComponent(n)}&submit=1`;
 /** Usada só se o app não fizer a chamada na 1ª página (ex.: número em formato inválido). */
-const DEFAULT_UTAPI = '/utapi?trackingNumber=_N_&language=pt&requesterCountryCode=BR&source=tt';
+const DEFAULT_UTAPI = (n: string) =>
+  `https://www.dhl.com/utapi?trackingNumber=${encodeURIComponent(n)}&language=pt&requesterCountryCode=BR&source=tt`;
 const INVALID_RE = /c[oó]digo de rastreamento [eé] inv[aá]lido|tracking (code|number) is invalid/i;
 
 const BATCH_WAIT_MS = 1500;
@@ -48,6 +49,20 @@ export interface DhlWebSession {
 
 export function isDhlWebAvailable(): boolean {
   return isSBConfigured();
+}
+
+/**
+ * URL da chamada de dados para outro número: troca o parâmetro que tem o 1º
+ * número (é `trackingNumber` hoje, mas não dependemos do nome).
+ */
+export function urlForNumber(template: string, first: string, n: string): string {
+  const u = new URL(template);
+  const keys = [...u.searchParams.entries()].filter(([, v]) => v === first).map(([k]) => k);
+  for (const k of keys) u.searchParams.set(k, n);
+  if (keys.length) return u.toString();
+  if (template.includes(first)) return template.split(first).join(encodeURIComponent(n));
+  u.searchParams.set('trackingNumber', n);
+  return u.toString();
 }
 
 /** Cabeçalhos que o fetch da página não pode (ou não deve) repetir. */
@@ -86,48 +101,58 @@ async function fetchDhlWebSession(numbers: string[]): Promise<DhlWebSession> {
     async (page: Page) => {
       const raws: DhlWebRaw[] = [];
       await blockHeavyResources(page, 'media');
-      const captured: Array<Promise<{ url: string; headers: Record<string, string>; status: number; body: string }>> = [];
+      // Toda resposta JSON das chamadas do app — não dependemos do nome da rota
+      // de dados (hoje `/utapi`); fica a que traz `shipments`.
+      type Call = { url: string; headers: Record<string, string>; status: number; body: string };
+      const captured: Array<Promise<Call>> = [];
+      const seen: string[] = [];
       page.on('response', (r) => {
-        if (!/\/utapi\b/.test(r.url())) return;
+        const kind = r.request().resourceType();
+        if (kind !== 'xhr' && kind !== 'fetch') return;
+        const u = new URL(r.url());
+        if (seen.length < 25) seen.push(`${r.status()} ${u.host}${u.pathname}`);
+        if (!/json/i.test(r.headers()['content-type'] || '') && !/\/utapi\b/.test(u.pathname)) return;
         captured.push(
           (async () => ({
             url: r.url(),
             headers: await r.request().allHeaders().catch(() => ({})),
             status: r.status(),
-            body: await r.text().catch(() => ''),
+            body: (await r.text().catch(() => '')).slice(0, 500_000),
           }))(),
         );
       });
+      const isTracking = (c: Call) => /\/utapi\b/.test(c.url) || c.body.includes('"shipments"');
       await page.goto(PAGE_URL(first), { waitUntil: 'domcontentloaded', timeout: 60_000 });
       mark('página aberta');
 
-      // Espera a chamada do app (ou o aviso de número inválido).
+      // Espera a chamada do app (ou o aviso de número inválido — fica dentro de
+      // web components; o getByText do Playwright enxerga o shadow DOM).
       let invalid = false;
       const deadline = Date.now() + FIRST_CALL_TIMEOUT_MS;
-      while (Date.now() < deadline && captured.length === 0) {
-        const text = await page.innerText('body').catch(() => '');
-        if (INVALID_RE.test(text)) {
+      while (Date.now() < deadline) {
+        if ((await Promise.all(captured)).some(isTracking)) break;
+        if (await page.getByText(INVALID_RE).first().isVisible().catch(() => false)) {
           invalid = true;
           break;
         }
         await page.waitForTimeout(1000);
       }
-      const firstCalls = await Promise.all(captured);
-      mark(`utapi do app: ${firstCalls.length} chamada(s)${invalid ? ' (número inválido)' : ''}`);
-      const own = firstCalls.find((c) => new URL(c.url).searchParams.get('trackingNumber') === first) || firstCalls[0];
+      const calls = (await Promise.all(captured)).filter(isTracking);
+      mark(`dados do app: ${calls.length} chamada(s)${invalid ? ' (número inválido)' : ''}`);
+      if (!calls.length) mark(`chamadas vistas: ${seen.join(' | ') || 'nenhuma'}`);
+      const own = calls.find((c) => c.url.includes(first) || c.url.includes(encodeURIComponent(first))) || calls[0];
       if (own) raws.push({ number: first, status: own.status, body: own.body });
       else if (invalid) raws.push({ number: first, status: null, body: '', invalid: true });
       else raws.push({ number: first, status: null, body: '', error: 'o app da DHL não buscou os dados (página bloqueada ou fora do ar)' });
 
       // Demais números: a mesma chamada, de dentro da página.
-      const template = own ? own.url : new URL(DEFAULT_UTAPI, 'https://www.dhl.com').toString();
+      const template = own ? own.url : DEFAULT_UTAPI(first);
       const headers: Record<string, string> = {};
       for (const [k, v] of Object.entries(own?.headers || { accept: 'application/json' })) {
         if (!SKIP_HEADER.test(k)) headers[k] = v;
       }
       for (const n of numbers.slice(1)) {
-        const u = new URL(template.replace('_N_', encodeURIComponent(n)));
-        u.searchParams.set('trackingNumber', n);
+        const url = urlForNumber(template, first, n);
         const r = await page
           .evaluate(
             async ({ url, hdrs }) => {
@@ -138,11 +163,11 @@ async function fetchDhlWebSession(numbers: string[]): Promise<DhlWebSession> {
                 return { status: null, body: '', error: String(e) };
               }
             },
-            { url: u.toString(), hdrs: headers },
+            { url, hdrs: headers },
           )
           .catch((e: Error) => ({ status: null, body: '', error: e.message }));
         raws.push({ number: n, ...r });
-        mark(`utapi ${n}: HTTP ${r.status ?? '—'}`);
+        mark(`dados ${n}: HTTP ${r.status ?? '—'}`);
         await page.waitForTimeout(800);
       }
       return { raws, ms: Date.now() - t0, trace };
