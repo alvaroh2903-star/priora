@@ -44,6 +44,9 @@ leia-o para o desenho pretendido. Este arquivo resume o **estado atual** e as
 - **Line-up dos portos** (`src/ports/`, doc [docs/PORTOS_LINEUP.md](docs/PORTOS_LINEUP.md)): Itapoá e Rio
   Brasil (APIs JSON dos próprios sites; token/chave lidos do JS público em execução, nunca no código)
   e Paranaguá/APPA (HTML; cobre a TCP), Santos Brasil (Tecon Santos/Imbituba/Vila do Conde), BTP, Tecon Rio Grande (Akamai → Scrapfly sem navegador, 1 crédito), Salvador (CODEBA; inclui o Tecon Salvador) e Portonave (JSON `/lineup/list/*` com `x-crypt: false`; o WAF da XLabs só barra a página). `GET /api/ports/*` (login Priora), diag `/health/port-lineup`.
+- **Rastreio DHL** (`src/dhl/dhlClient.ts`, API oficial Unified Tracking, `DHL_API_KEY`): fila espaçada
+  (`DHL_MIN_INTERVAL_MS`, 5 s da chave grátis), pausa no 429, cache por número (`DHL_CACHE_MIN`; entregue 24 h)
+  e última consulta boa como `stale`. Diag `/health/dhl?number=`; uso em `/api/tracking/health`. `npm run dhl:selftest`.
 - **Lotes em duas pistas** (`enrichMany`/`mapLanes`): CMA/ZIM (API da Scrapfly) em paralelo
   (`BOT_API_CONCURRENCY`, 3) junto da pista de navegador (`BOT_CONCURRENCY`, 1).
 

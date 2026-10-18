@@ -5,7 +5,7 @@ import {
   isFedexConfigured,
   checkFedexAuth,
 } from '../fedex/fedexClient';
-import { trackNumber as trackDhl, isDhlConfigured } from '../dhl/dhlClient';
+import { trackDhlCached, isDhlConfigured, dhlUsage, DhlLimitError } from '../dhl/dhlClient';
 import { config } from '../config';
 
 export const trackingRouter = Router();
@@ -31,6 +31,7 @@ trackingRouter.get('/health', async (_req, res) => {
     dhl: {
       configured: isDhlConfigured(),
       baseUrl: config.dhl.baseUrl,
+      uso: dhlUsage(),
     },
   });
 });
@@ -39,9 +40,10 @@ trackingRouter.get('/health', async (_req, res) => {
 trackingRouter.use(requireAuth);
 
 /* ------------------------------------------------------------------ *
- * Cache de rastreio (TTL curto). O módulo Courier consulta TODOS os
+ * Cache de rastreio da FedEx (TTL curto; a DHL tem o próprio, com fila — ver
+ * dhlClient). O módulo Courier consulta TODOS os
  * trackings ao abrir a página; sem cache, cada recarregamento/expansão
- * repetiria as chamadas à DHL/FedEx. Aqui: 1 consulta por tracking dentro
+ * repetiria as chamadas à FedEx. Aqui: 1 consulta por tracking dentro
  * da janela de TTL, com DEDUPE de chamadas em voo (várias requisições
  * simultâneas do mesmo número aguardam a MESMA promessa).
  * ------------------------------------------------------------------ */
@@ -57,7 +59,7 @@ async function trackCached(carrier: string, number: string): Promise<unknown> {
   const flying = inFlight.get(key);
   if (flying) return flying;
 
-  const p = (carrier === 'dhl' ? trackDhl(number) : trackFedex(number))
+  const p = trackFedex(number)
     .then((data) => {
       trackCache.set(key, { at: Date.now(), data });
       return data as unknown;
@@ -68,9 +70,9 @@ async function trackCached(carrier: string, number: string): Promise<unknown> {
 }
 
 /**
- * GET /api/tracking/:number?carrier=fedex|dhl
+ * GET /api/tracking/:number?carrier=fedex|dhl[&refresh=1]
  * Rastreia um número na transportadora indicada (padrão: FedEx).
- * Resultado cacheado por alguns minutos (ver trackCached).
+ * Resultado cacheado (FedEx: trackCached; DHL: trackDhlCached).
  */
 trackingRouter.get('/:number', async (req: AuthedRequest, res, next) => {
   try {
@@ -87,7 +89,12 @@ trackingRouter.get('/:number', async (req: AuthedRequest, res, next) => {
           .status(503)
           .json({ error: 'Rastreio DHL indisponível. Defina DHL_API_KEY no servidor.' });
       }
-      return res.json(await trackCached('dhl', number));
+      try {
+        return res.json(await trackDhlCached(number, { refresh: req.query.refresh === '1' }));
+      } catch (e) {
+        if (e instanceof DhlLimitError) return res.status(429).json({ error: e.message });
+        throw e;
+      }
     }
 
     // Padrão: FedEx

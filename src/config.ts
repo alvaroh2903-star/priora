@@ -89,6 +89,14 @@ export const config = {
     apiKey: (process.env.DHL_API_KEY || '').trim(),
     apiSecret: (process.env.DHL_API_SECRET || '').trim(), // reservado (outras APIs DHL usam OAuth)
     baseUrl: (process.env.DHL_BASE_URL || 'https://api-eu.dhl.com').trim(),
+    // Limites da chave GRÁTIS da DHL (developer.dhl.com, visto em 18/10/2026):
+    // 1 chamada a cada 5 s e 250 por dia — acima disso a DHL devolve 429. Depois
+    // do "Request Upgrade" no portal, ajuste os dois pelo ambiente.
+    minIntervalMs: Math.max(0, parseInt(process.env.DHL_MIN_INTERVAL_MS || '5000', 10) || 0),
+    dailyLimit: Math.max(1, parseInt(process.env.DHL_DAILY_LIMIT || '250', 10) || 250),
+    // Por quanto tempo uma consulta é reaproveitada (a tela de Courier consulta
+    // todos os envios ao abrir). Entregue fica 24 h — não muda mais.
+    cacheMin: Math.max(1, parseInt(process.env.DHL_CACHE_MIN || '30', 10) || 30),
   },
   /**
    * Automação de navegador (Playwright) — base dos scrapers que buscam os dados

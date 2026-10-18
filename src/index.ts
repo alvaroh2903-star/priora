@@ -18,6 +18,7 @@ import { demurrageBotRouter } from './routes/demurrageBotRoutes';
 import { auditoriaRouter } from './routes/auditoriaRoutes';
 import { portsRouter } from './routes/portsRoutes';
 import { PORTS as PORT_SOURCES, getLineup, findVessel } from './ports';
+import { trackDhlCached, dhlUsage, isDhlConfigured } from './dhl/dhlClient';
 import { chromium } from 'playwright';
 import { withPage } from './browser/browser';
 import { trackShipment, detect, detectCarrier, resolveSearchRef } from './browser/carriers';
@@ -1276,6 +1277,24 @@ app.get('/health/watchdog-auto', async (req, res) => {
   }
   if (String(req.query.run || '') === '1') void runWatchdogAutoOnce();
   res.json(getWatchdogAutoStatus());
+});
+
+/**
+ * Rastreio DHL (gated por DIAG_TOKEN) — testar a chave sem login. Passa pela
+ * MESMA fila/cache da tela de Courier (conta na cota de 250/dia da chave grátis).
+ *   /health/dhl?token=<DIAG_TOKEN>&number=<tracking>[&refresh=1]
+ */
+app.get('/health/dhl', async (req, res) => {
+  const token = requireDiagToken(req, res);
+  if (!token) return;
+  const number = String(req.query.number || '').replace(/[^A-Za-z0-9]/g, '');
+  if (!isDhlConfigured()) return res.status(503).json({ error: 'DHL_API_KEY não definida.', uso: dhlUsage() });
+  if (number.length < 6) return res.json({ configured: true, uso: dhlUsage() });
+  try {
+    res.json({ result: await trackDhlCached(number, { refresh: String(req.query.refresh || '') === '1' }), uso: dhlUsage() });
+  } catch (e) {
+    res.status(502).json({ error: (e as Error).message, uso: dhlUsage() });
+  }
 });
 
 /**
