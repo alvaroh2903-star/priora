@@ -1,5 +1,6 @@
 import { CARRIERS } from './registry';
 import { PORT_SITE_DOMAINS } from '../../ports';
+import { COURIER_SITE_DOMAINS } from '../../dhl/dhlWeb';
 
 /**
  * Priora — quais URLs as rotas de DIAGNÓSTICO podem abrir (`?url=`).
@@ -8,7 +9,8 @@ import { PORT_SITE_DOMAINS } from '../../ports';
  * créditos da Scrapfly/Bright Data) para abrir QUALQUER site — inclusive
  * endereços internos. Agora só os domínios dos portais dos armadores do
  * registro (tirados do `trackingUrl` e do `buildTrackingUrl` de cada um), os
- * sites dos PORTOS (PORT_SITE_DOMAINS, src/ports) e os
+ * sites dos PORTOS (PORT_SITE_DOMAINS, src/ports), os dos COURIERS raspados
+ * (COURIER_SITE_DOMAINS, src/dhl) e os
  * que o operador liberar em `DIAG_URL_ALLOW` (lista separada por vírgula, ex.:
  * `example.com,httpbin.org`). Só https.
  */
@@ -63,7 +65,7 @@ export function isAllowedDiagUrl(raw: string): boolean {
   }
   if (u.protocol !== 'https:') return false;
   const host = u.hostname.toLowerCase();
-  const allowed = [...carrierPortalDomains(), ...PORT_SITE_DOMAINS, ...extraAllowed()];
+  const allowed = [...carrierPortalDomains(), ...PORT_SITE_DOMAINS, ...COURIER_SITE_DOMAINS, ...extraAllowed()];
   return allowed.some((d) => host === d || host.endsWith(`.${d}`));
 }
 
