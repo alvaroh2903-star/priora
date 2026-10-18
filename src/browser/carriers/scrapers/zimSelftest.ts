@@ -1,6 +1,7 @@
 import { extractZimEvents } from './zim';
 import { extractCarrierEvents } from './dispatch';
 import { deriveContainers } from './hapag';
+import { isShieldFailure } from '../scrapflyFetch';
 
 /**
  * Priora — Self-test OFFLINE do parser da ZIM (cartões React em DIV).
@@ -43,6 +44,11 @@ function main(): void {
 
   console.log('[selftest] guarda — HTML não-ZIM → vazio');
   check('sem os cartões da ZIM → 0', extractZimEvents('<div class="card"><div>Discharged</div></div>').length === 0);
+
+  console.log('[selftest] nova tentativa só quando o escudo anti-bot falha');
+  check('422 do Akamai (18/10) → tenta de novo', isShieldFailure('Scrapfly 422: ERR::ASP::SHIELD_PROTECTION_FAILED — Unable to bypass akamai, please retry in few seconds.'));
+  check('erro de configuração → não insiste', !isShieldFailure('Scrapfly 400: ERR::SCRAPE::CONFIG_ERROR'));
+  check('sem erro → não insiste', !isShieldFailure(null));
 
   if (failures === 0) console.log('\n[selftest] ✅ parser ZIM: lógica OK');
   else {

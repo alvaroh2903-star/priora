@@ -16,6 +16,18 @@ import { detectMaintenance, maintenanceMessage } from './maintenance';
  * URL/cenário e passamos o HTML pelos MESMOS parsers da produção.
  */
 
+const MAX_ATTEMPTS = 3;
+const SHIELD_RETRY_DELAY_MS = 8_000;
+/** Mesmo pool residencial do Cloud Browser (ver scrapingBrowser.ts). */
+const RESIDENTIAL_POOL = (process.env.SCRAPE_RESIDENTIAL_POOL || 'public_residential_pool').trim();
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Falha do escudo anti-bot do ASP (422 ERR::ASP::*) — a Scrapfly pede nova tentativa. */
+export function isShieldFailure(error: string | null | undefined): boolean {
+  return /ERR::ASP::|SHIELD_PROTECTION|unable to bypass/i.test(error || '');
+}
+
 /** Cenário (js_scenario) por armador — preencher/clicar quando não há link direto. */
 export function scrapflyScenario(carrierId: string, searchRef: string): { url?: string; steps?: unknown[] } {
   if (carrierId === 'cmacgm') {
@@ -83,23 +95,36 @@ export async function scrapeViaScrapflyApi(
     fetchedAt: new Date().toISOString(),
   };
 
-  // 2 tentativas: o ASP às vezes devolve 422 numa e passa na seguinte (visto na
-  // ZIM em 10/10). Cada tentativa é uma sessão nova do lado da Scrapfly.
+  // Até 3 tentativas: o ASP às vezes devolve 422 numa e passa na seguinte (visto
+  // na ZIM em 10/10). Cada tentativa é uma sessão nova do lado da Scrapfly.
   let r: ScrapflyScrapeResult | null = null;
   let spent = 0;
-  for (let attempt = 1; attempt <= 2; attempt++) {
+  let residential = false;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     r = await scrapflyScrape({
       url,
       jsScenario: scen.steps,
       renderingWait: scen.steps ? undefined : 8000,
       timeoutMs: 150_000,
+      proxyPool: residential ? RESIDENTIAL_POOL : undefined,
     });
     spent += r.cost || 0;
     if (r.ok && extractCarrierEvents(r.html).length > 0) break;
     if (r.ok && detectMaintenance(r.html.replace(/<[^>]+>/g, ' '))) break;
+    // Escudo do anti-bot não vencido (visto na ZIM em 18/10, as 2 tentativas em
+    // sequência: "Unable to bypass akamai, please retry in few seconds"): espera
+    // uns segundos, como a própria Scrapfly pede, e troca para o pool RESIDENCIAL
+    // (IP de reputação melhor — mais caro, por isso só depois de uma falha).
+    if (!r.ok && attempt < MAX_ATTEMPTS && isShieldFailure(r.error)) {
+      residential = true;
+      await sleep(SHIELD_RETRY_DELAY_MS);
+    }
   }
   if (!r || !r.ok) {
-    return { ...base, message: `API da Scrapfly (ASP) não trouxe a página: ${r?.error || 'sem resposta'}.` };
+    return {
+      ...base,
+      message: `API da Scrapfly (ASP) não trouxe a página: ${r?.error || 'sem resposta'} (${spent} créditos).`,
+    };
   }
   const events = extractCarrierEvents(r.html);
   if (events.length === 0) {
