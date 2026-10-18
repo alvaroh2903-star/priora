@@ -4,6 +4,7 @@ import { Db } from '../../identidade';
 import { mastersCitadosPeloProcesso, processosVinculadosAoMaster } from '../../auditoria/fatos/vinculos';
 import { DecisaoDoProcesso, EntradaDecisao, Instante, aplicarPortaoCompartilhado, decidirProcesso, entradaSemIntegracoes } from '../dominio';
 import { DivergenciaDeConferencia, divergenciasDoCourier } from './divergencias';
+import { registrarDivergenciaHistorica } from './revisoes';
 import {
   EntradaCarregada, FontesDaAvaliacao, FontesPosteriores, FonteTerminal, ParticipanteDaDecisao, SEM_FONTES_POSTERIORES, SEM_PRODUTOR_TERMINAL,
   carregarEntrada,
@@ -22,7 +23,10 @@ import {
  *  - disponibilidade da fonte só vira evento se mudar uma saída da decisão;
  *  - mudança material → linha atual + UM evento, na mesma transação.
  * Tudo sob bloqueio por processo: reexecução e retentativa são idempotentes.
- * Terminal (LIBERADO) nunca é reaberto: o recálculo devolve a projeção como está.
+ * Terminal (LIBERADO) OFICIAL nunca é reaberto: o recálculo devolve a projeção como está. Um LIBERADO de
+ * versão anterior ao motor oficial é histórico (G-3c): o processo é reavaliado pela L1b e, se a decisão oficial
+ * não o comprovar, o registro da liberação histórica é gravado na mesma transação, ANTES da linha — o histórico
+ * nunca é apagado nem copiado para a versão atual (Decisão A: a tela o apresenta como liberado, sem reabrir).
  */
 
 /** 2: a avaliação passa a levar as divergências do físico (L4). 3: a decisão é a da L1b (motor oficial). */
@@ -208,76 +212,100 @@ export async function recalcularLiberacaoProcesso(
   pool: Pool, organizationId: string, processoId: string, opcoes: OpcoesRecalculo = {},
 ): Promise<ResultadoRecalculo> {
   if (!ehUuid(processoId)) return { status: 'PROCESSO_NAO_ENCONTRADO' };
+  return emTransacao(pool, (c) => recalcularNaTransacao(c, organizationId, processoId, opcoes));
+}
+
+/** O bloqueio por processo da projeção. Recálculo normal e reconstrução (G-3c) usam o MESMO; reentrante na sessão. */
+export async function travarProcesso(c: PoolClient, organizationId: string, processoId: string): Promise<void> {
+  await c.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [`l2:${organizationId}:${processoId}`]);
+}
+
+/**
+ * O mesmo recálculo, dentro de uma transação do chamador (a reconstrução grava a projeção e o estado do seu item
+ * na MESMA transação). Bloqueia o processo ANTES de ler qualquer fato.
+ */
+export async function recalcularNaTransacao(
+  c: PoolClient, organizationId: string, processoId: string, opcoes: OpcoesRecalculo = {},
+): Promise<ResultadoRecalculo> {
+  if (!ehUuid(processoId)) return { status: 'PROCESSO_NAO_ENCONTRADO' };
   const gatilho = opcoes.gatilho ?? 'RECONSTRUCAO';
   const acionadoPor = gatilho === 'RECONSTRUCAO_MANUAL' ? (opcoes.acionadoPorMembershipId ?? null) : null;
   if (gatilho === 'RECONSTRUCAO_MANUAL' && !acionadoPor) throw new Error('reconstrução manual exige a pessoa (membership) que a pediu');
+  await travarProcesso(c, organizationId, processoId);
+  const { rows: [proc] } = await c.query(`SELECT 1 FROM processos WHERE id = $1 AND organization_id = $2`, [processoId, organizationId]);
+  if (!proc) return { status: 'PROCESSO_NAO_ENCONTRADO' };
 
-  return emTransacao(pool, async (c) => {
-    await c.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [`l2:${organizationId}:${processoId}`]);
-    const { rows: [proc] } = await c.query(`SELECT 1 FROM processos WHERE id = $1 AND organization_id = $2`, [processoId, organizationId]);
-    if (!proc) return { status: 'PROCESSO_NAO_ENCONTRADO' };
-
-    const { rows: [atual] } = await c.query(
-      `SELECT * FROM liberacao_avaliacoes WHERE organization_id = $1 AND processo_id = $2 FOR UPDATE`, [organizationId, processoId],
-    );
-    if (atual?.terminal) return { status: 'TERMINAL_PRESERVADO', projecao: projecaoDaLinha(atual) };
-    const { rows: [ultimo] } = await c.query(
-      `SELECT * FROM liberacao_avaliacao_eventos WHERE organization_id = $1 AND processo_id = $2 ORDER BY sequencia DESC LIMIT 1`,
-      [organizationId, processoId],
-    );
-    if (!atual && ultimo && ehTerminal(ultimo.avaliacao_nova)) {
-      // Terminal sem a linha atual (só por remoção administrativa): restaura do histórico, nunca reavalia.
-      const projecao = await gravarLinha(c, organizationId, processoId, {
-        avaliacao: ultimo.avaliacao_nova, fontes: ultimo.fontes, impressao: ultimo.impressao_nova, sequencia: ultimo.sequencia,
-        avaliadoEm: ultimo.registrado_em, alteradoEm: ultimo.registrado_em,
-      });
-      return { status: 'TERMINAL_PRESERVADO', projecao };
-    }
-
-    const carregada = await carregarEntrada(
-      c, organizationId, processoId, opcoes.terminal ?? SEM_PRODUTOR_TERMINAL, opcoes.posteriores ?? SEM_FONTES_POSTERIORES,
-    );
-    if (!carregada) return { status: 'PROCESSO_NAO_ENCONTRADO' };
-    const { rows: [{ agora }] } = await c.query(`SELECT now() AS agora`);
-    const avaliacao = avaliarLiberacao(carregada, new Date(agora).toISOString());
-    const { fontes } = carregada;
-    const impressao = impressaoMaterial(avaliacao);
-
-    const referencia = atual
-      ? { impressao: atual.impressao_material as string, avaliacao: atual.avaliacao, sequencia: atual.sequencia as number, alteradoEm: atual.alterado_em }
-      : ultimo
-        ? { impressao: ultimo.impressao_nova as string, avaliacao: ultimo.avaliacao_nova, sequencia: ultimo.sequencia as number, alteradoEm: ultimo.registrado_em }
-        : null;
-
-    if (referencia && referencia.impressao === impressao) {
-      // O relógio da decisão sozinho não regrava a linha: a gravada continua com o `agora` da avaliação que a produziu (= avaliadoEm).
-      const identica = atual && atual.versao_projecao === VERSAO_PROJECAO
-        && canonico(semRelogio(atual.avaliacao)) === canonico(semRelogio(avaliacao)) && canonico(atual.fontes) === canonico(fontes);
-      if (identica) return { status: 'SEM_MUDANCA_MATERIAL', atualizada: false, projecao: projecaoDaLinha(atual) };
-      const projecao = await gravarLinha(c, organizationId, processoId, {
-        avaliacao, fontes, impressao, sequencia: referencia.sequencia, avaliadoEm: agora, alteradoEm: referencia.alteradoEm,
-      });
-      return { status: 'SEM_MUDANCA_MATERIAL', atualizada: true, projecao };
-    }
-
-    const sequencia = (ultimo?.sequencia ?? 0) + 1;
-    const { rows: [evento] } = await c.query(
-      `INSERT INTO liberacao_avaliacao_eventos
-         (organization_id, processo_id, sequencia, impressao_anterior, impressao_nova, avaliacao_anterior, avaliacao_nova, fontes,
-          gatilho, acionado_por_membership_id, versao_projecao, registrado_em)
-       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8::jsonb, $9, $10, $11, $12)
-       RETURNING id`,
-      [organizationId, processoId, sequencia, referencia?.impressao ?? null, impressao,
-        referencia ? JSON.stringify(referencia.avaliacao) : null, JSON.stringify(avaliacao), JSON.stringify(fontes),
-        gatilho, acionadoPor, VERSAO_PROJECAO, agora],
-    );
+  const { rows: [atual] } = await c.query(
+    `SELECT * FROM liberacao_avaliacoes WHERE organization_id = $1 AND processo_id = $2 FOR UPDATE`, [organizationId, processoId],
+  );
+  // Só o LIBERADO oficial é preservado; o de versão anterior é histórico e o processo é reavaliado (G-3c).
+  if (atual?.terminal && atual.versao_projecao >= VERSAO_PROJECAO) return { status: 'TERMINAL_PRESERVADO', projecao: projecaoDaLinha(atual) };
+  const { rows: [ultimo] } = await c.query(
+    `SELECT * FROM liberacao_avaliacao_eventos WHERE organization_id = $1 AND processo_id = $2 ORDER BY sequencia DESC LIMIT 1`,
+    [organizationId, processoId],
+  );
+  if (!atual && ultimo && ultimo.versao_projecao >= VERSAO_PROJECAO && ehTerminal(ultimo.avaliacao_nova)) {
+    // Terminal OFICIAL sem a linha atual (só por remoção administrativa): restaura do histórico, nunca reavalia.
+    // Um evento de versão anterior nunca volta como projeção vigente: o processo é reavaliado abaixo.
     const projecao = await gravarLinha(c, organizationId, processoId, {
-      avaliacao, fontes, impressao, sequencia, avaliadoEm: agora, alteradoEm: agora,
+      avaliacao: ultimo.avaliacao_nova, fontes: ultimo.fontes, impressao: ultimo.impressao_nova, sequencia: ultimo.sequencia,
+      avaliadoEm: ultimo.registrado_em, alteradoEm: ultimo.registrado_em,
     });
-    return {
-      status: referencia ? 'MUDANCA_MATERIAL' : 'PRIMEIRA_AVALIACAO', evento: { id: evento.id, sequencia }, projecao,
-    };
+    return { status: 'TERMINAL_PRESERVADO', projecao };
+  }
+
+  const carregada = await carregarEntrada(
+    c, organizationId, processoId, opcoes.terminal ?? SEM_PRODUTOR_TERMINAL, opcoes.posteriores ?? SEM_FONTES_POSTERIORES,
+  );
+  if (!carregada) return { status: 'PROCESSO_NAO_ENCONTRADO' };
+  const { rows: [{ agora }] } = await c.query(`SELECT now() AS agora`);
+  const avaliacao = avaliarLiberacao(carregada, new Date(agora).toISOString());
+  const { fontes } = carregada;
+  const impressao = impressaoMaterial(avaliacao);
+
+  const referencia = atual
+    ? { impressao: atual.impressao_material as string, avaliacao: atual.avaliacao, sequencia: atual.sequencia as number, alteradoEm: atual.alterado_em }
+    : ultimo
+      ? { impressao: ultimo.impressao_nova as string, avaliacao: ultimo.avaliacao_nova, sequencia: ultimo.sequencia as number, alteradoEm: ultimo.registrado_em }
+      : null;
+
+  if (referencia && referencia.impressao === impressao) {
+    // O relógio da decisão sozinho não regrava a linha: a gravada continua com o `agora` da avaliação que a produziu (= avaliadoEm).
+    const identica = atual && atual.versao_projecao === VERSAO_PROJECAO
+      && canonico(semRelogio(atual.avaliacao)) === canonico(semRelogio(avaliacao)) && canonico(atual.fontes) === canonico(fontes);
+    if (identica) return { status: 'SEM_MUDANCA_MATERIAL', atualizada: false, projecao: projecaoDaLinha(atual) };
+    const projecao = await gravarLinha(c, organizationId, processoId, {
+      avaliacao, fontes, impressao, sequencia: referencia.sequencia, avaliadoEm: agora, alteradoEm: referencia.alteradoEm,
+    });
+    return { status: 'SEM_MUDANCA_MATERIAL', atualizada: true, projecao };
+  }
+
+  // G-3c: a referência é um LIBERADO do motor anterior? (linha atual ou, sem ela, o último evento)
+  const liberadoHistorico = atual
+    ? (atual.versao_projecao < VERSAO_PROJECAO && atual.terminal ? atual.sequencia as number : null)
+    : (ultimo && ultimo.versao_projecao < VERSAO_PROJECAO && ehTerminal(ultimo.avaliacao_nova) ? ultimo.sequencia as number : null);
+  const sequencia = (ultimo?.sequencia ?? 0) + 1;
+  const { rows: [evento] } = await c.query(
+    `INSERT INTO liberacao_avaliacao_eventos
+       (organization_id, processo_id, sequencia, impressao_anterior, impressao_nova, avaliacao_anterior, avaliacao_nova, fontes,
+        gatilho, acionado_por_membership_id, versao_projecao, registrado_em)
+     VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8::jsonb, $9, $10, $11, $12)
+     RETURNING id`,
+    [organizationId, processoId, sequencia, referencia?.impressao ?? null, impressao,
+      referencia ? JSON.stringify(referencia.avaliacao) : null, JSON.stringify(avaliacao), JSON.stringify(fontes),
+      gatilho, acionadoPor, VERSAO_PROJECAO, agora],
+  );
+  if (liberadoHistorico !== null && !ehTerminal(avaliacao)) {
+    // A liberação histórica não é desfeita nem copiada: a decisão oficial que não a comprova fica registrada, antes
+    // da linha (a guarda do banco exige o registro gravado por esta transação para trocar o LIBERADO legado).
+    await registrarDivergenciaHistorica(c, { organizationId, processoId, historicaSequencia: liberadoHistorico, oficialSequencia: sequencia });
+  }
+  const projecao = await gravarLinha(c, organizationId, processoId, {
+    avaliacao, fontes, impressao, sequencia, avaliadoEm: agora, alteradoEm: agora,
   });
+  return {
+    status: referencia ? 'MUDANCA_MATERIAL' : 'PRIMEIRA_AVALIACAO', evento: { id: evento.id, sequencia }, projecao,
+  };
 }
 
 /**

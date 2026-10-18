@@ -4,7 +4,8 @@ import { AuthedRequest, requireAuth } from '../middleware/requireAuth';
 import { getPool } from '../demurrage-engine/db/pool';
 import { fatosDuraveisHabilitados } from '../operacional/contexto';
 import {
-  detalharLiberacao, ehUuid, listarLiberacao, processoDaReferencia, recalcularLiberacaoProcesso,
+  detalharLiberacao, ehUuid, enfileirarLegados, listarLiberacao, processoDaReferencia, recalcularLiberacaoProcesso, solicitarReconstrucao,
+  statusDaReconstrucao,
 } from '../liberacao/aplicacao';
 
 /**
@@ -95,6 +96,47 @@ export function criarLiberacaoRouter(deps: LiberacaoRouterDeps = {}): Router {
       });
       if (r.status === 'PROCESSO_NAO_ENCONTRADO') return res.status(404).json({ error: 'Processo não encontrado.' });
       res.json({ status: r.status, projecao: r.projecao });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /*
+   * G-3c — reconstrução das projeções anteriores ao motor oficial. Só ADMIN (mesma política das outras operações
+   * de administração); a organização é SEMPRE a da membership resolvida no servidor — nenhum `organizationId` do
+   * corpo, da query ou de cabeçalho é lido. Processo de outra organização = processo inexistente (404 igual).
+   */
+  const exigirAdmin = (req: AuthedRequest, res: Response, next: NextFunction) => {
+    if (req.pessoa!.papel !== 'ADMIN') {
+      return res.status(403).json({ error: 'Só a administração da organização opera a reconstrução.', motivo: 'EXIGE_ADMIN' });
+    }
+    next();
+  };
+
+  /** POST /api/liberacao/admin/reconstrucao/processos/:processoId — pede a reconstrução de UM processo (fila durável). */
+  router.post('/admin/reconstrucao/processos/:processoId', exigirAdmin, async (req: AuthedRequest, res, next) => {
+    try {
+      const r = await solicitarReconstrucao(pool(), req.pessoa!.organizationId, req.params.processoId, req.pessoa!.membershipId);
+      if (r.status === 'PROCESSO_NAO_ENCONTRADO') return res.status(404).json({ error: 'Processo não encontrado.' });
+      res.status(202).json(r);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /** POST /api/liberacao/admin/reconstrucao/organizacao — enfileira (limitado) as projeções legadas da organização da sessão. */
+  router.post('/admin/reconstrucao/organizacao', exigirAdmin, async (req: AuthedRequest, res, next) => {
+    try {
+      res.status(202).json(await enfileirarLegados(pool(), req.pessoa!.organizationId));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /** GET /api/liberacao/admin/reconstrucao/status — contagens da organização da sessão (só leitura). */
+  router.get('/admin/reconstrucao/status', exigirAdmin, async (req: AuthedRequest, res, next) => {
+    try {
+      res.json(await statusDaReconstrucao(pool(), req.pessoa!.organizationId));
     } catch (err) {
       next(err);
     }

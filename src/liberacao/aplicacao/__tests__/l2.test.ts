@@ -445,7 +445,9 @@ test('L2 — projeção real da Liberação', { skip: !url }, async (t) => {
       assert.deepEqual(await contagens(), antes, 'recalcular não grava nada nos donos');
       const { rows: tabelas } = await pool.query(
         `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name LIKE 'liberacao%' ORDER BY 1`);
-      assert.deepEqual(tabelas.map((r) => r.table_name), ['liberacao_avaliacao_eventos', 'liberacao_avaliacoes'], 'sem liberacao_processos');
+      // G-3c: a fila da reconstrução, as posses perdidas e a revisão da divergência histórica — só referências, nenhum fato de origem.
+      assert.deepEqual(tabelas.map((r) => r.table_name), ['liberacao_avaliacao_eventos', 'liberacao_avaliacoes', 'liberacao_reconstrucao_posses_perdidas',
+        'liberacao_reconstrucoes', 'liberacao_revisoes'], 'sem liberacao_processos');
       const { rows: colunas } = await pool.query(
         `SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name LIKE 'liberacao%'`);
       const PROIBIDAS = ['tracking_chave', 'tracking_bruto', 'documento', 'valor', 'processo_ref', 'numero_processo', 'mbl_bruto',
@@ -455,7 +457,7 @@ test('L2 — projeção real da Liberação', { skip: !url }, async (t) => {
       const dir = path.join(__dirname, '..');
       for (const arq of fs.readdirSync(dir).filter((f) => f.endsWith('.ts'))) {
         const fonte = fs.readFileSync(path.join(dir, arq), 'utf8');
-        for (const m of fonte.matchAll(/\b(INSERT\s+INTO|(?<!DO\s)UPDATE|DELETE\s+FROM)\s+([a-z_]+)/gi)) {
+        for (const m of fonte.matchAll(/\b(INSERT\s+INTO|(?<!(?:DO|FOR)\s)UPDATE|DELETE\s+FROM)\s+([a-z_]+)/gi)) { // FOR UPDATE (SKIP LOCKED) é bloqueio, não escrita
           assert.ok(m[2].startsWith('liberacao_'), `${arq}: escrita fora da L2 (${m[0]})`);
         }
       }

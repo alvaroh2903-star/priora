@@ -129,6 +129,8 @@ test('0007 — organization_id imutável nas tabelas de tenant', { skip: !url },
       'processo_referencias', 'masters', 'master_referencias', 'identidade_pendencias',
       // Vertical 1 S1 (0101_courier_fatos) e S2-mín (0102_auditoria_extracoes_vinculos): mesma regra.
       'courier_fatos', 'auditoria_extracoes', 'processo_master_vinculos',
+      // Liberação G-3c (0107_liberacao_reconstrucao): fila da reconstrução, posses perdidas e revisão, mesma regra.
+      'liberacao_reconstrucoes', 'liberacao_reconstrucao_posses_perdidas', 'liberacao_revisoes',
       // Liberação L2 (0103_liberacao_projecao): projeção atual e histórico material, mesma regra.
       'liberacao_avaliacoes', 'liberacao_avaliacao_eventos'];
     const { rows } = await pool.query(`

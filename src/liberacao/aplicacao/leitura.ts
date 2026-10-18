@@ -7,6 +7,10 @@ import {
 } from '../dominio';
 import { EstadoDisponibilidadeCourier, disponibilidadeDoCourier } from './entrada';
 import { AvaliacaoLiberacao, ProjecaoLiberacao, VERSAO_PROJECAO, canonico, ehUuid, obterLiberacaoDoProcesso } from './projecao';
+import { EstadoReconstrucao, ReconstrucaoDoProcesso, estadosDaReconstrucao, reconstrucaoDoProcesso } from './reconstrucao';
+import {
+  LiberacaoHistorica, RevisaoHistorica, liberacaoHistoricaDoProcesso, liberacoesHistoricas, processosComRevisaoHistorica, revisaoHistoricaDoProcesso,
+} from './revisoes';
 
 /**
  * L11a — contrato de LEITURA da tela da Liberação. Só lê: a projeção L2/L4
@@ -171,6 +175,15 @@ export interface ItemDaLista {
   reavaliacaoPendente: boolean;
   motivosDeInclusao: MotivoDeInclusao[];
   resumo: ResumoDaLiberacao | null;
+  /** G-3c: estado do item de reconstrução mais recente do processo (null = nenhum pedido). */
+  reconstrucao: EstadoReconstrucao | null;
+  /** G-3c: há revisão "Decisão histórica diverge da decisão oficial atual" para o processo. */
+  revisaoHistorica: boolean;
+  /**
+   * Decisão A: LIBERADO registrado pelo motor anterior e nenhum LIBERADO oficial depois. A tela apresenta o
+   * processo como "Liberado (registro histórico)"; o resumo da decisão atual não é trabalho operacional dele.
+   */
+  liberacaoHistorica: LiberacaoHistorica | null;
 }
 
 export interface ListaDaLiberacao {
@@ -202,6 +215,9 @@ export async function listarLiberacao(db: Db, organizationId: string): Promise<L
   const motivos = await processosComContexto(db, organizationId);
   const fonteCourier = await fonteCourierAgora(db, organizationId);
   if (motivos.size === 0) return { processos: [], fonteCourier };
+  const reconstrucoes = await estadosDaReconstrucao(db, organizationId);
+  const revisoes = await processosComRevisaoHistorica(db, organizationId);
+  const historicas = await liberacoesHistoricas(db, organizationId);
   const { rows } = await db.query(
     `SELECT p.id, p.numero_processo, a.processo_id IS NOT NULL AS avaliado,
             a.avaliacao, a.fontes, a.impressao_material, a.versao_projecao, a.sequencia, a.terminal, a.avaliado_em, a.alterado_em
@@ -226,6 +242,9 @@ export async function listarLiberacao(db: Db, organizationId: string): Promise<L
           avaliadoEm: new Date(r.avaliado_em).toISOString(), alteradoEm: new Date(r.alterado_em).toISOString(),
         })
         : null,
+      reconstrucao: reconstrucoes.get(r.id) ?? null,
+      revisaoHistorica: revisoes.has(r.id),
+      liberacaoHistorica: historicas.get(r.id) ?? null,
     })),
   };
 }
@@ -495,6 +514,15 @@ export interface DetalheDaLiberacao {
   reavaliacaoPendente: boolean;
   /** Decisão operacional oficial (L1b) pronta para exibir; null sem decisão vigente. */
   decisao: DecisaoOperacional | null;
+  /** G-3c: item de reconstrução mais recente (estado e tentativas), sem a projeção antiga. */
+  reconstrucao: ReconstrucaoDoProcesso | null;
+  /** G-3c: revisão da divergência entre a liberação histórica e a decisão oficial atual (só códigos e instantes). */
+  revisaoHistorica: RevisaoHistorica | null;
+  /**
+   * Decisão A: LIBERADO registrado pelo motor anterior e nenhum LIBERADO oficial depois — a situação apresentada
+   * é "Liberado (registro histórico)". A `decisao` (oficial, da L1b) continua inteira, para consulta à parte.
+   */
+  liberacaoHistorica: LiberacaoHistorica | null;
   master: LeituraDoMaster;
   house: LeituraDaHouse | null;
   contexto: {
@@ -566,6 +594,9 @@ export async function detalharLiberacao(db: Db, organizationId: string, processo
     processoId,
     processo: { ...identidadeCentral, aliases, pendencias: await pendenciasDoProcesso(db, organizationId, processoId) },
     motivosDeInclusao, fonteCourier, projecao, reavaliacaoPendente, decisao: projecao ? decisaoOperacionalDe(projecao.avaliacao) : null,
+    reconstrucao: await reconstrucaoDoProcesso(db, organizationId, processoId),
+    revisaoHistorica: await revisaoHistoricaDoProcesso(db, organizationId, processoId),
+    liberacaoHistorica: await liberacaoHistoricaDoProcesso(db, organizationId, processoId),
     master, house: null, contexto: { processos: {}, evidencias: {} },
   };
   if (!projecao) return { status: 'OK', detalhe };

@@ -170,10 +170,39 @@
             </sc-if>
           </div>
 
-          <sc-if value="{{ d.avaliado }}" hint-placeholder-val="{{ false }}">
+          <sc-if value="{{ d.historico.on }}" hint-placeholder-val="{{ false }}">
+            <!-- Decisão A: LIBERADO do motor anterior. A situação apresentada é a liberação histórica; nada é reaberto. -->
+            <div style="background:#fff;border:1px solid #EAEBF4;border-radius:20px;padding:18px 22px">
+              <div style="font-size:11px;font-weight:700;color:#9AA0B4;text-transform:uppercase;letter-spacing:.05em">Situação</div>
+              <div style="font-size:16px;font-weight:800;color:#161A2E;margin-top:4px">{{ d.historico.titulo }}</div>
+              <sc-for list="{{ d.historico.linhas }}" as="l" hint-placeholder-count="2">
+                <div style="font-size:12.5px;color:#5A6076;line-height:1.55;margin-top:4px">{{ l }}</div>
+              </sc-for>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ d.revisao.on }}" hint-placeholder-val="{{ false }}">
+            <!-- Decisão A: diferença entre o histórico e as evidências atuais — registro discreto, nunca trabalho nem decisão -->
+            <div style="background:#F7F8FC;border:1px solid #ECEDF4;border-radius:16px;padding:12px 16px">
+              <div style="font-size:12.5px;font-weight:700;color:#5A6076">{{ d.revisao.titulo }}</div>
+              <sc-for list="{{ d.revisao.linhas }}" as="l" hint-placeholder-count="2">
+                <div style="font-size:12px;color:#6B7192;line-height:1.5;margin-top:3px">{{ l }}</div>
+              </sc-for>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ d.consulta.on }}" hint-placeholder-val="{{ false }}">
+            <!-- Decisão A: a decisão oficial atual fica à parte, só para consulta -->
+            <div><button onClick="{{ d.consulta.onAlternar }}" class="ghost-btn" style="font-size:12.5px;font-weight:700;color:#4327E6;background:#fff;border:1px solid #E6E8F2;border-radius:10px;padding:8px 13px;cursor:pointer">{{ d.consulta.rotulo }}</button></div>
+          </sc-if>
+
+          <sc-if value="{{ d.decisaoVisivel }}" hint-placeholder-val="{{ false }}">
             <!-- DECISÃO OPERACIONAL OFICIAL (L1b, sem reinterpretação): etapa, o que impede, responsável e próxima ação -->
             <div style="background:#fff;border:1px solid #EAEBF4;border-radius:20px;padding:20px 22px">
-              <h3 style="font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:#161A2E;margin-bottom:14px">Decisão operacional</h3>
+              <h3 style="font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:#161A2E;margin-bottom:14px">{{ d.decisaoTitulo }}</h3>
+              <sc-if value="{{ d.decisaoOrigem.on }}" hint-placeholder-val="{{ false }}">
+                <div style="font-size:12px;color:#6B7192;line-height:1.5;margin:-6px 0 14px">{{ d.decisaoOrigem.texto }}</div>
+              </sc-if>
               <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px">
                 <sc-for list="{{ d.saidas }}" as="s" hint-placeholder-count="4">
                   <div style="background:{{ s.fundo }};border:1px solid {{ s.borda }};border-radius:14px;padding:14px 15px">
@@ -403,7 +432,7 @@ class Component extends DCLogic {
    * nunca é mostrada como decisão.
    */
   state = { lista:null, fonteCourier:null, carregando:true, falha:null, filtro:'', selecionado:null, detalhe:null, carregandoDetalhe:false,
-    erroDetalhe:null, focoNaoEncontrado:null, semContexto:null };
+    erroDetalhe:null, focoNaoEncontrado:null, semContexto:null, consultaAtual:false };
 
   UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -542,7 +571,7 @@ class Component extends DCLogic {
     const self=this;
     if (window.PrioraBus) window.PrioraBus.scrollToSel('[data-lib-detalhe]');
     if (this.state.selecionado===processoId && (this.state.detalhe || this.state.carregandoDetalhe || this.state.semContexto)) return;
-    this.setState({ selecionado:processoId, detalhe:null, erroDetalhe:null, carregandoDetalhe:true, focoNaoEncontrado:null, semContexto:null });
+    this.setState({ selecionado:processoId, detalhe:null, erroDetalhe:null, carregandoDetalhe:true, focoNaoEncontrado:null, semContexto:null, consultaAtual:false });
     this.api('/api/liberacao/processos/'+encodeURIComponent(processoId)).then(function(r){
       if (self.state.selecionado!==processoId) return;
       if (r.ok) return self.setState({ detalhe:r.corpo, carregandoDetalhe:false });
@@ -554,6 +583,8 @@ class Component extends DCLogic {
   }
 
   /* ---------------- formatação ---------------- */
+  dia(iso){ if(!iso) return '—'; var d=new Date(iso); if(isNaN(d)) return '—'; return d.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit',year:'numeric'}); }
+  tentativas(r){ var m=r.maxTentativas; return 'em '+r.tentativas+' de '+m+(m===1?' tentativa permitida':' tentativas permitidas'); }
   quando(iso){ if(!iso) return '—'; var d=new Date(iso); if(isNaN(d)) return '—'; return d.toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}); }
   rotulo(mapa, v){ return (v && mapa[v]) || v || '—'; }
   cor(nome){ return this.COR[nome] || this.COR.neutro; }
@@ -763,15 +794,42 @@ class Component extends DCLogic {
   vmDetalhe(){
     var st=this.state, d=st.detalhe, self=this;
     var vazio = { on:false, avaliado:false, naoAvaliado:false, fonte:{}, saidas:[], atencoes:[], outros:[], temOutros:false, faltam:{ on:false, linhas:[] },
-      master:{ on:false, tardio:{}, dims:{ celulas:[] } }, house:{ dims:{ celulas:[] } }, divergencias:[], marcos:[], evidencias:[], pendencias:[] };
+      master:{ on:false, tardio:{}, dims:{ celulas:[] } }, house:{ dims:{ celulas:[] } }, divergencias:[], marcos:[], evidencias:[], pendencias:[],
+      revisao:{ on:false, titulo:'', linhas:[] }, historico:{ on:false, titulo:'', linhas:[] }, consulta:{ on:false },
+      decisaoVisivel:false, decisaoTitulo:'Decisão operacional', decisaoOrigem:{ on:false, texto:'' } };
     if (!d) return vazio;
     var base = Object.assign({}, vazio, { on:true, codigo:d.processo.codigo||'Processo sem código',
       aliases:(d.processo.aliases||[]).join(', '), temAliases:(d.processo.aliases||[]).length>0,
       pendencias:(d.processo.pendencias||[]).map(function(p){ return self.vmPendencia(p, d); }), fonte:this.vmFonteAgora(d.fonteCourier) });
     base.temPendencias = base.pendencias.length>0;
     base.master = this.vmMaster(d);
-    var p=d.projecao, dec=d.decisao;
+    var p=d.projecao, dec=d.decisao, lh=d.liberacaoHistorica, rv=d.revisaoHistorica;
+    var esgotada = !!(d.reavaliacaoPendente && d.reconstrucao && d.reconstrucao.estado==='ESGOTADA');
+    if (rv) base.revisao = { on:true, titulo:'Diferença entre o histórico e as evidências atuais',
+      linhas: lh ? ['Liberado em '+this.dia(rv.historicaEm)+' (registro histórico).',
+        'As evidências hoje disponíveis na Priora não comprovam essa liberação. Isso não indica erro na liberação e não reabre o processo.']
+        : ['Liberado em '+this.dia(rv.historicaEm)+' (registro histórico).',
+          'Na avaliação de '+this.quando(rv.oficialEm)+', as evidências disponíveis na Priora não comprovavam essa liberação. Isso não indicava erro na liberação.'] };
+    if (lh) {
+      // Decisão A: o processo liberado pelo motor anterior é apresentado como liberado (registro histórico). A decisão
+      // oficial atual (L1b) continua inteira, mas só aparece à parte, para consulta, nunca como obrigação dele.
+      var situacao = !p || !dec
+        ? (esgotada ? 'A avaliação pelas evidências atuais não foi concluída: falhou '+this.tentativas(d.reconstrucao)+'. A administração da organização pode pedir uma nova reconstrução.'
+          : 'A avaliação pelas evidências atuais (motor oficial) ainda não foi feita.')
+        : null;
+      base.historico = { on:true, titulo:'Liberado (registro histórico)',
+        linhas:['Liberação registrada em '+this.quando(lh.registradaEm)+' pelo motor anterior da Priora.',
+          'O processo não é reaberto automaticamente, não gera pendência operacional e não exige confirmação por falta de evidências antigas.']
+          .concat(situacao ? [situacao] : []) };
+      base.avaliadoEm = 'Liberado (registro histórico)';
+      if (!p || !dec) return base;
+    }
     if (!p || !dec) {
+      if (esgotada) {
+        // G-3c: a reconstrução esgotou as tentativas; nada é exibido como decisão até alguém intervir.
+        return Object.assign(base, { naoAvaliado:true, avaliadoEm:'Reavaliação esgotada', naoAvaliadoTitulo:'Reavaliação esgotada — requer intervenção',
+          naoAvaliadoTexto:'A reavaliação pelo motor oficial falhou '+this.tentativas(d.reconstrucao)+'. Nenhuma decisão é exibida para este processo; a administração da organização precisa verificar e pedir uma nova reconstrução.' });
+      }
       if (d.reavaliacaoPendente) {
         // Avaliação gravada antes do motor oficial: nunca é mostrada como decisão.
         return Object.assign(base, { naoAvaliado:true, avaliadoEm:'Aguardando reavaliação', naoAvaliadoTitulo:'Aguardando reavaliação pelo motor oficial',
@@ -782,7 +840,18 @@ class Component extends DCLogic {
         naoAvaliadoTexto:'A Liberação ainda não avaliou este processo, mas já há fatos dele na Priora: '+fatos+'. Nenhuma situação é presumida até a avaliação.' });
     }
     base.avaliado = true;
-    base.avaliadoEm = 'Avaliado em '+this.quando(p.avaliadoEm);
+    if (lh) {
+      var aberta = !!st.consultaAtual;
+      base.consulta = { on:true, rotulo: aberta ? 'Ocultar a avaliação pelas evidências atuais' : 'Consultar a avaliação pelas evidências atuais',
+        onAlternar:function(){ self.setState({ consultaAtual:!self.state.consultaAtual }); } };
+      base.decisaoVisivel = aberta;
+      base.decisaoTitulo = 'Avaliação pelas evidências atuais (consulta)';
+      base.decisaoOrigem = { on:true, texto:'Calculada pelo motor oficial (L1b) em '+this.quando(p.avaliadoEm)+', só com os fatos hoje disponíveis na Priora; '
+        +'fontes ainda não integradas aparecem como não determináveis. É informação de consulta: não reabre o processo nem cria obrigação operacional para ele.' };
+    } else {
+      base.avaliadoEm = 'Avaliado em '+this.quando(p.avaliadoEm);
+      base.decisaoVisivel = true;
+    }
     base.saidas = this.saidas(dec, d);
     base.atencoes = (dec.atencoes||[]).map(function(a){ return { texto:a.mensagem }; });
     base.outros = (dec.outrosItens||[]).map(function(i){
@@ -811,8 +880,15 @@ class Component extends DCLogic {
 
   vmItem(it){
     var c=this.COR, self=this, sel=this.state.selecionado===it.processoId, chips=[], r=it.resumo;
-    if (it.reavaliacaoPendente) {
+    if (it.liberacaoHistorica) {
+      // Decisão A: liberado pelo motor anterior. Nenhum chip da decisão atual (etapa, trava, próxima ação) vira trabalho dele.
+      chips.push(Object.assign({ texto:'Liberado (registro histórico)' }, c.neutro));
+      if (it.revisaoHistorica) chips.push(Object.assign({ texto:'Diferença com as evidências atuais' }, c.neutro));
+      if (it.reavaliacaoPendente) chips.push(Object.assign({ texto: it.reconstrucao==='ESGOTADA' ? 'Avaliação atual esgotada' : 'Avaliação atual pendente' }, c.neutro));
+      if (r && r.divergenciasAtivas>0) chips.push(Object.assign({ texto:'Divergência' }, c.vermelho));
+    } else if (it.reavaliacaoPendente) {
       chips.push({ texto:'Aguardando reavaliação', cor:c.neutro.cor, fundo:c.neutro.fundo });
+      if (it.reconstrucao==='ESGOTADA') chips.push(Object.assign({ texto:'Reavaliação esgotada' }, c.vermelho));
     } else if (!it.avaliado || !r) {
       chips.push({ texto:'Ainda não avaliado', cor:c.neutro.cor, fundo:c.neutro.fundo });
       (it.motivosDeInclusao||[]).forEach(function(m){ if (self.CHIP_INCLUSAO[m]) chips.push({ texto:self.CHIP_INCLUSAO[m], cor:c.roxo.cor, fundo:c.roxo.fundo }); });
@@ -827,6 +903,7 @@ class Component extends DCLogic {
       chips.push(m);
       chips.push(r.house.situacao==='RESOLVIDO' ? Object.assign({ texto:'House: caminho B' }, c.verde) : Object.assign({ texto:'House não determinável' }, c.neutro));
       if (r.divergenciasAtivas>0) chips.push(Object.assign({ texto:'Divergência' }, c.vermelho));
+      if (it.revisaoHistorica) chips.push(Object.assign({ texto:'Diferença com as evidências atuais' }, c.neutro));
     }
     return { processoId:it.processoId, codigo:it.codigo||'Processo sem código', chips:chips,
       temDivergencia: !!(r && r.divergenciasAtivas>0), borda: sel?'#CFC6FB':'#F0F1F7', fundo: sel?'#F8F7FE':'#fff', corCodigo: sel?'#4327E6':'#161A2E',

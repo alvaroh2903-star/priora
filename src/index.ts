@@ -17,6 +17,7 @@ import { capturaRouter } from './routes/capturaRoutes';
 import { liberacaoRouter } from './routes/liberacaoRoutes';
 import { iniciarSchedulerDemurrage } from './demurrage/schedulerBootstrap';
 import { iniciarCapturaPreAlerta } from './demurrage/capturaBootstrap';
+import { iniciarReconstrucaoLiberacao } from './liberacao/reconstrucaoBootstrap';
 
 const app = express();
 
@@ -123,11 +124,21 @@ async function main(): Promise<void> {
     console.error('[captura-pre-alerta] falha ao iniciar (app segue no ar):', err);
   }
 
-  if (scheduler || captura) {
+  // Reconstrução das projeções legadas da Liberação (G-3c): laço PRÓPRIO, com interruptor próprio
+  // (PRIORA_LIBERACAO_RECONSTRUCAO=on; desligado por padrão). Falha aqui nunca afeta o resto do app.
+  let reconstrucao: ReturnType<typeof iniciarReconstrucaoLiberacao> = null;
+  try {
+    reconstrucao = iniciarReconstrucaoLiberacao();
+  } catch (err) {
+    console.error('[liberacao-reconstrucao] falha ao iniciar (app segue no ar):', err);
+  }
+
+  if (scheduler || captura || reconstrucao) {
     const encerrar = (sinal: string) => {
       console.log(`[boot] ${sinal} recebido — parando os laços em background.`);
       scheduler?.stop(); // um tick em andamento termina sozinho; o claim/lease o cobre
       captura?.stop();
+      reconstrucao?.stop();
       server.close(() => process.exit(0));
     };
     process.once('SIGTERM', () => encerrar('SIGTERM')); // Render envia SIGTERM no deploy
