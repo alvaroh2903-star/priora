@@ -29,9 +29,15 @@ const UTAPI_URL = (n: string) =>
 
 const BATCH_WAIT_MS = 1500;
 const MAX_BATCH = 10;
-/** O script da Akamai valida os cookies logo depois do carregamento. */
+/**
+ * O script da Akamai valida os cookies alguns segundos DEPOIS do carregamento:
+ * aos 4 s a /utapi ainda respondia 428 (18/10/2026); aos ~20 s, 404 normal.
+ * Tenta a cada RETRY_WAIT_MS até MAX_TRIES vezes no 1º número; os demais já
+ * saem com os cookies validados.
+ */
 const AKAMAI_SETTLE_MS = 4000;
-const RETRY_WAIT_MS = 5000;
+const RETRY_WAIT_MS = 4000;
+const MAX_TRIES = 6;
 
 /** O que a `/utapi` respondeu para um número (ou por que não respondeu). */
 export interface DhlWebRaw {
@@ -52,6 +58,8 @@ export function isDhlWebAvailable(): boolean {
 }
 
 const looksJson = (body: string) => /^\s*[{[]/.test(body);
+/** A DHL respondeu de verdade: 200 (achou) ou 404 (não há envio). O resto é bloqueio/erro. */
+const answered = (r: { status: number | null; body: string }) => (r.status === 200 || r.status === 404) && looksJson(r.body);
 
 /**
  * Resposta da `/utapi` → resultado no formato comum. `Error` = falha NOSSA ou
@@ -60,8 +68,9 @@ const looksJson = (body: string) => /^\s*[{[]/.test(body);
  */
 export function parseDhlWebRaw(raw: DhlWebRaw): TrackingResult | Error {
   if (raw.error) return new Error(`DHL (site): ${raw.error}`);
-  if (raw.status === 403 || raw.status === 429) {
-    return new Error(`DHL (site) recusou a consulta (HTTP ${raw.status}) — provável bloqueio do anti-robô.`);
+  // 428/403/429…: a Akamai não liberou a chamada. Nunca vira "não encontrado".
+  if (raw.status !== 200 && raw.status !== 404) {
+    return new Error(`DHL (site) recusou a consulta (HTTP ${raw.status ?? '—'}) — provável bloqueio do anti-robô.`);
   }
   let json: unknown;
   try {
@@ -121,21 +130,22 @@ async function fetchDhlWebSession(numbers: string[]): Promise<DhlWebSession> {
       mark('página aberta');
       await page.waitForTimeout(AKAMAI_SETTLE_MS);
       const raws: DhlWebRaw[] = [];
-      let retry = true;
+      // 1º número: espera a Akamai liberar (ver AKAMAI_SETTLE_MS). Se não liberar,
+      // a sessão está barrada — os demais saem com uma tentativa só.
+      let tries = MAX_TRIES;
       for (const n of numbers) {
         let r = await fetchInPage(page, n);
-        // Cookie da Akamai ainda não validado: espera e tenta UMA vez. Se a nova
-        // tentativa também falhar, a sessão está barrada — não insiste nos demais.
-        if (retry && (r.status === 403 || !looksJson(r.body))) {
+        for (let t = 1; t < tries && !answered(r); t++) {
+          mark(`dados ${n}: HTTP ${r.status ?? '—'} — aguardando a Akamai`);
           await page.waitForTimeout(RETRY_WAIT_MS);
           r = await fetchInPage(page, n);
-          if (r.status === 403 || !looksJson(r.body)) retry = false;
         }
+        if (!answered(r)) tries = 1;
         raws.push({ number: n, ...r });
         mark(`dados ${n}: HTTP ${r.status ?? '—'}`);
         await page.waitForTimeout(800);
       }
-      if (raws.every((r) => !looksJson(r.body))) mark(`tela: ${await trackingText(page)}`);
+      if (!raws.some(answered)) mark(`tela: ${await trackingText(page)}`);
       return { raws, ms: Date.now() - t0, trace };
     },
     { pool: 'residential_unblock', targetUrl: PAGE_URL(numbers[0]), country: 'br' },

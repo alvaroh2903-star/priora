@@ -130,6 +130,9 @@ async function main(): Promise<void> {
   check('404 da DHL → found false com o detalhe', (() => { const r = parseDhlWebRaw({ number: 'S2', status: 404, body: JSON.stringify({ title: 'No result found', detail: 'No shipment with given tracking number found.' }) }); return !(r instanceof Error) && !r.found && /No shipment/.test(r.error || ''); })());
   check('página HTML (bloqueio) → erro, não "não encontrado"', parseDhlWebRaw({ number: 'S3', status: 200, body: '<html>Access Denied</html>' }) instanceof Error);
   check('403 → erro', parseDhlWebRaw({ number: 'S4', status: 403, body: '{}' }) instanceof Error);
+  // 18/10/2026: aos 4 s da página a /utapi devolveu 428 com corpo JSON — era lido
+  // como "sem dados" e iria para o cache como resultado falso.
+  check('428 com JSON (Akamai ainda validando) → erro, nunca "não encontrado"', parseDhlWebRaw({ number: 'S6', status: 428, body: '{"title":"Precondition Required"}' }) instanceof Error);
   check('fetch falhou dentro da página → erro', parseDhlWebRaw({ number: 'S5', status: null, body: '', error: 'TypeError: Failed to fetch' }) instanceof Error);
 
   console.log('[selftest] site — pedidos simultâneos vão numa sessão só');
