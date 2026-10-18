@@ -5,6 +5,7 @@ import {
   registrarReferenciaProcesso,
 } from '../../identidade';
 import { ContextoOperacional, validarContextoOperacional } from '../../operacional/contexto';
+import { DocumentoExtraido } from '../playbooks';
 
 /**
  * S2-mín — persistência, uma única vez, do que a extração EXISTENTE da
@@ -25,8 +26,12 @@ import { ContextoOperacional, validarContextoOperacional } from '../../operacion
  */
 
 export const EXTRATOR = 'auditoria.docExtractor';
-/** Versão do contrato da extração persistida (schema/prompt do docExtractor). Mude quando eles mudarem. */
-export const EXTRATOR_VERSAO = '1';
+/**
+ * Versão do contrato da extração persistida (schema/prompt do docExtractor e o que é gravado). Mude quando eles mudarem.
+ *  - '1': tipo, legível e conhecimento;
+ *  - '2' (0106): + campos documentais que o OCR já devolve (navio, consignatário, contêineres) e o hash do arquivo lido.
+ */
+export const EXTRATOR_VERSAO = '2';
 
 export type TipoDetectado = 'MBL' | 'HBL' | 'CE_MASTER' | 'CE_HOUSE' | 'ITEM' | 'OUTRO';
 const TIPOS: TipoDetectado[] = ['MBL', 'HBL', 'CE_MASTER', 'CE_HOUSE', 'ITEM', 'OUTRO'];
@@ -46,6 +51,23 @@ export interface ProvenienciaDocumento {
   associacao: 'CITADA' | 'REFERENCIA_CRUZADA';
 }
 
+/**
+ * Campos que a extração EXISTENTE já devolve e o motor documental usa, exatamente como o OCR devolveu (sem
+ * normalização). É dado EXTRAÍDO: quem consome decide a confiabilidade pelas regras aprovadas.
+ */
+export interface CamposDocumentaisExtraidos {
+  /** "Nome do navio e viagem" (um texto só, como o schema do OCR o define). */
+  navio: string | null;
+  consignee: string | null;
+  /** Números dos contêineres, na ordem do documento (null = o OCR achou o contêiner mas não o número). */
+  conteineres: ReadonlyArray<string | null>;
+}
+
+/** Os campos documentais do resultado do OCR, sem nenhuma interpretação. */
+export function camposDocumentaisDe(doc: Pick<DocumentoExtraido, 'navio' | 'consignee' | 'containers'>): CamposDocumentaisExtraidos {
+  return { navio: doc.navio ?? null, consignee: doc.consignee ?? null, conteineres: (doc.containers ?? []).map((c) => c.numero ?? null) };
+}
+
 export interface ResultadoDaExtracao {
   /** Tipo pela classificação de nome de arquivo (antes do OCR). */
   tipoPorNome: string;
@@ -54,6 +76,10 @@ export interface ResultadoDaExtracao {
   legivel: boolean;
   /** Número do conhecimento como o OCR devolveu (sem normalização). */
   conhecimento: string | null;
+  /** Campos documentais como o OCR devolveu (0106). Ausente = não informados (gravados como NULL). */
+  camposDocumentais?: CamposDocumentaisExtraidos | null;
+  /** sha256 dos bytes do anexo que o extrator leu (0106). Identifica conteúdo idêntico; nunca decide qual MBL vale. */
+  arquivoSha256?: string | null;
 }
 
 export interface ExtracaoParaPersistir {
@@ -92,13 +118,16 @@ async function emTransacao<T>(pool: Pool, fn: (c: PoolClient) => Promise<T>): Pr
   }
 }
 
+/** Forma fixa (independente da ordem de chaves do JSONB): a mesma extração relida do banco dá o mesmo hash. */
+const camposNoHash = (c: CamposDocumentaisExtraidos | null | undefined) => (c ? [c.navio, c.consignee, [...c.conteineres]] : null);
+
 function hashConteudo(item: ExtracaoParaPersistir): string {
   const p = item.proveniencia;
   const r = item.resultado;
   return createHash('sha256').update(JSON.stringify([
     r.tipoPorNome, r.tipoDetectado, r.legivel, r.conhecimento,
     p.internetMessageId, p.attachmentNome, p.contentType, p.remetente, p.recebidaEm?.toISOString() ?? null,
-    p.referenciasBrutas, p.associacao,
+    p.referenciasBrutas, p.associacao, camposNoHash(r.camposDocumentais), r.arquivoSha256 ?? null,
   ])).digest('hex');
 }
 
@@ -108,6 +137,7 @@ export async function gravarExtracao(pool: Pool, ctx: ContextoOperacional, item:
   const r = item.resultado;
   if (!p.messageId || !p.attachmentId) throw new Error('extração sem mensagem/anexo de origem');
   if (!TIPOS.includes(r.tipoDetectado)) throw new Error(`tipo detectado inválido: ${r.tipoDetectado}`);
+  if (r.arquivoSha256 != null && !/^[0-9a-f]{64}$/.test(r.arquivoSha256)) throw new Error('hash do arquivo inválido');
   const chave = [ctx.organizationId, ctx.caixaId, p.messageId, p.attachmentId, EXTRATOR, EXTRATOR_VERSAO, item.modelo, hashConteudo(item)];
   return emTransacao(pool, async (c) => {
     await validarContextoOperacional(c, ctx);
@@ -115,12 +145,14 @@ export async function gravarExtracao(pool: Pool, ctx: ContextoOperacional, item:
       `INSERT INTO auditoria_extracoes
          (organization_id, caixa_id, message_id, attachment_id, extrator, extrator_versao, modelo, conteudo_hash,
           internet_message_id, attachment_nome, content_type, remetente, mensagem_recebida_em, referencias_processo_brutas,
-          associacao, tipo_por_nome, tipo_detectado, legivel, conhecimento, extraido_em, acionado_por_membership_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+          associacao, tipo_por_nome, tipo_detectado, legivel, conhecimento, extraido_em, acionado_por_membership_id,
+          campos_documentais, arquivo_sha256)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
        ON CONFLICT ON CONSTRAINT auditoria_extracoes_unica DO NOTHING
        RETURNING id`,
       [...chave, p.internetMessageId, p.attachmentNome, p.contentType, p.remetente, p.recebidaEm, p.referenciasBrutas,
-        p.associacao, r.tipoPorNome, r.tipoDetectado, r.legivel, r.conhecimento, item.extraidaEm, ctx.membershipId],
+        p.associacao, r.tipoPorNome, r.tipoDetectado, r.legivel, r.conhecimento, item.extraidaEm, ctx.membershipId,
+        r.camposDocumentais ? JSON.stringify(r.camposDocumentais) : null, r.arquivoSha256 ?? null],
     );
     if (ins.rows[0]) return { id: ins.rows[0].id, nova: true };
     const { rows: [existente] } = await c.query(
@@ -228,4 +260,70 @@ export async function persistirExtracoesAuditoria(
     }
   }
   return out;
+}
+
+/* ------------------------------ reuso sem novo OCR (versões do MBL) ------------------------------ */
+
+const COLUNAS_DA_EXTRACAO = `message_id, internet_message_id, attachment_id, attachment_nome, content_type, remetente, mensagem_recebida_em,
+  referencias_processo_brutas, associacao, tipo_por_nome, tipo_detectado, legivel, conhecimento, campos_documentais, arquivo_sha256, modelo, extraido_em`;
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function camposGravados(v: any): CamposDocumentaisExtraidos | null {
+  if (!v || typeof v !== 'object') return null;
+  return { navio: v.navio ?? null, consignee: v.consignee ?? null, conteineres: Array.isArray(v.conteineres) ? v.conteineres : [] };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function itemGravado(r: any): ExtracaoParaPersistir {
+  return {
+    proveniencia: {
+      messageId: r.message_id, internetMessageId: r.internet_message_id, attachmentId: r.attachment_id, attachmentNome: r.attachment_nome,
+      contentType: r.content_type, remetente: r.remetente, recebidaEm: r.mensagem_recebida_em ? new Date(r.mensagem_recebida_em) : null,
+      referenciasBrutas: r.referencias_processo_brutas ?? [], associacao: r.associacao,
+    },
+    resultado: {
+      tipoPorNome: r.tipo_por_nome, tipoDetectado: r.tipo_detectado, legivel: r.legivel, conhecimento: r.conhecimento,
+      camposDocumentais: camposGravados(r.campos_documentais), arquivoSha256: r.arquivo_sha256,
+    },
+    modelo: r.modelo,
+    extraidaEm: new Date(r.extraido_em),
+  };
+}
+
+/**
+ * Extrações JÁ gravadas deste anexo (mesma caixa, mensagem e anexo do Outlook) na versão atual do contrato. Reenviá-las
+ * à persistência é idempotente (mesma chave) e completa identidade e vínculo — sem baixar o anexo nem rodar OCR.
+ */
+export async function extracoesGravadasDoAnexo(
+  pool: Pool, ctx: Pick<ContextoOperacional, 'organizationId' | 'caixaId'>, messageId: string, attachmentId: string,
+): Promise<ExtracaoParaPersistir[]> {
+  const { rows } = await pool.query(
+    `SELECT ${COLUNAS_DA_EXTRACAO} FROM auditoria_extracoes
+      WHERE organization_id = $1 AND caixa_id = $2 AND message_id = $3 AND attachment_id = $4 AND extrator = $5 AND extrator_versao = $6
+      ORDER BY extraido_em, id`,
+    [ctx.organizationId, ctx.caixaId, messageId, attachmentId, EXTRATOR, EXTRATOR_VERSAO]);
+  return rows.map(itemGravado);
+}
+
+/**
+ * Resultado já extraído de um arquivo com estes MESMOS bytes (mesmo hash) na organização, na versão atual do
+ * contrato. O hash só identifica conteúdo idêntico. Só se reaproveita quando todas as extrações desse conteúdo
+ * concordam; se discordam, nada é escolhido (null) e o anexo é lido uma vez, como versão própria.
+ */
+export async function resultadoPorConteudo(pool: Pool, organizationId: string, arquivoSha256: string): Promise<
+  { resultado: Omit<ResultadoDaExtracao, 'tipoPorNome'>; modelo: string; extraidaEm: Date } | null
+> {
+  const { rows } = await pool.query(
+    `SELECT ${COLUNAS_DA_EXTRACAO} FROM auditoria_extracoes
+      WHERE organization_id = $1 AND arquivo_sha256 = $2 AND extrator = $3 AND extrator_versao = $4 AND campos_documentais IS NOT NULL
+      ORDER BY extraido_em, id`,
+    [organizationId, arquivoSha256, EXTRATOR, EXTRATOR_VERSAO]);
+  if (!rows.length) return null;
+  const itens = rows.map(itemGravado);
+  const forma = (i: ExtracaoParaPersistir) => JSON.stringify([
+    i.resultado.tipoDetectado, i.resultado.legivel, i.resultado.conhecimento, camposNoHash(i.resultado.camposDocumentais),
+  ]);
+  if (new Set(itens.map(forma)).size !== 1) return null;
+  const { tipoPorNome: _nome, ...resultado } = itens[0].resultado;
+  return { resultado, modelo: itens[0].modelo, extraidaEm: itens[0].extraidaEm };
 }

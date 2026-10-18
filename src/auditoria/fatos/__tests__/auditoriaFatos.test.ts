@@ -13,7 +13,7 @@ import { FatosDuraveisDeps } from '../../../operacional/requisicao';
 import { Cenario, cenario, contar } from '../../../operacional/__tests__/cenario';
 import { servir } from '../../../operacional/__tests__/http';
 import { criarAuditoriaRouter } from '../../../routes/auditoriaRoutes';
-import { ExtracaoParaPersistir, mblUtilizavel, persistirExtracoesAuditoria } from '../extracoes';
+import { EXTRATOR_VERSAO, ExtracaoParaPersistir, mblUtilizavel, persistirExtracoesAuditoria } from '../extracoes';
 import { vinculoDoProcesso } from '../vinculos';
 
 const url = testDatabaseUrl();
@@ -136,7 +136,7 @@ test('S2-mín — fatos da Auditoria', { skip: !url }, async (t) => {
       for (const e of ext) {
         assert.deepEqual(e.referencias_processo_brutas, ['IM2151-026'], 'referência bruta inteira, nunca IM2151');
         assert.deepEqual([e.associacao, e.internet_message_id, e.remetente, e.extrator, e.extrator_versao, e.modelo],
-          ['CITADA', '<pa1@agente.com>', 'agente@agente.com', 'auditoria.docExtractor', '1', 'modelo-teste']);
+          ['CITADA', '<pa1@agente.com>', 'agente@agente.com', 'auditoria.docExtractor', EXTRATOR_VERSAO, 'modelo-teste']);
         assert.equal(new Date(e.mensagem_recebida_em).toISOString(), '2026-09-01T08:00:00.000Z');
         assert.deepEqual([e.acionado_por_membership_id, e.caixa_id], [a.membershipPessoa, a.caixaId], 'pessoa e caixa separadas');
       }

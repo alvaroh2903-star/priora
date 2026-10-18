@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { RequestHandler, Router } from 'express';
 import { requireAuth, AuthedRequest } from '../middleware/requireAuth';
 import { GatilhosLiberacao, gatilhosLiberacaoPadrao } from '../liberacao/aplicacao';
@@ -8,9 +9,10 @@ import {
 } from '../graph/graphService';
 import { config } from '../config';
 import { isAiConfigured } from '../ai/geminiClient';
-import { extrairDocumento } from '../auditoria/docExtractor';
+import { DocumentoLido, extrairDocumento } from '../auditoria/docExtractor';
 import { executarAuditoria, DocumentoExtraido, DocTipo } from '../auditoria/playbooks';
-import { resumirAuditoria } from '../auditoria/auditClara';
+import { ResumoClara, resumirAuditoria } from '../auditoria/auditClara';
+import { getActiveAccount } from '../auth/activeAccount';
 import {
   extrairDocPreAlerta,
   montarOperacao,
@@ -19,10 +21,15 @@ import {
 import { executarPreAlerta, DocPreAlerta, TipoDoc } from '../auditoria/preAlerta';
 import { capturarReferenciasProcesso } from '../identidade/captura';
 import { FatosDuraveisDeps, contextoDaRequisicao, fatosDuraveisPadrao } from '../operacional/requisicao';
+import { ContextoOperacional } from '../operacional/contexto';
 import {
   ExtracaoParaPersistir,
+  ResultadoDaExtracao,
   TipoDetectado,
+  camposDocumentaisDe,
+  extracoesGravadasDoAnexo,
   persistirExtracoesAuditoria,
+  resultadoPorConteudo,
 } from '../auditoria/fatos/extracoes';
 
 /**
@@ -149,13 +156,24 @@ interface DocRef {
 interface ProcessoAuditoria {
   processo: string;
   cliente: string | null;
+  /** Lista de apresentação: um por NOME de arquivo (central de processos e PB-001, como antes). */
   docs: DocRef[];
+  /**
+   * TODOS os anexos de documento do processo, um por anexo do Outlook (mensagem + anexo). Nunca reduzido pelo nome:
+   * um MBL corrigido com o mesmo nome do anterior é outro anexo (outra versão).
+   */
+  anexos: DocRef[];
   qtdDocs: number;
   tiposPresentes: string[];
   auditorias: string[];
   faltando: string[];
   status: 'Completa' | 'Parcial' | 'Aguardando';
   data: string;
+}
+
+/** Identidade de um anexo: mensagem + anexo do Outlook (nunca o nome do arquivo). */
+function chaveDoAnexo(d: Pick<DocRef, 'emailId' | 'attachmentId'>): string {
+  return `${d.emailId}/${d.attachmentId}`;
 }
 
 /** Constrói a central de processos a partir do Outlook (sem OCR). Reutilizada. */
@@ -249,6 +267,7 @@ async function buildProcessos(
           processo: p,
           cliente: null,
           docs: [],
+          anexos: [],
           qtdDocs: 0,
           tiposPresentes: [],
           auditorias: [],
@@ -261,7 +280,7 @@ async function buildProcessos(
       if (/-\d{2}$/.test(p) && !/-\d{2}$/.test(entry.processo)) entry.processo = p;
       for (const a of atts) {
         const tipo = classifyDoc(a.name);
-        entry.docs.push({
+        const ref: DocRef = {
           nome: a.name,
           tipo,
           tipoLabel: labelOf(tipo),
@@ -274,7 +293,9 @@ async function buildProcessos(
           remetente: full.from?.emailAddress.address || null,
           referenciasBrutas,
           associacao,
-        });
+        };
+        entry.docs.push(ref);
+        if (!entry.anexos.some((x) => chaveDoAnexo(x) === chaveDoAnexo(ref))) entry.anexos.push(ref);
       }
       if ((full.receivedDateTime || '') > entry.data) entry.data = full.receivedDateTime || '';
     }
@@ -317,11 +338,35 @@ async function buildProcessos(
  * processo+assinatura de documentos (10.11). "?refresh=1" força reprocessar.
  * ------------------------------------------------------------------ */
 interface CacheEntry {
+  /** Os anexos auditados (mensagem + anexo do Outlook), nunca os nomes: outro anexo com o mesmo nome invalida o cache. */
   sig: string;
   at: number;
   payload: unknown;
   /** O que a extração produziu nesta execução, pronto para persistir (S2-mín) — sem novo OCR. */
   extracoes: ExtracaoParaPersistir[];
+}
+
+/**
+ * O que o OCR devolveu para UM anexo e quando/como foi feito. Reaproveitado para o mesmo anexo e para conteúdo
+ * idêntico (mesmo hash dos bytes), sem novo OCR. `parcial`: só os campos persistidos (reuso pelo banco) — nunca
+ * alimenta o Playbook.
+ */
+interface LeituraDoAnexo {
+  doc: DocumentoLido;
+  modelo: string;
+  extraidaEm: Date;
+  parcial?: boolean;
+}
+
+/** Documento com só o que a extração persistida guarda (reuso por conteúdo idêntico, sem OCR). */
+function documentoParcial(r: Omit<ResultadoDaExtracao, 'tipoPorNome'>, nome: string, tipo: DocTipo): DocumentoLido {
+  const c = r.camposDocumentais;
+  return {
+    nome, tipo, tipoDetectado: r.tipoDetectado, conhecimento: r.conhecimento, portoOrigem: null, portoDestino: null,
+    navio: c?.navio ?? null, shipper: null, consignee: c?.consignee ?? null, notify: null, freteValor: null, freteMoeda: null,
+    thcValor: null, cliente: null, legivel: r.legivel, arquivoSha256: r.arquivoSha256 ?? null,
+    containers: (c?.conteineres ?? []).map((numero) => ({ numero, pesoBrutoKg: null, cubagemM3: null, lacre: null, ncm: [], descricao: null })),
+  };
 }
 
 // Tipos que têm Playbook na V1 — só extraímos esses (economia de OCR, 9.17/10.11).
@@ -332,27 +377,31 @@ const TIPOS_AUDITAVEIS: DocTipo[] = ['MBL', 'HBL', 'CE_MASTER', 'CE_HOUSE'];
  * OCR realmente devolveu (tipo detectado pelo conteúdo); timeout/falha do
  * extrator não é resultado e não vira fato.
  */
-function extracoesParaPersistir(
-  candidatos: DocRef[], extraidos: DocumentoExtraido[], ocrOk: boolean[], modelo: string, extraidaEm: Date,
-): ExtracaoParaPersistir[] {
+function extracaoParaPersistir(d: DocRef, l: LeituraDoAnexo): ExtracaoParaPersistir {
+  const x = l.doc;
+  const recebida = d.data ? new Date(d.data) : null;
+  return {
+    proveniencia: {
+      messageId: d.emailId, internetMessageId: d.internetMessageId, attachmentId: d.attachmentId, attachmentNome: d.nome,
+      contentType: d.contentType || null, remetente: d.remetente,
+      recebidaEm: recebida && !Number.isNaN(recebida.getTime()) ? recebida : null,
+      referenciasBrutas: d.referenciasBrutas, associacao: d.associacao,
+    },
+    resultado: {
+      tipoPorNome: d.tipo, tipoDetectado: x.tipoDetectado as TipoDetectado, legivel: x.legivel, conhecimento: x.conhecimento,
+      camposDocumentais: camposDocumentaisDe(x), arquivoSha256: x.arquivoSha256 ?? null,
+    },
+    modelo: l.modelo,
+    extraidaEm: l.extraidaEm,
+  };
+}
+
+function extracoesParaPersistir(candidatos: DocRef[], leituras: Array<LeituraDoAnexo | null>): ExtracaoParaPersistir[] {
   const out: ExtracaoParaPersistir[] = [];
   candidatos.forEach((d, i) => {
-    const x = extraidos[i];
-    if (!ocrOk[i] || !x || !x.tipoDetectado) return;
-    const recebida = d.data ? new Date(d.data) : null;
-    out.push({
-      proveniencia: {
-        messageId: d.emailId, internetMessageId: d.internetMessageId, attachmentId: d.attachmentId, attachmentNome: d.nome,
-        contentType: d.contentType || null, remetente: d.remetente,
-        recebidaEm: recebida && !Number.isNaN(recebida.getTime()) ? recebida : null,
-        referenciasBrutas: d.referenciasBrutas, associacao: d.associacao,
-      },
-      resultado: {
-        tipoPorNome: d.tipo, tipoDetectado: x.tipoDetectado as TipoDetectado, legivel: x.legivel, conhecimento: x.conhecimento,
-      },
-      modelo,
-      extraidaEm,
-    });
+    const l = leituras[i];
+    if (!l || !l.doc.tipoDetectado) return;
+    out.push(extracaoParaPersistir(d, l));
   });
   return out;
 }
@@ -372,6 +421,8 @@ export interface AuditoriaRouterDeps {
   aoPersistir?: (persistencia: Promise<unknown>) => void;
   /** L2: recálculo da Liberação depois da persistência (vínculo ou processo criado). */
   liberacao?: GatilhosLiberacao;
+  /** Escopo dos caches em memória: a caixa monitorada lida (o padrão é a conta ativa). Caixas diferentes nunca se misturam. */
+  escopoDoCache?: () => string;
 }
 
 export function criarAuditoriaRouter(deps: AuditoriaRouterDeps = {}): Router {
@@ -385,20 +436,113 @@ export function criarAuditoriaRouter(deps: AuditoriaRouterDeps = {}): Router {
   const modelo = deps.modelo ?? (() => config.ai.model);
   const fatos = deps.fatos ?? fatosDuraveisPadrao();
   const liberacao = deps.liberacao ?? gatilhosLiberacaoPadrao(() => fatos.pool());
+  const escopoDoCache = deps.escopoDoCache ?? (() => getActiveAccount()?.homeAccountId ?? '');
   const auditCache = new Map<string, CacheEntry>();
   const preAlertaCache = new Map<string, { sig: string; payload: unknown }>();
+  /** Por anexo (mensagem + anexo) e por conteúdo idêntico (hash dos bytes): o que já foi lido não é relido. */
+  const lidosPorAnexo = new Map<string, LeituraDoAnexo>();
+  const lidosPorConteudo = new Map<string, LeituraDoAnexo>();
+  /** Resumo da Clara por resultado de Playbook idêntico: o mesmo resultado nunca é resumido duas vezes. */
+  const resumos = new Map<string, ResumoClara>();
+
+  const guardar = (escopo: string, d: DocRef, l: LeituraDoAnexo) => {
+    if (!l.doc.tipoDetectado) return;
+    const copia: LeituraDoAnexo = { ...l, doc: { ...l.doc } };
+    lidosPorAnexo.set(`${escopo}|${chaveDoAnexo(d)}`, copia);
+    if (!l.parcial && l.doc.arquivoSha256 && !lidosPorConteudo.has(`${escopo}|${l.doc.arquivoSha256}`)) {
+      lidosPorConteudo.set(`${escopo}|${l.doc.arquivoSha256}`, copia);
+    }
+  };
+
+  /**
+   * Lê UM anexo: o mesmo anexo já lido nesta execução não é relido; conteúdo idêntico já lido (mesmo hash dos bytes
+   * que o extrator obteve) não passa de novo pelo OCR; `banco` permite reaproveitar a extração persistida do mesmo
+   * conteúdo (só os campos gravados → leitura parcial). Falha ou timeout do extrator → null (não é resultado).
+   */
+  async function lerAnexo(
+    req: AuthedRequest, escopo: string, d: DocRef, hint: DocTipo, opcoes: { refresh: boolean; banco?: (sha: string) => Promise<LeituraDoAnexo | null> },
+  ): Promise<LeituraDoAnexo | null> {
+    const lido = opcoes.refresh ? undefined : lidosPorAnexo.get(`${escopo}|${chaveDoAnexo(d)}`);
+    if (lido && !(lido.parcial && !opcoes.banco)) return { ...lido, doc: { ...lido.doc, nome: d.nome, tipo: hint } };
+    let reuso: LeituraDoAnexo | null = null;
+    try {
+      const doc = await withTimeout(
+        extrair(req.accessToken!, d.emailId, d.attachmentId, d.nome, hint, opcoes.refresh ? undefined : async (sha) => {
+          const mesmo = lidosPorConteudo.get(`${escopo}|${sha}`);
+          reuso = mesmo ?? (opcoes.banco ? await opcoes.banco(sha) : null);
+          return reuso ? reuso.doc : null;
+        }),
+        40000,
+        'ocr',
+      );
+      const r = reuso as LeituraDoAnexo | null;
+      const leitura: LeituraDoAnexo = r
+        ? { doc, modelo: r.modelo, extraidaEm: r.extraidaEm, parcial: r.parcial }
+        : { doc, modelo: modelo(), extraidaEm: new Date() };
+      guardar(escopo, d, leitura);
+      return leitura;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Versões do MBL (política aprovada: cada versão distinta é lida UMA vez). Cada anexo de MBL do processo que não
+   * foi auditado nesta execução: extração já gravada deste anexo → reenviada (sem baixar nem ler); conteúdo idêntico
+   * já extraído → reaproveitado (sem OCR); conteúdo novo → lido uma vez. Todas as versões ficam, com a própria origem;
+   * nenhuma substitui outra e nenhuma é escolhida aqui. Só roda com os fatos duráveis ligados (é para persistir).
+   */
+  async function lerVersoesDoMbl(req: AuthedRequest, ctx: ContextoOperacional, escopo: string, versoes: DocRef[]): Promise<ExtracaoParaPersistir[]> {
+    const out: ExtracaoParaPersistir[] = [];
+    const pool = fatos.pool();
+    for (const d of versoes) {
+      const lido = lidosPorAnexo.get(`${escopo}|${chaveDoAnexo(d)}`);
+      if (lido) {
+        out.push(extracaoParaPersistir(d, lido));
+        continue;
+      }
+      const gravadas = await extracoesGravadasDoAnexo(pool, ctx, d.emailId, d.attachmentId);
+      if (gravadas.length) {
+        out.push(...gravadas);
+        continue;
+      }
+      const l = await lerAnexo(req, escopo, d, 'MBL', {
+        refresh: false,
+        banco: async (sha) => {
+          const r = await resultadoPorConteudo(pool, ctx.organizationId, sha);
+          return r ? { doc: documentoParcial({ ...r.resultado, arquivoSha256: sha }, d.nome, 'MBL'), modelo: r.modelo, extraidaEm: r.extraidaEm, parcial: true } : null;
+        },
+      });
+      if (l && l.doc.tipoDetectado) out.push(extracaoParaPersistir(d, l));
+    }
+    return out;
+  }
+
+  /** Clara só para um resultado de Playbook ainda não resumido (resumo é função do resultado). */
+  async function resumirUmaVez(escopo: string, resultado: ReturnType<typeof executarAuditoria>): Promise<ResumoClara> {
+    const chave = `${escopo}|${createHash('sha256').update(JSON.stringify(resultado)).digest('hex')}`;
+    const pronto = resumos.get(chave);
+    if (pronto) return pronto;
+    const r = await resumir(resultado);
+    resumos.set(chave, r);
+    return r;
+  }
 
   /**
    * Persistência S2-mín, idempotente e fora do caminho da resposta: a
    * Auditoria responde igual com o banco fora. O que não gravar agora é
    * reenviado do cache na próxima execução (sem OCR).
    */
-  function submeterPersistencia(req: AuthedRequest, itens: ExtracaoParaPersistir[]): void {
-    if (!itens.length) return;
+  function submeterPersistencia(req: AuthedRequest, itens: ExtracaoParaPersistir[], versoesDoMbl: DocRef[] = [], escopo = ''): void {
+    if (!itens.length && !versoesDoMbl.length) return;
     const persistencia = (async () => {
       const ctx = await contextoDaRequisicao(fatos, req);
       if (!ctx.ok) return { persistido: false, motivo: ctx.motivo };
+      // Primeiro o que esta execução já leu; depois as demais versões do MBL (uma leitura nova não atrasa a gravação).
       const resultados = await persistirExtracoesAuditoria(fatos.pool(), ctx.contexto, itens);
+      if (versoesDoMbl.length) {
+        resultados.push(...await persistirExtracoesAuditoria(fatos.pool(), ctx.contexto, await lerVersoesDoMbl(req, ctx.contexto, escopo, versoesDoMbl)));
+      }
       await liberacao.extracoesPersistidas(ctx.contexto.organizationId, resultados);
       return { persistido: true, resultados };
     })().catch((err) => {
@@ -474,15 +618,19 @@ export function criarAuditoriaRouter(deps: AuditoriaRouterDeps = {}): Router {
             .slice(0, 4)
         : [];
       const candidatos: DocRef[] = [...selecionados, ...extras].slice(0, 6);
+      // Demais versões do MBL (outros anexos de MBL do processo, inclusive com o MESMO nome): lidas uma vez cada e
+      // persistidas, sem entrar no Playbook (a seleção acima, um documento por tipo, não muda).
+      const versoesDoMbl = proc.anexos.filter((d) => d.tipo === 'MBL' && !candidatos.some((c) => chaveDoAnexo(c) === chaveDoAnexo(d)));
 
-      const sig = candidatos.map((d) => `${d.tipo}:${d.nome}`).sort().join('|');
+      const escopo = escopoDoCache();
+      const sig = candidatos.map((d) => `${d.tipo}:${chaveDoAnexo(d)}`).sort().join('|');
       const refresh = String(req.query.refresh || '') === '1';
-      const cacheKey = `${alvoBase}`;
+      const cacheKey = `${escopo}|${alvoBase}`;
       const cached = auditCache.get(cacheKey);
       if (!refresh && cached && cached.sig === sig) {
         // Cache: OCR zero vezes. A extração em cache pode ser reenviada à
         // persistência idempotente (recupera falha anterior do banco).
-        submeterPersistencia(req, cached.extracoes);
+        submeterPersistencia(req, cached.extracoes, versoesDoMbl, escopo);
         return res.json(cached.payload);
       }
 
@@ -519,21 +667,12 @@ export function criarAuditoriaRouter(deps: AuditoriaRouterDeps = {}): Router {
       });
       const ehAuditavel = (t: string): t is DocTipo => (TIPOS_AUDITAVEIS as string[]).includes(t);
 
-      // OCR/extração em paralelo (cada doc é defensivo: falha vira "ilegível").
-      const ocrOk: boolean[] = candidatos.map(() => true);
-      const extraidos: DocumentoExtraido[] = await Promise.all(
-        candidatos.map((d, i) => {
-          const hint: DocTipo = ehAuditavel(d.tipo) ? d.tipo : 'OUTRO';
-          return withTimeout(
-            extrair(req.accessToken!, d.emailId, d.attachmentId, d.nome, hint),
-            40000,
-            'ocr',
-          ).catch(() => {
-            ocrOk[i] = false;
-            return vazio(d.nome, hint);
-          });
-        }),
+      // OCR/extração em paralelo (cada doc é defensivo: falha vira "ilegível"). Anexo já lido ou conteúdo idêntico
+      // já lido nesta execução não passa de novo pelo OCR (exceto com refresh=1, que força reprocessar).
+      const leituras = await Promise.all(
+        candidatos.map((d) => lerAnexo(req, escopo, d, ehAuditavel(d.tipo) ? d.tipo : 'OUTRO', { refresh })),
       );
+      const extraidos: DocumentoExtraido[] = leituras.map((l, i) => l?.doc ?? vazio(candidatos[i].nome, ehAuditavel(candidatos[i].tipo) ? candidatos[i].tipo as DocTipo : 'OUTRO'));
 
       // Reclassifica pelo CONTEÚDO os anexos cujo NOME não deu um tipo auditável.
       for (const d of extraidos) {
@@ -544,8 +683,8 @@ export function criarAuditoriaRouter(deps: AuditoriaRouterDeps = {}): Router {
 
       // S2-mín: TODO resultado da extração é persistido aqui, antes de os
       // candidatos não escolhidos serem descartados. Não bloqueia a resposta.
-      const extracoes = extracoesParaPersistir(candidatos, extraidos, ocrOk, modelo(), new Date());
-      submeterPersistencia(req, extracoes);
+      const extracoes = extracoesParaPersistir(candidatos, leituras);
+      submeterPersistencia(req, extracoes, versoesDoMbl, escopo);
 
       // Um documento por tipo auditável (prefere legível). Só esses vão ao Playbook.
       const paraAuditar: DocumentoExtraido[] = [];
@@ -559,7 +698,7 @@ export function criarAuditoriaRouter(deps: AuditoriaRouterDeps = {}): Router {
       }
 
       const resultado = executarAuditoria(paraAuditar);
-      const clara = await resumir(resultado);
+      const clara = await resumirUmaVez(escopo, resultado);
 
       // Cliente: primeiro que a extração conseguir ler (best-effort).
       const cliente = extraidos.map((d) => d.cliente).find(Boolean) || proc.cliente || null;

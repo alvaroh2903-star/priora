@@ -728,3 +728,18 @@ Aplicam regras já congeladas; não criam regra nova.
   - **não** se avança para a etapa 7 enquanto a condição de pagamento estiver pendente;
   - a janela de 48h só começa quando apresentação e pagamento são ambos válidos, pelo instante mais recente.
 - **Distinção:** ESTADO FACTUAL = apresentado; CONFORMIDADE DO PROCESSO = a apresentação foi irregular.
+
+## 14. Preparação documental, evidências e envio (aprovadas)
+
+> **Status:** aprovadas pelo responsável pelo produto (V1–V7 da revisão da camada documental, 2026-10-15). Registro aditivo: nada acima foi alterado. Etapas, gates, matriz, portão do cliente, overrides, prova de apresentação, pagamento, janela de 48h, terminalidade, prioridade e Master compartilhado continuam como estão.
+
+### 14.18 Reutilização determinística dos fatos do MBL (Entrega 1, 2026-10-17)
+- **H1 (aprovada):** a Priora pode preencher automaticamente os documentos da Liberação com dados **confiáveis** do MBL, sem confirmação campo a campo, desde que o documento correto esteja identificado, a origem seja rastreável e não existam divergências relevantes. A geração e o preenchimento são determinísticos; a Clara não reinterpreta dado já extraído. H1 **não** promove resultado de OCR a verdade operacional.
+- **Confiável (só regras já aprovadas):** extração de MBL pelo conteúdo, legível, que sustenta vínculo **válido** Processo↔Master com ESTE Master (identidade S6/S2 inalterada; mesmo critério da cópia do MBL); evidência `auditoria_extracao:{id}`. Por dado:
+  - **navio e viagem:** o texto que o OCR leu do MBL (nunca o do rastreamento S3 sem regra aprovada);
+  - **contêineres:** todos no padrão ISO 6346 com dígito verificador (PB-001, N13) e sem repetição (DOC-27);
+  - **consignatário** (razão social e qualificação): **não publicado** — o OCR devolve um texto livre e não há critério aprovado para isolar razão social nem "uma informação por linha" (fica preservado como extraído; **PRECISA DE VALIDAÇÃO** para mudar).
+  - Uma leitura **não confiável** de um dado em qualquer versão do MBL retém o dado em todas (não dá para afirmar que não há divergência); extração anterior à 0106 (sem campos) não retém nada. O que não é publicado aparece no que falta, com o motivo.
+- **Versões do MBL (política aprovada):** cada anexo é identificado pela **mensagem + anexo do Outlook**, nunca pelo nome; o SHA-256 dos bytes **já obtidos** para o OCR identifica conteúdo idêntico (reaproveitado sem OCR, na mesma organização e na mesma versão do extrator) ou diferente (outra versão, lida **uma única vez**). Todas as versões ficam, com a própria origem; nada é sobrescrito. Valores diferentes entre versões **divergem** e não se escolhe a mais recente nem a mais antiga. Sem OCR em massa nem reprocessamento periódico: só os anexos do processo auditado, e só com os fatos duráveis ligados. PB-001, prompts do OCR, identidade Processo↔Master e L1b inalterados; a escolha de um documento por tipo para o Playbook antigo também não mudou.
+- **Migração 0106 (aprovada, aditiva):** `auditoria_extracoes.campos_documentais` (navio, consignatário e números de contêiner como o OCR devolveu) e `auditoria_extracoes.arquivo_sha256`; append-only mantido; linhas anteriores ficam NULL. Versão do contrato da extração: `EXTRATOR_VERSAO = '2'`.
+- **Comparação única:** a divergência entre fontes no preenchimento passa a usar o mesmo valor **escrito** da DOC-31.B (`valorEscritoNoLugar`); leituras que só diferem em espaços concordam.

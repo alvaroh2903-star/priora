@@ -6,6 +6,7 @@
  * e devolve os campos ESTRUTURADOS que o Core/Playbooks precisam. Não compara,
  * não valida, não decide — só extrai (fiel ao texto; nunca inventa — 6.4/9.10).
  */
+import { createHash } from 'crypto';
 import { z } from 'zod/v4';
 import { generateStructuredFromDocument } from '../ai/geminiClient';
 import { getAttachmentContent } from '../graph/graphService';
@@ -95,10 +96,21 @@ function docIlegivel(nome: string, tipo: DocTipo): DocumentoExtraido {
   };
 }
 
+/** O documento extraído e o hash dos bytes que foram lidos (o mesmo arquivo em e-mails diferentes tem o mesmo hash). */
+export type DocumentoLido = DocumentoExtraido & { arquivoSha256?: string | null };
+
+/**
+ * Consulta feita DEPOIS de obter os bytes e ANTES do OCR: se já existe a extração
+ * deste conteúdo idêntico (mesmo hash), ela é devolvida e o OCR não roda.
+ */
+export type ReusoPorConteudo = (arquivoSha256: string) => Promise<DocumentoExtraido | null>;
+
 /**
  * Extrai um documento (baixa os bytes do Graph e roda o OCR/visão). Defensivo:
  * qualquer falha vira um documento "ilegível" (Cap. 6.3) — nunca quebra a
- * auditoria (degradar com elegância, 9.9).
+ * auditoria (degradar com elegância, 9.9). O hash é dos bytes já obtidos para o
+ * OCR (nenhum download a mais); com `reusoPorConteudo`, conteúdo idêntico já
+ * extraído não passa de novo pelo OCR. Prompt e schema não mudam.
  */
 export async function extrairDocumento(
   accessToken: string,
@@ -106,10 +118,14 @@ export async function extrairDocumento(
   attachmentId: string,
   nome: string,
   tipo: DocTipo,
-): Promise<DocumentoExtraido> {
+  reusoPorConteudo?: ReusoPorConteudo,
+): Promise<DocumentoLido> {
   try {
     const content = await getAttachmentContent(accessToken, messageId, attachmentId);
     if (!content) return docIlegivel(nome, tipo);
+    const arquivoSha256 = createHash('sha256').update(Buffer.from(content.contentBytes, 'base64')).digest('hex');
+    const reuso = reusoPorConteudo ? await reusoPorConteudo(arquivoSha256) : null;
+    if (reuso) return { ...reuso, nome, tipo, arquivoSha256 };
     const mime = mimeSuportado(content.contentType, content.name);
     if (!mime) return docIlegivel(nome, tipo);
 
@@ -146,6 +162,7 @@ export async function extrairDocumento(
       cliente: ai.cliente,
       containers,
       legivel: ai.legivel !== false,
+      arquivoSha256,
     };
   } catch {
     return docIlegivel(nome, tipo);
