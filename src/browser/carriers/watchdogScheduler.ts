@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { config } from '../../config';
 import nodemailer from 'nodemailer';
-import { runWatchdog, WatchdogCarrierReport, WatchdogReport } from './watchdog';
+import { runWatchdog, parseSeedEnv, WatchdogCarrierReport, WatchdogReport } from './watchdog';
 
 /**
  * Priora — WATCHDOG AUTOMÁTICO (uma volta por dia) + ALERTA.
@@ -350,6 +350,9 @@ export function getWatchdogAutoStatus() {
       emailVia: cfg.smtp ? 'gmail' : 'microsoft',
       webhook: Boolean(cfg.webhook),
     },
+    // BLs de teste fixos (WATCHDOG_SEED_REFS): sem eles, depois de um deploy o
+    // watchdog não tem o que testar (o cache de canários some com o disco).
+    seedRefs: Object.keys(parseSeedEnv()),
     lastRunAt: state.lastRunAt,
     lastReport: state.lastReport,
     lastAlert: state.lastAlert,
