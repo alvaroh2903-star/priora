@@ -29,7 +29,7 @@ const INVALID_RE = /c[oó]digo de rastreamento [eé] inv[aá]lido|tracking (code
 
 const BATCH_WAIT_MS = 1500;
 const MAX_BATCH = 10;
-const FIRST_CALL_TIMEOUT_MS = 45_000;
+const FIRST_CALL_TIMEOUT_MS = 20_000;
 
 /** O que a `/utapi` respondeu para um número (ou por que não respondeu). */
 export interface DhlWebRaw {
@@ -91,6 +91,29 @@ export function parseDhlWebRaw(raw: DhlWebRaw): TrackingResult | Error {
   return normalize(json, raw.number);
 }
 
+/** Texto da área de rastreio, inclusive dentro de web components (diagnóstico). */
+async function trackingText(page: Page): Promise<string> {
+  const text = await page
+    .evaluate(() => {
+      const deep = (n: Node): string => {
+        let t = '';
+        n.childNodes.forEach((c) => {
+          if (c.nodeType === 3) t += `${c.textContent} `;
+          else if (c.nodeType === 1) {
+            const root = (c as Element).shadowRoot;
+            if (root) t += deep(root);
+            t += deep(c);
+          }
+        });
+        return t;
+      };
+      return deep(document.body).replace(/\s+/g, ' ');
+    })
+    .catch(() => '');
+  const at = text.search(/Rastrear e acompanhar|Track and trace/i);
+  return text.slice(Math.max(at, 0), Math.max(at, 0) + 400).trim() || '(vazia)';
+}
+
 /** Uma sessão do navegador remoto para vários números (ver cabeçalho). */
 async function fetchDhlWebSession(numbers: string[]): Promise<DhlWebSession> {
   const t0 = Date.now();
@@ -139,19 +162,23 @@ async function fetchDhlWebSession(numbers: string[]): Promise<DhlWebSession> {
       }
       const calls = (await Promise.all(captured)).filter(isTracking);
       mark(`dados do app: ${calls.length} chamada(s)${invalid ? ' (número inválido)' : ''}`);
-      if (!calls.length) mark(`chamadas vistas: ${seen.join(' | ') || 'nenhuma'}`);
+      if (!calls.length) {
+        mark(`chamadas vistas: ${seen.join(' | ') || 'nenhuma'}`);
+        mark(`tela: ${await trackingText(page)}`);
+      }
       const own = calls.find((c) => c.url.includes(first) || c.url.includes(encodeURIComponent(first))) || calls[0];
       if (own) raws.push({ number: first, status: own.status, body: own.body });
       else if (invalid) raws.push({ number: first, status: null, body: '', invalid: true });
-      else raws.push({ number: first, status: null, body: '', error: 'o app da DHL não buscou os dados (página bloqueada ou fora do ar)' });
 
-      // Demais números: a mesma chamada, de dentro da página.
+      // Demais números (e o 1º, se o app não buscou sozinho — visto em 18/10
+      // abrindo pelo link): a mesma chamada, de dentro da página, com os
+      // cookies que a Akamai acabou de validar.
       const template = own ? own.url : DEFAULT_UTAPI(first);
       const headers: Record<string, string> = {};
       for (const [k, v] of Object.entries(own?.headers || { accept: 'application/json' })) {
         if (!SKIP_HEADER.test(k)) headers[k] = v;
       }
-      for (const n of numbers.slice(1)) {
+      for (const n of numbers.filter((x) => !raws.some((r) => r.number === x))) {
         const url = urlForNumber(template, first, n);
         const r = await page
           .evaluate(
