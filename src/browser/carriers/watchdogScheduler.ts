@@ -5,7 +5,7 @@ import nodemailer from 'nodemailer';
 import { runWatchdog, parseSeedEnv, WatchdogCarrierReport, WatchdogReport } from './watchdog';
 
 /**
- * Priora — WATCHDOG AUTOMÁTICO (uma volta por dia) + ALERTA.
+ * Priora — WATCHDOG AUTOMÁTICO (uma volta por semana) + ALERTA.
  *
  * Antes o watchdog só rodava quando alguém chamava o link de diagnóstico: um
  * portal que mudasse de madrugada só era descoberto quando o cliente reclamava.
@@ -14,7 +14,7 @@ import { runWatchdog, parseSeedEnv, WatchdogCarrierReport, WatchdogReport } from
  * remoto com as consultas dos clientes — e avisa quando algo muda:
  *  - armador que SAIU de saudável (quebrou, captcha, manutenção, BL expirado…);
  *  - armador que VOLTOU a saudável;
- *  - e repete todo dia enquanto houver falha grave (`fail`: broken/error).
+ *  - e repete a cada volta enquanto houver falha grave (`fail`: broken/error).
  *
  * Canais (todos opcionais; sem nenhum, o relatório fica só no status/log):
  *  - WATCHDOG_ALERT_TO: e-mails (vírgula). Padrão: prioracontato@gmail.com;
@@ -25,8 +25,36 @@ import { runWatchdog, parseSeedEnv, WatchdogCarrierReport, WatchdogReport } from
  *  - WATCHDOG_ALERT_WEBHOOK: URL que recebe POST JSON {text, content} (Slack,
  *    Teams, Discord ou qualquer automação).
  * Agenda: WATCHDOG_AUTO (1/0; padrão ligado em produção), WATCHDOG_HOUR_UTC
- * (padrão 6 = 03:00 em Brasília).
+ * (padrão 6 = 03:00 em Brasília) e WATCHDOG_WEEKDAYS (padrão `seg`: só segunda de
+ * madrugada — pedido do usuário em 18/10, porque uma volta pelos 12 armadores
+ * custou ~2.500 créditos da Scrapfly; aceita `seg,qui`, números 0–6 ou `todos`).
+ * Volta perdida (serviço fora do ar no dia) não é recuperada em outro dia.
  */
+
+/** Dia da semana (UTC, 0 = domingo) por nome ou número. */
+const WEEKDAY_NAMES: Record<string, number> = {
+  dom: 0, domingo: 0, sun: 0,
+  seg: 1, segunda: 1, mon: 1,
+  ter: 2, terca: 2, 'terça': 2, tue: 2,
+  qua: 3, quarta: 3, wed: 3,
+  qui: 4, quinta: 4, thu: 4,
+  sex: 5, sexta: 5, fri: 5,
+  sab: 6, 'sáb': 6, sabado: 6, 'sábado': 6, sat: 6,
+};
+const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
+const WEEKDAY_PT = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado'];
+
+/** `WATCHDOG_WEEKDAYS` → dias (UTC). Vazio/inválido = segunda. */
+export function parseWeekdays(raw: string | undefined): number[] {
+  const txt = (raw ?? 'seg').trim().toLowerCase();
+  if (/^(todos|all|\*)$/.test(txt)) return ALL_DAYS;
+  const days = new Set<number>();
+  for (const part of txt.split(/[,\s]+/).filter(Boolean)) {
+    const n = /^[0-6]$/.test(part) ? Number(part) : WEEKDAY_NAMES[part];
+    if (n !== undefined) days.add(n);
+  }
+  return days.size ? [...days].sort() : [1];
+}
 
 /** Destinatário padrão do alerta (pedido do usuário em 12/10). */
 export const DEFAULT_ALERT_TO = 'prioracontato@gmail.com';
@@ -42,6 +70,8 @@ export interface WatchdogSmtp {
 export interface WatchdogAutoConfig {
   enabled: boolean;
   hourUtc: number;
+  /** Dias da semana (UTC, 0 = domingo) em que a volta acontece. */
+  weekdaysUtc: number[];
   alertTo: string[];
   webhook: string;
   /** null = sem senha de app → o e-mail vai pela reserva (Microsoft/Graph). */
@@ -53,6 +83,7 @@ export function watchdogAutoConfig(): WatchdogAutoConfig {
   return {
     enabled: (process.env.WATCHDOG_AUTO ?? (config.isProduction ? '1' : '0')).trim() !== '0',
     hourUtc: Number.isInteger(hour) && hour >= 0 && hour <= 23 ? hour : 6,
+    weekdaysUtc: parseWeekdays(process.env.WATCHDOG_WEEKDAYS),
     // Sem a variável: o contato da Priora. Variável VAZIA desliga o e-mail.
     alertTo: (process.env.WATCHDOG_ALERT_TO ?? DEFAULT_ALERT_TO)
       .split(',')
@@ -132,18 +163,31 @@ export function todaySlot(now: Date, hourUtc: number): Date {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), hourUtc, 0, 0));
 }
 
-/** Já passou do horário de hoje e a última volta foi antes dele? */
-export function isDue(now: Date, lastRunAt: Date | null, hourUtc: number): boolean {
+/** Hoje é dia de volta, já passou do horário e a última volta foi antes dele? */
+export function isDue(now: Date, lastRunAt: Date | null, hourUtc: number, weekdaysUtc: number[] = ALL_DAYS): boolean {
   const slot = todaySlot(now, hourUtc);
-  if (now < slot) return false;
+  if (!weekdaysUtc.includes(slot.getUTCDay()) || now < slot) return false;
   return !lastRunAt || lastRunAt < slot;
 }
 
 /** Próxima volta prevista (para o status). */
-export function nextSlot(now: Date, lastRunAt: Date | null, hourUtc: number): Date {
-  if (isDue(now, lastRunAt, hourUtc)) return now;
-  const slot = todaySlot(now, hourUtc);
-  return now < slot ? slot : new Date(slot.getTime() + 24 * 3_600_000);
+export function nextSlot(now: Date, lastRunAt: Date | null, hourUtc: number, weekdaysUtc: number[] = ALL_DAYS): Date {
+  if (isDue(now, lastRunAt, hourUtc, weekdaysUtc)) return now;
+  const today = todaySlot(now, hourUtc);
+  for (let d = 0; d <= 7; d++) {
+    const slot = new Date(today.getTime() + d * 24 * 3_600_000);
+    if (slot > now && weekdaysUtc.includes(slot.getUTCDay())) return slot;
+  }
+  return new Date(today.getTime() + 7 * 24 * 3_600_000);
+}
+
+/** "segunda às 03:00 (Brasília)" — para log/status. */
+export function describeSchedule(cfg: Pick<WatchdogAutoConfig, 'hourUtc' | 'weekdaysUtc'>): string {
+  const brt = (cfg.hourUtc + 21) % 24; // Brasília = UTC−3
+  // Antes das 03:00 UTC, o dia em Brasília é o anterior.
+  const days = cfg.weekdaysUtc.map((d) => WEEKDAY_PT[cfg.hourUtc < 3 ? (d + 6) % 7 : d]);
+  const quando = days.length === 7 ? 'todo dia' : `toda ${days.join(', ')}`;
+  return `${quando} às ${String(brt).padStart(2, '0')}:00 (Brasília)`;
 }
 
 const HEALTH_PT: Record<string, string> = {
@@ -317,7 +361,7 @@ export function runWatchdogAutoOnce(): Promise<WatchdogAutoState> {
 function tick(): void {
   const cfg = watchdogAutoConfig();
   if (!cfg.enabled || running) return;
-  if (isDue(new Date(), state.lastRunAt ? new Date(state.lastRunAt) : null, cfg.hourUtc)) void runWatchdogAutoOnce();
+  if (isDue(new Date(), state.lastRunAt ? new Date(state.lastRunAt) : null, cfg.hourUtc, cfg.weekdaysUtc)) void runWatchdogAutoOnce();
 }
 
 /** Liga a agenda (idempotente). Chamado uma vez no boot do servidor. */
@@ -332,7 +376,7 @@ export function startWatchdogScheduler(): void {
   if (!saved) saveState(state);
   timer = setInterval(tick, 15 * 60_000);
   setTimeout(tick, 2 * 60_000);
-  console.log(`[watchdog-auto] ligado: uma volta por dia às ${String(cfg.hourUtc).padStart(2, '0')}:00 UTC; alerta: ${[cfg.alertTo.length ? 'e-mail' : '', cfg.webhook ? 'webhook' : ''].filter(Boolean).join(' + ') || 'nenhum canal (só status/log)'}.`);
+  console.log(`[watchdog-auto] ligado: ${describeSchedule(cfg)}; alerta: ${[cfg.alertTo.length ? 'e-mail' : '', cfg.webhook ? 'webhook' : ''].filter(Boolean).join(' + ') || 'nenhum canal (só status/log)'}.`);
 }
 
 /** Status para o painel/diagnóstico. */
@@ -343,7 +387,8 @@ export function getWatchdogAutoStatus() {
     enabled: cfg.enabled,
     hourUtc: cfg.hourUtc,
     running: Boolean(running),
-    nextRunAt: cfg.enabled ? nextSlot(new Date(), last, cfg.hourUtc).toISOString() : null,
+    agenda: describeSchedule(cfg),
+    nextRunAt: cfg.enabled ? nextSlot(new Date(), last, cfg.hourUtc, cfg.weekdaysUtc).toISOString() : null,
     alertChannels: {
       email: cfg.alertTo.length > 0,
       // Por onde o e-mail sai: Gmail da Priora (senha de app) ou a reserva Microsoft.

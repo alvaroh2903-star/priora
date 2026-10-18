@@ -1,7 +1,7 @@
 import http from 'http';
 import type { AddressInfo } from 'net';
 import nodemailer from 'nodemailer';
-import { isDue, nextSlot, buildAlert, deliverAlert, watchdogAutoConfig, smtpFromEnv, buildSmtpMail, WatchdogRowLite, WatchdogSmtp } from './watchdogScheduler';
+import { isDue, nextSlot, buildAlert, deliverAlert, watchdogAutoConfig, smtpFromEnv, buildSmtpMail, parseWeekdays, describeSchedule, WatchdogRowLite, WatchdogSmtp } from './watchdogScheduler';
 
 /**
  * Priora — Self-test OFFLINE do watchdog AUTOMÁTICO:
@@ -44,6 +44,18 @@ async function main(): Promise<void> {
   check('próxima depois de rodar hoje = amanhã 06:00', nextSlot(d('2026-10-12T10:00:00Z'), d('2026-10-12T06:05:00Z'), 6).toISOString() === '2026-10-13T06:00:00.000Z');
   check('próxima antes do horário = hoje 06:00', nextSlot(d('2026-10-12T03:00:00Z'), d('2026-10-11T06:05:00Z'), 6).toISOString() === '2026-10-12T06:00:00.000Z');
 
+  console.log('[selftest] agenda semanal (padrão: só segunda, 06:00 UTC = 03:00 em Brasília)');
+  const seg = parseWeekdays(undefined);
+  check('padrão = segunda', JSON.stringify(seg) === '[1]', seg);
+  check('domingo 18/10 depois das 06:00 → não roda', !isDue(d('2026-10-18T09:00:00Z'), d('2026-10-12T06:05:00Z'), 6, seg));
+  check('segunda 19/10 às 06:01 → roda', isDue(d('2026-10-19T06:01:00Z'), d('2026-10-12T06:05:00Z'), 6, seg));
+  check('terça sem ter rodado na segunda → não recupera', !isDue(d('2026-10-20T07:00:00Z'), d('2026-10-12T06:05:00Z'), 6, seg));
+  check('próxima a partir de domingo = segunda 19/10 06:00', nextSlot(d('2026-10-18T17:00:00Z'), d('2026-10-12T06:05:00Z'), 6, seg).toISOString() === '2026-10-19T06:00:00.000Z');
+  check('próxima depois de rodar na segunda = segunda seguinte', nextSlot(d('2026-10-19T08:00:00Z'), d('2026-10-19T06:05:00Z'), 6, seg).toISOString() === '2026-10-26T06:00:00.000Z');
+  check('"seg,qui" e números', JSON.stringify(parseWeekdays('seg, qui')) === '[1,4]' && JSON.stringify(parseWeekdays('0 6')) === '[0,6]');
+  check('"todos" = os 7 dias; lixo = segunda', parseWeekdays('todos').length === 7 && JSON.stringify(parseWeekdays('xyz')) === '[1]');
+  check('texto da agenda', describeSchedule({ hourUtc: 6, weekdaysUtc: [1] }) === 'toda segunda às 03:00 (Brasília)', describeSchedule({ hourUtc: 6, weekdaysUtc: [1] }));
+
   console.log('[selftest] destinatário do alerta');
   delete process.env.WATCHDOG_ALERT_TO;
   check('padrão = prioracontato@gmail.com', JSON.stringify(watchdogAutoConfig().alertTo) === '["prioracontato@gmail.com"]', watchdogAutoConfig().alertTo);
@@ -83,7 +95,7 @@ async function main(): Promise<void> {
   await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r));
   const port = (srv.address() as AddressInfo).port;
   const mails: Array<{ to: string[]; subject: string }> = [];
-  const r1 = await deliverAlert('Assunto X', 'corpo Y', { enabled: true, hourUtc: 6, alertTo: ['a@b.com'], webhook: `http://127.0.0.1:${port}/ok`, smtp: null }, {
+  const r1 = await deliverAlert('Assunto X', 'corpo Y', { enabled: true, hourUtc: 6, weekdaysUtc: [1], alertTo: ['a@b.com'], webhook: `http://127.0.0.1:${port}/ok`, smtp: null }, {
     sendGraph: async (to, subject) => {
       mails.push({ to, subject });
     },
@@ -92,7 +104,7 @@ async function main(): Promise<void> {
   check('webhook recebeu {text, content}', /Assunto X/.test(posted.text) && /corpo Y/.test(posted.content), posted);
   check('sem senha de app: e-mail pela reserva Microsoft', mails.length === 1 && mails[0].to[0] === 'a@b.com' && r1.channels.some((c) => c.via === 'microsoft' && c.ok), r1.channels);
   check('os dois canais ok', r1.channels.length === 2 && r1.channels.every((c) => c.ok), r1.channels);
-  const r2 = await deliverAlert('S', 'T', { enabled: true, hourUtc: 6, alertTo: ['a@b.com'], webhook: `http://127.0.0.1:${port}/falha`, smtp: null }, {
+  const r2 = await deliverAlert('S', 'T', { enabled: true, hourUtc: 6, weekdaysUtc: [1], alertTo: ['a@b.com'], webhook: `http://127.0.0.1:${port}/falha`, smtp: null }, {
     sendGraph: async () => {
       throw new Error('sem conta Microsoft vinculada');
     },
@@ -103,7 +115,7 @@ async function main(): Promise<void> {
   const smtp: WatchdogSmtp = { host: 'smtp.gmail.com', port: 465, user: 'prioracontato@gmail.com', pass: 'x' };
   let viaGraph = 0;
   const viaSmtp: string[][] = [];
-  const r3 = await deliverAlert('S', 'T', { enabled: true, hourUtc: 6, alertTo: ['prioracontato@gmail.com'], webhook: '', smtp }, {
+  const r3 = await deliverAlert('S', 'T', { enabled: true, hourUtc: 6, weekdaysUtc: [1], alertTo: ['prioracontato@gmail.com'], webhook: '', smtp }, {
     sendSmtp: async (_s, to) => {
       viaSmtp.push(to);
     },
@@ -112,7 +124,7 @@ async function main(): Promise<void> {
     },
   });
   check('com senha de app: sai pelo Gmail e NÃO usa a Microsoft', viaSmtp.length === 1 && viaGraph === 0 && r3.channels.length === 1 && r3.channels[0].via === 'gmail' && r3.channels[0].ok, r3.channels);
-  const r4 = await deliverAlert('S', 'T', { enabled: true, hourUtc: 6, alertTo: ['prioracontato@gmail.com'], webhook: '', smtp }, {
+  const r4 = await deliverAlert('S', 'T', { enabled: true, hourUtc: 6, weekdaysUtc: [1], alertTo: ['prioracontato@gmail.com'], webhook: '', smtp }, {
     sendSmtp: async () => {
       throw new Error('535 Username and Password not accepted');
     },

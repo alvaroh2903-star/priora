@@ -34,7 +34,8 @@ leia-o para o desenho pretendido. Este arquivo resume o **estado atual** e as
 - Testes de fumaça: `npm run browser:smoke | carriers:detect | carriers:selftest | demurrage:calc`.
 - **CI** (`.github/workflows/ci.yml`): typecheck + build + `npm run selftest:all` (descobre
   sozinho todo script `:selftest`) a cada push. Self-test novo = só nomear `xxx:selftest`.
-- **Watchdog automático** (`watchdogScheduler.ts`): 1 volta/dia (06:00 UTC), avisa quando
+- **Watchdog automático** (`watchdogScheduler.ts`): 1 volta por SEMANA, segunda 06:00 UTC = 03:00 BRT
+  (`WATCHDOG_WEEKDAYS`, padrão `seg`; uma volta nos 12 custou ~2.500 créditos em 18/10), avisa quando
   armador quebra/volta (`WATCHDOG_ALERT_TO`, padrão prioracontato@gmail.com — enviado pelo Gmail da
   Priora com senha de app `WATCHDOG_SMTP_PASS`, reserva = conta Microsoft vinculada; `WATCHDOG_ALERT_WEBHOOK`).
   Status: `/health/watchdog-auto` (diag) e `/api/demurrage/bot/watchdog` (painel).
