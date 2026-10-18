@@ -133,6 +133,9 @@ test('0007 — organization_id imutável nas tabelas de tenant', { skip: !url },
       'liberacao_reconstrucoes', 'liberacao_reconstrucao_posses_perdidas', 'liberacao_revisoes',
       // Liberação L2 (0103_liberacao_projecao): projeção atual e histórico material, mesma regra.
       'liberacao_avaliacoes', 'liberacao_avaliacao_eventos',
+      // Liberação — documentos de apresentação (0104_liberacao_documentos_apresentacao): mesma regra.
+      'documentos_apresentacao_modelos', 'documentos_apresentacao', 'documentos_apresentacao_processos', 'documentos_apresentacao_assinaturas',
+      'documentos_apresentacao_conferencias', 'documentos_apresentacao_envios', 'documentos_apresentacao_eventos',
       // S4 — Outlook do próprio Analista (0105_s4_outlook_da_pessoa): mesma regra.
       'outlook_conexoes_pessoa'];
     const { rows } = await pool.query(`

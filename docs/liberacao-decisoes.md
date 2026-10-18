@@ -733,6 +733,165 @@ Aplicam regras já congeladas; não criam regra nova.
 
 > **Status:** aprovadas pelo responsável pelo produto (V1–V7 da revisão da camada documental, 2026-10-15). Registro aditivo: nada acima foi alterado. Etapas, gates, matriz, portão do cliente, overrides, prova de apresentação, pagamento, janela de 48h, terminalidade, prioridade e Master compartilhado continuam como estão.
 
+### 14.1 Termo Evergreen (Grieg)
+- A Priora prepara automaticamente o termo Evergreen: identifica o Master Evergreen, usa o modelo Evergreen, preenche os campos variáveis só com dados de fontes confiáveis, preserva texto jurídico e estrutura, gera o PDF vinculado ao Master e aos processos, com versão, origem dos dados e evidência da geração.
+- Os PDFs recebidos são **exemplos preenchidos**: nunca se copiam deles BL, contêiner, navio, data, responsável ou assinatura, e nenhum dado ausente é inventado. Tabela tarifária e cláusulas não são alteradas automaticamente.
+
+### 14.2 Preparado × assinado × enviado × apresentado
+- O documento está **preparado** quando a Priora gera o PDF corretamente preenchido; a assinatura não é condição da preparação.
+- Fatos distintos: documento preparado; documento assinado pelo Analista; e-mail efetivamente enviado; apresentação efetivamente comprovada.
+- Assinatura humana: nada de assinatura automática, simulada ou reaproveitada; a assinatura de uma versão nunca vale para outra.
+- Nenhum fato documental comprova a apresentação (cap. 30).
+
+### 14.3 E-mail da Grieg = solicitação de agendamento de apresentação (V1)
+- O e-mail com o termo Evergreen preenchido e assinado e a cópia do MBL em PDF é uma **solicitação de agendamento de apresentação**. Não é BL encaminhado, nem apresentação, nem protocolo, nem desbloqueio, nem Master liberado.
+- Assunto: "Solicitação de agendamento de apresentação de BL – [MBL]". Corpo: "Prezados, boa tarde. / Segue em anexo o termo Evergreen preenchido e assinado, juntamente com a cópia do MBL, para agendamento de apresentação do BL para desbloqueio. / Atenciosamente,". Anexos: termo preenchido e assinado; cópia do MBL em PDF do próprio Master (nunca anexo achado pelo nome; nunca documento de outro Master).
+- **L1b:** não se mapeia para `BL_ENCAMINHADO_PARA_APRESENTACAO`; não se reutiliza `PREPARACAO_REGISTRADA` da Grieg ("memorando próprio + aviso por e-mail") sem correspondência funcional demonstrada. Não há fato L1b compatível: termo preparado, termo assinado e solicitação enviada ficam no domínio documental, rastreáveis. Contrato futuro (exige aprovação): fato próprio `SOLICITACAO_DE_AGENDAMENTO_ENVIADA` e a regra do seu efeito.
+
+### 14.4 Outlook do Analista (V2/V3)
+- A Priora prepara o e-mail (assunto, corpo, destinatário validado, anexos corretos) como **rascunho na conta Outlook do próprio Analista responsável** e o deixa para conferência. Quem envia é o Analista, por ação explícita (no Outlook ou pedindo pela Priora). A Priora não envia sozinha.
+- Nunca caixa compartilhada automaticamente, nunca token de outra pessoa, nunca a caixa monitorada pela Clara.
+- Envio exige o documento assinado e o MBL em PDF disponível.
+
+### 14.5 Reenvio legítimo (V4)
+- Depois de um envio confirmado, novo envio só como **reenvio explícito**: do último envio confirmado, com motivo e quem autorizou, associado à versão correta do documento. O envio original e a versão anterior são preservados.
+- Duplicação acidental continua impedida: uma tentativa aberta por Master e fluxo; um reenvio por envio confirmado; resultado incerto exige conciliação antes de nova tentativa; nada é reenviado automaticamente.
+
+### 14.6 Seleção dos serviços — MSC, Hapag-Lloyd, ZIM (V5)
+- Regra operacional explícita (com fundamento escrito) + evidência suficiente (modalidade do Master provada e única) → a Priora seleciona e registra a origem.
+- Ambiguidade (regras em conflito, modalidade ambígua) → escolha do Analista. Falta de evidência → nada é selecionado automaticamente.
+- Não se inventa matriz de serviços; opções de modelos diferentes não são equivalentes por nome; opção incompatível com a modalidade documental nunca é marcada.
+
+### 14.7 Atualização reativa dos modelos (V6)
+- Gera-se com a última versão **cadastrada e validada**. Sem polling, sem consulta a sites, sem IA sem evento.
+- Resposta da agência inequívoca e de origem confiável (resposta a um envio confirmado daquela versão, vinda de um destinatário dele ou de outro remetente confiável da agência — 14.10/14.13) → rejeição registrada, evidência vinculada, versão rejeitada, novos envios com ela bloqueados, histórico preservado. Ambígua → validação humana, sem rejeição confirmada.
+- Substituto enviado pela agência → nova versão vinculada à anterior, pendente; leitura dos campos (IA pode auxiliar, nunca alterar cláusulas); validação do Analista antes do uso. O mesmo arquivo nunca é reprocessado.
+
+### 14.8 Evidência de envio
+- Estados distintos: rascunho criado; rascunho alterado; envio solicitado; envio confirmado; resultado incerto; envio não realizado.
+- Envio **confirmado** só por evidência lida do Graph na caixa do Analista: a mensagem não é mais rascunho e tem data de envio. Criar rascunho ou ter o pedido de envio aceito não confirma. Nenhum identificador é inventado.
+
+### 14.9 Assinatura dos memorandos (V7)
+- MSC, Hapag-Lloyd e ZIM seguem o mesmo princípio: a Priora preenche; o Analista assina antes do encaminhamento; preparado não é assinado; nada de assinatura automática ou reaproveitada; a assinatura de uma versão não é herdada por outra.
+- ⚠️ **Restringida pela DOC-31 (14.17):** o Analista assina e encaminha os memorandos **fora da Priora**; a Priora não recebe, não confere nem guarda o arquivo assinado deles.
+
+### 14.10 Decisões aprovadas na conclusão da camada documental (2026-10-15)
+- **4.1 Preparação:** a Priora preenche automaticamente; **PDF corretamente preenchido = documento preparado**, para os quatro documentos. A assinatura é etapa posterior e não altera retroativamente a preparação.
+- **4.2 Assinatura:** feita pelo Analista; nenhum dos quatro documentos é encaminhado sem ela; nada de assinatura gerada ou reaproveitada. ⚠️ Restringida pela DOC-31 (14.17): só o termo Evergreen tem o arquivo assinado devolvido, conferido e encaminhado pela Priora; nos memorandos a assinatura acontece fora dela.
+- **4.3 Outlook do Analista:** aprovada a ampliação da S4 para autenticação Microsoft **delegada** do Analista, com permissões mínimas, armazenamento seguro de tokens e isolamento por organização e pessoa. A conta monitorada pela Clara continua separada. Envio confirmado só com evidência do Graph.
+- **4.4 Reenvios:** o Analista responsável autoriza o reenvio justificado; preservam-se envio original, motivo, autor, versões dos anexos, histórico e evidências. Resultado incerto exige conciliação confiável antes de nova tentativa; **uma busca negativa isolada no Graph não prova que a mensagem não saiu**.
+- **4.5 Modelos rejeitados:** sem monitoramento de sites. A resposta da agência pode vir de **outro funcionário confiável da agência**, não só do destinatário original; mensagem ambígua → validação humana; substituto → validação humana antes do uso.
+- **4.6 Seleção dos serviços:** automática só com regra operacional explícita e evidência suficiente; senão, escolha do Analista; nenhuma correspondência entre opções é inventada.
+- **5 Grieg/Evergreen:** reafirmado o 14.3 (solicitação de agendamento ≠ apresentação ≠ `BL_ENCAMINHADO_PARA_APRESENTACAO`; nenhum evento L1b fabricado; nenhuma nona etapa).
+
+### 14.11 Os quatro modelos oficiais recebidos — leitura e geração
+- Os quatro arquivos (Termo Evergreen — 3 páginas; memorandos MSC, Hapag-Lloyd/Rochamar e ZIM/Rochamar — 1 página) são **exportações do Word, já preenchidas**, sem campos de formulário (só campos de assinatura digital, nos exemplos MSC e Hapag). Preenchimento por **sobreposição** sobre o arquivo oficial.
+- Antes de preencher, os dados do exemplo são **removidos** (não cobertos) nas áreas declaradas no layout de cada versão: cada trecho de texto ali vira um avanço equivalente sem glifo, então o texto fixo da mesma linha não se desloca; imagens do exemplo nessas áreas (ex.: marcação de opção feita por imagem no Hapag) e, só onde declarado, traços inteiramente dentro da área (sublinhado dos links do exemplo) também saem. Anotações (assinatura digital, links), formulário, estrutura e metadados do exemplo nunca passam para o documento gerado.
+- Achados nos exemplos (por isso eles nunca servem de fonte para as opções): no MSC o "X" da opção está **escondido** sob o preenchimento branco da caixa; no Hapag a camada de texto marca uma opção (☒ em "Apresentação…") e a imagem sobreposta mostra outra (☒ em "Retirada e Desbloqueio").
+- Fidelidade conferida de forma independente (renderização do poppler): fora das áreas preenchidas e do lugar da assinatura o documento gerado é **igual pixel a pixel** ao oficial; os blocos de texto jurídico, as tabelas tarifária e de indenizações e a estrutura estão presentes, iguais.
+- As definições (campos, fontes aceitas, layout, opções, lugar da assinatura, texto fixo) são **propostas** e só entram em uso depois de cadastradas com o arquivo oficial exato (hash) e **validadas por uma pessoa**.
+
+### 14.12 PREPARACAO_REGISTRADA × autorização de encaminhamento (correção do mapeamento L1b)
+- Semântica congelada na L1b (cap. 28 e `agencia.ts`): para MSC/Rochamar, `PREPARACAO_REGISTRADA` é "**memorando gerado**", e com ele a L1b oferece "Enviar para apresentação". É o mesmo fato que a decisão 4.1 chama de documento preparado.
+- Mapeamento corrigido: o evento é entregue à L1b no instante da **primeira preparação** do memorando do armador do Master (antes: só depois da assinatura, o que fazia a L1b pedir "Preparar memorando" de um memorando já preparado).
+- A **autorização do encaminhamento** é um fato documental distinto (documento vigente + assinatura humana registrada sobre ele) e é **composta por fora da L1b** (`acaoComCondicaoDocumental`): enquanto não autorizado, "Enviar para apresentação" aguarda o passo documental que falta (ex.: assinar). A L1b não foi alterada.
+  - ⚠️ **Revogado pela DOC-31 (14.17):** a composição saiu; "Enviar para apresentação" é mostrada exatamente como a L1b decide, ao lado da situação documental. O mapeamento de `PREPARACAO_REGISTRADA` (primeira preparação) continua.
+- Grieg: inalterado (14.3) — termo preparado, termo assinado e solicitação enviada continuam documentais.
+
+### 14.13 Escolhas de implementação que aplicam as decisões acima (a confirmar)
+- **Permissão da ação:** a solicitação de agendamento só é preparada com a permissão da ação de Master na L1b (portão do cliente / N-13 / override, cap. 7 e 38). Sem ação L1b correspondente aprovada (14.3), a permissão fica "não determinada" e nenhum rascunho é preparado.
+- **Conciliação de resultado incerto:** a pessoa só pode concluir "não enviado" depois que a conciliação pelo Graph não achou a mensagem **nem pelo id nem pela busca independente pelo Internet Message ID**, declarando como verificou (a agência confirmou o não recebimento, ou o Analista conferiu Itens Enviados/Excluídos) e com justificativa. Sem Internet Message ID do rascunho, só a confirmação da agência basta. Uma pessoa nunca confirma envio.
+- **Remetente confiável da agência:** destinatário exato do envio respondido, ou endereço/domínio **validado por pessoa** na configuração da organização com a autenticação do e-mail **aprovada** (DMARC); em ambos os casos a mensagem tem de responder ao envio (In-Reply-To ou mesma conversa).
+- **Valores informados pelo Analista:** só onde a definição validada aceita a fonte ANALISTA (agendamento — data e hora — e local de retirada/entrega no ZIM), com autor e instante; nunca substituem dado de sistema.
+- **Arquivo assinado:** a Priora registra o que os bytes mostram — assinatura digital aplicada sobre o PDF preparado, assinatura sem vínculo verificável, ou nenhuma (ex.: assinatura à mão digitalizada) — sem validar o certificado e sem bloquear.
+- **Outlook do Analista:** consentimento separado do login de identidade; `Mail.ReadWrite` + `offline_access`; `Mail.Send` só se a pessoa optar pelo envio pela Priora. Conexão mantida até a pessoa desconectar (o encerramento da sessão não a revoga).
+- Data do documento no fuso America/Sao_Paulo; ordem de exibição das pendências documentais.
+
+### 14.14 Decisões aprovadas no fechamento documental (DOC-16 a DOC-21, 2026-10-15)
+- **DOC-16 — Assinatura do Analista:** ⚠️ **REVOGADA** pela DOC-22/DOC-23 (14.16): a premissa "preparador = signatário" estava incorreta. Texto original mantido só como histórico:
+  - quem prepara é quem assina, com os **próprios** dados (nome civil e CPF) do cadastro confiável dele (fonte `CADASTRO_DA_PESSOA`, escopo PESSOA); dado de outra pessoa é recusado; sem cadastro, o campo falta;
+  - só o signatário registra o arquivo assinado (serviço e banco);
+  - outra pessoa só assume um documento vigente por pedido explícito, e isso gera nova versão com os dados dela;
+  - onde o texto do modelo põe quem assina como representante da empresa (Evergreen, Hapag-Lloyd, ZIM), a definição declara a exigência de poderes; sem comprovação registrada, o encaminhamento fica **pendente**. O cargo de Analista não é comprovação.
+- **DOC-17 — Exportador/Importador (Hapag-Lloyd e ZIM):** é o consignatário do MBL do Master, por regra **específica** desses dois modelos (o fundamento fica no campo); não há equivalência global. Sem consignatário confiável (S2), o campo falta e indica a fonte.
+- **DOC-18 — Opções e placeholders:**
+  - MSC: exatamente uma opção ("Preencher com X apenas a opção desejada");
+  - Hapag-Lloyd e ZIM: uma ou mais ("solicito os serviços listados abaixo"), sem incompatibilidade presumida;
+  - seleção automática só com regra explícita; hoje o Analista escolhe;
+  - o placeholder do Word do Hapag sai; o quadro do representante e o protocolo da Rochamar ficam.
+- **DOC-19 — Prioridade das fontes (agendamento, hora, local):**
+  - dado confirmado do sistema primeiro; sem ele, o Analista informa, com autor, instante e proveniência declarada;
+  - informado igual ao sistema = concordante; diferente = divergência `INFORMADO_DIVERGE_DO_SISTEMA` para resolução, nunca sobrescrita;
+  - hoje nenhuma fonte do sistema produz esses dados.
+- **DOC-20 — Conferência humana da assinatura:**
+  - obrigatória antes de qualquer encaminhamento: quem, quando e qual arquivo (hash), CONFORME ou NÃO CONFORME com motivo;
+  - vale só para aquele registro e aquele arquivo: arquivo novo exige nova conferência; hash diferente ou documento não vigente é recusado;
+  - a leitura dos bytes é só **indício** (`INDICIO_*`, `CERTIFICADO_NAO_VERIFICADO`). Substitui, neste ponto, o "sem bloquear" do 14.13.
+- **DOC-21 — Conexão Outlook delegada:**
+  - sobrevive ao logout e termina por desconexão da pessoa, revogação pela administração (ADMIN da organização) ou invalidação pela Microsoft (token revogado → cache apagado na hora);
+  - usá-la exige sessão autenticada da própria pessoa (reautenticação depois do logout);
+  - o motivo e quem desconectou ficam registrados;
+  - o envio pela Priora vale só se pedido NA conexão (escopos pedidos ∩ concedidos).
+
+### 14.15 Portão documental do encaminhamento
+
+> ⚠️ **Revogado pela DOC-31 (14.17)** para MSC/Hapag/ZIM — o único caso que restava depois da DOC-28. Não há mais portão documental sobre ações da L1b; as condições abaixo valem só para a **solicitação de agendamento** da Grieg (`condicaoDaSolicitacaoDeAgendamento`). Texto original mantido como histórico.
+- **Composição fora da L1b** (`acaoComCondicaoDocumental`): só RESTRINGE a execução de uma ação que encaminha documento; a ação, a etapa, o bloqueador, o responsável, a classe e a prioridade continuam os da L1b, sem nenhum fato novo.
+  - ENVIAR_PARA_APRESENTACAO → memorando MSC/Hapag/ZIM;
+  - APRESENTAR_EVERGREEN → termo Evergreen (**PRECISA DE SUA VALIDAÇÃO**). ⚠️ Substituído pela DOC-28 (14.16): o termo condiciona a solicitação de agendamento, não a apresentação.
+- **Condições:** documento vigente e preparado + arquivo assinado pelo signatário + conferência CONFORME desse arquivo + poderes comprovados quando exigidos.
+- **Fora do portão:** permissões operacionais (portão do cliente, N-13, override) e condições externas continuam da L1b, que só recomenda a ação quando elas permitem.
+
+### 14.16 Correção do fluxo de assinatura digital (DOC-22 a DOC-30, 2026-10-15)
+
+> Registro aditivo. **Revoga a DOC-16** (preparador = signatário) e ajusta o portão de 14.15 para a Grieg. Nada da L1b, da Demurrage ou do Blueprint foi alterado.
+
+- **Operação real:** o signatário dos documentos é o **representante legal** da organização (signatário legal). Os Analistas preparam, aplicam no leitor de PDF (Adobe Acrobat) a assinatura digital com o certificado do representante, conforme o procedimento corporativo, e devolvem o PDF assinado à Priora para conferência, guarda e encaminhamento pelo Outlook do próprio Analista. **A Priora nunca acessa, importa, guarda ou usa o certificado, a chave privada ou a senha** — recebe só o arquivo já assinado. Quem opera o leitor de PDF não é confundido com a identidade do certificado.
+- **DOC-22 — Analistas autorizados:** qualquer pessoa interna autorizada da organização (Analista, gestor ou administrador; cliente nunca) prepara, anexa o PDF assinado, confere e encaminha pelo próprio Outlook — sem restrição ao preparador original. Cada ato guarda autor, ação, instante, documento (versão) e organização, separadamente; isolamento por organização mantido.
+- **DOC-23 — Signatário legal:** os campos de quem assina vêm só do **cadastro confiável e validado do signatário legal** (fonte `CADASTRO_DO_SIGNATARIO_LEGAL`, escopo SIGNATARIO) — nunca da conta Microsoft, do nome de exibição ou do cadastro do Analista. Papéis distintos e registrados: preparador, operador que anexa, identidade do signatário (documento e certificado), conferente e encaminhador. O signatário não precisa ser usuário da Priora nem ter Outlook. Sem cadastro válido (ou com mais de um vigente), os campos ficam faltando e a pendência é `DEFINIR_SIGNATARIO_LEGAL` (configuração) — nada é preenchido por aproximação. Poderes de representação vêm do cadastro do signatário, com evidência e validade; nunca presumidos.
+- **DOC-24 — Conferência humana:** registra conferente, instante, identidade esperada do signatário, registro e hash do arquivo conferido, resultado, constatação e motivo quando recusado, e a versão do documento. É o que a pessoa viu no leitor de PDF: a Priora não valida certificado, cadeia de confiança nem validade jurídica (`CERTIFICADO_NAO_VERIFICADO`).
+- **DOC-25 — Alteração depois da assinatura:** fatos distintos — nova versão documental (nova preparação), novo arquivo anexado (substituição), divergência de hash (recusada na conferência; anexo enviado diferente do conferido fica visível), conferência do arquivo efetivamente enviado, justificativa. Outro arquivo para a mesma versão só como **substituição justificada** (cadeia linear; os anteriores nunca mudam); se os bytes mostram alteração sobre um arquivo assinado, ela tem de ser declarada como tal. Nenhuma conferência é reaproveitada: arquivo final novo = conferência nova. Assinatura inválida, modificação que a comprometa, integridade não confirmada ou arquivo sem estrutura de assinatura digital **nunca** são conformes. A justificativa não valida nada. Não há caminho para encaminhar com conferência NÃO CONFORME (**PRECISA DE SUA VALIDAÇÃO — envio de documento cuja assinatura foi considerada inválida**: não implementado).
+- **DOC-26 — Seleção de serviços:** MSC exatamente uma; Hapag-Lloyd e ZIM uma ou mais, nunca zero; seleção automática só com regra e evidência (hoje nenhuma regra: o Analista escolhe); nenhuma equivalência entre agências.
+- **DOC-27 — Contêineres Evergreen:** sem limite de 6. A lista do MBL (um por linha, sem repetição — repetição é dado inconsistente e deixa o campo faltando) vai no quadro até 6; acima disso o quadro recebe a remissão ("VIDE RELAÇÃO ANEXA", total, páginas) e **todos** os contêineres, numerados e na ordem, vão em páginas adicionais ao final do mesmo PDF, cada uma identificando o termo (título, BL do Master, data) e a paginação. Páginas oficiais, cláusulas e tarifas intactas. **Extensão proposta pela Priora, pendente de aceite operacional da Grieg** — nunca considerada aceita sem confirmação registrada (atenção visível na situação documental).
+- **DOC-28 — Termo Evergreen e agendamento:** fatos distintos — termo preparado, assinado, conferido, solicitação de agendamento encaminhada, agendamento confirmado (sem fonte ainda) e apresentação efetiva do Master (L1b). A solicitação exige o termo assinado e conferido (composição própria `condicaoDaSolicitacaoDeAgendamento`, fora da L1b). `APRESENTAR_EVERGREEN` deixou o portão documental: na L1b ela é a apresentação do Master apto, não o agendamento; associar o termo a ela seria reinterpretar a L1b. **PRECISA DE SUA VALIDAÇÃO:** se a apresentação Evergreen também deve exigir o termo conferido.
+- **DOC-29 — Fidelidade:** pequenas diferenças de fonte aceitas (legível, sem sobreposição, corte ou deslocamento; conteúdo jurídico preservado); nenhuma dependência de fonte nova; testes visuais e textuais dos quatro modelos mantidos.
+- **DOC-30 — Armazenamento e rastreabilidade** (⚠️ restringida pela DOC-31: arquivo assinado, conferência e envio só no termo Evergreen)**:** arquivo assinado ligado ao processo/Master e à versão; preservados arquivo, hash, versão, preparador, operador, signatário, conferente, justificativas, evidências de envio e histórico de reenvios e substituições; nada é sobrescrito (append-only no banco); acesso por organização e pessoa autorizada.
+- **Banco:** a 0104 (ainda não aplicada em ambiente real) foi revista no próprio arquivo — `assinado_por_membership_id` → `registrado_por_membership_id` (operador); identidade do signatário em documento, arquivo e conferência; cadeia de substituições; constatação da conferência; o gatilho "só quem preparou registra" saiu. Depois de aplicada em ambiente real, só por nova migration.
+
+### 14.17 Correção de escopo documental: MSC, Hapag-Lloyd e ZIM × Evergreen/Grieg (DOC-31, 2026-10-15)
+
+> Registro aditivo. **Restringe** 14.9, 14.10 (4.2), 14.16 (DOC-22 a DOC-25 e DOC-30) ao termo Evergreen e **revoga** o portão de 14.12/14.15. Preserva todo o resto (preparação 4.1, dados confiáveis, opções DOC-18/DOC-26, signatário legal DOC-23 nos campos, Exportador/Importador DOC-17, contêineres DOC-27, agendamento DOC-28, fidelidade DOC-29, reenvio, conciliação, rejeição de modelos). Nada da L1b, da Demurrage ou do Blueprint foi alterado.
+
+- **Princípio:** a Priora reduz o trabalho do Analista; não cria uma segunda operação paralela. O que a Priora faz com o documento vem do **procedimento aprovado de cada modelo** (catálogo: `procedimento`), não de uma regra global de assinatura.
+- **Fluxo A — MSC, Hapag-Lloyd e ZIM (`GERAR_E_DISPONIBILIZAR`):** a Priora obtém os dados confiáveis que já tem, preenche o modelo, gera o PDF e o deixa para **visualizar e baixar**, e **para aí**. O Analista assina (Adobe) e encaminha fora da Priora.
+  - A preparação documental termina quando o PDF válido é gerado e disponibilizado (passo final `DOCUMENTO_DISPONIVEL`, que não é pendência). **Isso não é apresentação do Master nem conclusão da Liberação.**
+  - A Priora **não exige**: upload do PDF assinado, conferência, guarda do assinado, rascunho no Outlook, envio pela Priora, conciliação de envio, comprovação de poderes ou evidência de assinatura. Upload e conferência são recusados (`FLUXO_NAO_APLICAVEL`) e o banco não aceita arquivo assinado desses modelos.
+  - Continuam: campos obrigatórios, fontes confiáveis, opções de serviço, divergências, versões do documento e os campos de quem assina preenchidos pelo cadastro do signatário legal (DOC-23) onde o modelo os tem.
+- **Fluxo B — Evergreen/Grieg (`CICLO_COMPLETO`):** inalterado — prepara o termo para baixar; recebe o PDF assinado; exige a conferência humana do arquivo final; guarda o PDF assinado e as evidências; prepara o rascunho no Outlook do Analista com o termo e o MBL; permite o encaminhamento com os controles existentes; preserva histórico, versões, tentativas e evidências. A solicitação de agendamento exige o termo assinado e conferido e **não comprova a apresentação**.
+- **L1b:** `PREPARACAO_REGISTRADA` continua entregue na primeira preparação do memorando (MSC/Rochamar). "Enviar para apresentação" continua sendo a ação da L1b, sem renomear, remover ou dar por executada: a Priora não sabe se o Analista já encaminhou, e **baixar o PDF não é encaminhar nem apresentar**. Situação documental, próxima ação da L1b e evidência de apresentação ficam separadas. O portão `acaoComCondicaoDocumental` (assinatura + conferência + poderes antes de "Enviar para apresentação") **saiu**; nenhum bloqueio, prioridade ou etapa foi criado.
+- **DOC-31 restringe DOC-30:** armazenamento de PDF assinado somente em Evergreen/Grieg.
+- **Banco:** a 0104 (ainda não aplicada em ambiente real) foi revista no próprio arquivo — o gatilho do arquivo assinado aceita só documento do termo Evergreen (conferência e envio dependem dele por FK). Nenhuma tabela nova; nenhum documento preparado precisa de assinatura, conferência, tentativa ou Outlook.
+- **Dados pessoais:** os marcadores de vazamento do exemplo deixaram de conter nome, CPF ou e-mail de pessoas; o teste obtém esses dados do próprio arquivo oficial (o que a limpeza remove) na hora de conferir. (Revisto em DOC-31.C/§5 abaixo: a sanitização tem teste unitário com fixture sintética; a checagem com os oficiais virou só validação estrutural, sem reproduzir dado nem hash em mensagens.)
+
+#### DOC-31.A — Representação legal sem bloqueio documental (Hapag-Lloyd e ZIM)
+- A Priora preenche nome e CPF do representante legal **pelo cadastro confiável do signatário legal** (DOC-23), nunca por dado do Analista.
+- Não há pendência de comprovação de poderes, nem bloqueio de geração, visualização ou download por falta dela, nem upload de procuração/certificado/documento de representação, nem conferência de assinatura na Priora. O Analista assina e encaminha pelo procedimento externo.
+- Continuam as validações normais de dados obrigatórios e de integridade do documento. A ausência de bloqueio **não** é declaração de validade jurídica dos poderes: a Priora simplesmente não participa dessa conferência neste fluxo. O texto do modelo continua declarando o quadro do representante (definição inalterada).
+- Evergreen/Grieg: inalterado (poderes comprovados antes da solicitação de agendamento).
+
+#### DOC-31.B — Atualização só por alteração de dado efetivamente usado no PDF
+- Documento gerado/disponibilizado + fato do processo mudou → **pendência de atualização só se mudar o que o PDF daquela versão mostra**: o valor **escrito** de um campo (formato do lugar; espaços repetidos não contam), as alternativas marcadas de um grupo de opções ou a versão do modelo. Ex.: MBL impresso, consignatário do memorando, viagem ou contêiner impressos → exige; dado do processo que não está no documento, reprocessamento (OCR) com o mesmo valor, outra evidência, outro instante de observação, outro processo vinculado sem campo no documento → não exige.
+- A pendência (`GERAR_NOVA_VERSAO`) lista os campos alterados (com o rótulo do modelo) e diz: "O PDF disponibilizado pode estar desatualizado e precisa ser regenerado." — sem afirmar que o arquivo baixado foi substituído ou recolhido.
+- Nenhuma versão é criada automaticamente: a nova versão só nasce quando a pessoa gera de novo; a anterior fica no histórico (append-only). Comparação isolada por organização, Master e modelo documental. Mudança documental nunca vira envio, apresentação ou agendamento; a L1b continua recebendo só a primeira preparação.
+- **Sem dados para verificar** um campo usado no PDF (sem valor confiável ou divergente agora), nada é presumido: o estado é explícito — vigência **não verificável** ("Não é possível confirmar se o PDF disponibilizado continua atual…"), com os campos não verificados, e a pendência é a do dado (obter/analisar). Se outro campo mudou comprovadamente, os dois aparecem.
+- Evergreen já assinado, conferido ou encaminhado: aplica-se o versionamento existente — nova versão exige nova assinatura e nova conferência; reenvio só explícito; assinatura antiga nunca vale para bytes novos.
+
+#### DOC-31.C — Situação documental separada da próxima ação operacional
+- MSC, Hapag-Lloyd e ZIM, após geração válida: situação documental **"Documento disponível para download"** (campo `texto` da situação). É só situação documental.
+- A próxima ação operacional continua sendo a da L1b, apresentada à parte e não ocultada porque a preparação terminou. Nenhuma resposta documental traz "Master apresentado", "Apresentação concluída", "Enviado" ou "Liberado", nem ação operacional.
+- Onde chega hoje: a situação documental só sai pela API `GET /api/liberacao/documentos/masters/:id`; a tela de Liberação mostra a próxima ação da projeção L2. Mostrar as duas lado a lado na tela fica para a integração da decisão da L1b (L8).
+
+
 ### 14.18 Reutilização determinística dos fatos do MBL (Entrega 1, 2026-10-17)
 - **H1 (aprovada):** a Priora pode preencher automaticamente os documentos da Liberação com dados **confiáveis** do MBL, sem confirmação campo a campo, desde que o documento correto esteja identificado, a origem seja rastreável e não existam divergências relevantes. A geração e o preenchimento são determinísticos; a Clara não reinterpreta dado já extraído. H1 **não** promove resultado de OCR a verdade operacional.
 - **Confiável (só regras já aprovadas):** extração de MBL pelo conteúdo, legível, que sustenta vínculo **válido** Processo↔Master com ESTE Master (identidade S6/S2 inalterada; mesmo critério da cópia do MBL); evidência `auditoria_extracao:{id}`. Por dado:

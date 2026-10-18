@@ -15,6 +15,7 @@ import { demurrageRouter } from './routes/demurrageRoutes';
 import { auditoriaRouter } from './routes/auditoriaRoutes';
 import { capturaRouter } from './routes/capturaRoutes';
 import { liberacaoRouter } from './routes/liberacaoRoutes';
+import { documentosRouter } from './routes/documentosRoutes';
 import { iniciarSchedulerDemurrage } from './demurrage/schedulerBootstrap';
 import { iniciarCapturaPreAlerta } from './demurrage/capturaBootstrap';
 import { iniciarReconstrucaoLiberacao } from './liberacao/reconstrucaoBootstrap';
@@ -69,6 +70,7 @@ app.use('/api/tracking', trackingRouter);
 app.use('/api/demurrage', demurrageRouter);
 app.use('/api/auditoria', auditoriaRouter);
 app.use('/api/captura', capturaRouter);
+app.use('/api/liberacao/documentos', documentosRouter);
 app.use('/api/liberacao', liberacaoRouter);
 
 /** Estado de autenticação do usuário atual (para a UI): sessão de pessoa (S4) ou legada. */
