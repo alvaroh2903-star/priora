@@ -1,6 +1,6 @@
 import { config } from '../config';
 import { normalize, trackNumber, trackDhlCached, dhlUsage, resetDhlStateForTest, DhlLimitError, DhlAuthError } from './dhlClient';
-import { parseDhlWebRaw, setDhlWebFetcherForTest, trackDhlWeb, urlForNumber, DhlWebSession } from './dhlWeb';
+import { parseDhlWebRaw, setDhlWebFetcherForTest, trackDhlWeb, DhlWebSession } from './dhlWeb';
 
 /**
  * Priora — Self-test OFFLINE do rastreio DHL (fetch simulado, nada sai da máquina).
@@ -126,13 +126,11 @@ async function main(): Promise<void> {
 
   console.log('[selftest] site — resposta da /utapi');
   check('JSON com envio → mesmo formato da API', (() => { const r = parseDhlWebRaw({ number: 'S1', status: 200, body: JSON.stringify(SHIPMENT) }); return !(r instanceof Error) && r.found && r.status === 'Processed at CAMPINAS - BRAZIL'; })());
+  // Texto exato da /utapi em produção (18/10/2026, número de teste inexistente).
   check('404 da DHL → found false com o detalhe', (() => { const r = parseDhlWebRaw({ number: 'S2', status: 404, body: JSON.stringify({ title: 'No result found', detail: 'No shipment with given tracking number found.' }) }); return !(r instanceof Error) && !r.found && /No shipment/.test(r.error || ''); })());
   check('página HTML (bloqueio) → erro, não "não encontrado"', parseDhlWebRaw({ number: 'S3', status: 200, body: '<html>Access Denied</html>' }) instanceof Error);
   check('403 → erro', parseDhlWebRaw({ number: 'S4', status: 403, body: '{}' }) instanceof Error);
-  check('número inválido na página → found false com aviso', (() => { const r = parseDhlWebRaw({ number: 'S5', status: null, body: '', invalid: true }); return !(r instanceof Error) && !r.found && /inválido/.test(r.error || ''); })());
-
-  check('URL do 2º número troca só o parâmetro do 1º', urlForNumber('https://www.dhl.com/utapi?trackingNumber=AAA111&language=pt&source=tt', 'AAA111', 'BBB222') === 'https://www.dhl.com/utapi?trackingNumber=BBB222&language=pt&source=tt');
-  check('rota com outro nome de parâmetro também', urlForNumber('https://www.dhl.com/x?id=AAA111', 'AAA111', 'BBB222') === 'https://www.dhl.com/x?id=BBB222');
+  check('fetch falhou dentro da página → erro', parseDhlWebRaw({ number: 'S5', status: null, body: '', error: 'TypeError: Failed to fetch' }) instanceof Error);
 
   console.log('[selftest] site — pedidos simultâneos vão numa sessão só');
   const sessions: string[][] = [];
