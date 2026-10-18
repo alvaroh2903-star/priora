@@ -51,7 +51,7 @@ leia-o para o desenho pretendido. Este arquivo resume o **estado atual** e as
   residencial+unblock saindo do BR passa a Akamai; abre a página uma vez e consulta todos os números do lote pela
   `/utapi` com `fetch` de dentro da página (mesmo formato da API oficial). A Akamai responde 428 por ~5–20 s até
   validar os cookies (só 200/404 contam como resposta; 428 nunca vira "não encontrado"). Sessão ~17–30 s e ~1,6 MB
-  (CSS/terceiros cortados) para até 10 números. Falta validar com um AWB real (só testado com número inexistente).
+  (CSS/terceiros cortados) para até 10 números. Validado com AWB real em 18/10 (1185619794: entregue, 27 eventos, 17,5 s).
 - **Lotes em duas pistas** (`enrichMany`/`mapLanes`): CMA/ZIM (API da Scrapfly) em paralelo
   (`BOT_API_CONCURRENCY`, 3) junto da pista de navegador (`BOT_CONCURRENCY`, 1).
 

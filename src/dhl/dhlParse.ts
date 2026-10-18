@@ -3,6 +3,11 @@ import { TrackingResult } from '../tracking/types';
 function fmtLocation(loc: any): string | null {
   const a = loc?.address;
   if (!a) return null;
+  // O site já manda "CIDADE - ESTADO - PAÍS" (ex.: "ITAJAI - SANTA CATARINA -
+  // BRAZIL", 18/10/2026): o código do país no fim só repetia — e nem sempre
+  // bate (a entrega em Blumenau veio "KRAILLING - Bavaria - GERMANY" com "BR").
+  // Mostra o texto da DHL como veio.
+  if (typeof a.addressLocality === 'string' && / - /.test(a.addressLocality)) return a.addressLocality;
   const parts = [a.addressLocality, a.countryCode].filter(Boolean);
   return parts.length ? parts.join(', ') : null;
 }

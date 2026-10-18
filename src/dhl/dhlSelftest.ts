@@ -75,6 +75,9 @@ async function main(): Promise<void> {
   check('encontrado, status e local atual', n.found && n.status === 'Processed at CAMPINAS - BRAZIL' && n.location === 'CAMPINAS, BR', n);
   check('origem e destino', n.origin === 'SHENZHEN, CN' && n.destination === 'SAO PAULO, BR');
   check('2 eventos com local', n.events.length === 2 && n.events[1].location === 'SHENZHEN, CN');
+  // Formato dos locais na resposta real do site (1185619794, 18/10/2026).
+  const site = normalize({ shipments: [{ status: { statusCode: 'delivered', description: 'Envio entregue', location: { address: { addressLocality: 'ITAJAI - SANTA CATARINA - BRAZIL', countryCode: 'BR' } } }, origin: { address: { addressLocality: "ZHEJIANG PROVINCE - THE PEOPLE'S REPUBLIC OF CHINA" } }, destination: { address: { addressLocality: 'BLUMENAU - BRAZIL' } }, events: [] }] }, '1185619794');
+  check('local "CIDADE - ESTADO - PAÍS" sem repetir o código do país', site.location === 'ITAJAI - SANTA CATARINA - BRAZIL' && site.destination === 'BLUMENAU - BRAZIL', site.location);
   const nf = normalize({ title: 'No result found', detail: 'No shipment with given tracking number found.' }, 'X');
   check('sem envio → found false com o detalhe da DHL (nada inventado)', !nf.found && nf.status === null && /No shipment/.test(nf.error || ''));
 
