@@ -1,6 +1,6 @@
 import { CARRIERS } from './registry';
 import { PORT_SITE_DOMAINS } from '../../ports';
-import { COURIER_SITE_DOMAINS } from '../../dhl/dhlWeb';
+import { COURIER_SITE_DOMAINS } from '../../dhl/siteDomains';
 
 /**
  * Priora — quais URLs as rotas de DIAGNÓSTICO podem abrir (`?url=`).

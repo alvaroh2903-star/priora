@@ -1,11 +1,14 @@
 import { config } from '../config';
-import { normalize, trackNumber, trackDhlCached, dhlUsage, resetDhlStateForTest, DhlLimitError } from './dhlClient';
+import { normalize, trackNumber, trackDhlCached, dhlUsage, resetDhlStateForTest, DhlLimitError, DhlAuthError } from './dhlClient';
+import { parseDhlWebRaw, setDhlWebFetcherForTest, trackDhlWeb, DhlWebSession } from './dhlWeb';
 
 /**
  * Priora — Self-test OFFLINE do rastreio DHL (fetch simulado, nada sai da máquina).
  * Cobre o que protege a cota da chave grátis (1 chamada/5 s, 250/dia): fila
  * espaçada, pausa depois de 429, cache por número (uma consulta só mesmo com
- * chamadas simultâneas) e a última consulta boa quando a nova falha.
+ * chamadas simultâneas) e a última consulta boa quando a nova falha. E o
+ * caminho pelo SITE (navegador simulado): leitura da resposta da /utapi, lote
+ * numa sessão só e a troca automática quando a chave é recusada (401).
  * A resposta simulada segue o formato da Unified Tracking que o `normalize` lê
  * (shipments[0].status/origin/destination/events) — não é captura real.
  *
@@ -121,7 +124,49 @@ async function main(): Promise<void> {
   await trackDhlCached('D000001').catch((e) => (err = e));
   check('sem consulta anterior → erro (não inventa resultado)', err instanceof DhlLimitError);
 
-  if (failures === 0) console.log('\n[selftest] ✅ rastreio DHL: fila, limite e cache OK');
+  console.log('[selftest] site — resposta da /utapi');
+  check('JSON com envio → mesmo formato da API', (() => { const r = parseDhlWebRaw({ number: 'S1', status: 200, body: JSON.stringify(SHIPMENT) }); return !(r instanceof Error) && r.found && r.status === 'Processed at CAMPINAS - BRAZIL'; })());
+  check('404 da DHL → found false com o detalhe', (() => { const r = parseDhlWebRaw({ number: 'S2', status: 404, body: JSON.stringify({ title: 'No result found', detail: 'No shipment with given tracking number found.' }) }); return !(r instanceof Error) && !r.found && /No shipment/.test(r.error || ''); })());
+  check('página HTML (bloqueio) → erro, não "não encontrado"', parseDhlWebRaw({ number: 'S3', status: 200, body: '<html>Access Denied</html>' }) instanceof Error);
+  check('403 → erro', parseDhlWebRaw({ number: 'S4', status: 403, body: '{}' }) instanceof Error);
+  check('número inválido na página → found false com aviso', (() => { const r = parseDhlWebRaw({ number: 'S5', status: null, body: '', invalid: true }); return !(r instanceof Error) && !r.found && /inválido/.test(r.error || ''); })());
+
+  console.log('[selftest] site — pedidos simultâneos vão numa sessão só');
+  const sessions: string[][] = [];
+  const fakeSite = async (numbers: string[]): Promise<DhlWebSession> => {
+    sessions.push(numbers);
+    return { ms: 1, trace: [], raws: numbers.map((n) => ({ number: n, status: 200, body: JSON.stringify(SHIPMENT) })) };
+  };
+  setDhlWebFetcherForTest(fakeSite);
+  const lote = await Promise.all(['W000001', 'W000002', 'W000003'].map((x) => trackDhlWeb(x)));
+  check('3 números → 1 sessão com os 3', sessions.length === 1 && sessions[0].length === 3, sessions);
+  check('cada número recebe o seu resultado', lote.every((r, i) => r.trackingNumber === `W00000${i + 1}` && r.found));
+
+  console.log('[selftest] auto — chave recusada (401) → vai pelo site e não insiste na API');
+  reset();
+  sessions.length = 0;
+  process.env.SCRAPE_BROWSER_WSS = 'wss://navegador-de-teste';
+  config.dhl.source = 'auto';
+  replies = [{ status: 401, body: { title: 'Unauthorized', detail: 'Access to the resource is not allowed.' } }];
+  const viaSite = await trackDhlCached('F000001');
+  check('resultado veio do site', viaSite.fonte === 'site' && viaSite.found && sessions.length === 1, viaSite.fonte);
+  const apiCalls = calls.length;
+  const viaSite2 = await trackDhlCached('F000002');
+  check('próximo número nem chama a API (recusa lembrada)', viaSite2.fonte === 'site' && calls.length === apiCalls);
+  check('uso mostra a recusa', dhlUsage().apiRecusadaAte !== null);
+  reset();
+  config.dhl.source = 'api';
+  replies = [{ status: 401, body: { detail: 'Access to the resource is not allowed.' } }];
+  err = null;
+  await trackDhlCached('F000003').catch((e) => (err = e));
+  check('DHL_SOURCE=api → não cai para o site, mostra o erro da chave', err instanceof DhlAuthError);
+  config.dhl.source = 'web';
+  sessions.length = 0;
+  const soSite = await trackDhlCached('F000004');
+  check('DHL_SOURCE=web → só o site', soSite.fonte === 'site' && sessions.length === 1 && calls.length === 1);
+  setDhlWebFetcherForTest(null);
+
+  if (failures === 0) console.log('\n[selftest] ✅ rastreio DHL: fila, limite, cache e site OK');
   else {
     console.log(`\n[selftest] ❌ ${failures} verificação(ões) falharam`);
     process.exit(1);

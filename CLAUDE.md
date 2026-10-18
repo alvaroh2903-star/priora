@@ -47,6 +47,9 @@ leia-o para o desenho pretendido. Este arquivo resume o **estado atual** e as
 - **Rastreio DHL** (`src/dhl/dhlClient.ts`, API oficial Unified Tracking, `DHL_API_KEY`): fila espaçada
   (`DHL_MIN_INTERVAL_MS`, 5 s da chave grátis), pausa no 429, cache por número (`DHL_CACHE_MIN`; entregue 24 h)
   e última consulta boa como `stale`. Diag `/health/dhl?number=`; uso em `/api/tracking/health`. `npm run dhl:selftest`.
+  **Sem chave aceita (401 em 18/10)** cai para o SITE (`dhlWeb.ts`, `DHL_SOURCE=auto|api|web`): navegador remoto
+  residencial+unblock saindo do BR passa a Akamai; lê a `/utapi` que o app da DHL chama e consulta os demais números
+  pela mesma `/utapi` de dentro da página (lote numa sessão).
 - **Lotes em duas pistas** (`enrichMany`/`mapLanes`): CMA/ZIM (API da Scrapfly) em paralelo
   (`BOT_API_CONCURRENCY`, 3) junto da pista de navegador (`BOT_CONCURRENCY`, 1).
 

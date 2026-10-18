@@ -5,7 +5,8 @@ import {
   isFedexConfigured,
   checkFedexAuth,
 } from '../fedex/fedexClient';
-import { trackDhlCached, isDhlConfigured, dhlUsage, DhlLimitError } from '../dhl/dhlClient';
+import { trackDhlCached, isDhlConfigured, isDhlAvailable, dhlUsage, DhlLimitError } from '../dhl/dhlClient';
+import { isDhlWebAvailable } from '../dhl/dhlWeb';
 import { config } from '../config';
 
 export const trackingRouter = Router();
@@ -31,6 +32,8 @@ trackingRouter.get('/health', async (_req, res) => {
     dhl: {
       configured: isDhlConfigured(),
       baseUrl: config.dhl.baseUrl,
+      // Rastreio pelo site (dhl.com) quando a chave falta ou é recusada.
+      site: isDhlWebAvailable(),
       uso: dhlUsage(),
     },
   });
@@ -84,10 +87,10 @@ trackingRouter.get('/:number', async (req: AuthedRequest, res, next) => {
     const carrier = String(req.query.carrier || 'fedex').toLowerCase();
 
     if (carrier === 'dhl') {
-      if (!isDhlConfigured()) {
+      if (!isDhlAvailable()) {
         return res
           .status(503)
-          .json({ error: 'Rastreio DHL indisponível. Defina DHL_API_KEY no servidor.' });
+          .json({ error: 'Rastreio DHL indisponível. Defina DHL_API_KEY ou SCRAPE_BROWSER_WSS no servidor.' });
       }
       try {
         return res.json(await trackDhlCached(number, { refresh: req.query.refresh === '1' }));

@@ -1,61 +1,25 @@
 import { config } from '../config';
 import { TrackingResult } from '../tracking/types';
+import { normalize } from './dhlParse';
+import { isDhlWebAvailable, trackDhlWeb } from './dhlWeb';
+
+export { normalize };
 
 /** Indica se a DHL está configurada (API Key). */
 export function isDhlConfigured(): boolean {
   return Boolean(config.dhl.apiKey);
 }
 
-function fmtLocation(loc: any): string | null {
-  const a = loc?.address;
-  if (!a) return null;
-  const parts = [a.addressLocality, a.countryCode].filter(Boolean);
-  return parts.length ? parts.join(', ') : null;
-}
-
-/** Normaliza a resposta do DHL Unified Tracking para o formato comum. */
-export function normalize(json: any, trackingNumber: string): TrackingResult {
-  const base: TrackingResult = {
-    trackingNumber,
-    carrier: 'DHL',
-    found: false,
-    status: null,
-    statusCode: null,
-    location: null,
-    origin: null,
-    destination: null,
-    estimatedDelivery: null,
-    events: [],
-    error: null,
-  };
-
-  const shipment = json?.shipments?.[0];
-  if (!shipment) {
-    base.error =
-      json?.detail || json?.title || 'Sem dados de rastreio para este número.';
-    return base;
-  }
-
-  const st = shipment.status || {};
-  base.found = true;
-  base.status = st.description || st.status || null;
-  base.statusCode = st.statusCode || null;
-  base.location = fmtLocation(st.location);
-  // Origem e destino final: a DHL Unified Tracking devolve shipment.origin/destination.
-  base.origin = fmtLocation(shipment.origin);
-  base.destination = fmtLocation(shipment.destination);
-  base.estimatedDelivery = shipment.estimatedTimeOfDelivery || null;
-  base.events = (shipment.events || []).slice(0, 40).map((e: any) => ({
-    time: e.timestamp || '',
-    description: e.description || e.status || '',
-    location: fmtLocation(e.location),
-  }));
-
-  return base;
+/** Há algum caminho de rastreio DHL (chave da API oficial ou navegador remoto p/ o site)? */
+export function isDhlAvailable(): boolean {
+  return isDhlConfigured() || isDhlWebAvailable();
 }
 
 /** A DHL recusou por limite de uso (429) — ou estamos esperando o limite passar. */
 export class DhlLimitError extends Error {}
+
+/** A DHL recusou a CHAVE (401/403): a API de rastreio não está liberada para ela. */
+export class DhlAuthError extends Error {}
 
 /*
  * LIMITES DA CHAVE (ver config.dhl): a tela de Courier consulta todos os envios
@@ -65,6 +29,9 @@ export class DhlLimitError extends Error {}
  */
 let nextSlotAt = 0;
 let blockedUntil = 0;
+// Chave recusada (401/403) no modo auto: vai pelo site e só retenta a API depois disto.
+let apiRefusedUntil = 0;
+const API_REFUSED_RETRY_MS = 6 * 60 * 60 * 1000;
 let usage = { dia: '', chamadas: 0 };
 
 function today(): string {
@@ -89,9 +56,19 @@ function limitMessage(): string {
 }
 
 /** Uso da chave desde o último reinício do serviço (contagem nossa, por dia UTC). */
-export function dhlUsage(): { dia: string; chamadas: number; limiteDia: number; intervaloMs: number; pausadaAte: string | null } {
+export function dhlUsage(): {
+  fonte: string;
+  apiRecusadaAte: string | null;
+  dia: string;
+  chamadas: number;
+  limiteDia: number;
+  intervaloMs: number;
+  pausadaAte: string | null;
+} {
   const dia = today();
   return {
+    fonte: config.dhl.source,
+    apiRecusadaAte: Date.now() < apiRefusedUntil ? new Date(apiRefusedUntil).toISOString() : null,
     dia,
     chamadas: usage.dia === dia ? usage.chamadas : 0,
     limiteDia: config.dhl.dailyLimit,
@@ -104,6 +81,7 @@ export function dhlUsage(): { dia: string; chamadas: number; limiteDia: number; 
 export function resetDhlStateForTest(): void {
   nextSlotAt = 0;
   blockedUntil = 0;
+  apiRefusedUntil = 0;
   usage = { dia: '', chamadas: 0 };
   cache.clear();
   inFlight.clear();
@@ -152,7 +130,7 @@ export async function trackNumber(
     // Visto em 18/10/2026 com a chave de produção: "Access to the resource is
     // not allowed" — a chave existe, mas não tem acesso à API de rastreio.
     if (res.status === 401 || res.status === 403) {
-      throw new Error(
+      throw new DhlAuthError(
         `DHL recusou a chave (HTTP ${res.status}: ${msg}). No developer.dhl.com → My Apps, confira se a API "Shipment Tracking - Unified" está no app e aprovada, e se DHL_API_KEY é a Consumer Key dela.`,
       );
     }
@@ -161,22 +139,48 @@ export async function trackNumber(
   return normalize(json, trackingNumber);
 }
 
+export type DhlSource = 'api' | 'site';
+
+/**
+ * Escolhe o caminho (DHL_SOURCE): `api` = só a API oficial; `web` = só o site;
+ * `auto` (padrão) = API se houver chave e ela não tiver sido recusada; numa
+ * recusa (401/403) passa a ir pelo site e só tenta a API de novo em 6 h.
+ */
+async function trackDhlAny(number: string): Promise<TrackingResult & { fonte: DhlSource }> {
+  const mode = config.dhl.source;
+  const tryApi = isDhlConfigured() && mode !== 'web' && (mode === 'api' || Date.now() >= apiRefusedUntil);
+  if (tryApi) {
+    try {
+      return { ...(await trackNumber(number)), fonte: 'api' };
+    } catch (e) {
+      if (mode === 'api' || !(e instanceof DhlAuthError) || !isDhlWebAvailable()) throw e;
+      apiRefusedUntil = Date.now() + API_REFUSED_RETRY_MS;
+    }
+  }
+  if (mode === 'api') throw new Error('DHL não configurada. Defina DHL_API_KEY no servidor.');
+  if (!isDhlWebAvailable()) {
+    throw new Error('Rastreio DHL indisponível: sem chave da API (DHL_API_KEY) e sem navegador remoto (SCRAPE_BROWSER_WSS).');
+  }
+  return { ...(await trackDhlWeb(number)), fonte: 'site' };
+}
+
 /* ------------------------------------------------------------------ *
- * Cache da DHL (a cota é curta): cada número é consultado no máximo uma
- * vez por `cacheMin` — entregue, uma vez por dia. Se a consulta nova falhar
- * (limite, DHL fora), devolve a última boa, marcada como `stale`.
+ * Cache da DHL (a cota da API é curta e o site custa crédito de navegador):
+ * cada número é consultado no máximo uma vez por `cacheMin` — entregue, uma
+ * vez por dia. Se a consulta nova falhar (limite, bloqueio, DHL fora), devolve
+ * a última boa, marcada como `stale`.
  * ------------------------------------------------------------------ */
-export type DhlCachedResult = TrackingResult & { cached: boolean; stale?: boolean; aviso?: string };
+export type DhlCachedResult = TrackingResult & { fonte: DhlSource; cached: boolean; stale?: boolean; aviso?: string };
 
 const DELIVERED_TTL_MS = 24 * 60 * 60 * 1000;
-const cache = new Map<string, { at: number; data: TrackingResult }>();
+const cache = new Map<string, { at: number; data: TrackingResult & { fonte: DhlSource } }>();
 const inFlight = new Map<string, Promise<DhlCachedResult>>();
 
 function ttlMs(r: TrackingResult): number {
   return /delivered/i.test(r.statusCode || '') ? DELIVERED_TTL_MS : config.dhl.cacheMin * 60 * 1000;
 }
 
-function remember(number: string, data: TrackingResult): void {
+function remember(number: string, data: TrackingResult & { fonte: DhlSource }): void {
   cache.set(number, { at: Date.now(), data });
   if (cache.size <= 2000) return;
   for (const [k, v] of cache) if (Date.now() - v.at > DELIVERED_TTL_MS) cache.delete(k);
@@ -187,7 +191,7 @@ export async function trackDhlCached(number: string, opts: { refresh?: boolean }
   if (hit && !opts.refresh && Date.now() - hit.at < ttlMs(hit.data)) return { ...hit.data, cached: true };
   const flying = inFlight.get(number);
   if (flying) return flying;
-  const p = trackNumber(number)
+  const p = trackDhlAny(number)
     .then((data): DhlCachedResult => {
       remember(number, data);
       return { ...data, cached: false };

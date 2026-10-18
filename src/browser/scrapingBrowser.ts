@@ -650,7 +650,7 @@ async function waitForResults(
 const MEDIA_URL_RE =
   /\.(?:png|jpe?g|gif|svg|webp|avif|ico|bmp|woff2?|ttf|otf|eot|mp4|webm|ogg|mp3|wav|avi|mov)(?:[?#]|$)/i;
 
-async function blockHeavyResources(page: Page, mode: Exclude<BlockMode, 'none'>): Promise<void> {
+export async function blockHeavyResources(page: Page, mode: Exclude<BlockMode, 'none'>): Promise<void> {
   try {
     // 'all' = legado (intercepta tudo); 'media' = só URLs de mídia. Ver BlockMode.
     const pattern: string | RegExp = mode === 'all' ? '**/*' : MEDIA_URL_RE;

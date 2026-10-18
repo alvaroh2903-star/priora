@@ -89,6 +89,11 @@ export const config = {
     apiKey: (process.env.DHL_API_KEY || '').trim(),
     apiSecret: (process.env.DHL_API_SECRET || '').trim(), // reservado (outras APIs DHL usam OAuth)
     baseUrl: (process.env.DHL_BASE_URL || 'https://api-eu.dhl.com').trim(),
+    // auto (padrão): API oficial se a chave for aceita, senão o site (dhl.com pelo
+    // navegador remoto — ver src/dhl/dhlWeb.ts). api = só a API; web = só o site.
+    source: ((s: string): 'auto' | 'api' | 'web' => (s === 'api' || s === 'web' ? s : 'auto'))(
+      (process.env.DHL_SOURCE || 'auto').trim().toLowerCase(),
+    ),
     // Limites da chave GRÁTIS da DHL (developer.dhl.com, visto em 18/10/2026):
     // 1 chamada a cada 5 s e 250 por dia — acima disso a DHL devolve 429. Depois
     // do "Request Upgrade" no portal, ajuste os dois pelo ambiente.
