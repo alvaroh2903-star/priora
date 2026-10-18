@@ -22,10 +22,10 @@ import { trackDhlCached, dhlUsage, isDhlAvailable } from './dhl/dhlClient';
 import { dhlWebLastSession } from './dhl/dhlWeb';
 import { chromium } from 'playwright';
 import { withPage } from './browser/browser';
-import { trackShipment, detect, detectCarrier, resolveSearchRef } from './browser/carriers';
+import { trackShipment, detect, detectCarrier, resolveSearchRef, getCarrier } from './browser/carriers';
 import type { PoolMode } from './browser/carriers/types';
 import { mapLimit } from './browser/carriers/concurrency';
-import { runWatchdog } from './browser/carriers/watchdog';
+import { runWatchdog, classifyHealth } from './browser/carriers/watchdog';
 import { startWatchdogScheduler, runWatchdogAutoOnce, getWatchdogAutoStatus, deliverAlert, watchdogAutoConfig } from './browser/carriers/watchdogScheduler';
 import { startAutoSync } from './demurrage/autoSync';
 import { remoteSlotStatus } from './browser/remoteSlot';
@@ -1191,6 +1191,34 @@ function trackSummary(ref: string, result: TrackingResult, ms: number) {
     message: result.message,
   };
 }
+
+/**
+ * Rastreio de UM BL em segundo plano (gated por DIAG_TOKEN), pelo pipeline real
+ * (trackShipment, com a IA de reserva): devolve as datas por contêiner e a
+ * saúde (mesma classificação do watchdog). Não grava no cache.
+ *   /health/track-async?token=<DIAG_TOKEN>&ref=<BL>[&carrier=<id>][&ai=0]
+ */
+app.get('/health/track-async', (req, res) => {
+  const token = requireDiagToken(req, res);
+  if (!token) return;
+  const ref = String(req.query.ref || '').trim();
+  if (!ref) return res.status(400).json({ error: 'Informe ref=<BL|contêiner>.' });
+  const carrierId = req.query.carrier ? String(req.query.carrier).trim() : undefined;
+  const carrier = carrierId ? getCarrier(carrierId) : detectCarrier(ref).carrier;
+  if (!carrier) return res.status(400).json({ error: 'Armador não reconhecido — passe carrier=<id>.' });
+  const aiFallback = String(req.query.ai ?? '1') !== '0';
+  const job = startDiagJob({ ref, url: '(track)', via: 'track' }, async () => {
+    const t0 = Date.now();
+    try {
+      const result = await trackShipment(ref, { carrierId: carrier.id, aiFallback });
+      const { health } = classifyHealth(carrier, result);
+      return { result: { health, ...trackSummary(ref, result, Date.now() - t0) } };
+    } catch (e) {
+      return { result: { health: 'error', ref, ok: false, ms: Date.now() - t0, error: (e as Error).message } };
+    }
+  });
+  res.json(jobCreatedResponse(req, token, job, { carrier: carrier.id }));
+});
 
 app.get('/health/track', async (req, res) => {
   const token = (process.env.DIAG_TOKEN || '').trim();
