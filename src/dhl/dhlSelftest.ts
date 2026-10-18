@@ -97,6 +97,13 @@ async function main(): Promise<void> {
   const ok = await trackNumber('B000003');
   check('passada a pausa, volta a consultar', ok.found === true && calls.length === before + 1);
 
+  console.log('[selftest] chave sem acesso à API → mensagem que diz o que fazer');
+  reset();
+  replies = [{ status: 403, body: { title: 'Forbidden', detail: 'Access to the resource is not allowed.' } }];
+  err = null;
+  await trackNumber('E000001').catch((e) => (err = e));
+  check('403 explica onde liberar a API', /HTTP 403/.test((err as Error)?.message) && /Shipment Tracking - Unified/.test((err as Error)?.message), (err as Error)?.message);
+
   console.log('[selftest] cache — uma consulta por número');
   reset();
   const [c1, c2] = await Promise.all([trackDhlCached('C000001'), trackDhlCached('C000001')]);

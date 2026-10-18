@@ -148,8 +148,15 @@ export async function trackNumber(
     return normalize(json, trackingNumber);
   }
   if (!res.ok) {
-    const msg = json?.detail || json?.title || `HTTP ${res.status}`;
-    throw new Error(`DHL track falhou: ${msg}`);
+    const msg = json?.detail || json?.title || 'sem detalhe';
+    // Visto em 18/10/2026 com a chave de produção: "Access to the resource is
+    // not allowed" — a chave existe, mas não tem acesso à API de rastreio.
+    if (res.status === 401 || res.status === 403) {
+      throw new Error(
+        `DHL recusou a chave (HTTP ${res.status}: ${msg}). No developer.dhl.com → My Apps, confira se a API "Shipment Tracking - Unified" está no app e aprovada, e se DHL_API_KEY é a Consumer Key dela.`,
+      );
+    }
+    throw new Error(`DHL track falhou (HTTP ${res.status}): ${msg}`);
   }
   return normalize(json, trackingNumber);
 }
