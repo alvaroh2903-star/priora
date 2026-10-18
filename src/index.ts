@@ -927,6 +927,39 @@ app.get('/health/scrape-sb-async', (req, res) => {
  * Uso: /health/scrapfly-api-async?token=<DIAG_TOKEN>&ref=<BL>[&url=][&find=][&htmlwin=]
  *      [&scenario=<base64url(JSON)>][&wait=<ms>][&country=br][&budget=<créditos>][&render=0][&origin=<url>]
  */
+/**
+ * Uso da conta Scrapfly (gated por DIAG_TOKEN): créditos gastos/restantes no
+ * período. Lendo antes e depois de uma consulta dá o custo REAL dela — a sessão
+ * do navegador remoto não informa o próprio custo. Devolve só a assinatura e o
+ * orçamento do projeto (nada da conta nem a chave).
+ *   /health/scrapfly-usage?token=<DIAG_TOKEN>
+ */
+app.get('/health/scrapfly-usage', async (req, res) => {
+  const token = requireDiagToken(req, res);
+  if (!token) return;
+  const key = getScrapflyKey();
+  if (!key) return res.status(503).json({ error: 'Sem chave da Scrapfly.' });
+  try {
+    const r = await fetch(`https://api.scrapfly.io/account?key=${encodeURIComponent(key)}`, {
+      headers: { Accept: 'application/json' },
+      signal: AbortSignal.timeout(20_000),
+    });
+    const json = (await r.json().catch(() => null)) as {
+      subscription?: unknown;
+      project?: { budget_limit?: unknown; budget_spent?: unknown; quota_reached?: unknown };
+    } | null;
+    if (!r.ok || !json) return res.status(502).json({ error: `Scrapfly respondeu HTTP ${r.status}.` });
+    const p = json.project || {};
+    res.json({
+      at: new Date().toISOString(),
+      subscription: json.subscription ?? null,
+      project: { budget_limit: p.budget_limit ?? null, budget_spent: p.budget_spent ?? null, quota_reached: p.quota_reached ?? null },
+    });
+  } catch (e) {
+    res.status(502).json({ error: (e as Error).message });
+  }
+});
+
 app.get('/health/scrapfly-api-async', (req, res) => {
   const token = requireDiagToken(req, res);
   if (!token) return;
