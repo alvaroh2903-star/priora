@@ -1,6 +1,7 @@
 import { Db } from '../../identidade';
 import { CamposDocumentaisExtraidos } from './extracoes';
-import { processosVinculadosAoMaster } from './vinculos';
+import { EvidenciasDoMbl, evidenciasDoMbl } from './evidenciasDoMbl';
+import { VinculoPublicado, processosVinculadosAoMaster } from './vinculos';
 
 /**
  * Contrato de saída (S2): o que a Auditoria já extraiu do MBL de UM Master, com a origem de cada leitura. Só
@@ -36,8 +37,21 @@ export interface LeituraDoMblDoMaster {
 }
 
 export async function leiturasDoMblDoMaster(db: Db, organizationId: string, masterId: string): Promise<LeituraDoMblDoMaster[]> {
+  return leiturasDosVinculos(db, organizationId, masterId, await processosVinculadosAoMaster(db, organizationId, masterId));
+}
+
+/**
+ * As evidências do MBL de UM Master (contrato `evidenciasDoMbl`): o estado documental de cada campo, por versão e no
+ * Master, sobre as leituras JÁ persistidas. Só leitura; nenhum OCR, nenhum anexo baixado, nenhuma IA.
+ */
+export async function evidenciasDoMblDoMaster(db: Db, organizationId: string, masterId: string): Promise<EvidenciasDoMbl> {
+  const vinculados = await processosVinculadosAoMaster(db, organizationId, masterId);
+  return evidenciasDoMbl(masterId, vinculados.length > 0, await leiturasDosVinculos(db, organizationId, masterId, vinculados));
+}
+
+async function leiturasDosVinculos(db: Db, organizationId: string, masterId: string, vinculados: ReadonlyArray<VinculoPublicado>): Promise<LeituraDoMblDoMaster[]> {
   const processosPorExtracao = new Map<string, Set<string>>();
-  for (const v of await processosVinculadosAoMaster(db, organizationId, masterId)) {
+  for (const v of vinculados) {
     for (const e of v.evidencias) {
       const s = processosPorExtracao.get(e.extracaoId) ?? new Set<string>();
       s.add(v.processoId);

@@ -2,11 +2,10 @@ import { Pool, PoolClient } from 'pg';
 import { Db } from '../../../identidade';
 import { REFERENCIA_MASTER_ATIVA } from '../../../identidade/pendencias';
 import { processosVinculadosAoMaster } from '../../../auditoria/fatos/vinculos';
-import { leiturasDoMblDoMaster } from '../../../auditoria/fatos/camposDoMbl';
-import { normalizarCodigo, validaISO6346 } from '../../../auditoria/preAlerta/normalizacao';
+import { evidenciasDoMblDoMaster } from '../../../auditoria/fatos/camposDoMbl';
 import {
   AnexoDoManifesto, AssinaturaRegistrada, CandidatoCopiaDoMbl, ConferenciaDaAssinatura, ConteudoDoDocumento, DADOS_DO_MBL, DocumentoPreparado, EscolhaDeOpcao, EventoDoEnvio,
-  FluxoDeEmail, LeituraDoMbl, RegraDoConteiner, SelecaoDeOpcao, SinalPendente, TentativaDeEnvio, TipoDocumento, ValorInformado, ValorObservado, VeredictoDoSinal, VersaoDoModelo, dadosDoMbl,
+  FluxoDeEmail, LeituraDoMbl, SelecaoDeOpcao, SinalPendente, TentativaDeEnvio, TipoDocumento, ValorInformado, ValorObservado, VeredictoDoSinal, VersaoDoModelo, dadosDoMbl,
 } from '../dominio';
 import { geradorPdfPriora } from '../pdf/gerador';
 import {
@@ -372,17 +371,15 @@ export function repositorioDocumentalPostgres(pool: Pool): RepositorioDocumental
 
 /** Leitura dos dados confiáveis dos donos (S6, S2, S4). Fonte sem integração → nenhum valor. */
 /**
- * Entrega 1: leituras do MBL deste Master já persistidas pela Auditoria (S2), no formato do domínio documental. Só
- * leitura do que foi gravado: nenhum OCR, nenhum anexo baixado, nenhuma IA.
+ * Entrega 1 / E1: as versões do MBL deste Master pelo contrato de evidências da Auditoria (S2, dona): o estado
+ * documental de cada campo vem pronto do dono e aqui só muda de formato. Só leitura do que foi gravado: nenhum OCR,
+ * nenhum anexo baixado, nenhuma IA, nenhuma regra documental refeita na Liberação.
  */
 async function leiturasDoMbl(db: Db, org: string, masterId: string): Promise<LeituraDoMbl[]> {
-  return (await leiturasDoMblDoMaster(db, org, masterId)).map((l) => ({
-    extracaoId: l.extracaoId, masterId: l.masterId, observadoEm: (l.origem.recebidaEm ?? l.extraidaEm).toISOString(), campos: l.campos,
+  return (await evidenciasDoMblDoMaster(db, org, masterId)).versoes.map((v) => ({
+    extracaoId: v.extracaoId, masterId, observadoEm: v.observadoEm.toISOString(), estados: v.estados,
   }));
 }
-
-/** Número de contêiner: a regra do PB-001 (normalização e ISO 6346), a mesma da Auditoria. */
-const CONTEINER_PB001: RegraDoConteiner = { normalizar: normalizarCodigo, valido: validaISO6346 };
 
 /** Dados do MBL (S2) entre os pedidos. */
 const pedidosDoMbl = (pedidos: ReadonlyArray<{ dado: string; fonte: string }>) =>
@@ -424,12 +421,12 @@ export function fontesConfiaveisPostgres(db: Db): FontesConfiaveis {
       // Campos do MBL que a Auditoria já extraiu e persistiu (S2): só os confiáveis pelas regras aprovadas; cada versão
       // do MBL com a sua evidência. Divergência entre versões fica para o preenchimento (nada é escolhido aqui).
       const doMbl = pedidosDoMbl(pedidos);
-      if (doMbl.length) out.push(...dadosDoMbl(masterId, await leiturasDoMbl(db, org, masterId), doMbl, CONTEINER_PB001).valores);
+      if (doMbl.length) out.push(...dadosDoMbl(masterId, await leiturasDoMbl(db, org, masterId), doMbl).valores);
       return out;
     },
     async dadosNaoPublicados(org, masterId, pedidos) {
       const doMbl = pedidosDoMbl(pedidos);
-      return doMbl.length ? dadosDoMbl(masterId, await leiturasDoMbl(db, org, masterId), doMbl, CONTEINER_PB001).naoPublicados : [];
+      return doMbl.length ? dadosDoMbl(masterId, await leiturasDoMbl(db, org, masterId), doMbl).naoPublicados : [];
     },
     async copiasDoMbl(org, masterId): Promise<CandidatoCopiaDoMbl[]> {
       // Só extrações de MBL (pelo CONTEÚDO, OCR da Auditoria) que sustentam um vínculo válido com ESTE Master.

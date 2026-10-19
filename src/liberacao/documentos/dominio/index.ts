@@ -27,7 +27,7 @@ export type {
 } from './versoes';
 export { planejarPreenchimento, canonico, observacaoDoValorInformado } from './preenchimento';
 export { dadosDoMbl, estadoDoDado, DADOS_DO_MBL } from './fatosDoMbl';
-export type { LeituraDoMbl, CamposLidosDoMbl, EstadoDoDadoDoMbl, MotivoNaoConfiavel, RegraDoConteiner } from './fatosDoMbl';
+export type { LeituraDoMbl, CampoDocumentalDoMbl, EstadoDocumentalDoMbl, EstadoDoDadoDoMbl, MotivoNaoConfiavel } from './fatosDoMbl';
 export type {
   ValorObservado, ValorInformado, EscolhaDeOpcao, ModalidadeObservada, ContextoDoPreenchimento, MotivoRecusa, Recusado, Faltante, Divergente, ProblemaDeOpcao, DadoNaoPublicado,
   AtencaoDocumental, OrigemDaSelecao, SelecaoDeOpcao, ConteudoDoDocumento, PlanoDePreenchimento, ResultadoDoPreenchimento, ModeloEmUso,

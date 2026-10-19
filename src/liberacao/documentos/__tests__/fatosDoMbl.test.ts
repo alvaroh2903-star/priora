@@ -8,7 +8,9 @@ import { testDatabaseUrl, testPool } from '../../../demurrage-engine/__tests__/t
 import { Cenario, cenario, contar } from '../../../operacional/__tests__/cenario';
 import { preparar } from '../../aplicacao/__tests__/apoio';
 import { normalizarCodigo, validaISO6346 } from '../../../auditoria/preAlerta/normalizacao';
-import { persistirExtracoesAuditoria } from '../../../auditoria/fatos/extracoes';
+import { CamposDocumentaisExtraidos, persistirExtracoesAuditoria } from '../../../auditoria/fatos/extracoes';
+import { evidenciasDoMbl } from '../../../auditoria/fatos/evidenciasDoMbl';
+import { valorNoFormato } from '../dominio/formatos';
 import { situacaoDaAgencia } from '../../dominio';
 import { armador } from '../../dominio/__tests__/l1b/fixtures';
 import {
@@ -41,26 +43,34 @@ const NAVIO = 'NAVIO_E_VIAGEM';
 const CONTEINERES = 'CONTEINERES_DO_MASTER';
 const CONSIGNATARIO = 'CONSIGNATARIO_RAZAO_SOCIAL';
 
-const leitura = (id: string, campos: LeituraDoMbl['campos'], masterId = 'M1', observadoEm = '2026-09-01T08:00:00.000Z'): LeituraDoMbl =>
-  ({ extracaoId: id, masterId, observadoEm, campos });
+/** Uma versão do MBL com os campos como o OCR os devolveu, pelo contrato de evidências da Auditoria (o dono classifica). */
+const leitura = (id: string, campos: CamposDocumentaisExtraidos | null, masterId = 'M1', observadoEm = '2026-09-01T08:00:00.000Z'): LeituraDoMbl => {
+  const ev = evidenciasDoMbl(masterId, true, [{
+    extracaoId: id, masterId, processoIds: [], conhecimento: null, campos, extrator: 'auditoria.docExtractor', extratorVersao: '2', modelo: 'teste',
+    extraidaEm: new Date(observadoEm),
+    origem: { messageId: `m-${id}`, internetMessageId: null, attachmentId: `a-${id}`, attachmentNome: 'MBL.pdf', remetente: null, recebidaEm: new Date(observadoEm), arquivoSha256: null },
+  }]);
+  const v = ev.versoes[0];
+  return { extracaoId: id, masterId, observadoEm: v.observadoEm.toISOString(), estados: v.estados };
+};
 
 /* ------------------------------------------------ puro ------------------------------------------------ */
 
 test('[E1-08] confiabilidade por dado: extraído ≠ confiável; contêiner fora do ISO 6346 ou repetido, consignatário e extração antiga não viram fato', () => {
   const l = leitura('x1', { navio: '  NAVIO SINTETICO A V.001 ', consignee: 'EMPRESA SINTETICA LTDA', conteineres: [`${C1.slice(0, 4)} ${C1.slice(4)}`, C2.toLowerCase()] });
-  assert.deepEqual(estadoDoDado(l, NAVIO, PB001), { tipo: 'CONFIAVEL', valor: 'NAVIO SINTETICO A V.001' });
-  assert.deepEqual(estadoDoDado(l, CONTEINERES, PB001), { tipo: 'CONFIAVEL', valor: `${C1}\n${C2}` }, 'normalização do PB-001 (só o código)');
-  assert.deepEqual(estadoDoDado(l, CONSIGNATARIO, PB001), { tipo: 'NAO_CONFIAVEL', motivo: 'CONSIGNATARIO_SEM_CRITERIO_APROVADO' });
-  assert.deepEqual(estadoDoDado(l, 'CONSIGNATARIO_QUALIFICACAO', PB001), { tipo: 'NAO_CONFIAVEL', motivo: 'CONSIGNATARIO_SEM_CRITERIO_APROVADO' });
-  const ruim = (conteineres: Array<string | null>) => estadoDoDado(leitura('x', { navio: null, consignee: null, conteineres }), CONTEINERES, PB001);
+  assert.deepEqual(estadoDoDado(l, NAVIO), { tipo: 'CONFIAVEL', valor: 'NAVIO SINTETICO A V.001' });
+  assert.deepEqual(estadoDoDado(l, CONTEINERES), { tipo: 'CONFIAVEL', valor: `${C1}\n${C2}` }, 'normalização do PB-001 (só o código)');
+  assert.deepEqual(estadoDoDado(l, CONSIGNATARIO), { tipo: 'NAO_CONFIAVEL', motivo: 'CONSIGNATARIO_SEM_CRITERIO_APROVADO' });
+  assert.deepEqual(estadoDoDado(l, 'CONSIGNATARIO_QUALIFICACAO'), { tipo: 'NAO_CONFIAVEL', motivo: 'CONSIGNATARIO_SEM_CRITERIO_APROVADO' });
+  const ruim = (conteineres: Array<string | null>) => estadoDoDado(leitura('x', { navio: null, consignee: null, conteineres }), CONTEINERES);
   assert.deepEqual(ruim([C1, INVALIDO]), { tipo: 'NAO_CONFIAVEL', motivo: 'CONTEINER_FORA_DO_PADRAO_ISO_6346' }, 'um item fora do padrão: a lista não vale');
   assert.deepEqual(ruim([C1, null]), { tipo: 'NAO_CONFIAVEL', motivo: 'CONTEINER_FORA_DO_PADRAO_ISO_6346' }, 'contêiner sem número lido');
   assert.deepEqual(ruim([C1, C1.toLowerCase()]), { tipo: 'NAO_CONFIAVEL', motivo: 'CONTEINER_REPETIDO' }, 'DOC-27: repetido não é descartado em silêncio');
   assert.deepEqual(ruim([]), { tipo: 'AUSENTE', motivo: 'NAO_LIDO' });
-  assert.deepEqual(estadoDoDado(leitura('x', { navio: '   ', consignee: null, conteineres: [] }), NAVIO, PB001), { tipo: 'AUSENTE', motivo: 'NAO_LIDO' });
-  assert.deepEqual(estadoDoDado(leitura('antiga', null), NAVIO, PB001), { tipo: 'AUSENTE', motivo: 'NAO_PRESERVADO' }, 'extração anterior à 0106');
+  assert.deepEqual(estadoDoDado(leitura('x', { navio: '   ', consignee: null, conteineres: [] }), NAVIO), { tipo: 'AUSENTE', motivo: 'NAO_LIDO' });
+  assert.deepEqual(estadoDoDado(leitura('antiga', null), NAVIO), { tipo: 'AUSENTE', motivo: 'NAO_PRESERVADO' }, 'extração anterior à 0106');
 
-  const { valores, naoPublicados } = dadosDoMbl('M1', [l, leitura('outro', { navio: 'NAVIO DE OUTRO MASTER', consignee: null, conteineres: [] }, 'M2')], [NAVIO, CONTEINERES, CONSIGNATARIO], PB001);
+  const { valores, naoPublicados } = dadosDoMbl('M1', [l, leitura('outro', { navio: 'NAVIO DE OUTRO MASTER', consignee: null, conteineres: [] }, 'M2')], [NAVIO, CONTEINERES, CONSIGNATARIO]);
   assert.deepEqual(valores.map((v) => [v.dado, v.valor, v.fonte, v.escopo, v.evidencia.ref]), [
     [NAVIO, 'NAVIO SINTETICO A V.001', 'S2_AUDITORIA', { tipo: 'MASTER', masterId: 'M1' }, 'auditoria_extracao:x1'],
     [CONTEINERES, `${C1}\n${C2}`, 'S2_AUDITORIA', { tipo: 'MASTER', masterId: 'M1' }, 'auditoria_extracao:x1'],
@@ -71,14 +81,82 @@ test('[E1-08] confiabilidade por dado: extraído ≠ confiável; contêiner fora
 test('[E1-07] versões: cada versão é uma observação própria; uma leitura não confiável de QUALQUER versão retém o dado (não dá para afirmar que não há divergência)', () => {
   const v1 = leitura('v1', { navio: 'NAVIO A', consignee: null, conteineres: [C1, INVALIDO] }, 'M1', '2026-09-01T08:00:00.000Z');
   const v2 = leitura('v2', { navio: 'NAVIO B', consignee: null, conteineres: [C1, C2] }, 'M1', '2026-09-05T08:00:00.000Z');
-  const { valores, naoPublicados } = dadosDoMbl('M1', [v1, v2], [NAVIO, CONTEINERES], PB001);
+  const { valores, naoPublicados } = dadosDoMbl('M1', [v1, v2], [NAVIO, CONTEINERES]);
   assert.deepEqual(valores.map((v) => [v.dado, v.valor, v.evidencia.ref]), [[NAVIO, 'NAVIO A', 'auditoria_extracao:v1'], [NAVIO, 'NAVIO B', 'auditoria_extracao:v2']],
     'as duas versões do navio seguem (a divergência fica para o preenchimento); nenhuma é escolhida');
   assert.deepEqual(naoPublicados.map((n) => [n.dado, n.motivo, n.evidencia.ref]), [
     [CONTEINERES, 'CONTEINER_FORA_DO_PADRAO_ISO_6346', 'auditoria_extracao:v1'], [CONTEINERES, 'OUTRA_VERSAO_SEM_LEITURA_CONFIAVEL', 'auditoria_extracao:v2'],
   ], 'a versão corrigida não vence sozinha a leitura não confiável da outra');
-  const antiga = dadosDoMbl('M1', [leitura('v0', null), v2], [NAVIO], PB001);
+  const antiga = dadosDoMbl('M1', [leitura('v0', null), v2], [NAVIO]);
   assert.deepEqual(antiga.valores.map((v) => v.valor), ['NAVIO B'], 'extração anterior à 0106 (sem campos) não bloqueia: não há leitura para comparar');
+});
+
+/* ---------------- E1: oráculo — a implementação anterior (congelada aqui) e a nova dão EXATAMENTE o mesmo resultado ---------------- */
+
+/** Implementação anterior à E1 (classificação documental na Liberação), copiada sem mudança para servir de oráculo. */
+type LeituraAnterior = { extracaoId: string; masterId: string; observadoEm: string; campos: CamposDocumentaisExtraidos | null };
+const vazioAnterior = (v: string | null | undefined) => String(v ?? '').trim() === '';
+function estadoDoDadoAnterior(l: LeituraAnterior, dado: string): ReturnType<typeof estadoDoDado> {
+  const c = l.campos;
+  if (!c) return { tipo: 'AUSENTE', motivo: 'NAO_PRESERVADO' };
+  switch (dado) {
+    case NAVIO:
+      return vazioAnterior(c.navio) ? { tipo: 'AUSENTE', motivo: 'NAO_LIDO' } : { tipo: 'CONFIAVEL', valor: String(c.navio).trim() };
+    case CONTEINERES: {
+      if (!c.conteineres.length) return { tipo: 'AUSENTE', motivo: 'NAO_LIDO' };
+      if (!c.conteineres.every((n) => PB001.valido(n))) return { tipo: 'NAO_CONFIAVEL', motivo: 'CONTEINER_FORA_DO_PADRAO_ISO_6346' };
+      const lista = c.conteineres.map((n) => PB001.normalizar(n)).join('\n');
+      return valorNoFormato('LISTA', lista) ? { tipo: 'CONFIAVEL', valor: lista } : { tipo: 'NAO_CONFIAVEL', motivo: 'CONTEINER_REPETIDO' };
+    }
+    case CONSIGNATARIO:
+    case 'CONSIGNATARIO_QUALIFICACAO':
+      return vazioAnterior(c.consignee) ? { tipo: 'AUSENTE', motivo: 'NAO_LIDO' } : { tipo: 'NAO_CONFIAVEL', motivo: 'CONSIGNATARIO_SEM_CRITERIO_APROVADO' };
+    default:
+      return { tipo: 'AUSENTE', motivo: 'NAO_LIDO' };
+  }
+}
+function dadosDoMblAnterior(masterId: string, leituras: ReadonlyArray<LeituraAnterior>, dados: ReadonlyArray<string>): ReturnType<typeof dadosDoMbl> {
+  const valores: ValorObservado[] = [];
+  const naoPublicados: DadoNaoPublicado[] = [];
+  const doMaster = leituras.filter((l) => l.masterId === masterId);
+  for (const dado of dados) {
+    if (![NAVIO, CONTEINERES, CONSIGNATARIO, 'CONSIGNATARIO_QUALIFICACAO'].includes(dado)) continue;
+    const estados = doMaster.map((l) => ({ l, e: estadoDoDadoAnterior(l, dado) }));
+    const algumaNaoConfiavel = estados.some((x) => x.e.tipo === 'NAO_CONFIAVEL');
+    for (const { l, e } of estados) {
+      const base = { dado, fonte: 'S2_AUDITORIA' as const, evidencia: { fonte: 'auditoria', ref: `auditoria_extracao:${l.extracaoId}` }, observadoEm: l.observadoEm };
+      if (e.tipo === 'NAO_CONFIAVEL') naoPublicados.push({ ...base, motivo: e.motivo });
+      else if (e.tipo === 'CONFIAVEL' && algumaNaoConfiavel) naoPublicados.push({ ...base, motivo: 'OUTRA_VERSAO_SEM_LEITURA_CONFIAVEL' });
+      else if (e.tipo === 'CONFIAVEL') valores.push({ ...base, valor: e.valor, escopo: { tipo: 'MASTER', masterId } });
+    }
+  }
+  return { valores, naoPublicados };
+}
+
+test('[E1-ORACULO] a mesma entrada dá o MESMO resultado de antes da E1 (estado por dado e dados publicados/retidos), em todas as combinações', () => {
+  const navios = [null, '', '   ', 'NAVIO A', '  NAVIO  A  ', 'NAVIO A\nV.001', 'NAVIO A\r\nV.001 ', 'NAVIO A \nV.001'];
+  const consignatarios = [null, '', ' EMPRESA SINTETICA ', 'EMPRESA SINTETICA\nRUA FICTICIA 1', 'EMPRESA SINTETICA\r\nRUA FICTICIA 1'];
+  const listas: Array<Array<string | null>> = [[], [C1], [C1, C2], [C2.toLowerCase(), `${C1.slice(0, 4)} ${C1.slice(4)}`], [C1, INVALIDO], [C1, null], [C1, C1.toLowerCase()], [null]];
+  const camposDe: Array<CamposDocumentaisExtraidos | null> = [null];
+  for (const navio of navios) for (const consignee of consignatarios) for (const conteineres of listas) camposDe.push({ navio, consignee, conteineres });
+  const dados = [NAVIO, CONTEINERES, CONSIGNATARIO, 'CONSIGNATARIO_QUALIFICACAO', 'OUTRO_DADO'];
+  const par = (id: string, c: CamposDocumentaisExtraidos | null, masterId = 'M1', em = '2026-09-01T08:00:00.000Z') =>
+    ({ nova: leitura(id, c, masterId, em), anterior: { extracaoId: id, masterId, observadoEm: em, campos: c } as LeituraAnterior });
+  let comparacoes = 0;
+  camposDe.forEach((c, i) => {
+    const { nova, anterior } = par(`v${i}`, c);
+    for (const d of dados) { assert.deepEqual(estadoDoDado(nova, d), estadoDoDadoAnterior(anterior, d), `estado ${i}/${d}`); comparacoes++; }
+    assert.deepEqual(dadosDoMbl('M1', [nova], dados), dadosDoMblAnterior('M1', [anterior], dados), `uma versão ${i}`);
+    comparacoes++;
+  });
+  // Duas e três versões (e uma de outro Master), em todas as combinações de uma amostra que cobre cada estado.
+  const amostra = [0, 1, 2, 9, 17, 40, 77, 120, 161, 200, 250, 300, 320].filter((i) => i < camposDe.length);
+  for (const a of amostra) for (const b of amostra) {
+    const versoes = [par(`a${a}`, camposDe[a], 'M1', '2026-09-01T08:00:00.000Z'), par(`b${b}`, camposDe[b], 'M1', '2026-09-05T08:00:00.000Z'), par(`o${a}`, camposDe[b], 'M2')];
+    assert.deepEqual(dadosDoMbl('M1', versoes.map((x) => x.nova), dados), dadosDoMblAnterior('M1', versoes.map((x) => x.anterior), dados), `versões ${a}×${b}`);
+    comparacoes++;
+  }
+  assert.ok(comparacoes > 900, `comparações: ${comparacoes}`);
 });
 
 const definicaoSintetica = (tipo: TipoDocumento, campos: DefinicaoDoModelo['campos']): DefinicaoDoModelo => {
@@ -116,7 +194,7 @@ test('[E1-12a] divergência pela MESMA escrita da DOC-31.B: leituras que só dif
 
 test('[E1-10/11] o adaptador documental não dispara OCR nem chama IA: nenhum import de extrator, Graph de anexos ou cliente de IA no caminho de leitura', () => {
   const raiz = path.resolve(__dirname, '..', '..', '..');
-  const caminho = ['liberacao/documentos/aplicacao/postgres.ts', 'liberacao/documentos/dominio/fatosDoMbl.ts', 'auditoria/fatos/camposDoMbl.ts', 'auditoria/fatos/vinculos.ts'];
+  const caminho = ['liberacao/documentos/aplicacao/postgres.ts', 'liberacao/documentos/dominio/fatosDoMbl.ts', 'auditoria/fatos/camposDoMbl.ts', 'auditoria/fatos/evidenciasDoMbl.ts', 'auditoria/fatos/vinculos.ts'];
   for (const f of caminho) {
     const fonte = fs.readFileSync(path.join(raiz, f), 'utf8');
     for (const [, imp] of fonte.matchAll(/from\s+'([^']+)'/g)) {

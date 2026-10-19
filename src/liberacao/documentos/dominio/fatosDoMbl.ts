@@ -1,5 +1,4 @@
 import { Instante } from '../../dominio';
-import { valorNoFormato } from './formatos';
 import { DADOS_DOS_MODELOS } from './modelosOficiais';
 import { DadoNaoPublicado, ValorObservado } from './preenchimento';
 
@@ -7,31 +6,36 @@ import { DadoNaoPublicado, ValorObservado } from './preenchimento';
  * Entrega 1 / H1 — o que a Auditoria já extraiu do MBL vira dado do documento SÓ quando é confiável pelas regras
  * aprovadas. Puro: nenhum banco, nenhum OCR, nenhuma IA, nenhuma escolha entre versões.
  *
- * A leitura chega aqui já restrita ao documento certo pelo S2 (MBL pelo conteúdo, legível, sustentando vínculo
- * válido com ESTE Master; origem rastreável `auditoria_extracao:{id}`). Por dado:
- *  - navio e viagem: o texto que o OCR leu (não vazio). Só o do MBL: nunca o do rastreamento (S3) sem regra aprovada;
- *  - contêineres: cada número no padrão ISO 6346, com dígito verificador (PB-001, N13: fora do padrão → validação
- *    humana) e sem repetição (DOC-27: repetido → falta, nada descartado em silêncio); um item fora → a lista não vale;
+ * E1: o estado DOCUMENTAL de cada campo (presente, ausente, não utilizável) vem pronto do dono — o contrato de
+ * evidências do MBL da Auditoria (`auditoria/fatos/evidenciasDoMbl.ts`), sobre a leitura já restrita ao documento
+ * certo pelo S2 (MBL pelo conteúdo, legível, sustentando vínculo válido com ESTE Master; origem rastreável
+ * `auditoria_extracao:{id}`). Aqui fica SÓ a regra de uso da Liberação, por dado:
+ *  - navio e viagem: o texto que o OCR leu, quando presente. Só o do MBL: nunca o do rastreamento (S3) sem regra aprovada;
+ *  - contêineres: a lista no padrão do PB-001 (ISO 6346, sem repetição — DOC-27); não utilizável → não confiável, com
+ *    o motivo da Auditoria;
  *  - consignatário: o OCR devolve um texto livre só, e não há critério aprovado para isolar a razão social nem a
- *    forma "uma informação por linha" → nunca publicado (fica preservado como extraído).
+ *    forma "uma informação por linha" → nunca publicado (14.18; fica preservado como extraído).
  * Cada versão do MBL é uma observação própria: valores iguais concordam e valores diferentes divergem no
  * preenchimento (nada é escolhido). Se alguma versão tem leitura NÃO confiável de um dado, nenhuma versão o
  * publica: não dá para afirmar que não há divergência.
  */
 
-export interface CamposLidosDoMbl {
-  navio: string | null;
-  consignee: string | null;
-  conteineres: ReadonlyArray<string | null>;
-}
+/** Campos documentais do MBL como a Auditoria os entrega (espelho estrutural do contrato do dono). */
+export type CampoDocumentalDoMbl = 'navio' | 'consignee' | 'conteineres';
 
+/** Estado documental de UM campo numa versão do MBL, decidido pela Auditoria (nunca recalculado aqui). */
+export type EstadoDocumentalDoMbl =
+  | { tipo: 'PRESENTE'; valor: string }
+  | { tipo: 'AUSENTE'; motivo: 'NAO_LIDO' | 'NAO_PRESERVADO' }
+  | { tipo: 'NAO_UTILIZAVEL'; motivo: 'DOCUMENTO_ILEGIVEL' | 'CONTEINER_FORA_DO_PADRAO_ISO_6346' | 'CONTEINER_REPETIDO' };
+
+/** Uma versão do MBL deste Master, com o estado documental de cada campo. */
 export interface LeituraDoMbl {
   extracaoId: string;
   masterId: string;
   /** Data da fonte (recebimento do e-mail; sem ela, a da extração). */
   observadoEm: Instante;
-  /** null = extração anterior à 0106 (os campos não foram preservados na época). */
-  campos: CamposLidosDoMbl | null;
+  estados: Readonly<Record<CampoDocumentalDoMbl, EstadoDocumentalDoMbl>>;
 }
 
 export type MotivoNaoConfiavel =
@@ -40,15 +44,6 @@ export type MotivoNaoConfiavel =
   | 'CONSIGNATARIO_SEM_CRITERIO_APROVADO'
   /** A leitura desta versão é confiável, mas outra versão do mesmo MBL tem leitura não confiável do dado. */
   | 'OUTRA_VERSAO_SEM_LEITURA_CONFIAVEL';
-
-/**
- * Regra do número de contêiner, fornecida pela aplicação: a MESMA do PB-001 (`normalizarCodigo`, `validaISO6346`),
- * para não haver uma segunda regra de contêiner no domínio documental.
- */
-export interface RegraDoConteiner {
-  normalizar(numero: string | null): string;
-  valido(numero: string | null): boolean;
-}
 
 export type EstadoDoDadoDoMbl =
   | { tipo: 'CONFIAVEL'; valor: string }
@@ -61,27 +56,28 @@ export const DADOS_DO_MBL = [
   DADOS_DOS_MODELOS.CONSIGNATARIO_RAZAO_SOCIAL, DADOS_DOS_MODELOS.CONSIGNATARIO_QUALIFICACAO,
 ] as const;
 
-const vazio = (v: string | null | undefined) => String(v ?? '').trim() === '';
+/** De qual campo documental do MBL cada dado do documento sai. */
+const CAMPO_DO_DADO: Readonly<Record<string, CampoDocumentalDoMbl>> = {
+  [DADOS_DOS_MODELOS.NAVIO_E_VIAGEM]: 'navio',
+  [DADOS_DOS_MODELOS.CONTEINERES_DO_MASTER]: 'conteineres',
+  [DADOS_DOS_MODELOS.CONSIGNATARIO_RAZAO_SOCIAL]: 'consignee',
+  [DADOS_DOS_MODELOS.CONSIGNATARIO_QUALIFICACAO]: 'consignee',
+};
 
-/** Estado de UM dado em UMA leitura do MBL. */
-export function estadoDoDado(leitura: LeituraDoMbl, dado: string, conteiner: RegraDoConteiner): EstadoDoDadoDoMbl {
-  const c = leitura.campos;
-  if (!c) return { tipo: 'AUSENTE', motivo: 'NAO_PRESERVADO' };
-  switch (dado) {
-    case DADOS_DOS_MODELOS.NAVIO_E_VIAGEM:
-      return vazio(c.navio) ? { tipo: 'AUSENTE', motivo: 'NAO_LIDO' } : { tipo: 'CONFIAVEL', valor: String(c.navio).trim() };
-    case DADOS_DOS_MODELOS.CONTEINERES_DO_MASTER: {
-      if (!c.conteineres.length) return { tipo: 'AUSENTE', motivo: 'NAO_LIDO' };
-      if (!c.conteineres.every((n) => conteiner.valido(n))) return { tipo: 'NAO_CONFIAVEL', motivo: 'CONTEINER_FORA_DO_PADRAO_ISO_6346' };
-      const lista = c.conteineres.map((n) => conteiner.normalizar(n)).join('\n');
-      return valorNoFormato('LISTA', lista) ? { tipo: 'CONFIAVEL', valor: lista } : { tipo: 'NAO_CONFIAVEL', motivo: 'CONTEINER_REPETIDO' };
-    }
-    case DADOS_DOS_MODELOS.CONSIGNATARIO_RAZAO_SOCIAL:
-    case DADOS_DOS_MODELOS.CONSIGNATARIO_QUALIFICACAO:
-      return vazio(c.consignee) ? { tipo: 'AUSENTE', motivo: 'NAO_LIDO' } : { tipo: 'NAO_CONFIAVEL', motivo: 'CONSIGNATARIO_SEM_CRITERIO_APROVADO' };
-    default:
-      return { tipo: 'AUSENTE', motivo: 'NAO_LIDO' };
-  }
+const ilegivel = (l: LeituraDoMbl) => Object.values(l.estados).some((e) => e.tipo === 'NAO_UTILIZAVEL' && e.motivo === 'DOCUMENTO_ILEGIVEL');
+
+/** Estado de UM dado em UMA leitura do MBL: o estado documental da Auditoria com a regra de uso da Liberação por cima. */
+export function estadoDoDado(leitura: LeituraDoMbl, dado: string): EstadoDoDadoDoMbl {
+  const campo = Object.prototype.hasOwnProperty.call(CAMPO_DO_DADO, dado) ? CAMPO_DO_DADO[dado] : null;
+  // Extração anterior à 0106 não preservou nenhum campo (o estado vem igual em todos).
+  if (!campo) return leitura.estados.navio.tipo === 'AUSENTE' && leitura.estados.navio.motivo === 'NAO_PRESERVADO' ? { tipo: 'AUSENTE', motivo: 'NAO_PRESERVADO' } : { tipo: 'AUSENTE', motivo: 'NAO_LIDO' };
+  const e = leitura.estados[campo];
+  if (e.tipo === 'AUSENTE') return { tipo: 'AUSENTE', motivo: e.motivo };
+  // Documento ilegível não traz dado nenhum (o S2 nem o vincula ao Master).
+  if (e.tipo === 'NAO_UTILIZAVEL') return e.motivo === 'DOCUMENTO_ILEGIVEL' ? { tipo: 'AUSENTE', motivo: 'NAO_LIDO' } : { tipo: 'NAO_CONFIAVEL', motivo: e.motivo };
+  // 14.18: o consignatário extraído não é publicado — não há critério aprovado (presente no documento ≠ autorizado).
+  if (campo === 'consignee') return { tipo: 'NAO_CONFIAVEL', motivo: 'CONSIGNATARIO_SEM_CRITERIO_APROVADO' };
+  return { tipo: 'CONFIAVEL', valor: e.valor };
 }
 
 const evidenciaDa = (l: LeituraDoMbl) => ({ fonte: 'auditoria', ref: `auditoria_extracao:${l.extracaoId}` });
@@ -89,16 +85,16 @@ const evidenciaDa = (l: LeituraDoMbl) => ({ fonte: 'auditoria', ref: `auditoria_
 /**
  * Os dados pedidos (`dados`) das leituras do MBL deste Master: os confiáveis viram `ValorObservado` (fonte
  * S2_AUDITORIA, escopo MASTER, um por versão, cada um com a sua evidência); os extraídos sem confiabilidade
- * suficiente ficam em `naoPublicados`, com o motivo. Leitura de outro Master nunca entra.
+ * suficiente ficam em `naoPublicados`, com o motivo. Leitura de outro Master nunca entra; versão ilegível não conta.
  */
-export function dadosDoMbl(masterId: string, leituras: ReadonlyArray<LeituraDoMbl>, dados: ReadonlyArray<string>, conteiner: RegraDoConteiner):
+export function dadosDoMbl(masterId: string, leituras: ReadonlyArray<LeituraDoMbl>, dados: ReadonlyArray<string>):
   { valores: ValorObservado[]; naoPublicados: DadoNaoPublicado[] } {
   const valores: ValorObservado[] = [];
   const naoPublicados: DadoNaoPublicado[] = [];
-  const doMaster = leituras.filter((l) => l.masterId === masterId);
+  const doMaster = leituras.filter((l) => l.masterId === masterId && !ilegivel(l));
   for (const dado of dados) {
     if (!(DADOS_DO_MBL as ReadonlyArray<string>).includes(dado)) continue;
-    const estados = doMaster.map((l) => ({ l, e: estadoDoDado(l, dado, conteiner) }));
+    const estados = doMaster.map((l) => ({ l, e: estadoDoDado(l, dado) }));
     const algumaNaoConfiavel = estados.some((x) => x.e.tipo === 'NAO_CONFIAVEL');
     for (const { l, e } of estados) {
       const base = { dado, fonte: 'S2_AUDITORIA' as const, evidencia: evidenciaDa(l), observadoEm: l.observadoEm };
