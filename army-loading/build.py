@@ -19,7 +19,7 @@ import numpy as np
 import lib
 from lib import FPS, H, W
 
-SCENES = ["s1_ignite", "s2_bullet", "s3_slam", "s4_scope", "s5_montage", "s6_final"]
+SCENES = ["s1_ignite", "s2_bullet", "s3_slam", "s4_crt", "s5_montage", "s6_final"]
 
 
 def load_scenes():

@@ -150,6 +150,7 @@ def levels(t, fr):
         return _FLICK[fr]
     hum = 1.0 + 0.012 * math.sin(t * 2 * math.pi * 7.3) + 0.008 * math.sin(t * 2 * math.pi * 13.1 + 1)
     b = l = tt = r = hum
+    b = hum + 0.045 * math.sin(t * 2 * math.pi * 0.85 - 1.2)      # slow neon breathing on the bullet
     if fr == 48:
         tt = 0.84
     elif fr == 49:
@@ -218,8 +219,8 @@ def haze_density(t):
     """Two drifting smoke layers, quarter res, 0..1."""
     f1, f2, sp = haze_maps()
     h4, w4 = sp.shape
-    a = _scroll(f1, 40 + t * 26, 20 + t * 7, w4, h4)
-    b = _scroll(f2, 90 - t * 15, 60 + t * 4, w4, h4)
+    a = _scroll(f1, 40 + t * 15, 20 + t * 5, w4, h4)
+    b = _scroll(f2, 90 - t * 8, 60 + t * 3, w4, h4)
     return np.clip((a * 0.6 + b * 0.4 - 0.4) * 2.2, 0, 1)
 
 
@@ -515,7 +516,7 @@ def logo_bullet(M, t, z, lb, unlit_k):
     bx, by, bv = bullet_offset(t)
     MB = compose(M, S0, (bx, by))
     qs = {k: xf(MB, v) for k, v in bullet_shapes().items()}
-    blur = int(min(70, bv / FPS * S0 * z * 0.15)) if t >= T_SHOT else 0
+    blur = int(min(44, bv / FPS * S0 * z * 0.1)) if t >= T_SHOT else 0
     x0, y0, x1, y1 = bbox_of([qs["sil"]], pad=4 + blur // 2 + 2)
     x0, y0, x1, y1 = max(x0, 0), max(y0, 0), min(x1, W), min(y1, H)
     if x1 <= x0 + 2 or y1 <= y0 + 2:
@@ -602,7 +603,7 @@ def render(t, ctx):
         emis[y0:y1, x0:x1] += em
     addc = np.zeros((H, W, 3), np.float32)        # additive canvas (cv2 draws overwrite, so never draw on frame)
     if dt >= 0:
-        draw_sparks(None, addc, M, muzzle_sparks(), dt, grav=700, delay=0.015)
+        draw_sparks(None, addc, M, muzzle_sparks(), dt, grav=700, delay=0.045)
     for t0, parts in ignition_bursts():
         if 0 <= t - t0 < 0.3:
             draw_sparks(None, addc, M, parts, t - t0, grav=1400)
@@ -623,6 +624,17 @@ def render(t, ctx):
     g += god_rays(small, dens, rc[0], rc[1], 2.2)
     frame += cv2.resize(g, (W, H), interpolation=cv2.INTER_LINEAR)
 
+    if dt < 0:                                   # idle lens streak sits behind the solid logo
+        ana = (0.15 + 0.04 * math.sin(t * 5.1)) * min(lb, 1.5) ** 2
+        p = xf(M, to_world(B_CENTER)[None])[0]
+        if ana > 0.01:
+            anamorphic(frame, p[0], p[1], ana)
+
+    if dt >= 0 and trails is not None:            # streak trails live in the A's plane, behind its face
+        (x0, y0, x1, y1), cov_s = trails
+        crop = frame[y0:y1, x0:x1]
+        crop += (np.array([200, 255, 170], np.float32) - crop) * cov_s[..., None]
+
     if A is not None:
         (x0, y0, x1, y1), cov, col, em = A
         crop = frame[y0:y1, x0:x1]
@@ -630,10 +642,6 @@ def render(t, ctx):
 
     if dt >= 0:
         muzzle(frame, M, z, dt)
-        if trails is not None:
-            (x0, y0, x1, y1), cov_s = trails
-            crop = frame[y0:y1, x0:x1]
-            crop += (np.array([200, 255, 170], np.float32) - crop) * cov_s[..., None]
 
     if B is not None:
         (x0, y0, x1, y1), pm, al, em = B
@@ -642,21 +650,18 @@ def render(t, ctx):
         crop += pm
 
     if dt >= 0:
-        draw_sparks(addc, None, M, muzzle_sparks(), dt, grav=700, delay=0.015)
+        draw_sparks(addc, None, M, muzzle_sparks(), dt, grav=700, delay=0.045)
         smoke_puffs(frame, M, z, dt)
     for t0, parts in ignition_bursts():
         if 0 <= t - t0 < 0.3:
             draw_sparks(addc, None, M, parts, t - t0, grav=1400)
 
-    # ---- anamorphic streak through the bullet / muzzle
-    if dt < 0:
-        ana = (0.15 + 0.04 * math.sin(t * 5.1)) * min(lb, 1.5) ** 2
-        p = xf(M, to_world(B_CENTER)[None])[0]
-    else:
+    # ---- anamorphic streak from the muzzle (over everything: it's the lens)
+    if dt >= 0:
         ana = 1.5 * math.exp(-dt * 8)
         p = xf(M, to_world(B_TIP)[None])[0]
-    if ana > 0.01:
-        anamorphic(frame, p[0], p[1], ana)
+        if ana > 0.01:
+            anamorphic(frame, p[0], p[1], ana)
 
     draw_motes(addc, M, t, min(max(lb, la), 1.3))
     frame += addc
@@ -755,7 +760,7 @@ def streak_trails(M, dt):
         fx = min(tail_x, W + 900)
         bxw = back + (1 - ext) * (fx - back)
         ht = th * S0 / 2
-        polys.append(xf(M, np.array([(bxw, yy - 0.4), (fx, yy - ht), (fx + 6, yy), (fx, yy + ht), (bxw, yy + 0.4)],
+        polys.append(xf(M, np.array([(bxw, yy - 0.4), (fx + 30, yy - ht), (fx + 30, yy + ht), (bxw, yy + 0.4)],
                                     np.float32)))
     x0, y0, x1, y1 = bbox_of(polys, 6)
     x0, y0, x1, y1 = max(x0, 0), max(y0, 0), min(x1, W), min(y1, H)
