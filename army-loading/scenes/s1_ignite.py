@@ -879,7 +879,7 @@ def whip(frame, t):
     k = int(min(260, 0.6 * disp / 2))
     if k > 2:
         small = cv2.blur(cv2.blur(small, (k, 1)), (k, 1))     # triangle kernel: no hard box edges
-        small = cv2.GaussianBlur(small, (1, 0), sigmaX=0.1, sigmaY=max(0.5, k / 16))   # a hair of vertical shake
+        small = cv2.GaussianBlur(small, (1, 0), sigmaX=0.1, sigmaY=max(0.5, k / 36))   # a hair of vertical shake
     reach, width, lead = _flood_rows()
     r, wv, ld = reach[:, None], width[:, None], lead[:, None]
     xs = np.arange(w2, dtype=np.float32)[None, :] * 2
