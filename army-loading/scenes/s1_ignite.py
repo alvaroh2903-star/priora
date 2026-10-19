@@ -221,15 +221,16 @@ def wall_maps():
     fine = value_noise(W, H, 3, 1, 12)
     g = grunge(W, H, 4)
     rng0 = np.random.default_rng(19)
-    pits = cv2.GaussianBlur((rng0.random((H, W)) > 0.992).astype(np.float32), (0, 0), 1.1) * 2.5
+    pits = cv2.GaussianBlur((rng0.random((H, W), dtype=np.float32) > 0.992).astype(np.float32), (0, 0), 1.1) * 2.5
     tex = (0.5 + 0.2 * n + 0.2 * mid + 0.25 * fine) * (0.7 + 0.3 * g) * (1 - np.clip(pits, 0, 0.8))
     tex = np.clip(0.78 + (tex - 0.78) * 1.7, 0.05, 1.3)          # stretch: stains / pits / scratches read
-    yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+    yy = np.arange(H, dtype=np.float32)[:, None]
+    xx = np.arange(W, dtype=np.float32)[None, :]
     bc = to_world(B_CENTER)
     ac = to_world((130, 110))
 
     def gauss(c, sx, sy):
-        return np.exp(-(((xx - c[0]) / sx) ** 2 + ((yy - c[1]) / sy) ** 2))
+        return np.exp(-((xx - c[0]) / sx) ** 2) * np.exp(-((yy - c[1]) / sy) ** 2)
 
     sg = gauss(bc, 470, 270) + 0.03 * gauss(bc, 1000, 560)
     sa = gauss(ac, 330, 300)
@@ -247,7 +248,7 @@ def wall_maps():
     shd = np.roll(np.roll(cr, 2, 0), 2, 1)
     tex = tex * (1 - 0.65 * shd) * (1 - 0.25 * paint)
     base = (INK * (0.8 + 0.22 * tex)[..., None]).astype(np.float32)
-    SG = (np.clip(tex, 0, None) ** 3 * sg)[..., None] * np.array([46, 92, 18], np.float32)
+    SG = (tex * tex * tex * sg)[..., None] * np.array([46, 92, 18], np.float32)
     SA = (tex * sa)[..., None] * np.array([12, 14, 11], np.float32)
     DET = ((paint * (0.3 + 0.7 * lmid))[..., None] * (GREEN_DK * 0.36)
            + (np.clip(cr - 0.35 * shd, 0, 1) * (0.28 + 0.72 * lmid))[..., None] * np.array([30, 38, 31], np.float32))
@@ -317,18 +318,23 @@ def halftone_maps():
         g = np.maximum(g, s * np.clip(1 - r, 0, 1) ** 1.1)
     br = grunge(W, H, 8)
     g *= 0.6 + 0.4 * value_noise(W, H, 150, 3, 9)
-    return d, g, br, cell
+    gB = (g * 0.62 * cell * 0.9).astype(np.float32)            # dot coverage = clip(gB*k - dB) * br
+    dB = (d * cell * 0.9 - 0.5).astype(np.float32)
+    return gB, dB, br.astype(np.float32)
 
 
 def halftone_layer(t, frame, lvl):
-    d, g, br, cell = halftone_maps()
+    gB, dB, br = halftone_maps()
     k = ease_out_cubic(prog(t, 0.0, 0.9)) * (1.0 + 0.07 * math.sin(t * 2 * math.pi / 1.7))
     if k <= 0.001:
         return frame
-    r = g * (0.62 * k)
-    m = np.clip((r - d) * cell * 0.9 + 0.5, 0, 1) * br
     op = 0.11 + 0.07 * min(lvl, 1.2)
-    frame += (BONE - frame) * (m * op)[..., None]
+    m = cv2.scaleAdd(gB, float(k), -dB)
+    np.clip(m, 0, 1, out=m)
+    m *= br
+    m *= op
+    m3 = cv2.merge([m, m, m])
+    frame += (BONE - frame) * m3
     return frame
 
 
@@ -480,17 +486,17 @@ def tonemap(frame):
     """Hue-preserving soft clip: anything brighter than the knee is scaled down
     by its max channel (no per-channel clipping -> no cream/yellow), then
     desaturated towards mint-white the hotter it was."""
-    m = frame.max(axis=2)
-    idx = m > KNEE
-    if not idx.any():
+    m = np.maximum(np.maximum(frame[..., 0], frame[..., 1]), frame[..., 2])
+    ys, xs = np.nonzero(m > KNEE)
+    if not len(ys):
         return frame
-    px = frame[idx]
-    mm = m[idx][:, None]
+    px = frame[ys, xs]
+    mm = m[ys, xs][:, None]
     ex = mm - KNEE
     L = KNEE + 20.0 * (1.0 - np.exp(-ex / 40.0))
     s = px * (L / mm)
     d = np.minimum(1.0 - np.exp(-ex / 220.0), 0.85)
-    frame[idx] = s + (L * MINT_T - s) * d
+    frame[ys, xs] = s + (L * MINT_T - s) * d
     return frame
 
 
@@ -721,7 +727,9 @@ def render(t, ctx):
 
     # ---- world: concrete wall lit by the sign + haze, seen through the camera
     base, SG, SA, DET, tex = wall_maps()
-    world = base + SG * (min(lb, 1.5) * (1 - 0.45 * inh)) + SA * min(la, 1.5) + DET * lw
+    world = cv2.scaleAdd(SG, float(min(lb, 1.5) * (1 - 0.45 * inh)), base)
+    cv2.scaleAdd(SA, float(min(la, 1.5)), world, dst=world)
+    cv2.scaleAdd(DET, float(lw), world, dst=world)
     dens = haze_density(t)
     world += haze(t, lw * (1 - 0.4 * inh), dens)
     if dt >= 0:                                    # muzzle flash lights the wall
@@ -871,6 +879,7 @@ def whip(frame, t):
     k = int(min(260, 0.6 * disp / 2))
     if k > 2:
         small = cv2.blur(cv2.blur(small, (k, 1)), (k, 1))     # triangle kernel: no hard box edges
+        small = cv2.GaussianBlur(small, (1, 0), sigmaX=0.1, sigmaY=max(0.5, k / 16))   # a hair of vertical shake
     reach, width, lead = _flood_rows()
     r, wv, ld = reach[:, None], width[:, None], lead[:, None]
     xs = np.arange(w2, dtype=np.float32)[None, :] * 2
