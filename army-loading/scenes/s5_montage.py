@@ -169,7 +169,9 @@ def _wear(m, seed, sc, amt=1.0, feet=1.0, base=None, cap=None):
     if feet > 0 and base is not None:
         ty = base - cap
         yy = (np.arange(h, dtype=np.float32)[:, None] - ty) / max(cap, 1)
-        bot = np.clip((yy - 0.68) / 0.32, 0, 1) * np.clip(value_noise(w, h, 70 * sc, 3, seed + 9) * 1.8 - 0.45, 0, 1) * feet
+        # fade grows toward the baseline, then backs off below it (cedillas, commas)
+        ramp = np.clip((yy - 0.68) / 0.32, 0, 1) * np.clip(1 - (yy - 1.0) / 0.12, 0.25, 1)
+        bot = ramp * np.clip(value_noise(w, h, 70 * sc, 3, seed + 9) * 1.8 - 0.45, 0, 1) * feet
         r0 = int(max(ty + 0.66 * cap, 0))
         if r0 < h:
             dots[r0:] = _dot_holes(w, h, cell * 1.25, 45.0, np.clip(bot[r0:], 0, 1), r0)
@@ -190,7 +192,7 @@ def _wear(m, seed, sc, amt=1.0, feet=1.0, base=None, cap=None):
         cv2.line(simg, (int(x0 * 16), int(y0 * 16)), (int((x0 + rng.normal(0, 2)) * 16), int((y0 + L) * 16)),
                  int(rng.uniform(70, 170)), 1, cv2.LINE_AA, 4)
     scr = simg.astype(np.float32) / 255.0
-    tex = (1 - 0.95 * holes) * (1 - 0.9 * dots) * (1 - 0.55 * mesh) * (1 - 0.92 * speck) * (1 - 0.8 * scr)
+    tex = (1 - 0.95 * holes) * (1 - 0.9 * dots) * (1 - 0.3 * mesh) * (1 - 0.92 * speck) * (1 - 0.8 * scr)
     return (rough * np.clip(1 - (1 - tex) * amt, 0, 1)).astype(np.float32)
 
 
@@ -265,6 +267,30 @@ def _corners(f, color, k=1.0, op=1.0, flip=False):
 
 
 @lru_cache(maxsize=4)
+def _grit(seed, amount=1.0):
+    """Fine print / concrete grit (0..1 darkening mask): pores, clustered
+    specks, a few hairline scratches. No big blotches."""
+    rng = np.random.default_rng(seed)
+    clump = value_noise(W // 2, H // 2, 90, 3, seed + 1)
+    clump = cv2.resize(clump, (W, H), interpolation=cv2.INTER_LINEAR)
+    p = 0.004 + 0.03 * np.clip((clump - 0.45) * 2.2, 0, 1)
+    sp = (rng.random((H, W)) < p).astype(np.float32)
+    sp = cv2.GaussianBlur(sp, (0, 0), 0.6) * 1.6
+    big = (rng.random((H // 3, W // 3)) < 0.0035).astype(np.float32)
+    big = cv2.resize(big, (W, H), interpolation=cv2.INTER_LINEAR)
+    big = np.clip((cv2.GaussianBlur(big, (0, 0), 1.0) - 0.06) * 5, 0, 1)
+    sc = np.zeros((H, W), np.uint8)
+    for _ in range(70):
+        x0, y0 = rng.uniform(0, W), rng.uniform(0, H)
+        an = rng.normal(-0.35, 0.5)
+        L = rng.uniform(30, 220)
+        cv2.line(sc, (int(x0 * 16), int(y0 * 16)), (int((x0 + L * math.cos(an)) * 16), int((y0 + L * math.sin(an)) * 16)),
+                 int(rng.uniform(60, 150)), 1, cv2.LINE_AA, 4)
+    m = np.clip(sp + big * 0.8 + sc.astype(np.float32) / 255.0 * 0.5, 0, 1) * amount
+    return m.astype(np.float32)
+
+
+@lru_cache(maxsize=4)
 def _plate(kind):
     """Static background plates (layout space)."""
     if kind == "B":
@@ -277,33 +303,29 @@ def _plate(kind):
         b += ((1 - gr) * 7)[..., None]
         return b
     if kind == "G":
-        n = value_noise(W, H, 300, 6, 541)
-        fn = value_noise(W, H, 5, 2, 542)
-        bl = value_noise(W, H, 60, 4, 543)
-        gr = grunge(W, H, 544)
+        n = value_noise(W, H, 380, 5, 541)
+        mid = value_noise(W, H, 48, 3, 543)
+        fn = value_noise(W, H, 3, 2, 542)
         b = np.empty((H, W, 3), np.float32)
         b[:] = GREEN
-        shade = 0.90 + 0.14 * (n - 0.5) * 2 * 0.5 + (fn - 0.5) * 0.06
-        b *= shade[..., None]
-        # worn / dirty patches go toward casing green, pinholes + scratches to dark
-        dirt = np.clip((bl - 0.62) * 3.0, 0, 1) * 0.55
-        b += (GREEN_DK - b) * dirt[..., None]
-        b += (INK - b) * ((1 - gr) * 0.5)[..., None]
+        b *= (0.93 + 0.10 * (n - 0.5) + 0.04 * (mid - 0.5) + 0.06 * (fn - 0.5))[..., None]
+        stain = np.clip((value_noise(W, H, 220, 4, 544) - 0.64) * 2.6, 0, 1)
+        b += (GREEN_DK - b) * (stain * 0.22)[..., None]
+        b += (INK - b) * _grit(545, 0.75)[..., None]
         return b
     if kind == "C":
-        n = value_noise(W, H, 320, 6, 551)
+        n = value_noise(W, H, 380, 5, 551)
         mid = value_noise(W, H, 40, 4, 552)
         fn = value_noise(W, H, 3, 2, 553)
-        gr = grunge(W, H, 554)
         b = np.empty((H, W, 3), np.float32)
         b[:] = CONC
-        b *= (0.86 + 0.2 * n + 0.07 * (mid - 0.5) + 0.06 * (fn - 0.5))[..., None]
-        stain = np.clip((value_noise(W, H, 150, 4, 555) - 0.6) * 2.5, 0, 1)
-        b += (np.float32([118, 116, 110]) - b) * (stain * 0.45)[..., None]
-        b += (INK - b) * ((1 - gr) * 0.55)[..., None]
-        cr = crack_mask(W, H, W * 0.18, H * 0.82, seed=556, branches=7, progress=0.75, thickness=2)
-        cr = np.maximum(cr, crack_mask(W, H, W * 0.86, H * 0.12, seed=557, branches=6, progress=0.6, thickness=1))
-        b += (np.float32([60, 60, 58]) - b) * (cr * 0.6)[..., None]
+        b *= (0.93 + 0.12 * (n - 0.5) + 0.06 * (mid - 0.5) + 0.08 * (fn - 0.5))[..., None]
+        stain = np.clip((value_noise(W, H, 200, 4, 555) - 0.62) * 2.5, 0, 1)
+        b += (np.float32([128, 125, 118]) - b) * (stain * 0.25)[..., None]
+        b += (INK - b) * _grit(554, 0.7)[..., None]
+        cr = crack_mask(W, H, W * 0.12, H * 0.88, seed=556, branches=7, progress=0.7, thickness=2)
+        cr = np.maximum(cr, crack_mask(W, H, W * 0.9, H * 0.08, seed=557, branches=6, progress=0.55, thickness=1))
+        b += (np.float32([84, 83, 80]) - b) * (cr * 0.45)[..., None]
         return b
     raise ValueError(kind)
 
