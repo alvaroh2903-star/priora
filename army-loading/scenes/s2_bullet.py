@@ -1,27 +1,31 @@
 """Scene 2 · s2_bullet (3.0 s) — macro slow-motion bullet flight -> lens hit.
 
 Beat sheet (local seconds):
-  0.00  hand-off from s1's white-green whip flash: the light wall keeps sliding
-        off to the left while the camera whips in and "catches" the bullet
-        (it enters from the right, heavy horizontal smear that resolves)
-  0.10  whoosh
+  0.00  hand-off from s1's white-green whip flash: the streaky light wall keeps
+        sliding off to the left while the camera whips in and "catches" the
+        bullet (it enters from the right, heavy smear that resolves) — whoosh 0.1
   0.3+  macro slow-mo, 3/4 side view: the brand bullet (re-drawn in 3D as a
-        solid of revolution, flat logo colours + soft cylinder shading,
-        rifling grooves that spin) drifts left->right, precessing slightly.
-        Mach-cone shock rings peel off the nose, green speed streaks stream
-        past, smoke puffs part around the flight path, turbulent wake, the
-        three logo streaks trail the casing. Stencil HUD type on 3D planes
-        at different depths (".50 BMG" huge in the back, "853 M/S" in
-        front) + a screen-space range tape with the DIST 1.240 M readout.
-  1.30  ricochet zing: the nose clips a mote -> spark burst, bright ring pop,
-        glint sweeps the bullet, anamorphic flare, camera kick
-  1.35  camera swings round in front of the bullet (it turns to camera):
-        type planes fold away, streaks become a radial warp field, the shock
-        rings become concentric circles around the incoming nose
-  2.20  head-on approach, accelerating, range ring counts DIST down to 0
-  2.65  lens hit: white flash, radial glass cracks race out from the centre,
-        shards of green light, heavy decaying shake
-  2.8+  hold the cracked dark frame (cracks dim slightly) -> cut to s3
+        solid of revolution: flat logo colours, logo highlight capsule, dark
+        screen-space outline, soft cylinder shading, spinning rifling marks)
+        drifts left->right with a slight precession. Mach-cone shock rings
+        peel off the nose + faint bow-shock V, green speed streaks, the three
+        logo streaks trailing the casing, green-lit smoke parted by the wake.
+        Stencil HUD on 3D planes at different depths (".50 BMG" huge in the
+        back, "VELOCIDADE 853 M/S" in front, "ENERGIA 18.000 J") + a
+        screen-space range tape with the DIST readout counting up.
+  1.30  ricochet zing: DIST locks on 1.240 M, the nose clips a mote -> spark
+        burst, bright ring pop, glint sweeps the bullet, anamorphic flare, kick
+  1.35  the camera swings round in front of the bullet (it turns to camera):
+        type planes fold away (motion-blurred), streaks become a radial warp
+        field, shock rings become concentric circles round the incoming nose
+  2.1+  head-on, accelerating approach (slight focal ramp): cel-stepped nose
+        with a knife-edge highlight on the tip, tick ring + "0.xxx M IMPACTO"
+        countdown; the nose is steered onto the crack origin
+  2.65  lens hit (first frame 80): white flash, crack network races out from
+        (0.52 W, 0.47 H), shards of green light (rays + glinting crack edges),
+        refraction per glass shard, heavy decaying shake — glass + impact
+  2.8+  hold the cracked dark frame; it relaxes to exactly the crack_mask
+        pattern scene 3 opens on (same seeds / centre), so the cut is seamless
 
 Everything 3D lives in the bullet's co-moving frame (+X = flight direction,
 +Y up); the camera orbits it.  Logo geometry measured from logo_bullet.png.
@@ -1104,21 +1108,15 @@ def crack_maps():
     frost_c = np.exp(-(np.hypot(fxx, fyy) / 30) ** 2) * (0.5 + 0.5 * value_noise(2 * fr_, 2 * fr_, 6, 2, 2651))
     n_lab, lab = cv2.connectedComponents((1 - cv2.dilate(binm, np.ones((3, 3), np.uint8))).astype(np.uint8), connectivity=4)
     tint = rng.normal(0, 1, n_lab).astype(np.float32)
-    offx = rng.normal(0, 4.5, n_lab).astype(np.float32)
-    offy = rng.normal(0, 4.5, n_lab).astype(np.float32)
     sdir = rng.uniform(0, 2 * math.pi, n_lab)
     sph = rng.uniform(0, 2 * math.pi, n_lab).astype(np.float32)
     son = (rng.random(n_lab) < 0.4).astype(np.float32)
-    for arrv in (tint, offx, offy, son):
+    for arrv in (tint, son):
         arrv[0] = 0
     lh = lab[::2, ::2]
     sd = np.cos(sdir).astype(np.float32)[lh] * (xh - cx) / 300 + np.sin(sdir).astype(np.float32)[lh] * (yh - cy) / 300
     sheen = up(np.clip(np.sin(sd * 2.5 + sph[lh]), 0, 1) ** 5 * son[lh] * np.exp(-(rh / 950) ** 2))
     tintm = up(tint[lh] * np.exp(-(rh / 1100) ** 2))
-    kk = np.clip(rh / 180, 0, 1)
-    dx = up(offx[lh] * kk, cv2.INTER_NEAREST)
-    dy = up(offy[lh] * kk, cv2.INTER_NEAREST)
-    yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
     gl = []
     tries = 0
     segs_all = [(a, b) for a, b in base_segs] + [(a, b) for a, b, _, _ in extra]
@@ -1134,17 +1132,8 @@ def crack_maps():
     return {
         "base": base.astype(np.float32), "extra": ex.astype(np.float32), "falloff": falloff, "lines": lines,
         "shadow": shadow.astype(np.float32), "arr": arr, "frost": frost_c.astype(np.float32), "frost_at": (fcx - fr_, fcy - fr_),
-        "tint": tintm, "sheen": sheen, "xx": xx, "yy": yy, "dx": dx, "dy": dy, "glints": gl,
+        "tint": tintm, "sheen": sheen, "glints": gl,
     }
-
-
-@lru_cache(maxsize=4)
-def star_sprite(r):
-    s = int(r * 6) | 1
-    yy, xx = np.mgrid[0:s, 0:s].astype(np.float32) - s // 2
-    a = np.exp(-(xx / (r * 0.12)) ** 2 - (yy / (r * 2.4)) ** 2) + np.exp(-(yy / (r * 0.12)) ** 2 - (xx / (r * 2.4)) ** 2)
-    a += np.exp(-(xx * xx + yy * yy) / (r * 0.45) ** 2) * 1.2
-    return np.clip(a, 0, 1.6).astype(np.float32)
 
 
 def crack_pass(frame, t):
@@ -1157,8 +1146,6 @@ def crack_pass(frame, t):
     tf = clamp(grow) * (1 - settle)
     lit = 0.7 + 0.3 * math.exp(-dt * 9)
     if tf > 0.02:
-        frame = cv2.remap(frame, cm["xx"] + cm["dx"] * tf, cm["yy"] + cm["dy"] * tf, cv2.INTER_LINEAR,
-                          borderMode=cv2.BORDER_REFLECT)
         frame += (cm["tint"] * (3.0 * tf))[..., None] + cm["sheen"][..., None] * (ADD_G * (30 * tf * lit / 255.0))
         sh = cm["shadow"] if reach is None else cm["shadow"] * reach
         frame *= (1 - (0.65 * tf) * np.minimum(sh, 1))[..., None]
@@ -1417,23 +1404,22 @@ def _core_glow():
 
 
 @lru_cache(maxsize=1)
-def _grid():
-    yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
-    return yy, xx
-
-
-@lru_cache(maxsize=1)
 def _rays():
-    yy, xx = np.mgrid[0:H // 2, 0:W // 2].astype(np.float32) * 2 + 1
-    ang = np.arctan2(yy - CRACK_C[1], xx - CRACK_C[0])
-    rr = np.hypot(xx - CRACK_C[0], yy - CRACK_C[1])
+    """Radial light shafts from the crack origin: 1D angular profile mapped over the frame."""
     rng = np.random.default_rng(81)
-    acc = np.zeros(yy.shape, np.float32)
+    na = 4096
+    th = np.linspace(-math.pi, math.pi, na, endpoint=False)
+    prof = np.zeros(na, np.float64)
     for _ in range(14):
         a0 = rng.uniform(-math.pi, math.pi)
         wd = rng.uniform(0.006, 0.03)
-        da = (ang - a0 + math.pi) % (2 * math.pi) - math.pi
-        acc += np.exp(-(da / wd) ** 2) * rng.uniform(0.4, 1.0)
-    acc *= np.exp(-rr / 700) * np.clip(rr / 60, 0, 1)
+        da = (th - a0 + math.pi) % (2 * math.pi) - math.pi
+        prof += np.exp(-(da / wd) ** 2) * rng.uniform(0.4, 1.0)
+    prof = prof.astype(np.float32)
+    yy, xx = np.mgrid[0:H // 2, 0:W // 2].astype(np.float32) * 2 + 1
+    ang = np.arctan2(yy - CRACK_C[1], xx - CRACK_C[0])
+    rr = np.hypot(xx - CRACK_C[0], yy - CRACK_C[1])
+    idx = ((ang + math.pi) * (na / (2 * math.pi))).astype(np.int32) % na
+    acc = prof[idx] * np.exp(-rr / 700) * np.clip(rr / 60, 0, 1)
     acc = cv2.resize(acc, (W, H), interpolation=cv2.INTER_CUBIC)
     return (np.clip(acc, 0, None)[..., None] * ADD_G * 0.9).astype(np.float32)
