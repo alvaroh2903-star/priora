@@ -4,22 +4,27 @@ Beat sheet (local seconds):
   0.00  pure black; halftone corners breathe in; the unlit sign is dead glass
   0.20  neon start: the sign is three tubes cut along the letter's own miters
         (left leg+shoulder, top bar, right shoulder+leg) plus the bullet.
-        They sputter near-binary (dead <-> full), dark tube joints show while
-        a neighbour is off, each catch throws real sparks + an electrode flare
-  0.77  holds lit with a surge: green bloom, white A slightly hot, the worn
-        concrete wall (grit, cracks, old green spray paint) catches the light
+        Three clear catches (0.20, 0.40, 0.60 -> holds) with an ember glow
+        between them (the wall never fully dies); dark tube joints show while
+        a neighbour is off; each catch throws sparks (behind the sign face)
+        + an electrode flare
+  0.67  holds lit with a swelling surge: green bloom, white A hot, the worn
+        concrete wall (cracks, old green spray paint) catches the light
   0.90  short glitch burst (3 frames)
-  1.0+  hold: slow push-in 1.00 -> 1.08 about the optically centred icon,
-        haze drift, dust; 1.4-1.9 a specular glint crosses the A and bullet
-  2.30  click: the bullet snaps back ~13 units (one frame), camera micro-punch,
-        the A sags (power draw) while the bullet charges: green-hot core,
-        rising tremble, growing lens streak, halo inhales in the last 4 frames
+  1.0+  hold: eased dolly push 1.00 -> 1.12 with a slow lateral truck + roll;
+        the wall sits deeper than the sign (parallax), god rays sweep through
+        drifting haze, dust + out-of-focus flecks; 1.4-1.9 a specular glint
+        crosses the A and bullet; 1.73 a 2-frame neon stutter of the A only
+  2.30  click: the bullet snaps back a few units (stays inside the A's leg),
+        camera micro-punch, single A dip, then the bullet charges: green-hot
+        core, rising forward-biased tremble, growing lens streak, halo inhales
+        in the last 4 frames
   2.60  shot: bullet leaves the A to the right (motion smear); the flash sits
         right of the A (hot core behind the A face, only soft halo over it,
         hue-preserving soft clip -> mint-white, never cream), green streak
         trails, sparks, smoke, camera kick
-  2.80  whip-pan right (blur tied to camera speed) into a streaky white-green
-        light wall (cut 3.0, s2 opens on the same white)
+  2.72  whip-pan right (horizontal-only smear tied to camera speed) into a
+        streaky white-green light wall (cut 3.0, s2 opens on the same white)
 
 The logo is re-drawn as vector geometry (A polygon from the brand sheet,
 bullet contours traced + smoothed from the asset) and rasterised every frame
@@ -31,7 +36,7 @@ from lib import *
 DUR = 3.0
 CUES = [(0.0, "hum"), (0.9, "glitch"), (2.3, "click"), (2.6, "shot")]
 
-T_CLICK, T_SHOT, T_WHIP = 2.3, 2.6, 2.80
+T_CLICK, T_SHOT, T_WHIP = 2.3, 2.6, 2.72
 T_G0, T_G1 = 1.4, 1.9                      # glint pass
 
 # ---------------------------------------------------------------- layout
@@ -56,7 +61,7 @@ SEAM_BW = 2.5                             # feather width (logo units)
 C_OUT = np.array([10, 11, 12], np.float32)
 C_HL = np.array([214, 245, 180], np.float32)
 FLASH_C = np.array([232, 255, 218], np.float32)
-FACE = np.array([221, 224, 223], np.float32)       # lit A face (headroom for glint / surge)
+FACE = np.array([240, 242, 242], np.float32)       # lit A face: brand white (tonemap() handles surges)
 GLASS = np.array([29, 31, 31], np.float32)         # dead neon glass
 A_EM = np.array([105, 225, 70], np.float32)        # A's green spill (the bullet is the main bloom)
 ADD_G = np.array([70, 235, 78], np.float32)        # additive light tint: saturates to mint-white
@@ -157,28 +162,51 @@ def _sstep(x):
 # ---------------------------------------------------------------- light levels
 # per-frame neon levels (bullet, left tube, top tube, right tube) during start-up.
 # Authored near-binary and pushed through _bin() so a tube is either dead glass
-# or (almost) full; only the bullet keeps a faint electrode ember (< 0.12).
+# or (almost) full; values below EMBER are kept as a faint ember glow (a tube that
+# has caught once never goes fully dark again). Surge frames use identical L/T/R.
 _FLICK_RAW = {
     0: (0, 0, 0, 0), 1: (0, 0, 0, 0), 2: (0, 0, 0, 0), 3: (0, 0, 0, 0),
     4: (.07, 0, 0, 0), 5: (.04, 0, 0, 0),
-    6: (1.0, .95, 0, 0), 7: (.9, 0, 0, 0), 8: (.08, 0, 0, 0),
-    9: (.04, 0, 0, 0), 10: (.02, 0, 0, 0), 11: (.06, 0, 0, 0),
-    12: (1.05, 1.0, .95, 1.0), 13: (1.0, 1.0, 0, .95), 14: (.1, 0, 0, 0),
-    15: (.95, 0, 0, .95), 16: (.1, 0, 0, 0), 17: (.05, 0, 0, 0), 18: (.03, 0, 0, 0),
-    19: (1.05, 1.0, 0, 1.0), 20: (1.0, 1.0, 0, 1.0), 21: (1.1, 1.05, 1.0, 1.05),
-    22: (1.0, 1.0, .95, 1.0), 23: (1.28, 1.22, 1.16, 1.22), 24: (1.18, 1.12, 1.08, 1.12),
-    25: (1.1, 1.06, 1.04, 1.06), 26: (1.04, 1.02, 1.01, 1.02),
-    27: (1.32, 1.3, 1.3, 1.3), 28: (.5, .55, .45, .6), 29: (1.18, 1.12, 1.1, 1.12),
+    # catch 1: bullet + left tube
+    6: (1.0, .95, 0, 0), 7: (.9, .15, 0, 0),
+    8: (.1, .15, 0, 0), 9: (.08, .13, 0, 0), 10: (.1, .12, 0, 0), 11: (.09, .14, 0, 0),
+    # catch 2: the whole sign, the top tube drops first
+    12: (1.05, 1.0, .95, 1.0), 13: (1.0, 1.0, .15, .95),
+    14: (.1, .15, .15, .15), 15: (.12, .15, .14, .15), 16: (.1, .14, .13, .14), 17: (.09, .13, .12, .13),
+    # catch 3: legs + bullet, the top tube joins a frame later, then it holds with a swelling surge
+    18: (1.0, .95, .15, 1.0), 19: (1.05, 1.0, .95, 1.0), 20: (1.0, 1.0, 1.0, 1.0),
+    21: (1.1, 1.08, 1.08, 1.08), 22: (1.18, 1.14, 1.14, 1.14), 23: (1.26, 1.2, 1.2, 1.2),
+    24: (1.16, 1.12, 1.12, 1.12), 25: (1.09, 1.06, 1.06, 1.06), 26: (1.04, 1.02, 1.02, 1.02),
+    # glitch burst
+    27: (1.32, 1.3, 1.3, 1.3), 28: (.5, .55, .55, .55), 29: (1.18, 1.12, 1.12, 1.12),
 }
+EMBER = 0.2                  # below this a level is an authored ember glow (kept as is)
 
 
 def _bin(v):
     """Near-binary neon response: dead below ~.25, full above ~.6, surges kept."""
+    if v < EMBER:
+        return v
     x = clamp((v - 0.25) / 0.35)
     return x * x * (3 - 2 * x) * max(v, 1.0)
 
 
-_FLICK = {fr: (b if b < 0.12 else _bin(b), _bin(l), _bin(tt), _bin(r)) for fr, (b, l, tt, r) in _FLICK_RAW.items()}
+_FLICK = {fr: tuple(_bin(v) for v in lv) for fr, lv in _FLICK_RAW.items()}
+
+
+@lru_cache(maxsize=1)
+def _wall_glow():
+    """Per-frame (bullet, A) light reaching the wall during start-up: after the first catch
+    it never drops below an ember floor and falls off over ~2 frames (warm tube / eye
+    persistence), so the wall breathes with the catches instead of strobing to black."""
+    out, wb, wa = {}, 0.0, 0.0
+    for fr in sorted(_FLICK):
+        b, l, tt, r = _FLICK[fr]
+        a = (l + tt + r) / 3.0
+        floor = 0.2 if fr >= 6 else 0.0
+        wb, wa = max(b, 0.45 * wb, floor), max(a, 0.45 * wa, floor * 0.6)
+        out[fr] = (wb, wa)
+    return out
 
 
 def charge(t):
@@ -200,15 +228,17 @@ def levels(t, fr):
     hum = 1.0 + 0.012 * math.sin(t * 2 * math.pi * 7.3) + 0.008 * math.sin(t * 2 * math.pi * 13.1 + 1)
     b = hum + 0.045 * math.sin(t * 2 * math.pi * 0.85 - 1.2)      # slow neon breathing on the bullet
     a = hum
-    if fr == 48:                    # mains hiccup: the whole sign, never one segment
-        a, b = 0.9, b * 0.94
-    if T_CLICK <= t < T_SHOT:       # click: the A sags (power draw) while the bullet charges
+    if fr in (52, 53):              # neon micro-stutter of the A tubes only; the bullet stays lit
+        a = (0.65, 0.7)[fr - 52]
+    elif fr == 54:
+        a = hum * 1.04
+    if T_CLICK <= t < T_SHOT:       # click: one dip of the A, then a slight sag while the bullet charges
         ch = charge(t)
-        a = {69: 0.42, 70: 0.74}.get(fr, hum * (0.86 + 0.03 * math.sin(t * 2 * math.pi * 11)))
+        a = {69: 0.6, 70: 0.84}.get(fr, hum * (0.95 + 0.015 * math.sin(t * 2 * math.pi * 11)))
         b = hum * (1.1 + 0.42 * ch) + 0.06 * ch * math.sin(t * 2 * math.pi * 14)
     if t >= T_SHOT:
         k = math.exp(-(t - T_SHOT) * 9)
-        a = 1.0 + 0.2 * k
+        a = 1.0 + 0.08 * k            # keep the face just under the flash so the leg silhouettes against it
         b = 0.0
     return (b, a, a, a)
 
@@ -219,10 +249,10 @@ def wall_maps():
     n = value_noise(W, H, 320, 3, 11)
     mid = value_noise(W, H, 40, 3, 13)
     fine = value_noise(W, H, 3, 1, 12)
-    g = grunge(W, H, 4)
+    g = cv2.GaussianBlur(grunge(W, H, 4), (0, 0), 0.9)     # soft pits, not pixel pepper
     rng0 = np.random.default_rng(19)
     pits = cv2.GaussianBlur((rng0.random((H, W), dtype=np.float32) > 0.992).astype(np.float32), (0, 0), 1.1) * 2.5
-    tex = (0.5 + 0.2 * n + 0.2 * mid + 0.25 * fine) * (0.7 + 0.3 * g) * (1 - np.clip(pits, 0, 0.8))
+    tex = (0.575 + 0.2 * n + 0.2 * mid + 0.1 * fine) * (0.78 + 0.22 * g) * (1 - np.clip(pits, 0, 0.8))
     tex = np.clip(0.78 + (tex - 0.78) * 1.7, 0.05, 1.3)          # stretch: stains / pits / scratches read
     yy = np.arange(H, dtype=np.float32)[:, None]
     xx = np.arange(W, dtype=np.float32)[None, :]
@@ -242,17 +272,21 @@ def wall_maps():
         m = cv2.GaussianBlur(m, (0, 0), 0.8)
         paint[sy:sy + sh, sx:sx + sw] = np.maximum(paint[sy:sy + sh, sx:sx + sw], m)
     # crack systems: dark gap offset down-right + a lit lip that catches the sign light
-    cr = np.maximum(crack_mask(W, H, 1480, 120, seed=5, branches=6, thickness=2),
-                    crack_mask(W, H, 260, 1010, seed=9, branches=5, thickness=2))
-    cr = cv2.GaussianBlur(cr, (0, 0), 0.6)
+    cr = np.maximum(crack_mask(W, H, 1480, 120, seed=5, branches=6, thickness=3),
+                    crack_mask(W, H, 260, 1010, seed=9, branches=5, thickness=3))
+    cr = cv2.GaussianBlur(cr, (0, 0), 0.8)
     shd = np.roll(np.roll(cr, 2, 0), 2, 1)
     tex = tex * (1 - 0.65 * shd) * (1 - 0.25 * paint)
-    base = (INK * (0.8 + 0.22 * tex)[..., None]).astype(np.float32)
-    SG = (tex * tex * tex * sg)[..., None] * np.array([46, 92, 18], np.float32)
-    SA = (tex * sa)[..., None] * np.array([12, 14, 11], np.float32)
-    DET = ((paint * (0.3 + 0.7 * lmid))[..., None] * (GREEN_DK * 0.36)
-           + (np.clip(cr - 0.35 * shd, 0, 1) * (0.28 + 0.72 * lmid))[..., None] * np.array([30, 38, 31], np.float32))
-    return base, SG.astype(np.float32), SA.astype(np.float32), DET.astype(np.float32), tex.astype(np.float32)
+    # 3-channel maps are built with cv2.merge from planes (one big buffer each)
+    base = cv2.merge([tex * float(0.22 * c) + float(0.8 * c) for c in INK])
+    sgt = tex * tex * sg
+    SG = cv2.merge([sgt * float(c) for c in (46, 92, 18)])
+    sat = tex * sa
+    SA = cv2.merge([sat * float(c) for c in (12, 14, 11)])
+    pa = paint * (0.3 + 0.7 * lmid)
+    lip = np.clip(cr - 0.35 * shd, 0, 1) * (0.28 + 0.72 * lmid)
+    DET = cv2.merge([pa * float(c1) + lip * float(c2) for c1, c2 in zip(GREEN_DK * 0.5, (50, 62, 48))])
+    return base, SG, SA, DET, tex.astype(np.float32, copy=False)
 
 
 @lru_cache(maxsize=1)
@@ -283,7 +317,7 @@ def haze_density(t):
 def haze(t, lvl, dens):
     sp = haze_maps()[2]
     a = dens * sp * (0.05 + 0.95 * lvl)
-    col = a[..., None] * np.array([16, 29, 10], np.float32)
+    col = a[..., None] * np.array([24, 44, 15], np.float32)
     return cv2.resize(col, (W, H), interpolation=cv2.INTER_LINEAR)
 
 
@@ -292,34 +326,75 @@ def god_rays(small_emis, dens, cx, cy, strength):
     h4, w4 = dens.shape
     src = small_emis * (dens[..., None] ** 1.5)
     acc = np.zeros_like(src)
-    n = 10
+    n = 14
     for i in range(n):
-        sc = 1.0 - 0.045 * i
+        sc = 1.0 - 0.032 * i
         M = np.float32([[sc, 0, cx * (1 - sc)], [0, sc, cy * (1 - sc)]])
         acc += cv2.warpAffine(src, M, (w4, h4), flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP) * (1 - i / n)
     acc *= strength / n * (0.25 + 0.75 * dens[..., None])
     return acc
 
 
+# volumetric light shafts: angular beams around the sign, broken up by the drifting haze
+_SH_K = (3, 5, 8, 11, 17, 26)                              # angular frequencies (periodic in theta)
+_SH_A = (0.9, 0.8, 0.7, 0.55, 0.45, 0.35)
+_SH_P = (0.4, 2.1, 4.0, 1.3, 5.2, 3.3)
+_SH_W = (0.45, -0.7, 0.6, -0.85, 1.1, -1.3)              # phase speeds (rad/s): beams slowly sweep / morph
+
+
+@lru_cache(maxsize=1)
+def _shaft_grid():
+    h4, w4 = H // 4, W // 4
+    yy, xx = np.mgrid[0:h4, 0:w4].astype(np.float32)
+    return xx + 0.5, yy + 0.5
+
+
+def shafts(t, dens, cx, cy, strength):
+    """Quarter-res additive RGB light shafts radiating from (cx, cy) (quarter-res coords)."""
+    if strength <= 0.003:
+        return 0.0
+    xx, yy = _shaft_grid()
+    dx, dy = xx - cx, (yy - cy) * 1.7                       # wide light pool: beams fan out sideways
+    th = np.arctan2(dy, dx)
+    n = np.zeros_like(th)
+    for k, a, p0, w in zip(_SH_K, _SH_A, _SH_P, _SH_W):
+        n += a * np.cos(k * th + p0 + w * t)
+    n *= 1.0 / sum(_SH_A)
+    beam = np.clip(0.5 + 0.9 * n, 0, 1)
+    beam *= beam
+    r = np.sqrt(dx * dx + dy * dy) * 4.0                    # full-res px
+    prof = np.exp(-r / 520.0) * np.clip((r - 70.0) / 200.0, 0, 1)
+    m = beam * prof * (0.15 + 1.1 * dens)
+    return m[..., None] * (ADD_G * (0.5 * strength))
+
+
 # ---------------------------------------------------------------- halftone corners (screen space)
 @lru_cache(maxsize=1)
 def halftone_maps():
-    cell = 19.0
-    yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
-    a = math.radians(45)
-    u = xx * math.cos(a) + yy * math.sin(a)
-    v = -xx * math.sin(a) + yy * math.cos(a)
-    fu = (u / cell) % 1 - 0.5
-    fv = (v / cell) % 1 - 0.5
-    d = np.sqrt(fu * fu + fv * fv).astype(np.float32)
+    cell = np.float32(19.0)
+    yy = np.arange(H, dtype=np.float32)[:, None]
+    xx = np.arange(W, dtype=np.float32)[None, :]
+    c45 = np.float32(math.cos(math.radians(45)))
+    u = (xx + yy) * (c45 / cell)
+    v = (yy - xx) * (c45 / cell)
+    u -= np.floor(u)
+    v -= np.floor(v)
+    u -= 0.5
+    v -= 0.5
+    d = cv2.magnitude(u, v)
     g = np.zeros((H, W), np.float32)
     for cx, cy, s in ((0, 0, 1.0), (W, 0, 0.85), (0, H, 0.8), (W, H, 1.0)):
-        r = np.hypot((xx - cx) / (W * 0.40), (yy - cy) / (H * 0.66))
-        g = np.maximum(g, s * np.clip(1 - r, 0, 1) ** 1.1)
+        rx, ry = W * 0.40, H * 0.66                         # only the corner box where r < 1
+        x0, x1 = (0, int(rx) + 1) if cx == 0 else (W - int(rx) - 1, W)
+        y0, y1 = (0, int(ry) + 1) if cy == 0 else (H - int(ry) - 1, H)
+        r = cv2.magnitude(np.broadcast_to((xx[:, x0:x1] - cx) / rx, (y1 - y0, x1 - x0)).copy(),
+                          np.broadcast_to((yy[y0:y1] - cy) / ry, (y1 - y0, x1 - x0)).copy())
+        sub = g[y0:y1, x0:x1]
+        np.maximum(sub, s * np.clip(1 - r, 0, 1) ** 1.1, out=sub)
     br = grunge(W, H, 8)
     g *= 0.6 + 0.4 * value_noise(W, H, 150, 3, 9)
-    gB = (g * 0.62 * cell * 0.9).astype(np.float32)            # dot coverage = clip(gB*k - dB) * br
-    dB = (d * cell * 0.9 - 0.5).astype(np.float32)
+    gB = (g * (0.62 * 19.0 * 0.9)).astype(np.float32)          # dot coverage = clip(gB*k - dB) * br
+    dB = (d * (19.0 * 0.9) - 0.5).astype(np.float32)
     return gB, dB, br.astype(np.float32)
 
 
@@ -339,23 +414,28 @@ def halftone_layer(t, frame, lvl):
 
 
 # ---------------------------------------------------------------- particles
-def spark_burst(seed, n, origin, ang, spread, vmin, vmax, life):
+def spark_burst(seed, n, origin, ang, spread, vmin, vmax, life, delay_max=2 / FPS, wd=(2, 4)):
+    """Particles (x0, y0, vx, vy, life, width, birth delay, tail factor). Each particle is born
+    0..delay_max late from a jittered origin so a burst's first frame is an uneven hot core,
+    never a perfect clip-art star."""
     rng = np.random.default_rng(seed)
     a = ang + rng.normal(0, spread, n)
     v = rng.uniform(vmin, vmax, n)
     lf = life * rng.uniform(0.55, 1.0, n)
-    jit = rng.normal(0, 4, (n, 2))
-    wd = rng.integers(2, 4, n)
-    return [(origin[0] + jit[i, 0], origin[1] + jit[i, 1], v[i] * math.cos(a[i]), v[i] * math.sin(a[i]), lf[i], int(wd[i]))
-            for i in range(n)]
+    jit = rng.uniform(-6, 6, (n, 2))
+    wds = rng.integers(wd[0], wd[1], n)
+    dl = rng.uniform(0, delay_max, n)
+    tf = rng.uniform(0.5, 1.5, n)
+    return [(origin[0] + jit[i, 0], origin[1] + jit[i, 1], v[i] * math.cos(a[i]), v[i] * math.sin(a[i]), lf[i],
+             int(wds[i]), dl[i], tf[i]) for i in range(n)]
 
 
-# spark origins at the tube electrodes (seams / leg ends), keyed by the frame the tube catches
-_IGN = {6: [(30, 238, -1.57), (91, 28, -2.0), (12, 150, 3.0)],
-        12: [(91, 28, -2.0), (169, 28, -1.1), (230, 238, -1.57)],
-        15: [(169, 28, -1.1), (230, 238, -1.4)],
-        19: [(30, 238, -1.8), (230, 238, -1.3)],
-        21: [(91, 28, -1.9), (169, 28, -1.2)]}
+# spark origins at the tube electrodes (on the letter's outer edges, spraying outwards), keyed by
+# the frame the tube catches.  The visible sparks are composited UNDER the A face.
+_IGN = {6: [(30, 240, 1.95), (91, 2, -2.0), (1, 150, 3.0)],
+        12: [(91, 2, -2.0), (169, 2, -1.1), (230, 240, 1.2)],
+        18: [(30, 240, 1.9), (230, 240, 1.25)],
+        19: [(91, 2, -1.9), (169, 2, -1.2)]}
 
 
 @lru_cache(maxsize=1)
@@ -373,16 +453,17 @@ def ignition_bursts():
 @lru_cache(maxsize=1)
 def muzzle_sparks():
     tip = to_world(B_TIP + np.array([12, 0], np.float32))
-    return [p[:5] + (1,) for p in spark_burst(77, 34, tip, 0.0, 0.38, 1400, 3400, 0.24)]
+    return spark_burst(77, 34, tip, 0.0, 0.38, 1400, 3400, 0.24, delay_max=1 / FPS, wd=(1, 2))
 
 
 def draw_sparks(frame, emis, M, parts, dt, grav=900.0, col=(225, 255, 205), delay=0.0, tail=1 / 110):
-    for x0, y0, vx, vy, lf, wd in parts:
-        if dt < delay or dt > lf:
+    for x0, y0, vx, vy, lf, wd, dl, tf in parts:
+        d = dt - delay - dl                       # particle age
+        if d < 0 or d > lf:
             continue
-        a = (1 - dt / lf) ** 0.7 * clamp((dt - delay) / 0.03 + 0.3)
-        t2 = max(dt - tail, 0)
-        p1 = (x0 + vx * dt, y0 + vy * dt + 0.5 * grav * dt * dt)
+        a = (1 - d / lf) ** 0.7 * clamp(d / 0.03 + 0.3)
+        t2 = max(d - tail * tf, 0)
+        p1 = (x0 + vx * d, y0 + vy * d + 0.5 * grav * d * d)
         p0 = (x0 + vx * t2, y0 + vy * t2 + 0.5 * grav * t2 * t2)
         q = xf(M, np.array([p0, p1], np.float32))
         c = tuple(float(v) * a for v in col)
@@ -414,19 +495,32 @@ def motes():
             rng.uniform(-22, -4, n), rng.uniform(0.6, 2.2, n), rng.uniform(0, 6.28, n))
 
 
-@lru_cache(maxsize=4)
-def soft_disk(r):
-    s = int(r * 2 + 6)
-    yy, xx = np.mgrid[0:s, 0:s].astype(np.float32) - s / 2
-    d = np.hypot(xx, yy)
-    a = np.clip((r - d) / 2.0, 0, 1) * (0.55 + 0.45 * np.clip(d / r, 0, 1))  # rim-heavy bokeh
-    return a.astype(np.float32)
+def _soft_dot(frame, cx, cy, r, col, op, bokeh):
+    """Additive sub-pixel soft dot: bokeh = rim-heavy out-of-focus disk of radius r,
+    else a gaussian dust dot (sigma r) so the post chroma can't split it into specks."""
+    ext = int(r + 4) if bokeh else int(r * 3.2 + 1)
+    ix, iy = int(math.floor(cx)), int(math.floor(cy))
+    x0, y0, x1, y1 = max(ix - ext, 0), max(iy - ext, 0), min(ix + ext + 2, W), min(iy + ext + 2, H)
+    if x1 <= x0 or y1 <= y0:
+        return
+    xx = np.arange(x0, x1, dtype=np.float32)[None, :] + 0.5 - cx
+    yy = np.arange(y0, y1, dtype=np.float32)[:, None] + 0.5 - cy
+    if bokeh:
+        d = np.sqrt(xx * xx + yy * yy)
+        a = np.clip((r - d) / 2.0, 0, 1) * (0.55 + 0.45 * np.clip(d / r, 0, 1))
+    else:
+        a = np.exp(-(xx * xx + yy * yy) / (2 * r * r))
+    frame[y0:y1, x0:x1] += a[..., None] * (np.asarray(col, np.float32) * op)
 
 
-def draw_motes(frame, M, t, lvl):
+def draw_motes(frame, M, t, lvl, big):
+    """big=False: dust in the beam (drawn behind the sign face); big=True: out-of-focus
+    foreground flecks (drawn over everything)."""
     xs, ys, vx, vy, sz, ph = motes()
     bc = to_world(B_CENTER)
     for i in range(len(xs)):
+        if (i % 9 == 0) != big:
+            continue
         x = xs[i] + vx[i] * t + 6 * math.sin(t * 1.3 + ph[i])
         y = ys[i] + vy[i] * t + 4 * math.cos(t * 1.1 + ph[i])
         lit = math.exp(-(((x - bc[0]) / 620) ** 2 + ((y - bc[1]) / 380) ** 2))
@@ -435,13 +529,9 @@ def draw_motes(frame, M, t, lvl):
             continue
         q = xf(M, np.array([[x, y]], np.float32))[0]
         if i % 9 == 0:   # big out-of-focus foreground flecks
-            r = 9 + 7 * (sz[i] - 0.6)
-            dsk = soft_disk(round(r))
-            lay = np.dstack([np.broadcast_to(np.array([150, 220, 90], np.float32), dsk.shape + (3,)), dsk])
-            over_center(frame, lay, q[0], q[1], 0.16 * b, "add")
-        else:
-            c = tuple(float(v) for v in np.array([170, 235, 120]) * b * 0.9)
-            cv2.circle(frame, (int(q[0] * 16), int(q[1] * 16)), int(sz[i] * 16), c, -1, cv2.LINE_AA, 4)
+            _soft_dot(frame, q[0], q[1], 9 + 7 * (sz[i] - 0.6), (150, 220, 90), 0.3 * b, True)
+        else:            # dust in the beam: soft dots (>= 1.5 px visible radius)
+            _soft_dot(frame, q[0], q[1], 0.9 + 0.45 * sz[i], (170, 235, 120), 0.9 * b, False)
 
 
 # ---------------------------------------------------------------- muzzle flash sprite
@@ -451,15 +541,16 @@ def flash_sprite(var):
     rng = np.random.default_rng(500 + var)
     w, h = 1150, 560
     cx, cy = 300, 280
-    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    st = 2                                    # built at half res (it is soft light), upscaled when placed
+    yy, xx = (np.mgrid[0:h // st, 0:w // st].astype(np.float32) + 0.5) * st
     dx, dy = xx - cx, yy - cy
     core = np.exp(-((dx / 58) ** 2 + (dy / 28) ** 2))
     fil = value_noise(w // 24 + 2, h, 6, 3, 610 + var)[:, : w // 24 + 2]
-    fil = cv2.resize(fil, (w, h), interpolation=cv2.INTER_CUBIC)       # horizontal filaments
+    fil = cv2.resize(fil, (w // st, h // st), interpolation=cv2.INTER_AREA)   # horizontal filaments
     r = 16 + np.clip(dx, 0, None) * 0.15
     jet = np.exp(-np.clip(dx, 0, None) / 330.0) * np.exp(-(dy / r) ** 2) * (dx > -30)
     jet *= 0.45 + 0.9 * fil
-    pet = np.zeros((h, w), np.float32)
+    pet = np.zeros(xx.shape, np.float32)
     for ang, L, wd, k in ((0.75, 150, 16, 0.7), (-0.75, 150, 16, 0.7), (2.4, 80, 13, 0.4), (-2.4, 80, 13, 0.4),
                           (0.32, 260, 14, 0.6), (-0.32, 260, 14, 0.6)):
         ang += rng.normal(0, 0.08)
@@ -474,7 +565,7 @@ def flash_sprite(var):
     halo = np.exp(-(((dx - 140) / 380) ** 2 + (dy / 160) ** 2)) * win
     hot = (I[..., None] * ADD_G * 1.0 + np.clip(I - 0.45, 0, None)[..., None] * FL_WHITE * 0.9).astype(np.float32)
     soft = (halo[..., None] * ADD_G * 0.45).astype(np.float32)
-    return hot, soft, (cx, cy)
+    return hot, soft, (cx / st, cy / st)
 
 
 # ---------------------------------------------------------------- tone mapping (palette-safe highlights)
@@ -493,7 +584,7 @@ def tonemap(frame):
     px = frame[ys, xs]
     mm = m[ys, xs][:, None]
     ex = mm - KNEE
-    L = KNEE + 20.0 * (1.0 - np.exp(-ex / 40.0))
+    L = KNEE + 18.0 * (1.0 - np.exp(-ex / 40.0))
     s = px * (L / mm)
     d = np.minimum(1.0 - np.exp(-ex / 220.0), 0.85)
     frame[ys, xs] = s + (L * MINT_T - s) * d
@@ -535,41 +626,56 @@ def glitch_fx(frame, amount, seed):
 def whip_dx(t):
     if t < T_WHIP:
         return 0.0
-    return 1900.0 * prog(t, T_WHIP, DUR - 1 / FPS) ** 2.2
+    return 1900.0 * prog(t, T_WHIP, DUR - 1 / FPS) ** 1.8
+
+
+WALL_DEPTH = 0.7             # the wall sits behind the sign: it gets this share of the dolly move
 
 
 def camera(t, fr):
+    """-> (M sign plane, M wall plane, zoom). The dolly (push, truck, roll) is split by
+    depth so the sign separates from the wall; shake / punch / whip are lens moves
+    shared by both planes."""
     u = prog(t, 0.0, T_SHOT)
-    z = 1.0 + 0.08 * (0.8 * u + 0.2 * u * u)
-    dx = 3.0 * math.sin(t * 0.9 + 0.4) + 1.5 * math.sin(t * 2.3)
-    dy = 2.0 * math.sin(t * 0.7 + 1.9) + 1.0 * math.sin(t * 1.9 + 0.3)
-    ang = 0.12 * math.sin(t * 0.6 + 0.5)
+    e = 0.3 * u + 0.7 * ease_in_out(u)             # eased dolly progress, still moving at the click
+    push = 0.12 * e
+    tx = -22.0 * (e - 0.45) + 2.0 * math.sin(t * 0.9 + 0.4) + 1.0 * math.sin(t * 2.3)
+    ty = -7.0 * (e - 0.45) + 1.5 * math.sin(t * 0.7 + 1.9) + 0.8 * math.sin(t * 1.9 + 0.3)
+    roll = -0.3 * (e - 0.4) + 0.06 * math.sin(t * 0.6 + 0.5)
+    sz = sx = sy = sa = 0.0
     if t >= T_CLICK:                               # click: micro-punch
-        e = math.exp(-(t - T_CLICK) * 18)
-        z += 0.012 * e
-        dy += 5.0 * e
-        dx -= 3.0 * e
+        k = math.exp(-(t - T_CLICK) * 18)
+        sz += 0.014 * k
+        sy += 5.0 * k
+        sx -= 3.0 * k
     if fr in (27, 28, 29):                         # glitch jolts
-        dx += (9, -14, 5)[fr - 27]
+        sx += (9, -14, 5)[fr - 27]
     if t >= T_SHOT:
         dt = t - T_SHOT
-        sx, sy, sa = shake(t, amp=26, freq=38, seed=3, decay_from=T_SHOT, decay=8.5)
-        dx += sx - 30 * math.exp(-dt * 14) * (1 if dt < 0.12 else 0)
-        dy += sy
-        ang += sa
-        z += 0.035 * math.exp(-dt * 10) + 0.02 * ease_out_cubic(prog(t, T_SHOT, DUR))
-    dx -= whip_dx(t)
-    # zoom about the icon's screen position (it is optically centred, so this keeps it put)
-    M = cv2.getRotationMatrix2D((float(ORG[0]), float(ORG[1])), ang, z)
-    M[0, 2] += dx
-    M[1, 2] += dy
-    return M, z
+        kx, ky, ka = shake(t, amp=26, freq=38, seed=3, decay_from=T_SHOT, decay=8.5)
+        sx += kx - 30 * math.exp(-dt * 14) * (1 if dt < 0.12 else 0)
+        sy += ky
+        sa += ka
+        sz += 0.035 * math.exp(-dt * 10) + 0.02 * ease_out_cubic(prog(t, T_SHOT, DUR))
+    sx -= whip_dx(t)
+
+    def mat(depth):
+        # zoom / roll about the icon's screen position (it is optically centred, so this keeps it put)
+        m = cv2.getRotationMatrix2D((float(ORG[0]), float(ORG[1])), roll + sa, 1.0 + push * depth + sz)
+        m[0, 2] += tx * depth + sx
+        m[1, 2] += ty * depth + sy
+        return m
+
+    return mat(1.0), mat(WALL_DEPTH), 1.0 + push + sz
+
+
+B_LIMIT = -5.5               # draw-back limit (logo units): the bullet outline stays inside the A's left leg
 
 
 def bullet_back(t):
     """Smooth draw-back (logo units): one-frame snap on the click, then a slow creep."""
-    snap = -13.0 * ease_out_expo(prog(t, T_CLICK - 1 / FPS, T_CLICK + 1 / FPS))
-    creep = -4.0 * ease_in_cubic(prog(t, T_CLICK + 0.05, T_SHOT))
+    snap = -5.0 * ease_out_expo(prog(t, T_CLICK - 1 / FPS, T_CLICK + 1 / FPS))
+    creep = -0.5 * ease_in_cubic(prog(t, T_CLICK + 0.05, T_SHOT))
     return snap + creep
 
 
@@ -582,13 +688,14 @@ def bullet_offset(t):
         jx = jy = 0.0
         if t >= T_CLICK + 0.02:
             p = prog(t, T_CLICK + 0.03, T_SHOT - 1 / FPS)
-            amp = 1.5 + 6.5 * p ** 1.4
+            amp = 1.5 + 8.5 * p ** 1.4
             fr = int(round(t * FPS))
             rng = np.random.default_rng(1700 + fr)
-            sgn = 1.0 if fr % 2 else -1.0                   # alternating rattle
-            jx = amp * sgn * (0.55 + 0.45 * rng.random())
+            r = 0.55 + 0.45 * rng.random()
+            # alternating rattle, biased forward (it strains to leave); backward kicks hit the stop
+            jx = amp * r if fr % 2 else -0.3 * amp * r
             jy = amp * 0.45 * rng.uniform(-1, 1)
-        return back + jx, jy, 0.0
+        return max(back + jx, B_LIMIT), jy, 0.0
     dt = t - T_SHOT
     v = 6300.0                   # logo units / s
     return 30.0 + v * dt + 4000 * dt * dt, 0.0, v
@@ -642,11 +749,12 @@ def logo_A(M, t, ll, lt, lr, unlit_k, amb):
     hot = np.clip(lv - 1, 0, 1) * 1.2 + glint * np.clip(lv, 0, 1) * 0.9
     col += (np.float32(252) - col) * np.clip(hot, 0, 1)[..., None]
     # tube joints: a thin dark line on a seam only while the neighbours differ
-    jl, jr = clamp(abs(ll - lt) * 1.6), clamp(abs(lr - lt) * 1.6)
+    jl = clamp((abs(min(ll, 1) - min(lt, 1)) - 0.2) * 2)     # dead zone: surge mismatches never draw seams
+    jr = clamp((abs(min(lr, 1) - min(lt, 1)) - 0.2) * 2)
     if jl > 0.01 or jr > 0.01:
         joint = np.maximum(np.exp(-(s1 / 0.75) ** 2) * jl * (s1 > -6), np.exp(-(s2 / 0.75) ** 2) * jr * (s2 > -6))
         col += (INK * 1.1 - col) * (0.85 * joint)[..., None]
-    em = (cov * lv * (0.2 + 0.55 * glint))[..., None] * A_EM
+    em = (cov * lv * (0.4 + 0.55 * glint))[..., None] * A_EM
     return (x0, y0, x1, y1), cov, col, em
 
 
@@ -718,22 +826,23 @@ def render(t, ctx):
         t = fr / FPS
     lb, ll, lt, lr = levels(t, fr)
     la = (ll + lt + lr) / 3.0
-    M, z = camera(t, fr)
+    M, Mw, z = camera(t, fr)
     # dead glass ghost: rises over the first 4 frames, never below 0.7 afterwards
     unlit_k = 0.7 * ease_in_out(prog(t, 0.02, 4 / FPS)) + 0.3 * ease_in_out(prog(t, 4 / FPS, 0.75))
     dt = t - T_SHOT
     inh = inhale(t)
-    lw = min(max(lb, la), 1.3)
+    wb, wa = _wall_glow().get(fr, (lb, la))       # light that reaches the wall (ember floor at start-up)
+    lw = min(max(wb, wa), 1.3)
 
     # ---- world: concrete wall lit by the sign + haze, seen through the camera
     base, SG, SA, DET, tex = wall_maps()
-    world = cv2.scaleAdd(SG, float(min(lb, 1.5) * (1 - 0.45 * inh)), base)
-    cv2.scaleAdd(SA, float(min(la, 1.5)), world, dst=world)
+    world = cv2.scaleAdd(SG, float(min(wb, 1.5) * (1 - 0.45 * inh)), base)
+    cv2.scaleAdd(SA, float(min(wa, 1.5)), world, dst=world)
     cv2.scaleAdd(DET, float(lw), world, dst=world)
     dens = haze_density(t)
     world += haze(t, lw * (1 - 0.4 * inh), dens)
     if dt >= 0:                                    # muzzle flash lights the wall
-        k = math.exp(-dt * 12)
+        k = math.exp(-dt * 6)                      # lingers through the whip (no energy dip)
         if k > 0.03:
             fa = to_world(F_ANCH)
             w4, h4 = W // 4, H // 4
@@ -742,7 +851,7 @@ def render(t, ctx):
             rad = cv2.resize(rad, (W, H), interpolation=cv2.INTER_LINEAR)
             world += ((0.35 + 0.65 * tex) * rad * k)[..., None] * np.array([70, 170, 62], np.float32)
             world += DET * (2.5 * k) * rad[..., None]
-    frame = cv2.warpAffine(world, M, (W, H), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
+    frame = cv2.warpAffine(world, Mw, (W, H), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
 
     halftone_layer(t, frame, max(lb, la))
 
@@ -760,9 +869,9 @@ def render(t, ctx):
     addc = np.zeros((H, W, 3), np.float32)        # additive canvas (cv2 draws overwrite, so never draw on frame)
     if dt >= 0:
         draw_sparks(None, addc, M, muzzle_sparks(), dt, grav=700, delay=0.045)
-    for t0, org, parts in ignition_bursts():
-        if 0 <= t - t0 < 0.42:
-            draw_sparks(None, addc, M, parts, t - t0, grav=1400, tail=1 / 24)
+    ign = [(t0, org, parts) for t0, org, parts in ignition_bursts() if 0 <= t - t0 < 0.5]
+    for t0, org, parts in ign:
+        draw_sparks(None, addc, M, parts, t - t0, grav=1400, tail=1 / 24)
     emis += addc
     addc[:] = 0
     trails = None
@@ -778,7 +887,8 @@ def render(t, ctx):
     g = (cv2.GaussianBlur(small, (0, 0), 1.6) * (0.5 + 0.45 * inh) + cv2.GaussianBlur(small, (0, 0), 6) * 0.5 * (1 - 0.45 * inh)
          + cv2.GaussianBlur(small, (0, 0), 20) * 0.22 * (1 - 0.75 * inh))
     rc = xf(M, to_world(B_CENTER if dt < 0 else F_ANCH)[None])[0] / 4
-    g += god_rays(small, dens, rc[0], rc[1], 2.2 * (1 - 0.6 * inh))
+    g += god_rays(small, dens, rc[0], rc[1], 3.5 * (1 - 0.6 * inh) * (clamp(lb) if dt < 0 else 1.0))
+    g += shafts(t, dens, rc[0], rc[1], (min(lw, 1.2) * (1 - 0.6 * inh)) if dt < 0 else 1.6 * math.exp(-dt * 7))
     frame += cv2.resize(g, (W, H), interpolation=cv2.INTER_LINEAR)
 
     if dt < 0:                                   # idle lens streak sits behind the solid logo
@@ -797,13 +907,20 @@ def render(t, ctx):
     if dt >= 0:                                   # hot flash core BEHIND the A face: the leg stays crisp
         muzzle(frame, M, z, dt, 1.0, "hot")
 
+    draw_motes(frame, M, t, lw, False)            # beam dust floats behind the sign: no specks on the brand mark
+    if ign:                                       # ignition sparks fly BEHIND the sign face (no streaks on the white)
+        for t0, org, parts in ign:
+            draw_sparks(addc, None, M, parts, t - t0, grav=1400, tail=1 / 24)
+        frame += addc
+        addc[:] = 0
+
     if A is not None:
         (x0, y0, x1, y1), cov, col, em = A
         crop = frame[y0:y1, x0:x1]
         crop += (col - crop) * cov[..., None]
 
     if dt >= 0:                                   # only the soft halo spills over it
-        muzzle(frame, M, z, dt, 0.8, "soft")
+        muzzle(frame, M, z, dt, 0.55, "soft")
 
     if B is not None:
         (x0, y0, x1, y1), pm, al, em = B
@@ -814,10 +931,8 @@ def render(t, ctx):
     if dt >= 0:
         draw_sparks(addc, None, M, muzzle_sparks(), dt, grav=700, delay=0.045)
         smoke_puffs(frame, M, z, dt)
-    for t0, org, parts in ignition_bursts():
-        if 0 <= t - t0 < 0.42:
-            draw_sparks(addc, None, M, parts, t - t0, grav=1400, tail=1 / 24)
-        if 0 <= t - t0 < 0.5 / FPS:              # one-frame electrode flare
+    for t0, org, parts in ign:
+        if t - t0 < 0.5 / FPS:                   # one-frame electrode flare (lens-level, over the face)
             q = xf(M, org[None])[0]
             over_center(addc, flare_sprite(), q[0], q[1], 0.9, "add")
 
@@ -828,13 +943,13 @@ def render(t, ctx):
         if ana > 0.01:
             anamorphic(frame, p[0], p[1], ana)
 
-    draw_motes(addc, M, t, lw)
+    draw_motes(addc, M, t, lw, True)
     frame += addc
     frame = fast_bloom(frame, 225, 18, 0.22)
-    frame = tonemap(frame)
 
     if fr in (27, 28, 29):
         frame = glitch_fx(frame, (0.9, 1.3, 0.6)[fr - 27], 900 + fr)
+    frame = tonemap(frame)                         # palette-safe highlights (before the whip's own flash white)
 
     if t >= T_WHIP:
         frame = whip(frame, t)
@@ -878,8 +993,7 @@ def whip(frame, t):
     disp = abs(whip_dx(t) - whip_dx(t - 1 / FPS))
     k = int(min(260, 0.6 * disp / 2))
     if k > 2:
-        small = cv2.blur(cv2.blur(small, (k, 1)), (k, 1))     # triangle kernel: no hard box edges
-        small = cv2.GaussianBlur(small, (1, 0), sigmaX=0.1, sigmaY=max(0.5, k / 36))   # a hair of vertical shake
+        small = cv2.blur(cv2.blur(small, (k, 1)), (k, 1))     # triangle kernel, horizontal only: a hard pan
     reach, width, lead = _flood_rows()
     r, wv, ld = reach[:, None], width[:, None], lead[:, None]
     xs = np.arange(w2, dtype=np.float32)[None, :] * 2
@@ -918,7 +1032,7 @@ def muzzle(frame, M, z, dt, amt=1.0, part="hot"):
     k = math.exp(-dt * 10) * (1.2 if dt < 0.01 else 1.0) * amt
     hot, soft, (cx, cy) = flash_sprite(int(dt * FPS + 0.5) % 4)
     spr = hot if part == "hot" else soft
-    sc = z * (1.0 + 0.35 * ease_out_cubic(prog(dt, 0, 0.12)))
+    sc = 2.0 * z * (1.0 + 0.35 * ease_out_cubic(prog(dt, 0, 0.12)))     # sprite is stored at half res
     q = xf(M, to_world(F_ANCH)[None])[0]
     sh, sw = spr.shape[:2]
     sm = cv2.resize(spr, (int(sw * sc), int(sh * sc)), interpolation=cv2.INTER_LINEAR)
