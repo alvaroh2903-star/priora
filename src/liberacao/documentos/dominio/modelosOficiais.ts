@@ -1,6 +1,6 @@
 import {
-  BlocoFixo, CampoVariavel, DefinicaoDoModelo, FonteDeDado, FonteDoDesenho, GrupoDeOpcoes, LayoutDoModelo, LugarDoCampo, MarcaDaAlternativa, Retangulo,
-  TipoDocumento,
+  BlocoFixo, CampoVariavel, ConfirmacaoExigida, DADOS_DO_CONSIGNATARIO_DO_MBL, DefinicaoDoModelo, FonteDeDado, FonteDoDesenho, GrupoDeOpcoes, LayoutDoModelo,
+  LugarDoCampo, MarcaDaAlternativa, Retangulo, TipoDocumento,
 } from './modelos';
 import { DADO_SIGNATARIO_CPF, DADO_SIGNATARIO_NOME } from './signatario';
 
@@ -41,6 +41,9 @@ import { DADO_SIGNATARIO_CPF, DADO_SIGNATARIO_NOME } from './signatario';
  *    final do mesmo PDF (extensão proposta pela Priora, pendente de aceite da agência).
  *  - Exportador/Importador (Hapag-Lloyd e ZIM, DOC-17): o consignatário do MBL
  *    do Master, por regra ESPECÍFICA desses modelos — não há equivalência global.
+ *  - Revisão 2 (decisão 14.20, abaixo): o consignatário do MBL dos quatro modelos
+ *    passa a ser escrito com o cadastro institucional, só com a identidade
+ *    confirmada pela Auditoria (CNPJ). A revisão 1 fica preservada como está.
  *  - Seleção dos serviços (DOC-18): MSC, exatamente uma ("Preencher com X apenas
  *    a opção desejada"); Hapag-Lloyd e ZIM, uma ou mais ("solicito os serviços
  *    listados abaixo" — o modelo não manda escolher só uma). Nenhuma regra
@@ -477,10 +480,61 @@ const definicaoMemorandoZim: DefinicaoDoModelo = {
   poderesDeRepresentacao: { fundamento: 'Quadro "Dados do Representante Legal": quem assina o faz como representante legal da empresa.' },
 };
 
-/** Definições propostas (a validar por pessoa no cadastro de cada versão). */
+/**
+ * Definições propostas — REVISÃO 1, preservada exatamente como foi proposta e validada (hash fixado em teste): o
+ * consignatário do MBL só pela Auditoria (DOC-17) e sem critério de escrita (14.18). Versões já validadas com ela não
+ * mudam; documentos feitos com ela continuam apontando para ela.
+ */
 export const DEFINICOES_PROPOSTAS: Readonly<Record<TipoDocumento, DefinicaoDoModelo>> = {
   TERMO_EVERGREEN: definicaoTermoEvergreen,
   MEMORANDO_MSC: definicaoMemorandoMsc,
   MEMORANDO_HAPAG_ROCHAMAR: definicaoMemorandoHapag,
   MEMORANDO_ZIM_ROCHAMAR: definicaoMemorandoZim,
 };
+
+/* ------------------------------ revisão 2 (decisão 14.20): consignatário pelo cadastro ------------------------------ */
+
+/**
+ * 14.20 (aprovada): os quatro documentos usam SEMPRE os dados institucionais cadastrados da organização; a Auditoria só
+ * confirma que o MBL do Master identifica a organização como consignatária (CNPJ do MBL = CNPJ do cadastro).
+ */
+export const CONFIRMACAO_DO_CONSIGNATARIO: ConfirmacaoExigida = {
+  tipo: 'IDENTIDADE_DO_CONSIGNATARIO_NO_MBL',
+  fundamento: '14.20: o consignatário do MBL é escrito com os dados do cadastro institucional da organização, só quando a Auditoria confirma pelo CNPJ que o MBL deste Master identifica a organização como consignatária. Sem a confirmação, o campo falta.',
+};
+
+/** DOC-17 revista pela 14.20 (só o que muda: de onde vem o texto do campo). */
+export const FUNDAMENTO_EXPORTADOR_IMPORTADOR_REVISAO_2 =
+  'DOC-17 (revista pela 14.20): nos memorandos Rochamar (Hapag-Lloyd e ZIM), "Exportador/Importador" é o consignatário do MBL do Master — a própria organização, confirmada pela Auditoria pelo CNPJ do MBL; o texto vem do cadastro institucional. Sem a confirmação, o campo fica faltando.';
+
+/**
+ * Revisão 2 de uma definição: SÓ os campos do consignatário do MBL mudam — a fonte aceita passa a ser o cadastro da
+ * organização, com a confirmação documental exigida (e, nos memorandos Rochamar, o fundamento revisto da DOC-17).
+ * Rótulo, dado, escopo, lugar, layout, texto jurídico, opções e todo o resto do modelo oficial ficam como estão.
+ */
+function revisao2(d: DefinicaoDoModelo): DefinicaoDoModelo {
+  return {
+    ...d,
+    revisao: { numero: 2, decisao: '14.20' },
+    campos: d.campos.map((c) => (DADOS_DO_CONSIGNATARIO_DO_MBL.includes(c.dado)
+      ? { ...c, fontesAceitas: CADASTRO, confirmacao: CONFIRMACAO_DO_CONSIGNATARIO, ...(c.fundamento ? { fundamento: FUNDAMENTO_EXPORTADOR_IMPORTADOR_REVISAO_2 } : {}) }
+      : c)),
+  };
+}
+
+export const DEFINICOES_REVISAO_2: Readonly<Record<TipoDocumento, DefinicaoDoModelo>> = {
+  TERMO_EVERGREEN: revisao2(definicaoTermoEvergreen),
+  MEMORANDO_MSC: revisao2(definicaoMemorandoMsc),
+  MEMORANDO_HAPAG_ROCHAMAR: revisao2(definicaoMemorandoHapag),
+  MEMORANDO_ZIM_ROCHAMAR: revisao2(definicaoMemorandoZim),
+};
+
+/** Todas as revisões das definições oficiais, da mais antiga à atual. Nenhuma é apagada nem alterada. */
+export const REVISOES_DAS_DEFINICOES: ReadonlyArray<{ numero: number; decisao: string | null; definicoes: Readonly<Record<TipoDocumento, DefinicaoDoModelo>> }> = [
+  { numero: 1, decisao: null, definicoes: DEFINICOES_PROPOSTAS },
+  { numero: 2, decisao: '14.20', definicoes: DEFINICOES_REVISAO_2 },
+];
+
+/** A revisão atual: a que um cadastro novo do arquivo oficial recebe (e a que uma revisão de versão validada propõe). */
+export const DEFINICOES_EM_VIGOR: Readonly<Record<TipoDocumento, DefinicaoDoModelo>> = DEFINICOES_REVISAO_2;
+export const REVISAO_EM_VIGOR = REVISOES_DAS_DEFINICOES[REVISOES_DAS_DEFINICOES.length - 1];

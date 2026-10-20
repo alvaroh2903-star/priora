@@ -144,7 +144,24 @@ export interface CampoVariavel {
   escopo: 'MASTER' | 'PROCESSO' | 'DOCUMENTO' | 'SIGNATARIO';
   /** Regra ESPECÍFICA deste modelo que liga o rótulo ao dado (ex.: DOC-17). Não vale para outros modelos. */
   fundamento?: string;
+  /**
+   * Decisão 14.20: o valor só vale com a confirmação documental indicada (ex.: o consignatário do MBL vem do cadastro
+   * da organização, mas só quando a Auditoria confirma que o MBL identifica a organização). Sem ela, o campo falta.
+   */
+  confirmacao?: ConfirmacaoExigida;
 }
+
+/** Tipos de confirmação documental que um campo pode exigir. */
+export type TipoDeConfirmacao = 'IDENTIDADE_DO_CONSIGNATARIO_NO_MBL';
+export const TIPOS_DE_CONFIRMACAO: ReadonlyArray<TipoDeConfirmacao> = ['IDENTIDADE_DO_CONSIGNATARIO_NO_MBL'];
+
+export interface ConfirmacaoExigida {
+  tipo: TipoDeConfirmacao;
+  fundamento: string;
+}
+
+/** Dados do consignatário do MBL nos modelos (DOC-17, 14.18, 14.20). */
+export const DADOS_DO_CONSIGNATARIO_DO_MBL: ReadonlyArray<string> = ['CONSIGNATARIO_RAZAO_SOCIAL', 'CONSIGNATARIO_QUALIFICACAO'];
 
 /** Texto jurídico, tabela tarifária ou estrutura do modelo oficial: reproduzido como está, nunca alterado automaticamente. */
 export interface BlocoFixo {
@@ -300,6 +317,11 @@ export interface DefinicaoDoModelo {
    * presumido nem fabricado. Ausente/null = o modelo não exige poderes específicos.
    */
   poderesDeRepresentacao?: { fundamento: string } | null;
+  /**
+   * Revisão da definição oficial (a partir da 2): o mesmo arquivo oficial com outra leitura aprovada. Ausente = a
+   * leitura original (revisão 1), preservada como foi validada.
+   */
+  revisao?: { numero: number; decisao: string } | null;
 }
 
 export type ProblemaDeDefinicao =
@@ -324,7 +346,13 @@ export type ProblemaDeDefinicao =
   | { tipo: 'LAYOUT_SOBRE_A_ASSINATURA'; item: string }
   /** Campo de escopo SIGNATARIO só aceita o cadastro do signatário legal, e esse cadastro só preenche campo de escopo SIGNATARIO. */
   | { tipo: 'ESCOPO_E_FONTE_INCOMPATIVEIS'; campo: string }
-  | { tipo: 'PODERES_SEM_FUNDAMENTO' };
+  | { tipo: 'PODERES_SEM_FUNDAMENTO' }
+  /**
+   * 14.20: confirmação desconhecida ou sem fundamento, fora do consignatário do MBL vindo só do cadastro da organização
+   * (escopo do Master), ou consignatário do MBL pelo cadastro SEM a confirmação.
+   */
+  | { tipo: 'CONFIRMACAO_INVALIDA'; campo: string }
+  | { tipo: 'REVISAO_INVALIDA' };
 
 const normalizar = (t: string) => t.toUpperCase().replace(/\s+/g, ' ').trim();
 
@@ -344,8 +372,15 @@ export function verificarDefinicao(d: DefinicaoDoModelo, esperado: TipoDocumento
     for (const f of c.fontesAceitas) if (!FONTES_DE_DADO.includes(f)) p.push({ tipo: 'FONTE_DESCONHECIDA', campo: c.id, fonte: f });
     const doSignatario = c.fontesAceitas.includes('CADASTRO_DO_SIGNATARIO_LEGAL');
     if ((c.escopo === 'SIGNATARIO') !== doSignatario || (doSignatario && c.fontesAceitas.length !== 1)) p.push({ tipo: 'ESCOPO_E_FONTE_INCOMPATIVEIS', campo: c.id });
+    // 14.20: o consignatário do MBL pelo cadastro da organização só com a confirmação da Auditoria — e só ele a usa.
+    const consignatarioPeloCadastro = DADOS_DO_CONSIGNATARIO_DO_MBL.includes(c.dado) && c.fontesAceitas.includes('CADASTRO_DA_ORGANIZACAO');
+    if (c.confirmacao
+      ? !TIPOS_DE_CONFIRMACAO.includes(c.confirmacao.tipo) || String(c.confirmacao.fundamento ?? '').trim() === '' || !consignatarioPeloCadastro
+        || c.fontesAceitas.length !== 1 || c.escopo !== 'MASTER'
+      : consignatarioPeloCadastro) p.push({ tipo: 'CONFIRMACAO_INVALIDA', campo: c.id });
   }
   if (d.poderesDeRepresentacao && String(d.poderesDeRepresentacao.fundamento ?? '').trim() === '') p.push({ tipo: 'PODERES_SEM_FUNDAMENTO' });
+  if (d.revisao && (!Number.isInteger(d.revisao.numero) || d.revisao.numero < 2 || String(d.revisao.decisao ?? '').trim() === '')) p.push({ tipo: 'REVISAO_INVALIDA' });
   for (const b of d.blocosFixos) {
     if (b.texto.trim() === '') p.push({ tipo: 'BLOCO_FIXO_VAZIO', bloco: b.id });
     for (const m of d.marcadoresDoExemplo) {

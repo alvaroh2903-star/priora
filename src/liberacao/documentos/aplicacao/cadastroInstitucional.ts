@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import {
-  CadastroInstitucional, DEFINICOES_PROPOSTAS, EventoDoSignatario, PendenciaInstitucional, ProblemaDoCadastro, SignatarioLegal, TipoDocumento, cadastroVigente,
+  CadastroInstitucional, DEFINICOES_EM_VIGOR, EventoDoSignatario, PendenciaInstitucional, ProblemaDoCadastro, SignatarioLegal, TipoDocumento, cadastroVigente,
   modeloVigente, pendenciasInstitucionais, signatariosVigentes, validarDadosInstitucionais, validarPoderes, validarSignatario,
 } from '../dominio';
 import { AtorDocumental, DepsDocumentos, RepositorioInstitucional } from './portas';
@@ -21,7 +21,9 @@ const TIPOS: TipoDocumento[] = ['MEMORANDO_MSC', 'MEMORANDO_HAPAG_ROCHAMAR', 'ME
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** As recusas do banco que a aplicação já conhece (proteção em profundidade): viram recusa, não erro. */
-const RECUSAS_DO_BANCO = ['CADASTRO_INSTITUCIONAL_EXIGE_ADMIN', 'SIGNATARIO_INEXISTENTE', 'SIGNATARIO_REVOGADO'];
+const RECUSAS_DO_BANCO = [
+  'CADASTRO_INSTITUCIONAL_EXIGE_ADMIN', 'SIGNATARIO_INEXISTENTE', 'SIGNATARIO_REVOGADO', 'PODERES_DE_OUTRO_CADASTRO', 'CADASTRO_INSTITUCIONAL_FORA_DE_ORDEM',
+];
 
 async function comoAdmin(
   deps: DepsDocumentos, ator: AtorDocumental, fn: (repo: RepositorioInstitucional) => Promise<ResultadoDoCadastro>,
@@ -37,10 +39,11 @@ async function comoAdmin(
   }
 }
 
-/** Motivo opcional da alteração: uma linha de texto. */
+/** Motivo opcional da alteração: uma linha de texto (nenhum controle C0/C1 nem separador de linha ou parágrafo). */
 function motivoDe(v: unknown): { ok: true; motivo: string | null } | { ok: false } {
   if (v === undefined || v === null) return { ok: true, motivo: null };
-  if (typeof v !== 'string' || /[\r\n]/.test(v) || !v.trim() || /[\u0000-\u001f\u007f]/.test(v)) return { ok: false };
+  // eslint-disable-next-line no-control-regex
+  if (typeof v !== 'string' || !v.trim() || /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(v)) return { ok: false };
   return { ok: true, motivo: v.trim() };
 }
 
@@ -69,13 +72,17 @@ export async function registrarSignatarioLegal(
     const v = validarSignatario(entrada);
     if (v.tipo === 'INVALIDO') return { tipo: 'RECUSADO', motivo: 'DADOS_INVALIDOS', problemas: v.problemas };
     const r = await repo.gravarEventoDoSignatario(ator.organizationId, {
-      signatarioId: signatarioId ?? randomUUID(), evento: 'CADASTRADO', ...v.dados, poderesValidoAte: null, motivo: null, por: ator.membershipId, em: deps.relogio.agora(),
+      signatarioId: signatarioId ?? randomUUID(), evento: 'CADASTRADO', ...v.dados, poderesValidoAte: null, motivo: null, refereCadastroId: null,
+      por: ator.membershipId, em: deps.relogio.agora(),
     });
     return { tipo: 'REGISTRADO', id: r.eventoId };
   });
 }
 
-/** Registra a comprovação dos poderes de representação do signatário, com a evidência (nunca presumida). */
+/**
+ * Registra a comprovação dos poderes de representação do signatário, com a evidência (nunca presumida), para o cadastro
+ * ATUAL dele (nome, CPF, qualificação). Uma correção posterior do cadastro exige nova comprovação.
+ */
 export async function registrarPoderesDoSignatario(
   deps: DepsDocumentos, ator: AtorDocumental, signatarioId: string, entrada: Readonly<Record<string, unknown>>,
 ): Promise<ResultadoDoCadastro> {
@@ -84,9 +91,11 @@ export async function registrarPoderesDoSignatario(
     if (r) return r;
     const v = validarPoderes(entrada);
     if (v.tipo === 'INVALIDO') return { tipo: 'RECUSADO', motivo: 'DADOS_INVALIDOS', problemas: v.problemas };
+    const atual = (await repo.eventosDosSignatarios(ator.organizationId)).filter((e) => e.signatarioId === signatarioId && e.evento === 'CADASTRADO')
+      .sort((a, b) => a.sequencia - b.sequencia).at(-1)!;
     const g = await repo.gravarEventoDoSignatario(ator.organizationId, {
       signatarioId, evento: 'PODERES_COMPROVADOS', nome: null, cpf: null, qualificacao: null, evidencia: v.dados.evidencia, poderesValidoAte: v.dados.validoAte,
-      motivo: null, por: ator.membershipId, em: deps.relogio.agora(),
+      motivo: null, refereCadastroId: atual.eventoId, por: ator.membershipId, em: deps.relogio.agora(),
     });
     return { tipo: 'REGISTRADO', id: g.eventoId };
   });
@@ -102,7 +111,7 @@ export async function revogarSignatarioLegal(
     const m = motivoDe(entrada.motivo);
     if (!m.ok || m.motivo === null) return { tipo: 'RECUSADO', motivo: 'DADOS_INVALIDOS', problemas: [{ campo: 'motivo', motivo: 'OBRIGATORIO' }] };
     const g = await repo.gravarEventoDoSignatario(ator.organizationId, {
-      signatarioId, evento: 'REVOGADO', nome: null, cpf: null, qualificacao: null, evidencia: null, poderesValidoAte: null, motivo: m.motivo,
+      signatarioId, evento: 'REVOGADO', nome: null, cpf: null, qualificacao: null, evidencia: null, poderesValidoAte: null, motivo: m.motivo, refereCadastroId: null,
       por: ator.membershipId, em: deps.relogio.agora(),
     });
     return { tipo: 'REGISTRADO', id: g.eventoId };
@@ -140,7 +149,7 @@ export async function consultarCadastroInstitucional(deps: DepsDocumentos, ator:
   const vigente = cadastroVigente(historico);
   const definicoes = await Promise.all(TIPOS.map(async (tipo) => {
     const emUso = modeloVigente(tipo, await deps.repo.versoes(ator.organizationId, tipo));
-    return emUso?.definicao ? { definicao: emUso.definicao, origem: 'VERSAO_EM_USO' as const } : { definicao: DEFINICOES_PROPOSTAS[tipo], origem: 'PROPOSTA_OFICIAL' as const };
+    return emUso?.definicao ? { definicao: emUso.definicao, origem: 'VERSAO_EM_USO' as const } : { definicao: DEFINICOES_EM_VIGOR[tipo], origem: 'PROPOSTA_OFICIAL' as const };
   }));
   const pendencias = pendenciasInstitucionais(definicoes.map((d) => d.definicao), vigente, vigentes, dataNoFuso(agora))
     .map((p, i) => ({ ...p, definicao: definicoes[i].origem }));

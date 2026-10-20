@@ -43,9 +43,10 @@ export interface FontesConfiaveis {
    */
   signatariosLegais(organizationId: string, em: Date): Promise<SignatarioLegal[]>;
   /**
-   * O1.8: conferência da identidade do consignatário do MBL deste Master com o CNPJ do cadastro institucional, sobre
-   * o texto JÁ persistido pela Auditoria (contrato E1). Só informa: não preenche nada nem bloqueia nada. Opcional:
-   * fonte sem essa leitura não confere.
+   * O1.8/14.20: conferência da identidade do consignatário do MBL deste Master com o CNPJ do cadastro institucional,
+   * sobre o texto JÁ persistido pela Auditoria (contrato E1). É a mesma conferência que condiciona os campos do
+   * consignatário escritos pelo cadastro (em `valores`); aqui só se lê o resultado. Opcional: fonte sem essa leitura
+   * não confere.
    */
   identidadeDoConsignatario?(organizationId: string, masterId: string): Promise<IdentidadeDoConsignatario>;
 }
@@ -58,9 +59,11 @@ export interface RepositorioInstitucional {
   /** Todos os registros do cadastro da organização (o histórico); vale o mais recente. */
   cadastros(organizationId: string): Promise<CadastroInstitucional[]>;
   gravarCadastro(organizationId: string, novo: DadosInstitucionais & { motivo: string | null; por: string; em: Date }): Promise<{ cadastroId: string }>;
-  /** Todos os eventos do registro do signatário legal da organização. */
+  /** Todos os eventos do registro do signatário legal da organização, na ordem de gravação. */
   eventosDosSignatarios(organizationId: string): Promise<EventoDoSignatario[]>;
-  gravarEventoDoSignatario(organizationId: string, novo: Omit<EventoDoSignatario, 'eventoId' | 'registradoPor' | 'registradoEm'> & { por: string; em: Date }): Promise<{ eventoId: string }>;
+  gravarEventoDoSignatario(
+    organizationId: string, novo: Omit<EventoDoSignatario, 'eventoId' | 'sequencia' | 'registradoPor' | 'registradoEm'> & { por: string; em: Date },
+  ): Promise<{ eventoId: string }>;
 }
 
 /**
@@ -160,7 +163,11 @@ export interface NovaVersaoDeModelo {
   definicao: DefinicaoDoModelo | null;
   origem:
     | { tipo: 'CADASTRO'; por: string }
-    | { tipo: 'SUBSTITUTO_DA_AGENCIA'; substitui: string; email: ReferenciaDeEmail; anexo: { attachmentId: string; nome: string }; sinalId: string | null };
+    | { tipo: 'SUBSTITUTO_DA_AGENCIA'; substitui: string; email: ReferenciaDeEmail; anexo: { attachmentId: string; nome: string }; sinalId: string | null }
+    /** 14.20: o MESMO arquivo de uma versão validada com outra leitura (revisão da definição oficial), por uma pessoa. */
+    | { tipo: 'REVISAO_DA_DEFINICAO'; revisa: string; por: string; decisao: string };
+  /** 1 = a leitura original do arquivo; cada revisão da leitura do MESMO arquivo soma 1 (ausente = 1). */
+  revisaoDaDefinicao?: number;
   em: Date;
 }
 

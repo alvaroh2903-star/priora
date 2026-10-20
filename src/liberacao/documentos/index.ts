@@ -2,7 +2,7 @@
 export * from './dominio';
 export * from './aplicacao/portas';
 export {
-  sha256, ehPdf, avaliarDocumentacao, cadastrarModelo, cadastrarModeloOficial, definirLeituraDoModelo, validarModelo, registrarSinalDeRejeicao, decidirSinalDeRejeicao,
+  sha256, ehPdf, avaliarDocumentacao, cadastrarModelo, cadastrarModeloOficial, revisarDefinicaoDoModelo, definirLeituraDoModelo, validarModelo, registrarSinalDeRejeicao, decidirSinalDeRejeicao,
   registrarModeloSubstituto, prepararDocumento, registrarAssinatura, conferirAssinatura, prepararRascunho, enviarPelaPriora, conciliarEnvio, descartarRascunho,
   conciliarManualmente, DADO_MBL, DADO_CODIGO_DO_PROCESSO, DADO_DATA_DA_GERACAO, FUSO_DA_DATA_DO_DOCUMENTO, MOTIVO_PERMISSAO_PENDENTE,
 } from './aplicacao/servico';

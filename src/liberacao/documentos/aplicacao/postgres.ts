@@ -6,7 +6,8 @@ import { evidenciasDoMblDoMaster } from '../../../auditoria/fatos/camposDoMbl';
 import {
   AnexoDoManifesto, AssinaturaRegistrada, CandidatoCopiaDoMbl, ConferenciaDaAssinatura, ConteudoDoDocumento, DADOS_DO_MBL, DocumentoPreparado, EscolhaDeOpcao, EventoDoEnvio,
   FluxoDeEmail, LeituraDoMbl, SelecaoDeOpcao, SinalPendente, TentativaDeEnvio, TipoDocumento, ValorInformado, ValorObservado, VeredictoDoSinal, VersaoDoModelo, dadosDoMbl,
-  CadastroInstitucional, EventoDoSignatario, cadastroVigente, conferirConsignatario, signatariosVigentes, valoresInstitucionais,
+  CadastroInstitucional, DADOS_DO_CONSIGNATARIO_DO_MBL, EventoDoSignatario, IdentidadeDoConsignatario, cadastroVigente, conferirConsignatario,
+  consignatarioNaoConfirmado, consignatarioPeloCadastro, signatariosVigentes, valoresInstitucionais,
 } from '../dominio';
 import { geradorPdfPriora } from '../pdf/gerador';
 import {
@@ -44,7 +45,10 @@ const paraVersao = (r: any): VersaoDoModelo => ({
   modeloId: r.id, tipo: r.tipo, versao: r.versao, arquivoSha256: r.arquivo_sha256,
   origem: r.origem === 'CADASTRO'
     ? { tipo: 'CADASTRO', por: r.cadastrado_por_membership_id }
-    : { tipo: 'SUBSTITUTO_DA_AGENCIA', substitui: r.substitui_modelo_id, email: r.evidencia.email, anexo: r.evidencia.anexo },
+    : r.origem === 'REVISAO_DA_DEFINICAO'
+      ? { tipo: 'REVISAO_DA_DEFINICAO', revisa: r.substitui_modelo_id, por: r.cadastrado_por_membership_id, decisao: r.evidencia.decisao }
+      : { tipo: 'SUBSTITUTO_DA_AGENCIA', substitui: r.substitui_modelo_id, email: r.evidencia.email, anexo: r.evidencia.anexo },
+  revisaoDaDefinicao: r.revisao_da_definicao ?? 1,
   definicao: r.definicao ?? null, estado: r.estado, cadastradoEm: iso(r.cadastrado_em)!,
   validacao: r.validado_em ? { por: r.validado_por_membership_id, em: iso(r.validado_em)! } : null,
   rejeicao: r.rejeitado_em ? { em: iso(r.rejeitado_em)!, sinalId: r.rejeicao.sinalId, confirmadaPor: r.rejeicao.confirmadaPor } : null,
@@ -106,26 +110,35 @@ export function repositorioDocumentalPostgres(pool: Pool): RepositorioDocumental
     async cadastrarVersao(org, n) {
       return emTransacao(pool, async (c) => {
         const substituto = n.origem.tipo === 'SUBSTITUTO_DA_AGENCIA' ? n.origem : null;
+        const revisao = n.origem.tipo === 'REVISAO_DA_DEFINICAO' ? n.origem : null;
+        const revisaoDaDefinicao = n.revisaoDaDefinicao ?? 1;
+        const por = n.origem.tipo === 'SUBSTITUTO_DA_AGENCIA' ? null : n.origem.por;
         const ins = await c.query(
           `INSERT INTO documentos_apresentacao_modelos
-             (organization_id, tipo, versao, arquivo, arquivo_sha256, origem, substitui_modelo_id, evidencia, definicao, cadastrado_por_membership_id, cadastrado_em)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+             (organization_id, tipo, versao, arquivo, arquivo_sha256, origem, substitui_modelo_id, evidencia, definicao, cadastrado_por_membership_id, cadastrado_em,
+              revisao_da_definicao)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
            ON CONFLICT ON CONSTRAINT documentos_apresentacao_modelos_arquivo_unico DO NOTHING
            RETURNING id`,
-          [org, n.tipo, n.versao, Buffer.from(n.arquivo), n.arquivoSha256, n.origem.tipo, substituto?.substitui ?? null,
-            substituto ? JSON.stringify({ email: substituto.email, anexo: substituto.anexo, sinalId: substituto.sinalId }) : null,
-            n.definicao ? JSON.stringify(n.definicao) : null, n.origem.tipo === 'CADASTRO' ? n.origem.por : null, n.em],
+          [org, n.tipo, n.versao, Buffer.from(n.arquivo), n.arquivoSha256, n.origem.tipo, substituto?.substitui ?? revisao?.revisa ?? null,
+            substituto ? JSON.stringify({ email: substituto.email, anexo: substituto.anexo, sinalId: substituto.sinalId })
+              : revisao ? JSON.stringify({ decisao: revisao.decisao, revisa: revisao.revisa }) : null,
+            n.definicao ? JSON.stringify(n.definicao) : null, por, n.em, revisaoDaDefinicao],
         );
         if (!ins.rows[0]) {
           const { rows } = await c.query(
-            `SELECT id FROM documentos_apresentacao_modelos WHERE organization_id = $1 AND tipo = $2 AND arquivo_sha256 = $3`, [org, n.tipo, n.arquivoSha256]);
+            `SELECT id FROM documentos_apresentacao_modelos WHERE organization_id = $1 AND tipo = $2 AND arquivo_sha256 = $3 AND revisao_da_definicao = $4`,
+            [org, n.tipo, n.arquivoSha256, revisaoDaDefinicao]);
           return { modeloId: rows[0].id, nova: false };
         }
         const modeloId: string = ins.rows[0].id;
         await evento(c, org, { modeloId }, {
           tipo: substituto ? 'SUBSTITUTO_RECEBIDO' : 'MODELO_CADASTRADO', para: 'PENDENTE_DE_VALIDACAO',
-          origem: substituto ? 'INTEGRACAO' : 'PESSOA', por: n.origem.tipo === 'CADASTRO' ? n.origem.por : null,
-          detalhe: { versao: n.versao, arquivoSha256: n.arquivoSha256, ...(substituto ? { substitui: substituto.substitui, sinalId: substituto.sinalId, email: substituto.email } : {}) },
+          origem: substituto ? 'INTEGRACAO' : 'PESSOA', por,
+          detalhe: {
+            versao: n.versao, arquivoSha256: n.arquivoSha256, ...(substituto ? { substitui: substituto.substitui, sinalId: substituto.sinalId, email: substituto.email } : {}),
+            ...(revisao ? { revisa: revisao.revisa, decisao: revisao.decisao, revisaoDaDefinicao } : {}),
+          },
           em: n.em,
         });
         return { modeloId, nova: true };
@@ -424,16 +437,27 @@ export function fontesConfiaveisPostgres(db: Db): FontesConfiaveis {
       const doMbl = pedidosDoMbl(pedidos);
       if (doMbl.length) out.push(...dadosDoMbl(masterId, await leiturasDoMbl(db, org, masterId), doMbl).valores);
       // O1.8: dados fixos da própria organização, do cadastro institucional vigente (o mesmo para os quatro modelos).
+      // 14.20: o consignatário do MBL também vem do cadastro, mas só com a identidade confirmada pela Auditoria.
       const doCadastro = pedidos.filter((p) => p.fonte === 'CADASTRO_DA_ORGANIZACAO').map((p) => p.dado);
       if (doCadastro.length) {
         const vigente = cadastroVigente(await cadastrosDaOrganizacao(db, org));
         if (vigente) out.push(...valoresInstitucionais(vigente, doCadastro));
+        if (pedeConsignatario(doCadastro)) {
+          out.push(...consignatarioPeloCadastro(vigente, await identidade(org, masterId, vigente), doCadastro, masterId));
+        }
       }
       return out;
     },
     async dadosNaoPublicados(org, masterId, pedidos) {
       const doMbl = pedidosDoMbl(pedidos);
-      return doMbl.length ? dadosDoMbl(masterId, await leiturasDoMbl(db, org, masterId), doMbl).naoPublicados : [];
+      const out = doMbl.length ? dadosDoMbl(masterId, await leiturasDoMbl(db, org, masterId), doMbl).naoPublicados : [];
+      // 14.20: o consignatário pelo cadastro sem a confirmação documental — o motivo e as evidências da exceção.
+      const doCadastro = pedidos.filter((p) => p.fonte === 'CADASTRO_DA_ORGANIZACAO').map((p) => p.dado);
+      if (pedeConsignatario(doCadastro)) {
+        const vigente = cadastroVigente(await cadastrosDaOrganizacao(db, org));
+        out.push(...consignatarioNaoConfirmado(await identidade(org, masterId, vigente), doCadastro, masterId, new Date().toISOString()));
+      }
+      return out;
     },
     async copiasDoMbl(org, masterId): Promise<CandidatoCopiaDoMbl[]> {
       // Só extrações de MBL (pelo CONTEÚDO, OCR da Auditoria) que sustentam um vínculo válido com ESTE Master.
@@ -473,28 +497,40 @@ export function fontesConfiaveisPostgres(db: Db): FontesConfiaveis {
     async signatariosLegais(org, em) {
       return signatariosVigentes(await eventosDosSignatariosDaOrganizacao(db, org), em.toISOString());
     },
-    // O1.8: identidade do consignatário do MBL conferida pelo CNPJ escrito no texto que a Auditoria JÁ persistiu (E1).
+    // O1.8/14.20: identidade do consignatário do MBL conferida pelo CNPJ escrito no texto que a Auditoria JÁ persistiu (E1).
     async identidadeDoConsignatario(org, masterId) {
-      const ev = await evidenciasDoMblDoMaster(db, org, masterId);
-      const vigente = cadastroVigente(await cadastrosDaOrganizacao(db, org));
-      return conferirConsignatario(
-        { situacao: ev.situacao.consignee, versoes: ev.versoes.map((v) => ({ extracaoId: v.extracaoId, estado: v.estados.consignee })) },
-        vigente ? { cadastroId: vigente.cadastroId, cnpj: vigente.cnpj } : null,
-      );
+      return identidade(org, masterId, cadastroVigente(await cadastrosDaOrganizacao(db, org)));
     },
   };
+
+  /** A conferência da identidade (uma só regra para o preenchimento e para a leitura), sobre o que a Auditoria persistiu. */
+  async function identidade(org: string, masterId: string, vigente: CadastroInstitucional | null): Promise<IdentidadeDoConsignatario> {
+    const ev = await evidenciasDoMblDoMaster(db, org, masterId);
+    return conferirConsignatario(
+      {
+        situacao: ev.situacao.consignee,
+        versoes: ev.versoes.map((v) => ({
+          extracaoId: v.extracaoId, arquivoSha256: v.origem.arquivoSha256, estado: v.estados.consignee, textoOriginal: v.campos?.consignee ?? null,
+        })),
+      },
+      vigente ? { cadastroId: vigente.cadastroId, cnpj: vigente.cnpj } : null,
+    );
+  }
 }
+
+/** O consignatário do MBL pedido ao cadastro da organização (definições da revisão 14.20). */
+const pedeConsignatario = (dados: ReadonlyArray<string>) => dados.some((d) => DADOS_DO_CONSIGNATARIO_DO_MBL.includes(d));
 
 /* ------------------------------------------ cadastro institucional (O1.8) ------------------------------------------ */
 
 async function cadastrosDaOrganizacao(db: Db, org: string): Promise<CadastroInstitucional[]> {
   const { rows } = await db.query(
-    `SELECT id, cnpj, razao_social, endereco, telefone, contato_sobreestadia_nome, contato_sobreestadia_email, emails_para_recibo, motivo,
+    `SELECT id, sequencia, cnpj, razao_social, endereco, telefone, contato_sobreestadia_nome, contato_sobreestadia_email, emails_para_recibo, motivo,
             registrado_por_membership_id, registrado_em
-       FROM organizacao_cadastro_institucional WHERE organization_id = $1 ORDER BY registrado_em, id`,
+       FROM organizacao_cadastro_institucional WHERE organization_id = $1 ORDER BY sequencia`,
     [org]);
   return rows.map((r) => ({
-    cadastroId: r.id, cnpj: r.cnpj, razaoSocial: r.razao_social, endereco: r.endereco, telefone: r.telefone,
+    cadastroId: r.id, sequencia: Number(r.sequencia), cnpj: r.cnpj, razaoSocial: r.razao_social, endereco: r.endereco, telefone: r.telefone,
     contatoSobreestadiaNome: r.contato_sobreestadia_nome, contatoSobreestadiaEmail: r.contato_sobreestadia_email, emailsParaRecibo: r.emails_para_recibo,
     motivo: r.motivo, registradoPor: r.registrado_por_membership_id, registradoEm: iso(r.registrado_em)!,
   }));
@@ -502,12 +538,12 @@ async function cadastrosDaOrganizacao(db: Db, org: string): Promise<CadastroInst
 
 async function eventosDosSignatariosDaOrganizacao(db: Db, org: string): Promise<EventoDoSignatario[]> {
   const { rows } = await db.query(
-    `SELECT id, signatario_id, evento, nome, cpf, qualificacao, evidencia, to_char(poderes_valido_ate, 'YYYY-MM-DD') AS poderes_valido_ate, motivo,
-            registrado_por_membership_id, registrado_em
-       FROM organizacao_signatarios_legais WHERE organization_id = $1 ORDER BY registrado_em, id`,
+    `SELECT id, sequencia, signatario_id, evento, nome, cpf, qualificacao, evidencia, to_char(poderes_valido_ate, 'YYYY-MM-DD') AS poderes_valido_ate,
+            refere_cadastro_id, motivo, registrado_por_membership_id, registrado_em
+       FROM organizacao_signatarios_legais WHERE organization_id = $1 ORDER BY sequencia`,
     [org]);
   return rows.map((r) => ({
-    eventoId: r.id, signatarioId: r.signatario_id, evento: r.evento, nome: r.nome, cpf: r.cpf, qualificacao: r.qualificacao, evidencia: r.evidencia,
+    eventoId: r.id, sequencia: Number(r.sequencia), signatarioId: r.signatario_id, evento: r.evento, refereCadastroId: r.refere_cadastro_id, nome: r.nome, cpf: r.cpf, qualificacao: r.qualificacao, evidencia: r.evidencia,
     poderesValidoAte: r.poderes_valido_ate, motivo: r.motivo, registradoPor: r.registrado_por_membership_id, registradoEm: iso(r.registrado_em)!,
   }));
 }
@@ -528,9 +564,9 @@ export function repositorioInstitucionalPostgres(pool: Pool): RepositorioInstitu
     async gravarEventoDoSignatario(org, n) {
       const { rows } = await pool.query(
         `INSERT INTO organizacao_signatarios_legais (organization_id, signatario_id, evento, nome, cpf, qualificacao, evidencia, poderes_valido_ate, motivo,
-           registrado_por_membership_id, registrado_em)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
-        [org, n.signatarioId, n.evento, n.nome, n.cpf, n.qualificacao, n.evidencia, n.poderesValidoAte, n.motivo, n.por, n.em]);
+           registrado_por_membership_id, registrado_em, refere_cadastro_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id`,
+        [org, n.signatarioId, n.evento, n.nome, n.cpf, n.qualificacao, n.evidencia, n.poderesValidoAte, n.motivo, n.por, n.em, n.refereCadastroId]);
       return { eventoId: rows[0].id };
     },
   };

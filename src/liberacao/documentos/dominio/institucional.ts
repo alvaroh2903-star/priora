@@ -1,8 +1,9 @@
-import { Instante } from '../../dominio';
-import { cnpjValido, cpfValido, valorNoFormato } from './formatos';
+import { Evidencia, Instante } from '../../dominio';
+import { cnpjValido, cpfValido, valorEscrito, valorNoFormato } from './formatos';
+import { IdentidadeDoConsignatario } from './identidadeDoConsignatario';
 import { DefinicaoDoModelo, TipoDocumento } from './modelos';
 import { DADOS_DOS_MODELOS as D } from './modelosOficiais';
-import { ValorObservado } from './preenchimento';
+import { DadoNaoPublicado, ValorObservado } from './preenchimento';
 import { ComprovacaoDePoderes, DefinicaoDoSignatario, SignatarioLegal, poderesValidos, signatarioDaOrganizacao } from './signatario';
 
 /**
@@ -41,6 +42,8 @@ export interface DadosInstitucionais {
 /** Um registro do cadastro (o cadastro completo naquele instante; vale o mais recente). */
 export interface CadastroInstitucional extends DadosInstitucionais {
   cadastroId: string;
+  /** Ordem de gravação dada pelo banco (gravações da organização serializadas; o instante nunca volta). */
+  sequencia: number;
   motivo: string | null;
   registradoPor: string;
   registradoEm: Instante;
@@ -67,6 +70,9 @@ function dataValida(d: string): boolean {
   return mes >= 1 && mes <= 12 && dia >= 1 && dia <= dias[mes - 1];
 }
 
+/** Qualquer quebra de linha, inclusive os separadores de linha e de parágrafo do Unicode. */
+const QUEBRA = /[\r\n\u2028\u2029]/;
+
 /** Texto de uma linha: os lugares desses dados nos quatro modelos são de uma linha só. */
 function texto(campo: string, v: unknown, obrigatorio: boolean, problemas: ProblemaDoCadastro[]): string | null {
   const problema = (motivo: MotivoDoProblema) => {
@@ -77,7 +83,7 @@ function texto(campo: string, v: unknown, obrigatorio: boolean, problemas: Probl
   if (typeof v !== 'string') return problema('NAO_E_TEXTO');
   const t = v.trim();
   if (!t) return problema(obrigatorio ? 'OBRIGATORIO' : 'VAZIO');
-  if (/[\r\n]/.test(t) || !valorNoFormato('TEXTO', t)) return problema('CARACTERE_DE_CONTROLE_OU_QUEBRA');
+  if (QUEBRA.test(t) || !valorNoFormato('TEXTO', t)) return problema('CARACTERE_DE_CONTROLE_OU_QUEBRA');
   return t;
 }
 
@@ -113,9 +119,9 @@ export function validarDadosInstitucionais(e: Readonly<Record<string, unknown>>)
   return problemas.length ? { tipo: 'INVALIDO', problemas } : { tipo: 'VALIDO', dados };
 }
 
-/** O cadastro vigente: o registro mais recente da organização (o histórico fica para consulta). */
+/** O cadastro vigente: o último registro gravado da organização (o histórico fica para consulta). */
 export function cadastroVigente(registros: ReadonlyArray<CadastroInstitucional>): CadastroInstitucional | null {
-  return [...registros].sort((a, b) => Date.parse(b.registradoEm) - Date.parse(a.registradoEm) || (b.cadastroId < a.cadastroId ? -1 : 1))[0] ?? null;
+  return [...registros].sort((a, b) => b.sequencia - a.sequencia)[0] ?? null;
 }
 
 /** Os dados pedidos que o cadastro TEM, como observações da fonte `CADASTRO_DA_ORGANIZACAO` (escopo do documento). */
@@ -139,8 +145,15 @@ export type TipoEventoDoSignatario = 'CADASTRADO' | 'PODERES_COMPROVADOS' | 'REV
 /** Um evento do registro do signatário legal (append-only). */
 export interface EventoDoSignatario {
   eventoId: string;
+  /** Ordem de gravação dada pelo banco (gravações da organização serializadas; o instante nunca volta). */
+  sequencia: number;
   signatarioId: string;
   evento: TipoEventoDoSignatario;
+  /**
+   * PODERES_COMPROVADOS: o CADASTRADO exato cujos dados (nome, CPF, qualificação) a evidência comprova. Uma correção
+   * do cadastro (novo CADASTRADO) não herda os poderes: eles precisam ser comprovados de novo para os dados novos.
+   */
+  refereCadastroId: string | null;
   nome: string | null;
   cpf: string | null;
   qualificacao: string | null;
@@ -179,11 +192,12 @@ export function validarPoderes(e: Readonly<Record<string, unknown>>): Validacao<
   return problemas.length || !evidencia ? { tipo: 'INVALIDO', problemas } : { tipo: 'VALIDO', dados: { evidencia, validoAte } };
 }
 
-const ordem = (a: EventoDoSignatario, b: EventoDoSignatario) => Date.parse(a.registradoEm) - Date.parse(b.registradoEm) || (a.eventoId < b.eventoId ? -1 : 1);
+const ordem = (a: EventoDoSignatario, b: EventoDoSignatario) => a.sequencia - b.sequencia;
 
 /**
  * Os cadastros de signatário legal VIGENTES no instante `em`: o último CADASTRADO de cada um até `em`, sem REVOGADO
- * até `em`, com a última comprovação de poderes registrada até `em` (a validade é conferida por quem usa).
+ * até `em`, com a última comprovação de poderes registrada até `em` PARA ESSE CADASTRADO (a validade é conferida por
+ * quem usa). Poderes comprovados para dados anteriores (outra pessoa, outro CPF, outra qualificação) não passam.
  */
 export function signatariosVigentes(eventos: ReadonlyArray<EventoDoSignatario>, em: Instante): SignatarioLegal[] {
   const ate = Date.parse(em);
@@ -196,7 +210,7 @@ export function signatariosVigentes(eventos: ReadonlyArray<EventoDoSignatario>, 
     if (lista.some((e) => e.evento === 'REVOGADO')) continue;
     const cadastro = lista.filter((e) => e.evento === 'CADASTRADO').at(-1);
     if (!cadastro || cadastro.nome === null || cadastro.cpf === null || cadastro.qualificacao === null) continue;
-    const p = lista.filter((e) => e.evento === 'PODERES_COMPROVADOS').at(-1);
+    const p = lista.filter((e) => e.evento === 'PODERES_COMPROVADOS' && e.refereCadastroId === cadastro.eventoId).at(-1);
     const poderes: ComprovacaoDePoderes | null = p ? {
       signatarioId, evidencia: { fonte: 'cadastro_institucional', ref: `signatario_legal_poderes:${p.eventoId}` }, registradoPor: p.registradoPor, registradoEm: p.registradoEm,
       validoAte: p.poderesValidoAte,
@@ -226,8 +240,8 @@ export function pendenciasInstitucionais(
   definicoes: ReadonlyArray<DefinicaoDoModelo>, cadastro: CadastroInstitucional | null, signatarios: ReadonlyArray<SignatarioLegal>, hoje: string,
 ): PendenciaInstitucional[] {
   const tem = (dado: string) => {
-    const campo = CAMPOS_INSTITUCIONAIS.find((c) => DADOS_INSTITUCIONAIS[c] === dado);
-    return !!cadastro && !!campo && cadastro[campo] !== null;
+    const campos = CAMPOS_DO_DADO.get(dado) ?? [];
+    return !!cadastro && campos.length > 0 && campos.every((c) => cadastro[c] !== null);
   };
   const definicao = signatarioDaOrganizacao(signatarios);
   return definicoes.map((d) => {
@@ -240,4 +254,72 @@ export function pendenciasInstitucionais(
         ? (definicao.tipo === 'DEFINIDO' && poderesValidos(definicao.signatario, hoje) ? 'COMPROVADOS' : 'NAO_COMPROVADOS') : null,
     };
   });
+}
+
+/* ------------------------- o consignatário do MBL escrito pelo cadastro (decisão 14.20) ------------------------- */
+
+/**
+ * O que cada dado do consignatário do MBL usa do cadastro. A qualificação (termo Evergreen) segue o bloco do exemplo
+ * oficial: razão social, CNPJ e endereço, uma informação por linha (a linha longa quebra no próprio lugar do modelo).
+ */
+const DO_CONSIGNATARIO: Readonly<Record<string, ReadonlyArray<CampoInstitucional>>> = {
+  [D.CONSIGNATARIO_RAZAO_SOCIAL]: ['razaoSocial'],
+  [D.CONSIGNATARIO_QUALIFICACAO]: ['razaoSocial', 'cnpj', 'endereco'],
+};
+
+const DADOS_DO_CONSIGNATARIO: ReadonlySet<string> = new Set(Object.keys(DO_CONSIGNATARIO));
+
+/** Os campos do cadastro que cada dado de modelo usa (os institucionais e os do consignatário). */
+const CAMPOS_DO_DADO: ReadonlyMap<string, ReadonlyArray<CampoInstitucional>> = new Map([
+  ...CAMPOS_INSTITUCIONAIS.map((c): [string, CampoInstitucional[]] => [DADOS_INSTITUCIONAIS[c], [c]]),
+  ...Object.entries(DO_CONSIGNATARIO),
+]);
+
+function textoDoConsignatario(c: CadastroInstitucional, dado: string): string | null {
+  if (dado === D.CONSIGNATARIO_RAZAO_SOCIAL) return c.razaoSocial;
+  if (dado === D.CONSIGNATARIO_QUALIFICACAO) {
+    return c.razaoSocial !== null && c.endereco !== null ? [c.razaoSocial, `CNPJ ${valorEscrito('CNPJ', c.cnpj)}`, c.endereco].join('\n') : null;
+  }
+  return null;
+}
+
+export const MOTIVO_IDENTIDADE_NAO_CONFIRMADA = 'IDENTIDADE_DO_CONSIGNATARIO_NAO_CONFIRMADA';
+
+const pedidosDoConsignatario = (dados: ReadonlyArray<string>) => dados.filter((d) => DADOS_DO_CONSIGNATARIO.has(d));
+
+/**
+ * 14.20 — o consignatário do MBL deste Master escrito com os dados do cadastro institucional, SÓ quando a identidade
+ * está VERIFICADA (o cadastro preenche; a Auditoria confirma). A origem do valor é o cadastro; a confirmação leva as
+ * evidências das versões do MBL e do CNPJ comparado — nada é atribuído à Auditoria. Sem a confirmação, nada é escrito:
+ * o consignatário nunca é trocado em silêncio (o motivo sai em `consignatarioNaoConfirmado`).
+ */
+export function consignatarioPeloCadastro(
+  cadastro: CadastroInstitucional | null, identidade: IdentidadeDoConsignatario, dados: ReadonlyArray<string>, masterId: string,
+): ValorObservado[] {
+  // A identidade confirmada é a do cadastro comparado: um cadastro trocado depois não herda a confirmação.
+  if (identidade.tipo !== 'VERIFICADA' || !cadastro || cadastro.cnpj !== identidade.cnpj) return [];
+  const valores: ValorObservado[] = [];
+  for (const dado of pedidosDoConsignatario(dados)) {
+    const valor = textoDoConsignatario(cadastro, dado);
+    if (valor === null) continue;
+    valores.push({
+      dado, valor, fonte: 'CADASTRO_DA_ORGANIZACAO', escopo: { tipo: 'MASTER', masterId }, observadoEm: cadastro.registradoEm,
+      evidencia: { fonte: 'cadastro_institucional', ref: `cadastro_institucional:${cadastro.cadastroId}#${DO_CONSIGNATARIO[dado].join(',')}` },
+      confirmacao: { tipo: 'IDENTIDADE_DO_CONSIGNATARIO_NO_MBL', evidencias: identidade.evidencias },
+    });
+  }
+  return valores;
+}
+
+/**
+ * 14.20 — por que o consignatário pelo cadastro não foi escrito: a identidade não confirmada, com o motivo da exceção e
+ * as evidências de cada versão do MBL. Só informa (o campo continua faltando). `em`: instante da avaliação.
+ */
+export function consignatarioNaoConfirmado(identidade: IdentidadeDoConsignatario, dados: ReadonlyArray<string>, masterId: string, em: Instante): DadoNaoPublicado[] {
+  if (identidade.tipo === 'VERIFICADA') return [];
+  const evidencias: Evidencia[] = identidade.evidencias;
+  const evidencia: Evidencia = evidencias[0] ?? { fonte: 'liberacao.documentos', ref: `identidade_do_consignatario:${masterId}` };
+  return pedidosDoConsignatario(dados).map((dado) => ({
+    dado, fonte: 'CADASTRO_DA_ORGANIZACAO', motivo: MOTIVO_IDENTIDADE_NAO_CONFIRMADA, causa: identidade.motivo, evidencia, evidencias, observadoEm: em,
+  }));
 }

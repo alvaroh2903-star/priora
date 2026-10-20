@@ -1,6 +1,6 @@
 import { Evidencia, Instante, ModalidadeMaster } from '../../dominio';
 import { valorEscritoNoLugar, valorNoFormato } from './formatos';
-import { DefinicaoDoModelo, FonteDeDado, GrupoDeOpcoes, TipoDocumento } from './modelos';
+import { CampoVariavel, DefinicaoDoModelo, FonteDeDado, GrupoDeOpcoes, TipoDeConfirmacao, TipoDocumento } from './modelos';
 
 /**
  * Preenchimento de uma versão de modelo (decisões 14.1 e 14.6): só com dados
@@ -29,6 +29,17 @@ export interface ValorObservado {
   observadoEm: Instante;
   /** De quem é o dado: o Master do documento, um processo vinculado a ele, o próprio ato de geração, ou o signatário legal. */
   escopo: { tipo: 'MASTER'; masterId: string } | { tipo: 'PROCESSO'; processoId: string } | { tipo: 'DOCUMENTO' } | { tipo: 'SIGNATARIO'; signatarioId: string };
+  /**
+   * 14.20: a confirmação documental que o valor carrega (proveniência dupla). A ORIGEM do valor continua sendo `fonte`
+   * e `evidencia` (ex.: o cadastro da organização); aqui ficam só as evidências que confirmaram o seu uso (ex.: as
+   * versões do MBL lidas pela Auditoria). Nunca transforma o valor em dado da Auditoria.
+   */
+  confirmacao?: ConfirmacaoDoValor;
+}
+
+export interface ConfirmacaoDoValor {
+  tipo: TipoDeConfirmacao;
+  evidencias: ReadonlyArray<Evidencia>;
 }
 
 /** Escolha explícita do Analista num grupo de opções (nunca default). */
@@ -62,7 +73,9 @@ export type MotivoRecusa =
   /** O valor não está no formato que o lugar do campo exige (data, hora, CPF/CNPJ com dígitos verificadores, texto sem controle). */
   | 'FORA_DO_FORMATO'
   /** Dado de um cadastro que não é o do signatário legal definido para este documento (DOC-23). */
-  | 'OUTRO_SIGNATARIO';
+  | 'OUTRO_SIGNATARIO'
+  /** 14.20: o campo exige confirmação documental (ex.: identidade do consignatário no MBL) e o valor não a traz. */
+  | 'SEM_CONFIRMACAO_DOCUMENTAL';
 
 /** Valor que só o Analista conhece, informado para ESTE documento (vale só onde a definição aceita a fonte ANALISTA). */
 export interface ValorInformado {
@@ -95,6 +108,9 @@ export interface DadoNaoPublicado {
   motivo: string;
   evidencia: Evidencia;
   observadoEm: Instante;
+  /** 14.20: a causa precisa (ex.: o motivo da exceção na identidade do consignatário) e todas as evidências dela. */
+  causa?: string;
+  evidencias?: ReadonlyArray<Evidencia>;
 }
 
 export interface Faltante {
@@ -153,7 +169,11 @@ export interface ConteudoDoDocumento {
 export interface PlanoDePreenchimento {
   conteudo: ConteudoDoDocumento;
   /** De onde veio cada valor (todas as fontes concordantes ficam registradas). */
-  proveniencia: ReadonlyArray<{ campo: string; fontes: ReadonlyArray<{ fonte: FonteDeDado; evidencia: Evidencia; observadoEm: Instante }> }>;
+  proveniencia: ReadonlyArray<{
+    campo: string;
+    /** A origem de cada valor concordante; `confirmacao` (14.20) só com as evidências que confirmaram o uso dele. */
+    fontes: ReadonlyArray<{ fonte: FonteDeDado; evidencia: Evidencia; observadoEm: Instante; confirmacao?: ConfirmacaoDoValor }>;
+  }>;
   selecoes: ReadonlyArray<SelecaoDeOpcao>;
   /** Só as escolhas humanas usadas (continuam valendo até nova decisão). */
   escolhas: ReadonlyArray<EscolhaDeOpcao>;
@@ -181,17 +201,19 @@ export interface ModeloEmUso {
 
 const vazio = (t: string | null | undefined) => String(t ?? '').trim() === '';
 
-function motivoDeRecusa(
-  v: ValorObservado, escopo: 'MASTER' | 'PROCESSO' | 'DOCUMENTO' | 'SIGNATARIO', aceitas: ReadonlyArray<FonteDeDado>, ctx: ContextoDoPreenchimento,
-  formato: Parameters<typeof valorNoFormato>[0] | null,
-): MotivoRecusa | null {
+/** 14.20: a confirmação exigida pelo campo, com ao menos uma evidência documental da Auditoria. */
+const confirmado = (v: ValorObservado, c: CampoVariavel) =>
+  !c.confirmacao || (v.confirmacao?.tipo === c.confirmacao.tipo && v.confirmacao.evidencias.some((e) => e.fonte === 'auditoria'));
+
+function motivoDeRecusa(v: ValorObservado, c: CampoVariavel, ctx: ContextoDoPreenchimento, formato: Parameters<typeof valorNoFormato>[0] | null): MotivoRecusa | null {
   if (vazio(v.valor)) return 'VALOR_VAZIO';
   if (formato && !valorNoFormato(formato, v.valor)) return 'FORA_DO_FORMATO';
-  if (!aceitas.includes(v.fonte)) return 'FONTE_NAO_ACEITA';
-  if (v.escopo.tipo !== escopo) return 'ESCOPO_INCOMPATIVEL';
+  if (!c.fontesAceitas.includes(v.fonte)) return 'FONTE_NAO_ACEITA';
+  if (v.escopo.tipo !== c.escopo) return 'ESCOPO_INCOMPATIVEL';
   if (v.escopo.tipo === 'MASTER' && v.escopo.masterId !== ctx.masterId) return 'OUTRO_MASTER';
   if (v.escopo.tipo === 'PROCESSO' && !ctx.processoIds.includes(v.escopo.processoId)) return 'PROCESSO_NAO_VINCULADO';
   if (v.escopo.tipo === 'SIGNATARIO' && (ctx.signatario === null || v.escopo.signatarioId !== ctx.signatario)) return 'OUTRO_SIGNATARIO';
+  if (!confirmado(v, c)) return 'SEM_CONFIRMACAO_DOCUMENTAL';
   return null;
 }
 
@@ -284,7 +306,7 @@ export function planejarPreenchimento(
   for (const c of d.campos) {
     const aceitos: ValorObservado[] = [];
     for (const v of valores.filter((x) => x.dado === c.dado)) {
-      const motivo = motivoDeRecusa(v, c.escopo, c.fontesAceitas, ctx, d.layout?.campos[c.id]?.formato ?? null);
+      const motivo = motivoDeRecusa(v, c, ctx, d.layout?.campos[c.id]?.formato ?? null);
       if (motivo) recusados.push({ valor: v, motivo });
       else aceitos.push(v);
     }
@@ -302,7 +324,10 @@ export function planejarPreenchimento(
     } else if (distintos.length === 1) {
       for (const v of aceitos) if (deInformado.has(v)) informadosUsados.add(deInformado.get(v)!);
       campos.push({ campo: c.id, valor: distintos[0] });
-      proveniencia.push({ campo: c.id, fontes: aceitos.map((v) => ({ fonte: v.fonte, evidencia: v.evidencia, observadoEm: v.observadoEm })) });
+      proveniencia.push({
+        campo: c.id,
+        fontes: aceitos.map((v) => ({ fonte: v.fonte, evidencia: v.evidencia, observadoEm: v.observadoEm, ...(v.confirmacao ? { confirmacao: v.confirmacao } : {}) })),
+      });
     } else if (c.obrigatorio) faltantes.push({ campo: c.id, rotulo: c.rotulo, dado: c.dado, fontesAceitas: c.fontesAceitas });
   }
   const { problemas, selecoes, escolhasUsadas } = resolverOpcoes(d, escolhas, ctx);

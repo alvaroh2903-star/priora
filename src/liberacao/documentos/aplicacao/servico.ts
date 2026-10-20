@@ -4,11 +4,11 @@ import {
   FLUXO_GRIEG, FonteDeDado, ItemDoManifesto, ModeloEmUso, PedidoDeReenvio, PlanoDePreenchimento, ReferenciaDeEmail, ResultadoDoPreenchimento,
   SinalDeRejeicao, SituacaoDocumental, TentativaDeEnvio, TipoDocumento, ValorInformado, ValorObservado, VeredictoDoSinal, VersaoDoModelo,
   ProcedimentoDocumental, procedimentoDoModelo,
-  ARQUIVOS_OFICIAIS_RECEBIDOS, DEFINICOES_PROPOSTAS, avaliarSinalDeRejeicao, entradaDoCatalogo, canonico, conciliar, modeloVigente, planejarPreenchimento, podeValidar,
+  ARQUIVOS_OFICIAIS_RECEBIDOS, DEFINICOES_EM_VIGOR, REVISOES_DAS_DEFINICOES, REVISAO_EM_VIGOR, avaliarSinalDeRejeicao, entradaDoCatalogo, canonico, conciliar, modeloVigente, planejarPreenchimento, podeValidar,
   selecionarModelo, situacaoDocumental, ultimoChangeKey, verificarArquivoAssinado, verificarDefinicao, VerificacaoDoArquivoAssinado, CERTIFICADO_NAO_VERIFICADO,
   ConstatacaoDaConferencia, CONSTATACOES_DA_CONFERENCIA, DefinicaoDoSignatario, IdentidadeDoSignatario, MOTIVOS_DE_SUBSTITUICAO, SignatarioLegal,
   SubstituicaoDoArquivoAssinado, alteracaoPosteriorA, assinaturaDoDocumento, identidadeDo, poderesValidos, signatarioDaOrganizacao, valoresDoSignatario,
-  IdentidadeDoConsignatario, DADOS_DOS_MODELOS,
+  IdentidadeDoConsignatario, DADOS_DO_CONSIGNATARIO_DO_MBL,
 } from '../dominio';
 import { AtorDocumental, CaixaMonitorada, DepsDocumentos, FalhaAntesDoEnvio, GeracaoRecusada, OutlookDoAnalista } from './portas';
 
@@ -116,8 +116,8 @@ export interface AvaliacaoDocumental {
   identidadeDoConsignatario: IdentidadeDoConsignatario | null;
 }
 
-/** Dados de modelo que mostram o consignatário do MBL (DOC-17, 14.18). */
-const DADOS_DO_CONSIGNATARIO: ReadonlySet<string> = new Set([DADOS_DOS_MODELOS.CONSIGNATARIO_RAZAO_SOCIAL, DADOS_DOS_MODELOS.CONSIGNATARIO_QUALIFICACAO]);
+/** Dados de modelo que mostram o consignatário do MBL (DOC-17, 14.18, 14.20). */
+const DADOS_DO_CONSIGNATARIO: ReadonlySet<string> = new Set(DADOS_DO_CONSIGNATARIO_DO_MBL);
 
 /** O modelo precisa do signatário legal: tem campo do cadastro dele ou exige poderes de representação. */
 const precisaDoSignatario = (d: DefinicaoDoModelo) =>
@@ -232,7 +232,11 @@ export async function avaliarDocumentacao(
 /* ---------------------------------------- versões de modelo ---------------------------------------- */
 
 export type ResultadoDoModelo =
-  | { tipo: 'OK'; modeloId: string; novo?: boolean }
+  | {
+    tipo: 'OK'; modeloId: string; novo?: boolean;
+    /** 14.20: a leitura PENDENTE (de uma revisão anterior do catálogo, nunca editada) passou para a revisão em vigor. */
+    leituraAtualizada?: true;
+  }
   | { tipo: 'RECUSADO'; motivo: string; detalhe?: unknown };
 
 /** Cadastro inicial de uma versão a partir do arquivo oficial (fica PENDENTE até validação humana). */
@@ -252,15 +256,54 @@ export async function cadastrarModelo(
   return { tipo: 'OK', modeloId: r.modeloId, novo: r.nova };
 }
 
+/** A revisão do catálogo oficial cuja definição é EXATAMENTE esta (null = leitura editada ou de outro arquivo). */
+function revisaoDoCatalogo(tipo: TipoDocumento, definicao: DefinicaoDoModelo | null): number | null {
+  if (!definicao) return null;
+  const c = canonico(definicao);
+  return REVISOES_DAS_DEFINICOES.find((r) => canonico(r.definicoes[tipo]) === c)?.numero ?? null;
+}
+
 /**
- * Cadastro de um dos quatro arquivos oficiais recebidos, com a definição PROPOSTA
- * lida dele. Exige exatamente os bytes recebidos (hash) e fica PENDENTE: só uma
- * pessoa, ao validar, coloca a versão em uso.
+ * Cadastro de um dos quatro arquivos oficiais recebidos, com a definição oficial EM VIGOR (a revisão atual do
+ * catálogo) lida dele. Exige exatamente os bytes recebidos (hash) e fica PENDENTE: só uma pessoa, ao validar, coloca a
+ * versão em uso. 14.20: o arquivo já cadastrado e ainda PENDENTE com a leitura de uma revisão ANTERIOR do catálogo
+ * (nunca editada por pessoa) passa para a revisão em vigor; nada validado muda (para isso, `revisarDefinicaoDoModelo`).
  */
 export async function cadastrarModeloOficial(deps: DepsDocumentos, ator: AtorDocumental, tipo: TipoDocumento, arquivo: Uint8Array): Promise<ResultadoDoModelo> {
   const esperado = ARQUIVOS_OFICIAIS_RECEBIDOS[tipo];
   if (sha256(arquivo) !== esperado.sha256) return { tipo: 'RECUSADO', motivo: 'ARQUIVO_DIFERENTE_DO_OFICIAL_RECEBIDO' };
-  return cadastrarModelo(deps, ator, { tipo, versao: `oficial-${esperado.sha256.slice(0, 12)}`, arquivo, definicao: DEFINICOES_PROPOSTAS[tipo] });
+  const r = await cadastrarModelo(deps, ator, { tipo, versao: `oficial-${esperado.sha256.slice(0, 12)}`, arquivo, definicao: DEFINICOES_EM_VIGOR[tipo] });
+  if (r.tipo !== 'OK' || r.novo !== false) return r;
+  const v = await deps.repo.versao(ator.organizationId, r.modeloId);
+  const revisao = v?.estado === 'PENDENTE_DE_VALIDACAO' ? revisaoDoCatalogo(tipo, v.definicao) : null;
+  if (revisao === null || revisao >= REVISAO_EM_VIGOR.numero) return r;
+  const ok = await deps.repo.definirLeitura(ator.organizationId, r.modeloId, DEFINICOES_EM_VIGOR[tipo], ator.membershipId, deps.relogio.agora());
+  return ok ? { ...r, leituraAtualizada: true } : r;
+}
+
+/**
+ * 14.20 — revisão da LEITURA de uma versão oficial já VALIDADA: o MESMO arquivo oficial ganha uma versão nova, PENDENTE,
+ * com a definição em vigor do catálogo; só uma pessoa, ao validar, a coloca em uso. A versão validada não muda (a leitura
+ * validada é imutável) e os documentos feitos com ela continuam apontando para ela. Só para leitura que é exatamente
+ * uma revisão anterior do catálogo (leitura editada por pessoa não é sobrescrita: fica para decisão humana).
+ */
+export async function revisarDefinicaoDoModelo(deps: DepsDocumentos, ator: AtorDocumental, modeloId: string): Promise<ResultadoDoModelo> {
+  if (!(await papelInterno(deps, ator.organizationId, ator.membershipId))) return { tipo: 'RECUSADO', motivo: 'PESSOA_SEM_PERMISSAO' };
+  const v = await deps.repo.versao(ator.organizationId, modeloId);
+  if (!v) return { tipo: 'RECUSADO', motivo: 'VERSAO_INEXISTENTE' };
+  if (v.estado !== 'VALIDADO') return { tipo: 'RECUSADO', motivo: 'VERSAO_NAO_ESTA_VALIDADA' };
+  if (v.arquivoSha256 !== ARQUIVOS_OFICIAIS_RECEBIDOS[v.tipo].sha256) return { tipo: 'RECUSADO', motivo: 'ARQUIVO_SEM_DEFINICAO_NO_CATALOGO' };
+  const revisao = revisaoDoCatalogo(v.tipo, v.definicao);
+  if (revisao === null) return { tipo: 'RECUSADO', motivo: 'LEITURA_FORA_DO_CATALOGO' };
+  if (revisao >= REVISAO_EM_VIGOR.numero) return { tipo: 'RECUSADO', motivo: 'LEITURA_JA_E_A_EM_VIGOR' };
+  const arquivo = await deps.repo.arquivoDoModelo(ator.organizationId, modeloId);
+  if (!arquivo || sha256(arquivo) !== v.arquivoSha256) return { tipo: 'RECUSADO', motivo: 'ARQUIVO_DO_MODELO_INDISPONIVEL' };
+  const r = await deps.repo.cadastrarVersao(ator.organizationId, {
+    tipo: v.tipo, versao: `${v.versao}-def${REVISAO_EM_VIGOR.numero}`, arquivo, arquivoSha256: v.arquivoSha256, definicao: DEFINICOES_EM_VIGOR[v.tipo],
+    origem: { tipo: 'REVISAO_DA_DEFINICAO', revisa: modeloId, por: ator.membershipId, decisao: REVISAO_EM_VIGOR.decisao! },
+    revisaoDaDefinicao: (v.revisaoDaDefinicao ?? 1) + 1, em: deps.relogio.agora(),
+  });
+  return { tipo: 'OK', modeloId: r.modeloId, novo: r.nova };
 }
 
 /** Registra a leitura (campos, texto fixo, opções) de uma versão PENDENTE. Pode ter sido preparada com ajuda de IA; só vale após validação. */

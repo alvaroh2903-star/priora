@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { situacaoDaAgencia } from '../../dominio';
 import { armador, clienteOk, decidir, procedimento } from '../../dominio/__tests__/l1b/fixtures';
 import {
-  ARQUIVOS_OFICIAIS_RECEBIDOS, DEFINICOES_PROPOSTAS, FonteDeDado, TipoDocumento, ValorObservado, acrescentarAoProcedimento,
+  ARQUIVOS_OFICIAIS_RECEBIDOS, DEFINICOES_EM_VIGOR, DEFINICOES_PROPOSTAS, DefinicaoDoModelo, FonteDeDado, TipoDocumento, ValorObservado, acrescentarAoProcedimento,
   avaliarDocumentacao, cadastrarModeloOficial, conciliarEnvio, condicaoDaSolicitacaoDeAgendamento, conferirAssinatura, fatosDocumentaisParaL1b, geradorPdfPriora,
   prepararDocumento, prepararRascunho, registrarAssinatura, sha256, validarModelo, SignatarioLegal,
 } from '..';
@@ -23,14 +23,16 @@ const CODIGO: Record<TipoDocumento, string> = {
 
 /**
  * Valores sintéticos para um tipo, cada dado vindo da PRIMEIRA fonte aceita pela definição (menos ANALISTA, GERACAO e o
- * cadastro do signatário legal — esse vem do cadastro SINTÉTICO `SIGNATARIO_LEGAL_SINTETICO`).
+ * cadastro do signatário legal — esse vem do cadastro SINTÉTICO `SIGNATARIO_LEGAL_SINTETICO`). Campo que exige
+ * confirmação documental (14.20) recebe a confirmação sintética, como o adaptador a entrega com a identidade VERIFICADA.
  */
-function valoresDasFontes(tipo: TipoDocumento, exceto: string[] = []): ValorObservado[] {
+function valoresDasFontes(tipo: TipoDocumento, exceto: string[] = [], defs: Readonly<Record<TipoDocumento, DefinicaoDoModelo>> = DEFINICOES_PROPOSTAS): ValorObservado[] {
   const out: ValorObservado[] = [];
-  for (const c of DEFINICOES_PROPOSTAS[tipo].campos) {
+  for (const c of defs[tipo].campos) {
     const fonte = c.fontesAceitas.find((f) => f !== 'ANALISTA' && f !== 'GERACAO' && f !== 'CADASTRO_DO_SIGNATARIO_LEGAL') as FonteDeDado | undefined;
     if (!fonte || exceto.includes(c.dado) || out.some((v) => v.dado === c.dado)) continue;
-    out.push(valor(c.dado, VALORES_SINTETICOS[c.dado], fonte, c.escopo === 'MASTER' ? { tipo: 'MASTER', masterId: MASTER } : { tipo: 'DOCUMENTO' }));
+    const v = valor(c.dado, VALORES_SINTETICOS[c.dado], fonte, c.escopo === 'MASTER' ? { tipo: 'MASTER', masterId: MASTER } : { tipo: 'DOCUMENTO' });
+    out.push(c.confirmacao ? { ...v, confirmacao: { tipo: c.confirmacao.tipo, evidencias: [{ fonte: 'auditoria', ref: 'auditoria_extracao:sintetica' }] } } : v);
   }
   return out;
 }
@@ -61,7 +63,8 @@ async function assinarEConferir(c: Awaited<ReturnType<typeof cenarioReal>>, docu
 }
 
 test('[GR-01] modelo oficial: só os bytes recebidos são cadastrados; a versão fica PENDENTE e nada é gerado até uma pessoa validar', { skip: SEM_MODELOS }, async () => {
-  const c = await cenarioDocumental({ armador: { masterId: MASTER, codigo: 'MSC' }, defs: {}, gerador: geradorPdfPriora, valores: valoresDasFontes('MEMORANDO_MSC') });
+  // 14.20: o cadastro do arquivo oficial recebe a revisão EM VIGOR das definições (consignatário pelo cadastro, confirmado pela Auditoria).
+  const c = await cenarioDocumental({ armador: { masterId: MASTER, codigo: 'MSC' }, defs: {}, gerador: geradorPdfPriora, valores: valoresDasFontes('MEMORANDO_MSC', [], DEFINICOES_EM_VIGOR) });
   assert.deepEqual(await cadastrarModeloOficial(c.deps, ATOR, 'MEMORANDO_MSC', MODELOS_OFICIAIS.MEMORANDO_ZIM_ROCHAMAR!), { tipo: 'RECUSADO', motivo: 'ARQUIVO_DIFERENTE_DO_OFICIAL_RECEBIDO' });
   const r = await cadastrarModeloOficial(c.deps, ATOR, 'MEMORANDO_MSC', MODELOS_OFICIAIS.MEMORANDO_MSC!);
   assert.equal(r.tipo, 'OK');

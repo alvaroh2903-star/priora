@@ -44,6 +44,9 @@ import {
  *    da organização usados pelos quatro documentos e o signatário legal
  *    (DOC-23). Só ADMIN consulta e altera (também conferido no banco); cada
  *    alteração é um registro novo, com o autor e o instante da sessão.
+ *  - 14.20 — o consignatário do MBL dos quatro modelos é escrito com o cadastro
+ *    só com a identidade confirmada pela Auditoria (`identidadeDoConsignatario`
+ *    na leitura do Master traz o resultado, versão por versão).
  */
 
 export interface DocumentosRouterDeps {
@@ -106,7 +109,8 @@ export function criarDocumentosRouter(deps: DocumentosRouterDeps = {}): Router {
         procedimento: av.procedimento, situacao: av.situacao, tipo: av.tipo,
         // Só o estado e a identidade (nome) do signatário legal; o cadastro dele (CPF, evidências) não sai por aqui.
         signatarioLegal: av.signatarioLegal ? { tipo: av.signatarioLegal.tipo, signatario: av.signatario } : null,
-        // O1.8: identidade do consignatário do MBL conferida pelo CNPJ (só informa; não preenche nem bloqueia).
+        // O1.8/14.20: identidade do consignatário do MBL conferida pelo CNPJ; condiciona só os campos do consignatário
+        // (escritos pelo cadastro), nunca a Liberação nem a L1b.
         identidadeDoConsignatario: av.identidadeDoConsignatario,
         // Versões preparadas (preparador, instante, versão do modelo, hash do PDF, opções e valores informados). O conteúdo de
         // cada versão (dados de quem assina inclusive) fica no PDF dela; os dados de agora estão em `situacao.preenchimento`.
@@ -293,6 +297,7 @@ export function criarDocumentosRouter(deps: DocumentosRouterDeps = {}): Router {
 
   const STATUS_DO_CADASTRO: Record<string, number> = {
     EXIGE_ADMIN: 403, CADASTRO_INDISPONIVEL: 503, DADOS_INVALIDOS: 422, SIGNATARIO_INEXISTENTE: 404, SIGNATARIO_REVOGADO: 409,
+    PODERES_DE_OUTRO_CADASTRO: 409, CADASTRO_INSTITUCIONAL_FORA_DE_ORDEM: 409,
   };
   const responderCadastro = (res: Response, r: ResultadoDoCadastro) =>
     res.status(r.tipo === 'REGISTRADO' ? 201 : STATUS_DO_CADASTRO[r.motivo] ?? 422).json(r);

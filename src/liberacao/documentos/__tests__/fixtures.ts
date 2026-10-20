@@ -155,18 +155,22 @@ export function repositorioEmMemoria(opcoes: { idsUuid?: boolean } = {}): Reposi
     },
     async arquivoDoModelo(org, modeloId) { return m.versoes.find((x) => x.org === org && x.modeloId === modeloId)?.arquivo ?? null; },
     async cadastrarVersao(org, n) {
-      const igual = m.versoes.find((v) => v.org === org && v.tipo === n.tipo && v.arquivoSha256 === n.arquivoSha256);
+      // O mesmo arquivo nunca é cadastrado duas vezes; só a revisão da leitura (14.20) repete o arquivo, com outro número.
+      const revisaoDaDefinicao = n.revisaoDaDefinicao ?? 1;
+      const igual = m.versoes.find((v) => v.org === org && v.tipo === n.tipo && v.arquivoSha256 === n.arquivoSha256 && (v.revisaoDaDefinicao ?? 1) === revisaoDaDefinicao);
       if (igual) return { modeloId: igual.modeloId, nova: false };
       if (m.versoes.some((v) => v.org === org && v.tipo === n.tipo && v.versao === n.versao)) throw new Error('versão já existe com outro arquivo');
       const modeloId = id('modelo');
+      const o = n.origem;
       m.versoes.push({
         org, modeloId, tipo: n.tipo, versao: n.versao, arquivoSha256: n.arquivoSha256, arquivo: n.arquivo, definicao: n.definicao, estado: 'PENDENTE_DE_VALIDACAO',
-        cadastradoEm: n.em.toISOString(), validacao: null, rejeicao: null,
-        origem: n.origem.tipo === 'CADASTRO' ? { tipo: 'CADASTRO', por: n.origem.por }
-          : { tipo: 'SUBSTITUTO_DA_AGENCIA', substitui: n.origem.substitui, email: n.origem.email, anexo: n.origem.anexo },
+        cadastradoEm: n.em.toISOString(), validacao: null, rejeicao: null, revisaoDaDefinicao,
+        origem: o.tipo === 'CADASTRO' ? { tipo: 'CADASTRO', por: o.por }
+          : o.tipo === 'REVISAO_DA_DEFINICAO' ? { tipo: 'REVISAO_DA_DEFINICAO', revisa: o.revisa, por: o.por, decisao: o.decisao }
+            : { tipo: 'SUBSTITUTO_DA_AGENCIA', substitui: o.substitui, email: o.email, anexo: o.anexo },
       });
-      eventoDeModelo(org, modeloId, n.origem.tipo === 'CADASTRO' ? 'MODELO_CADASTRADO' : 'SUBSTITUTO_RECEBIDO', n.origem.tipo === 'CADASTRO' ? 'PESSOA' : 'INTEGRACAO',
-        n.origem.tipo === 'CADASTRO' ? n.origem.por : null, { sinalId: n.origem.tipo === 'SUBSTITUTO_DA_AGENCIA' ? n.origem.sinalId : null }, n.em);
+      eventoDeModelo(org, modeloId, o.tipo === 'SUBSTITUTO_DA_AGENCIA' ? 'SUBSTITUTO_RECEBIDO' : 'MODELO_CADASTRADO', o.tipo === 'SUBSTITUTO_DA_AGENCIA' ? 'INTEGRACAO' : 'PESSOA',
+        o.tipo === 'SUBSTITUTO_DA_AGENCIA' ? null : o.por, { sinalId: o.tipo === 'SUBSTITUTO_DA_AGENCIA' ? o.sinalId : null }, n.em);
       return { modeloId, nova: true };
     },
     async definirLeitura(org, modeloId, definicao, por, em) {

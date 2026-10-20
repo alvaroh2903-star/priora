@@ -61,7 +61,11 @@ export interface VersaoDoModelo {
   arquivoSha256: string;
   origem:
     | { tipo: 'CADASTRO'; por: string }
-    | { tipo: 'SUBSTITUTO_DA_AGENCIA'; substitui: string; email: ReferenciaDeEmail; anexo: { attachmentId: string; nome: string } };
+    | { tipo: 'SUBSTITUTO_DA_AGENCIA'; substitui: string; email: ReferenciaDeEmail; anexo: { attachmentId: string; nome: string } }
+    /** 14.20: o MESMO arquivo de uma versão validada com outra leitura (revisão da definição oficial). */
+    | { tipo: 'REVISAO_DA_DEFINICAO'; revisa: string; por: string; decisao: string };
+  /** 1 = a leitura original do arquivo; cada revisão da leitura do MESMO arquivo soma 1 (ausente = 1). */
+  revisaoDaDefinicao?: number;
   /** Leitura do arquivo (campos, texto fixo, opções). Pode ser preparada com ajuda de IA; só vale depois de validada. */
   definicao: DefinicaoDoModelo | null;
   estado: EstadoDoModelo;
