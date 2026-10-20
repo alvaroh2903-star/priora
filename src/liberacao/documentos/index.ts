@@ -12,7 +12,11 @@ export type {
 } from './aplicacao/servico';
 export { geradorPdfPriora, gerarDocumento, limparExemplo, RecusaDeGeracao, ID_DO_GERADOR, VERSAO_DO_GERADOR } from './pdf/gerador';
 export type { MotivoDaRecusaDeGeracao, TrechoRemovido } from './pdf/gerador';
-export { repositorioDocumentalPostgres, fontesConfiaveisPostgres, depsDocumentosPadrao } from './aplicacao/postgres';
+export { repositorioDocumentalPostgres, fontesConfiaveisPostgres, repositorioInstitucionalPostgres, depsDocumentosPadrao } from './aplicacao/postgres';
+export {
+  registrarCadastroInstitucional, consultarCadastroInstitucional, registrarSignatarioLegal, registrarPoderesDoSignatario, revogarSignatarioLegal,
+} from './aplicacao/cadastroInstitucional';
+export type { ResultadoDoCadastro, ConsultaDoCadastro } from './aplicacao/cadastroInstitucional';
 export {
   outlookDoAnalistaGraph, outlookDaPessoaAutenticada, caixaMonitoradaGraph, escritaNoOutlookHabilitada, recusaDefinitiva, VARIAVEL_ESCRITA_OUTLOOK_LIBERACAO, LIMITE_ANEXOS_NO_PEDIDO_BYTES,
 } from './aplicacao/outlook';

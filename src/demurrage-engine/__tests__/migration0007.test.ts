@@ -137,7 +137,9 @@ test('0007 — organization_id imutável nas tabelas de tenant', { skip: !url },
       'documentos_apresentacao_modelos', 'documentos_apresentacao', 'documentos_apresentacao_processos', 'documentos_apresentacao_assinaturas',
       'documentos_apresentacao_conferencias', 'documentos_apresentacao_envios', 'documentos_apresentacao_eventos',
       // S4 — Outlook do próprio Analista (0105_s4_outlook_da_pessoa): mesma regra.
-      'outlook_conexoes_pessoa'];
+      'outlook_conexoes_pessoa',
+      // Liberação — cadastro institucional e signatário legal (0108_liberacao_cadastro_institucional): mesma regra.
+      'organizacao_cadastro_institucional', 'organizacao_signatarios_legais'];
     const { rows } = await pool.query(`
       SELECT c.table_name,
              EXISTS (SELECT 1 FROM pg_trigger tg

@@ -10,6 +10,7 @@ import {
   AutorizacaoDaAcao, CaixaMonitorada, DepsDocumentos, EscolhaDeOpcao, MOTIVO_PERMISSAO_PENDENTE, OutlookDoAnalista, PedidoDeReenvio, VerificacaoHumana,
   avaliarDocumentacao, caixaMonitoradaGraph, conciliarEnvio, conciliarManualmente, conferirAssinatura, depsDocumentosPadrao, descartarRascunho,
   enviarPelaPriora, outlookDaPessoaAutenticada, papeisDoDocumento, prepararDocumento, prepararRascunho, registrarAssinatura,
+  ResultadoDoCadastro, consultarCadastroInstitucional, registrarCadastroInstitucional, registrarPoderesDoSignatario, registrarSignatarioLegal, revogarSignatarioLegal,
 } from '../liberacao/documentos';
 
 /**
@@ -39,6 +40,10 @@ import {
  *    continua atrás de `PRIORA_LIBERACAO_OUTLOOK_ESCRITA`.
  *  - A permissão da ação de Master na L1b (portão do cliente / N-13) ainda não
  *    tem fonte: a solicitação de agendamento fica bloqueada com esse motivo.
+ *  - O1.8 — cadastro institucional (`/cadastro-institucional`): os dados fixos
+ *    da organização usados pelos quatro documentos e o signatário legal
+ *    (DOC-23). Só ADMIN consulta e altera (também conferido no banco); cada
+ *    alteração é um registro novo, com o autor e o instante da sessão.
  */
 
 export interface DocumentosRouterDeps {
@@ -101,6 +106,8 @@ export function criarDocumentosRouter(deps: DocumentosRouterDeps = {}): Router {
         procedimento: av.procedimento, situacao: av.situacao, tipo: av.tipo,
         // Só o estado e a identidade (nome) do signatário legal; o cadastro dele (CPF, evidências) não sai por aqui.
         signatarioLegal: av.signatarioLegal ? { tipo: av.signatarioLegal.tipo, signatario: av.signatario } : null,
+        // O1.8: identidade do consignatário do MBL conferida pelo CNPJ (só informa; não preenche nem bloqueia).
+        identidadeDoConsignatario: av.identidadeDoConsignatario,
         // Versões preparadas (preparador, instante, versão do modelo, hash do PDF, opções e valores informados). O conteúdo de
         // cada versão (dados de quem assina inclusive) fica no PDF dela; os dados de agora estão em `situacao.preenchimento`.
         documentos: av.documentos.map(({ conteudo: _conteudo, ...d }) => d),
@@ -281,6 +288,53 @@ export function criarDocumentosRouter(deps: DocumentosRouterDeps = {}): Router {
       next(err);
     }
   });
+
+  /* ----------------------------------- O1.8 — cadastro institucional (só ADMIN) ----------------------------------- */
+
+  const STATUS_DO_CADASTRO: Record<string, number> = {
+    EXIGE_ADMIN: 403, CADASTRO_INDISPONIVEL: 503, DADOS_INVALIDOS: 422, SIGNATARIO_INEXISTENTE: 404, SIGNATARIO_REVOGADO: 409,
+  };
+  const responderCadastro = (res: Response, r: ResultadoDoCadastro) =>
+    res.status(r.tipo === 'REGISTRADO' ? 201 : STATUS_DO_CADASTRO[r.motivo] ?? 422).json(r);
+  const corpo = (req: AuthedRequest): Record<string, unknown> => (req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {});
+  const noCadastro = (fn: (d: DepsDocumentos, req: AuthedRequest) => Promise<ResultadoDoCadastro>) =>
+    async (req: AuthedRequest, res: Response, next: NextFunction) => {
+      try {
+        res.setHeader('Cache-Control', 'private, no-store');
+        responderCadastro(res, await fn(documentos(), req));
+      } catch (err) {
+        next(err);
+      }
+    };
+
+  /** GET /cadastro-institucional — cadastro vigente, histórico, signatários e o que ainda falta, por modelo. Só ADMIN. */
+  router.get('/cadastro-institucional', async (req: AuthedRequest, res, next) => {
+    try {
+      const r = await consultarCadastroInstitucional(documentos(), ator(req));
+      // Traz CNPJ, CPF e evidências do cadastro: nada de cache compartilhado.
+      res.setHeader('Cache-Control', 'private, no-store');
+      res.status(r.tipo === 'OK' ? 200 : STATUS_DO_CADASTRO[r.motivo] ?? 422).json(r);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /** POST /cadastro-institucional — registra o cadastro COMPLETO (cnpj, razaoSocial, endereco, telefone, contatos, motivo). */
+  router.post('/cadastro-institucional', noCadastro((d, req) => registrarCadastroInstitucional(d, ator(req), corpo(req))));
+
+  /** POST /cadastro-institucional/signatarios — novo signatário legal (nome, cpf, qualificacao, evidencia). */
+  router.post('/cadastro-institucional/signatarios', noCadastro((d, req) => registrarSignatarioLegal(d, ator(req), corpo(req))));
+
+  /** POST /cadastro-institucional/signatarios/:signatarioId — corrige os dados de um signatário (novo registro). */
+  router.post('/cadastro-institucional/signatarios/:signatarioId', noCadastro((d, req) => registrarSignatarioLegal(d, ator(req), corpo(req), req.params.signatarioId)));
+
+  /** POST /cadastro-institucional/signatarios/:signatarioId/poderes — comprovação dos poderes (evidencia, validoAte?). */
+  router.post('/cadastro-institucional/signatarios/:signatarioId/poderes',
+    noCadastro((d, req) => registrarPoderesDoSignatario(d, ator(req), req.params.signatarioId, corpo(req))));
+
+  /** POST /cadastro-institucional/signatarios/:signatarioId/revogar — revogação definitiva (motivo obrigatório). */
+  router.post('/cadastro-institucional/signatarios/:signatarioId/revogar',
+    noCadastro((d, req) => revogarSignatarioLegal(d, ator(req), req.params.signatarioId, corpo(req))));
 
   return router;
 }

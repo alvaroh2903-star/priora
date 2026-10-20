@@ -82,7 +82,8 @@ test('[ROTA-02] DOC-31 pela API (MSC): preparar → ver/baixar o PDF e parar; se
     const sit = await resposta.json() as Sit;
     assert.deepEqual([sit.procedimento, sit.situacao.proximoPasso, sit.situacao.pendencias, sit.situacao.preenchimento.tipo],
       ['GERAR_E_DISPONIBILIZAR', { passo: 'DOCUMENTO_DISPONIVEL', responsavel: 'ANALISTA', documentoId: preparo.documentoId }, [], 'PRONTO']);
-    assert.deepEqual(Object.keys(sit).sort(), ['documentos', 'procedimento', 'signatarioLegal', 'situacao', 'tipo']);
+    // O1.8: + a identidade do consignatário conferida pelo CNPJ (só informa; nada de assinatura, conferência do arquivo ou envio).
+    assert.deepEqual(Object.keys(sit).sort(), ['documentos', 'identidadeDoConsignatario', 'procedimento', 'signatarioLegal', 'situacao', 'tipo']);
     assert.equal(campos(s).find((x) => x.campo === 'nome')?.valor, SIGNATARIO_SINTETICO.nome, 'os campos de quem assina continuam preenchidos pelo cadastro');
     // Baixar e visualizar: o PDF preparado, com o hash da versão; nenhuma gravação.
     const antes = JSON.stringify([s.c.repo.m.documentos.length, s.c.repo.m.assinaturas, s.c.repo.m.conferencias, s.c.repo.m.tentativas, s.c.repo.m.eventosDoEnvio]);

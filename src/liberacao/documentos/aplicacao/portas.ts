@@ -4,6 +4,7 @@ import {
   EstadoDoEnvio, EstadoDoModelo, EventoDoEnvio, FluxoDeEmail, FonteDeDado, ModalidadeObservada, ObservacaoDaMensagem, PlanoDePreenchimento,
   ReferenciaDeEmail, RemetentesConfiaveisDaAgencia, SinalDeRejeicao, SinalPendente, TentativaDeEnvio, TipoDocumento, TipoEventoDoEnvio, ValorObservado, VeredictoDoSinal, VersaoDoModelo,
   ConferenciaDoEnvio, VerificacaoDoArquivoAssinado, SignatarioLegal, IdentidadeDoSignatario, SubstituicaoDoArquivoAssinado,
+  CadastroInstitucional, DadosInstitucionais, EventoDoSignatario, IdentidadeDoConsignatario,
 } from '../dominio';
 
 /**
@@ -37,10 +38,29 @@ export interface FontesConfiaveis {
   /**
    * DOC-23: cadastro(s) CONFIÁVEL(EIS) e VALIDADO(S) do signatário legal (representante legal) da organização,
    * vigentes no instante pedido, com a comprovação de poderes quando registrada. Nunca a conta Microsoft, o nome de
-   * exibição nem o cadastro do Analista. O signatário não precisa ser usuário da Priora.
-   * DEPENDÊNCIA PENDENTE: ainda não há cadastro validado — nada é devolvido (os campos de quem assina ficam faltando).
+   * exibição nem o cadastro do Analista. O signatário não precisa ser usuário da Priora. Vem do cadastro institucional
+   * (O1.8): sem cadastro, nada é devolvido e os campos de quem assina ficam faltando.
    */
   signatariosLegais(organizationId: string, em: Date): Promise<SignatarioLegal[]>;
+  /**
+   * O1.8: conferência da identidade do consignatário do MBL deste Master com o CNPJ do cadastro institucional, sobre
+   * o texto JÁ persistido pela Auditoria (contrato E1). Só informa: não preenche nada nem bloqueia nada. Opcional:
+   * fonte sem essa leitura não confere.
+   */
+  identidadeDoConsignatario?(organizationId: string, masterId: string): Promise<IdentidadeDoConsignatario>;
+}
+
+/**
+ * Cadastro institucional da organização (O1.8): os dados fixos usados pelos quatro documentos e o registro do
+ * signatário legal (DOC-23). Append-only; só a administração grava (conferido também no banco).
+ */
+export interface RepositorioInstitucional {
+  /** Todos os registros do cadastro da organização (o histórico); vale o mais recente. */
+  cadastros(organizationId: string): Promise<CadastroInstitucional[]>;
+  gravarCadastro(organizationId: string, novo: DadosInstitucionais & { motivo: string | null; por: string; em: Date }): Promise<{ cadastroId: string }>;
+  /** Todos os eventos do registro do signatário legal da organização. */
+  eventosDosSignatarios(organizationId: string): Promise<EventoDoSignatario[]>;
+  gravarEventoDoSignatario(organizationId: string, novo: Omit<EventoDoSignatario, 'eventoId' | 'registradoPor' | 'registradoEm'> & { por: string; em: Date }): Promise<{ eventoId: string }>;
 }
 
 /**
@@ -250,6 +270,8 @@ export interface DepsDocumentos {
   gerador: GeradorDePdf | null;
   destinatarios: ConfiguracaoDeDestinatarios;
   relogio: Relogio;
+  /** Cadastro institucional (O1.8). Ausente → a API de cadastro responde indisponível; a leitura é das `fontes`. */
+  institucional?: RepositorioInstitucional;
 }
 
 /** Quem age: a organização e a PESSOA (membership), resolvidas no servidor (N-6). */

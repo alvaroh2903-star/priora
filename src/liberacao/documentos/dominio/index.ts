@@ -26,6 +26,18 @@ export type {
   MotivoDeValidacaoHumana, VeredictoDoSinal,
 } from './versoes';
 export { planejarPreenchimento, canonico, observacaoDoValorInformado } from './preenchimento';
+export {
+  DADOS_INSTITUCIONAIS, validarDadosInstitucionais, cadastroVigente, valoresInstitucionais, validarSignatario, validarPoderes, signatariosVigentes,
+  pendenciasInstitucionais,
+} from './institucional';
+export type {
+  CampoInstitucional, DadosInstitucionais, CadastroInstitucional, MotivoDoProblema, ProblemaDoCadastro, Validacao, TipoEventoDoSignatario, EventoDoSignatario,
+  DadosDoSignatario, DadosDosPoderes, PendenciaInstitucional,
+} from './institucional';
+export { cnpjsNoTexto, conferirConsignatario } from './identidadeDoConsignatario';
+export type {
+  SituacaoDoConsignatario, ConsignatarioDoMbl, MotivoDaExcecaoDoConsignatario, IdentidadeDoConsignatario, CnpjsDoTexto,
+} from './identidadeDoConsignatario';
 export { dadosDoMbl, estadoDoDado, DADOS_DO_MBL } from './fatosDoMbl';
 export type { LeituraDoMbl, CampoDocumentalDoMbl, EstadoDocumentalDoMbl, EstadoDoDadoDoMbl, MotivoNaoConfiavel } from './fatosDoMbl';
 export type {

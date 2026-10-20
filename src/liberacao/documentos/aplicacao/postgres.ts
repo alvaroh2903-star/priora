@@ -6,10 +6,11 @@ import { evidenciasDoMblDoMaster } from '../../../auditoria/fatos/camposDoMbl';
 import {
   AnexoDoManifesto, AssinaturaRegistrada, CandidatoCopiaDoMbl, ConferenciaDaAssinatura, ConteudoDoDocumento, DADOS_DO_MBL, DocumentoPreparado, EscolhaDeOpcao, EventoDoEnvio,
   FluxoDeEmail, LeituraDoMbl, SelecaoDeOpcao, SinalPendente, TentativaDeEnvio, TipoDocumento, ValorInformado, ValorObservado, VeredictoDoSinal, VersaoDoModelo, dadosDoMbl,
+  CadastroInstitucional, EventoDoSignatario, cadastroVigente, conferirConsignatario, signatariosVigentes, valoresInstitucionais,
 } from '../dominio';
 import { geradorPdfPriora } from '../pdf/gerador';
 import {
-  DepsDocumentos, FONTE_DO_ARMADOR_PENDENTE, FontesConfiaveis, RepositorioDocumental, Relogio, SEM_DESTINATARIOS_VALIDADOS,
+  DepsDocumentos, FONTE_DO_ARMADOR_PENDENTE, FontesConfiaveis, RepositorioDocumental, RepositorioInstitucional, Relogio, SEM_DESTINATARIOS_VALIDADOS,
 } from './portas';
 import { DADO_CODIGO_DO_PROCESSO, DADO_MBL } from './servico';
 
@@ -422,6 +423,12 @@ export function fontesConfiaveisPostgres(db: Db): FontesConfiaveis {
       // do MBL com a sua evidência. Divergência entre versões fica para o preenchimento (nada é escolhido aqui).
       const doMbl = pedidosDoMbl(pedidos);
       if (doMbl.length) out.push(...dadosDoMbl(masterId, await leiturasDoMbl(db, org, masterId), doMbl).valores);
+      // O1.8: dados fixos da própria organização, do cadastro institucional vigente (o mesmo para os quatro modelos).
+      const doCadastro = pedidos.filter((p) => p.fonte === 'CADASTRO_DA_ORGANIZACAO').map((p) => p.dado);
+      if (doCadastro.length) {
+        const vigente = cadastroVigente(await cadastrosDaOrganizacao(db, org));
+        if (vigente) out.push(...valoresInstitucionais(vigente, doCadastro));
+      }
       return out;
     },
     async dadosNaoPublicados(org, masterId, pedidos) {
@@ -461,11 +468,70 @@ export function fontesConfiaveisPostgres(db: Db): FontesConfiaveis {
     async modalidadeDoMaster() {
       return { tipo: 'DESCONHECIDA' };
     },
-    // DEPENDÊNCIA PENDENTE (DOC-23): não existe cadastro confiável e validado do signatário legal (representante legal) da
-    // organização, com nome civil, CPF, qualificação e a evidência dos poderes. Nada é lido de `usuarios` (nome de exibição da
-    // identidade Microsoft) nem do Analista. Sem cadastro, os campos de quem assina ficam faltando e os poderes, não comprovados.
-    async signatariosLegais() {
-      return [];
+    // DOC-23: o signatário legal vem só do cadastro institucional (O1.8), gravado pela administração. Nada é lido de `usuarios`
+    // (nome de exibição da identidade Microsoft) nem do Analista. Sem cadastro, os campos de quem assina ficam faltando.
+    async signatariosLegais(org, em) {
+      return signatariosVigentes(await eventosDosSignatariosDaOrganizacao(db, org), em.toISOString());
+    },
+    // O1.8: identidade do consignatário do MBL conferida pelo CNPJ escrito no texto que a Auditoria JÁ persistiu (E1).
+    async identidadeDoConsignatario(org, masterId) {
+      const ev = await evidenciasDoMblDoMaster(db, org, masterId);
+      const vigente = cadastroVigente(await cadastrosDaOrganizacao(db, org));
+      return conferirConsignatario(
+        { situacao: ev.situacao.consignee, versoes: ev.versoes.map((v) => ({ extracaoId: v.extracaoId, estado: v.estados.consignee })) },
+        vigente ? { cadastroId: vigente.cadastroId, cnpj: vigente.cnpj } : null,
+      );
+    },
+  };
+}
+
+/* ------------------------------------------ cadastro institucional (O1.8) ------------------------------------------ */
+
+async function cadastrosDaOrganizacao(db: Db, org: string): Promise<CadastroInstitucional[]> {
+  const { rows } = await db.query(
+    `SELECT id, cnpj, razao_social, endereco, telefone, contato_sobreestadia_nome, contato_sobreestadia_email, emails_para_recibo, motivo,
+            registrado_por_membership_id, registrado_em
+       FROM organizacao_cadastro_institucional WHERE organization_id = $1 ORDER BY registrado_em, id`,
+    [org]);
+  return rows.map((r) => ({
+    cadastroId: r.id, cnpj: r.cnpj, razaoSocial: r.razao_social, endereco: r.endereco, telefone: r.telefone,
+    contatoSobreestadiaNome: r.contato_sobreestadia_nome, contatoSobreestadiaEmail: r.contato_sobreestadia_email, emailsParaRecibo: r.emails_para_recibo,
+    motivo: r.motivo, registradoPor: r.registrado_por_membership_id, registradoEm: iso(r.registrado_em)!,
+  }));
+}
+
+async function eventosDosSignatariosDaOrganizacao(db: Db, org: string): Promise<EventoDoSignatario[]> {
+  const { rows } = await db.query(
+    `SELECT id, signatario_id, evento, nome, cpf, qualificacao, evidencia, to_char(poderes_valido_ate, 'YYYY-MM-DD') AS poderes_valido_ate, motivo,
+            registrado_por_membership_id, registrado_em
+       FROM organizacao_signatarios_legais WHERE organization_id = $1 ORDER BY registrado_em, id`,
+    [org]);
+  return rows.map((r) => ({
+    eventoId: r.id, signatarioId: r.signatario_id, evento: r.evento, nome: r.nome, cpf: r.cpf, qualificacao: r.qualificacao, evidencia: r.evidencia,
+    poderesValidoAte: r.poderes_valido_ate, motivo: r.motivo, registradoPor: r.registrado_por_membership_id, registradoEm: iso(r.registrado_em)!,
+  }));
+}
+
+/** Gravação do cadastro institucional (append-only). Só ADMIN da organização — conferido aqui e pelo gatilho do banco. */
+export function repositorioInstitucionalPostgres(pool: Pool): RepositorioInstitucional {
+  return {
+    cadastros: (org) => cadastrosDaOrganizacao(pool, org),
+    async gravarCadastro(org, n) {
+      const { rows } = await pool.query(
+        `INSERT INTO organizacao_cadastro_institucional (organization_id, cnpj, razao_social, endereco, telefone, contato_sobreestadia_nome,
+           contato_sobreestadia_email, emails_para_recibo, motivo, registrado_por_membership_id, registrado_em)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
+        [org, n.cnpj, n.razaoSocial, n.endereco, n.telefone, n.contatoSobreestadiaNome, n.contatoSobreestadiaEmail, n.emailsParaRecibo, n.motivo, n.por, n.em]);
+      return { cadastroId: rows[0].id };
+    },
+    eventosDosSignatarios: (org) => eventosDosSignatariosDaOrganizacao(pool, org),
+    async gravarEventoDoSignatario(org, n) {
+      const { rows } = await pool.query(
+        `INSERT INTO organizacao_signatarios_legais (organization_id, signatario_id, evento, nome, cpf, qualificacao, evidencia, poderes_valido_ate, motivo,
+           registrado_por_membership_id, registrado_em)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
+        [org, n.signatarioId, n.evento, n.nome, n.cpf, n.qualificacao, n.evidencia, n.poderesValidoAte, n.motivo, n.por, n.em]);
+      return { eventoId: rows[0].id };
     },
   };
 }
@@ -480,9 +546,9 @@ export function fontesConfiaveisPostgres(db: Db): FontesConfiaveis {
 export function depsDocumentosPadrao(pool: Pool, relogio: Relogio = { agora: () => new Date() }): DepsDocumentos {
   return {
     repo: repositorioDocumentalPostgres(pool), fontes: fontesConfiaveisPostgres(pool), armador: FONTE_DO_ARMADOR_PENDENTE,
-    // Geração real sobre o arquivo oficial da versão validada. Continua sem efeito enquanto faltarem as fontes dos dados
-    // (armador L8, cadastro da organização e do signatário legal): o preenchimento fica incompleto. Os campos do MBL
-    // vêm do S2 (Entrega 1) quando confiáveis; a viagem do rastreamento (S3) não substitui o navio do MBL.
-    gerador: geradorPdfPriora, destinatarios: SEM_DESTINATARIOS_VALIDADOS, relogio,
+    // Geração real sobre o arquivo oficial da versão validada. Os dados fixos da organização e do signatário legal vêm do
+    // cadastro institucional (O1.8), gravado pela administração; sem cadastro, ficam faltando. Os campos do MBL vêm do S2
+    // (Entrega 1) quando confiáveis; a viagem do rastreamento (S3) não substitui o navio do MBL. O armador (L8) segue pendente.
+    gerador: geradorPdfPriora, destinatarios: SEM_DESTINATARIOS_VALIDADOS, relogio, institucional: repositorioInstitucionalPostgres(pool),
   };
 }

@@ -8,6 +8,7 @@ import {
   selecionarModelo, situacaoDocumental, ultimoChangeKey, verificarArquivoAssinado, verificarDefinicao, VerificacaoDoArquivoAssinado, CERTIFICADO_NAO_VERIFICADO,
   ConstatacaoDaConferencia, CONSTATACOES_DA_CONFERENCIA, DefinicaoDoSignatario, IdentidadeDoSignatario, MOTIVOS_DE_SUBSTITUICAO, SignatarioLegal,
   SubstituicaoDoArquivoAssinado, alteracaoPosteriorA, assinaturaDoDocumento, identidadeDo, poderesValidos, signatarioDaOrganizacao, valoresDoSignatario,
+  IdentidadeDoConsignatario, DADOS_DOS_MODELOS,
 } from '../dominio';
 import { AtorDocumental, CaixaMonitorada, DepsDocumentos, FalhaAntesDoEnvio, GeracaoRecusada, OutlookDoAnalista } from './portas';
 
@@ -55,7 +56,8 @@ export const FUSO_DA_DATA_DO_DOCUMENTO = 'America/Sao_Paulo';
 export const MOTIVO_PERMISSAO_PENDENTE =
   'Sem ação correspondente aprovada na L1b para a solicitação de agendamento; a permissão (portão do cliente / N-13) não é determinada.';
 
-const dataNoFuso = (d: Date): string => {
+/** Data (AAAA-MM-DD) no fuso operacional do documento: a mesma régua da validade dos poderes e da data escrita. */
+export const dataNoFuso = (d: Date): string => {
   const p = new Intl.DateTimeFormat('en-CA', { timeZone: FUSO_DA_DATA_DO_DOCUMENTO, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(d);
   const v = (t: string) => p.find((x) => x.type === t)!.value;
   return `${v('year')}-${v('month')}-${v('day')}`;
@@ -107,7 +109,15 @@ export interface AvaliacaoDocumental {
   signatarioLegal: DefinicaoDoSignatario | null;
   /** Identidade de quem assina o documento planejado (só com cadastro definido). */
   signatario: IdentidadeDoSignatario | null;
+  /**
+   * O1.8: identidade do consignatário do MBL conferida pelo CNPJ com o cadastro institucional, quando o modelo tem campo
+   * de consignatário. Só informa (exceção documental com o motivo): não preenche, não cria pendência nem bloqueia nada.
+   */
+  identidadeDoConsignatario: IdentidadeDoConsignatario | null;
 }
+
+/** Dados de modelo que mostram o consignatário do MBL (DOC-17, 14.18). */
+const DADOS_DO_CONSIGNATARIO: ReadonlySet<string> = new Set([DADOS_DOS_MODELOS.CONSIGNATARIO_RAZAO_SOCIAL, DADOS_DOS_MODELOS.CONSIGNATARIO_QUALIFICACAO]);
 
 /** O modelo precisa do signatário legal: tem campo do cadastro dele ou exige poderes de representação. */
 const precisaDoSignatario = (d: DefinicaoDoModelo) =>
@@ -165,7 +175,7 @@ export async function avaliarDocumentacao(
   if (selecao.tipo !== 'SELECIONADO') {
     return {
       situacao: situacaoDocumental({ masterId, selecao, ...nada }), tipo: null, procedimento: null, modelo: null, plano: null, documentos: [], assinaturas: [], conferencias: [],
-      tentativas: [], versoes: [], processoIds: [], signatarioLegal: null, signatario: null,
+      tentativas: [], versoes: [], processoIds: [], signatarioLegal: null, signatario: null, identidadeDoConsignatario: null,
     };
   }
   const tipo = selecao.entrada.tipo;
@@ -210,9 +220,12 @@ export async function avaliarDocumentacao(
     masterId, selecao, versoes, sinaisPendentes, preenchimento, conteudoAtualSha256: plano ? sha256(canonico(plano.conteudo)) : null,
     documentos, assinaturas, conferencias, signatarioLegal, poderesDoSignatario, email,
   });
+  const temConsignatario = !!modelo?.definicao.campos.some((c) => DADOS_DO_CONSIGNATARIO.has(c.dado));
+  const identidadeDoConsignatario = temConsignatario && deps.fontes.identidadeDoConsignatario
+    ? await deps.fontes.identidadeDoConsignatario(organizationId, masterId) : null;
   return {
     situacao, tipo, procedimento: procedimentoDoModelo(tipo), modelo, plano, documentos, assinaturas, conferencias, tentativas, versoes, processoIds,
-    signatarioLegal, signatario: signatario ? identidadeDo(signatario) : null,
+    signatarioLegal, signatario: signatario ? identidadeDo(signatario) : null, identidadeDoConsignatario,
   };
 }
 
