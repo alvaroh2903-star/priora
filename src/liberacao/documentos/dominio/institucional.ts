@@ -1,5 +1,5 @@
 import { Evidencia, Instante } from '../../dominio';
-import { cnpjValido, cpfValido, valorEscrito, valorNoFormato } from './formatos';
+import { cnpjNumericoOuAlfanumericoValido, cpfValido, valorEscrito, valorNoFormato } from './formatos';
 import { IdentidadeDoConsignatario } from './identidadeDoConsignatario';
 import { DefinicaoDoModelo, TipoDocumento } from './modelos';
 import { DADOS_DOS_MODELOS as D } from './modelosOficiais';
@@ -29,7 +29,10 @@ export type CampoInstitucional = keyof typeof DADOS_INSTITUCIONAIS;
 const CAMPOS_INSTITUCIONAIS = Object.keys(DADOS_INSTITUCIONAIS) as CampoInstitucional[];
 
 export interface DadosInstitucionais {
-  /** Só dígitos, com os dígitos verificadores válidos. */
+  /**
+   * Os 14 caracteres sem a máscara, verificadores válidos: só dígitos, ou alfanumérico (IN RFB 2.229/2024, letras em
+   * maiúscula). O mesmo formato que a conferência lê no MBL: a comparação é direta.
+   */
   cnpj: string;
   razaoSocial: string | null;
   endereco: string | null;
@@ -54,8 +57,11 @@ export type MotivoDoProblema =
 export interface ProblemaDoCadastro { campo: string; motivo: MotivoDoProblema }
 export type Validacao<T> = { tipo: 'VALIDO'; dados: T } | { tipo: 'INVALIDO'; problemas: ProblemaDoCadastro[] };
 
-/** CNPJ como a administração o informa: 14 dígitos, com ou sem a máscara usual (nada além disso é aceito). */
-const MASCARA_CNPJ = /^\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}$/;
+/**
+ * CNPJ como a administração o informa: 14 posições, com ou sem a máscara usual (nada além disso é aceito). As 12 primeiras
+ * podem ter letras (CNPJ alfanumérico); os 2 verificadores são sempre dígitos.
+ */
+const MASCARA_CNPJ = /^[0-9A-Z]{2}\.?[0-9A-Z]{3}\.?[0-9A-Z]{3}\/?[0-9A-Z]{4}-?\d{2}$/;
 const MASCARA_CPF = /^\d{3}\.?\d{3}\.?\d{3}-?\d{2}$/;
 const EMAIL = /^[^\s@;,]+@[^\s@;,]+\.[^\s@;,]+$/;
 const DATA = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -87,12 +93,16 @@ function texto(campo: string, v: unknown, obrigatorio: boolean, problemas: Probl
   return t;
 }
 
-/** CNPJ ou CPF: a máscara usual é aceita na entrada; guarda-se só os dígitos, com os verificadores conferidos. */
+/**
+ * CNPJ ou CPF: a máscara usual é aceita na entrada; guarda-se só os caracteres do número (letra em maiúscula — a do
+ * CNPJ alfanumérico é oficialmente maiúscula), com os verificadores conferidos. Nenhum identificador inválido passa.
+ */
 function documento(campo: string, v: unknown, mascara: RegExp, valido: (d: string) => boolean, motivo: MotivoDoProblema, problemas: ProblemaDoCadastro[]): string | null {
   const t = texto(campo, v, true, problemas);
   if (t === null) return null;
-  const digitos = t.replace(/\D/g, '');
-  if (mascara.test(t) && valido(digitos)) return digitos;
+  const normal = t.toUpperCase();
+  const numero = normal.replace(/[./-]/g, '');
+  if (mascara.test(normal) && valido(numero)) return numero;
   problemas.push({ campo, motivo });
   return null;
 }
@@ -100,7 +110,7 @@ function documento(campo: string, v: unknown, mascara: RegExp, valido: (d: strin
 /** Valida os dados institucionais como a administração os informou. Só o CNPJ é obrigatório; o resto falta até ser cadastrado. */
 export function validarDadosInstitucionais(e: Readonly<Record<string, unknown>>): Validacao<DadosInstitucionais> {
   const problemas: ProblemaDoCadastro[] = [];
-  const cnpj = documento('cnpj', e.cnpj, MASCARA_CNPJ, cnpjValido, 'CNPJ_INVALIDO', problemas);
+  const cnpj = documento('cnpj', e.cnpj, MASCARA_CNPJ, cnpjNumericoOuAlfanumericoValido, 'CNPJ_INVALIDO', problemas);
   const opcional = (campo: CampoInstitucional) => texto(campo, e[campo], false, problemas);
   const dados = {
     cnpj: cnpj ?? '',

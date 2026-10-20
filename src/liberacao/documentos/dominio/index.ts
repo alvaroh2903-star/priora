@@ -14,7 +14,7 @@ export {
 export type { SignatarioLegal, IdentidadeDoSignatario, DefinicaoDoSignatario, ComprovacaoDePoderes } from './signatario';
 export { papeisDoDocumento } from './rastreabilidade';
 export type { PapeisDoDocumento } from './rastreabilidade';
-export { valorNoFormato, valorEscrito, cpfValido, cnpjValido } from './formatos';
+export { valorNoFormato, valorEscrito, cpfValido, cnpjValido, cnpjAlfanumericoValido, cnpjNumericoOuAlfanumericoValido } from './formatos';
 export { verificarArquivoAssinado, alteracaoPosteriorA, VERIFICACOES_DO_ARQUIVO_ASSINADO, CERTIFICADO_NAO_VERIFICADO } from './assinatura';
 export type { VerificacaoDoArquivoAssinado } from './assinatura';
 export {
@@ -38,7 +38,7 @@ export type {
   CampoInstitucional, DadosInstitucionais, CadastroInstitucional, MotivoDoProblema, ProblemaDoCadastro, Validacao, TipoEventoDoSignatario, EventoDoSignatario,
   DadosDoSignatario, DadosDosPoderes, PendenciaInstitucional,
 } from './institucional';
-export { cnpjsNoTexto, conferirConsignatario, cnpjAlfanumericoValido } from './identidadeDoConsignatario';
+export { cnpjsNoTexto, conferirConsignatario } from './identidadeDoConsignatario';
 export type {
   SituacaoDoConsignatario, ConsignatarioDoMbl, MotivoDaExcecaoDoConsignatario, IdentidadeDoConsignatario, CnpjsDoTexto, VersaoDoConsignatario, ConclusaoDaVersao,
   LeituraDaVersao, MotivoSemCnpj,

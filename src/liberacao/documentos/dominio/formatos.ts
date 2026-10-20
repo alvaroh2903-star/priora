@@ -3,7 +3,8 @@ import { DefinicaoDoModelo, FormatoDoValor } from './modelos';
 /**
  * Valores canônicos dos dados (o que fica guardado no conteúdo do documento)
  * e a forma escrita no PDF. Puro: a mesma entrada dá sempre o mesmo texto.
- *  - datas: AAAA-MM-DD; hora: HH:MM; CPF e CNPJ: só dígitos, com dígitos verificadores válidos;
+ *  - datas: AAAA-MM-DD; hora: HH:MM; CPF: só dígitos; CNPJ: os 14 caracteres sem a máscara — só dígitos, ou
+ *    alfanumérico (IN RFB 2.229/2024: letras maiúsculas e dígitos, verificadores numéricos) —, verificadores válidos;
  *  - TEXTO: sem caracteres de controle (quebra de linha é permitida e separa linhas);
  *  - LISTA: um item por linha; nenhum item repetido (comparação sem diferença de caixa) — repetição é dado
  *    inconsistente na fonte: o campo fica faltando, nada é descartado em silêncio (DOC-27).
@@ -44,6 +45,25 @@ export function cnpjValido(v: string): boolean {
   return verificadores(n.slice(0, 12), [[5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2], [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]]) === n;
 }
 
+/** Dígito verificador do CNPJ alfanumérico: o mesmo cálculo do numérico, com o valor do caractere = código − 48. */
+function verificadorAlfanumerico(base: string, pesos: ReadonlyArray<number>): number {
+  let soma = 0;
+  for (let i = 0; i < base.length; i++) soma += (base.charCodeAt(i) - 48) * pesos[i];
+  const resto = soma % 11;
+  return resto < 2 ? 0 : 11 - resto;
+}
+
+/** CNPJ alfanumérico (IN RFB 2.229/2024) com os verificadores válidos: só letras maiúsculas e dígitos, ao menos uma letra. */
+export function cnpjAlfanumericoValido(v: string): boolean {
+  if (!/^[0-9A-Z]{12}\d{2}$/.test(v) || !/[A-Z]/.test(v)) return false;
+  const d1 = verificadorAlfanumerico(v.slice(0, 12), [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]);
+  const d2 = verificadorAlfanumerico(v.slice(0, 12) + d1, [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]);
+  return v.slice(12) === `${d1}${d2}`;
+}
+
+/** CNPJ válido em qualquer dos formatos oficiais (numérico ou alfanumérico), sem a máscara. */
+export const cnpjNumericoOuAlfanumericoValido = (v: string): boolean => cnpjValido(v) || cnpjAlfanumericoValido(v);
+
 // Controle C0/C1 (exceto a quebra de linha), proibido em texto de documento.
 // eslint-disable-next-line no-control-regex
 const CONTROLE = /[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/;
@@ -57,7 +77,7 @@ export function valorNoFormato(formato: FormatoDoValor, valor: string): boolean 
     case 'DATA_DD_MM_AAAA': return dataValida(v) !== null;
     case 'HORA_HH_MM': return /^([01]\d|2[0-3]):[0-5]\d$/.test(v);
     case 'CPF': return cpfValido(v);
-    case 'CNPJ': return cnpjValido(v);
+    case 'CNPJ': return cnpjNumericoOuAlfanumericoValido(v);
     case 'LISTA': {
       if (CONTROLE.test(v)) return false;
       const itens = v.split('\n').map((x) => x.trim()).filter((x) => x !== '');
@@ -83,7 +103,8 @@ export function valorEscrito(formato: FormatoDoValor, valor: string): string {
       return `${n.slice(0, 3)}.${n.slice(3, 6)}.${n.slice(6, 9)}-${n.slice(9)}`;
     }
     case 'CNPJ': {
-      const n = digitos(valor);
+      // A máscara usual também no alfanumérico (as letras ficam onde estão).
+      const n = valor.replace(/[^0-9A-Za-z]/g, '').toUpperCase();
       return `${n.slice(0, 2)}.${n.slice(2, 5)}.${n.slice(5, 8)}/${n.slice(8, 12)}-${n.slice(12)}`;
     }
     case 'LISTA': return valor.split('\n').map((x) => x.trim()).filter((x) => x !== '').join('\n');

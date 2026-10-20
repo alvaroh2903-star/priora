@@ -20,7 +20,7 @@ import { AcessoDaPessoa } from '../../../auth/pessoa';
 import { situacaoDaAgencia } from '../../dominio';
 import { armador } from '../../dominio/__tests__/l1b/fixtures';
 import {
-  ARQUIVOS_OFICIAIS_RECEBIDOS, CadastroInstitucional, DEFINICOES_EM_VIGOR, DEFINICOES_PROPOSTAS, DEFINICOES_REVISAO_2, DefinicaoDoModelo, DepsDocumentos,
+  ARQUIVOS_OFICIAIS_RECEBIDOS, CadastroInstitucional, valorEscrito, valorNoFormato, DEFINICOES_EM_VIGOR, DEFINICOES_PROPOSTAS, DEFINICOES_REVISAO_2, DefinicaoDoModelo, DepsDocumentos,
   EventoDoSignatario, FonteDeDado, IdentidadeDoConsignatario, MOTIVO_IDENTIDADE_NAO_CONFIRMADA, ResultadoDoPreenchimento, SituacaoDoConsignatario, TipoDocumento,
   PlanoDePreenchimento, ValorInformado, ValorObservado, VersaoDoConsignatario, avaliarDocumentacao, cadastrarModelo, cadastrarModeloOficial, cadastroVigente, canonico, cnpjAlfanumericoValido, cnpjsNoTexto,
   conferirConsignatario, consignatarioNaoConfirmado, consignatarioPeloCadastro, consultarCadastroInstitucional, depsDocumentosPadrao, fatosDocumentaisParaL1b,
@@ -252,6 +252,7 @@ test('[CI-04b] CNPJ alfanumérico (IN RFB 2.229/2024): reconhecido com os verifi
   assert.deepEqual(cnpjsNoTexto('CNPJ 12.ABC.345/01DE-35').validos, [CNPJ_ALFA]);
   assert.deepEqual(cnpjsNoTexto('CNPJ 12ABC34501DE35').validos, [CNPJ_ALFA], 'sem a máscara');
   assert.deepEqual(cnpjsNoTexto('CNPJ 12.ABC.345/01DE-36'), { validos: [], invalidos: ['12ABC34501DE36'], citaCnpj: true }, 'com a máscara completa, inválido conta');
+  assert.deepEqual(cnpjsNoTexto('cnpj 12.abc.345/01de-35').validos, [CNPJ_ALFA], 'a leitura em minúscula é normalizada');
   const codigo = 'ZIMUSNH1234567';
   assert.equal(cnpjAlfanumericoValido(codigo), false);
   assert.deepEqual(cnpjsNoTexto(`BL ${codigo}`), { validos: [], invalidos: [], citaCnpj: false }, 'um código qualquer de 14 posições sem a máscara não vira CNPJ');
@@ -259,6 +260,33 @@ test('[CI-04b] CNPJ alfanumérico (IN RFB 2.229/2024): reconhecido com os verifi
   assert.equal(motivo(conferir(igual(comAlfa), [comAlfa])), 'MULTIPLOS_CNPJS', 'o 2º CNPJ (alfanumérico) não passa despercebido');
   const soAlfa = `EMPRESA SINTETICA\nCNPJ 12.ABC.345/01DE-35`;
   assert.deepEqual([motivo(conferir(igual(soAlfa), [soAlfa])), (conferir(igual(soAlfa), [soAlfa]) as { cnpjsEncontrados: string[] }).cnpjsEncontrados], ['CNPJ_DIVERGENTE', [CNPJ_ALFA]]);
+});
+
+test('[CI-26] CNPJ alfanumérico no cadastro (O1.9.1): aceito com verificadores válidos, normalizado em maiúscula, escrito com a máscara; inválido continua recusado; numérico inalterado', () => {
+  const ok = (c: string) => { const r = validarDadosInstitucionais({ cnpj: c }); return r.tipo === 'VALIDO' ? r.dados.cnpj : r.problemas.map((p) => p.motivo).join(); };
+  assert.equal(ok('12.ABC.345/01DE-35'), CNPJ_ALFA);
+  assert.equal(ok(CNPJ_ALFA), CNPJ_ALFA, 'sem a máscara');
+  assert.equal(ok('12.abc.345/01de-35'), CNPJ_ALFA, 'letra minúscula é normalizada (a oficial é maiúscula)');
+  for (const invalido of ['12.ABC.345/01DE-36', '12.ABC.345/01DE-3X', '12ABC34501DE3', 'CNPJ 12ABC34501DE35', '12.ABC.345/01DE-35 ', '12.ÁBC.345/01DE-35']) {
+    assert.equal(ok(invalido), invalido.trim() === '12.ABC.345/01DE-35' ? CNPJ_ALFA : 'CNPJ_INVALIDO', invalido);
+  }
+  assert.equal(ok(mascara(CNPJ_ORG)), CNPJ_ORG, 'numérico: o mesmo de antes');
+  assert.equal(ok('11111111111111'), 'CNPJ_INVALIDO');
+  // Os modelos: o formato CNPJ aceita os dois e escreve com a máscara (letras no lugar).
+  assert.equal(valorNoFormato('CNPJ', CNPJ_ALFA), true);
+  assert.equal(valorNoFormato('CNPJ', '12ABC34501DE36'), false);
+  assert.equal(valorNoFormato('CNPJ', '12abc34501de35'), false, 'o valor canônico é maiúsculo');
+  assert.equal(valorEscrito('CNPJ', CNPJ_ALFA), '12.ABC.345/01DE-35');
+  assert.equal(valorEscrito('CNPJ', CNPJ_ORG), mascara(CNPJ_ORG));
+  // Cadastro alfanumérico × MBL: a mesma forma normalizada (a caixa da leitura não importa).
+  const cadAlfa = registro({ ...CADASTRO_COMPLETO, cnpj: '12.ABC.345/01DE-35' });
+  const casa = (texto: string) => conferirVersoes(igual(texto), [versao('a1', texto)], { cadastroId: 'cad-1', cnpj: cadAlfa.cnpj });
+  assert.equal(motivo(casa(`${CADASTRO_COMPLETO.razaoSocial}\nCNPJ 12.ABC.345/01DE-35`)), 'VERIFICADA');
+  assert.equal(motivo(casa(`${CADASTRO_COMPLETO.razaoSocial}\ncnpj 12.abc.345/01de-35`)), 'VERIFICADA', 'leitura em minúscula');
+  assert.equal(motivo(casa(`${CADASTRO_COMPLETO.razaoSocial}\nCNPJ ${mascara(CNPJ_ORG)}`)), 'CNPJ_DIVERGENTE', 'outro CNPJ (numérico) não é o alfanumérico do cadastro');
+  const identidade = casa(`${CADASTRO_COMPLETO.razaoSocial}\nCNPJ 12.ABC.345/01DE-35`);
+  assert.deepEqual(consignatarioPeloCadastro(cadAlfa, identidade, ['CONSIGNATARIO_QUALIFICACAO'], MASTER).map((v) => v.valor),
+    [`${CADASTRO_COMPLETO.razaoSocial}\nCNPJ 12.ABC.345/01DE-35\n${CADASTRO_COMPLETO.endereco}`]);
 });
 
 test('[CI-05] CNPJ correspondente: só o CNPJ válido, igual ao do cadastro e o mesmo em todas as versões verifica; texto original e proveniência preservados', () => {
@@ -322,6 +350,20 @@ test('[CI-07] versões do MBL (O1.9): cópia do mesmo arquivo, diferença só de
   const cortado = `${semCnpj}\nCNPJ ${mascara(CNPJ_ORG).slice(0, 10)}`;
   const releitura = conferirVersoes({ tipo: 'DIVERGENTE', valores: [CONSIGNATARIO_ORG, cortado] }, [versao('r1', CONSIGNATARIO_ORG, 'sha-y'), versao('r2', cortado, 'sha-y')]);
   assert.equal(motivo(releitura), 'LEITURAS_DIVERGENTES_DO_MESMO_ARQUIVO');
+  assert.deepEqual(releitura.arquivos, [{ arquivoSha256: 'sha-y', extracaoIds: ['r1', 'r2'], conclusao: { tipo: 'LEITURAS_DIVERGENTES' } }]);
+  // O1.9.1: o mesmo arquivo lido de formas diferentes é exceção de EXTRAÇÃO, mesmo com outro arquivo concordando (antes, VERSOES_DIVERGENTES).
+  const misto = conferirVersoes({ tipo: 'DIVERGENTE', valores: [CONSIGNATARIO_ORG, cortado] },
+    [versao('r1', CONSIGNATARIO_ORG, 'sha-y'), versao('r2', cortado, 'sha-y'), versao('b1', CONSIGNATARIO_ORG, 'sha-b')]);
+  assert.deepEqual([motivo(misto), misto.arquivos.map((a) => [a.arquivoSha256, a.conclusao.tipo])],
+    ['LEITURAS_DIVERGENTES_DO_MESMO_ARQUIVO', [['sha-y', 'LEITURAS_DIVERGENTES'], ['sha-b', 'CONCLUSIVA']]]);
+  // Divergência entre DOCUMENTOS (outro arquivo com outro CNPJ) é documental, mesmo havendo também releitura divergente.
+  const outraEmpresa = `${VALORES_SINTETICOS.ORGANIZACAO_RAZAO_SOCIAL}\nCNPJ ${mascara(CNPJ_OUTRA)}`;
+  const documental = conferirVersoes({ tipo: 'DIVERGENTE', valores: [CONSIGNATARIO_ORG, cortado, outraEmpresa] },
+    [versao('r1', CONSIGNATARIO_ORG, 'sha-y'), versao('r2', cortado, 'sha-y'), versao('b1', CONSIGNATARIO_ORG, 'sha-b'), versao('c1', outraEmpresa, 'sha-c')]);
+  assert.equal(motivo(documental), 'VERSOES_DIVERGENTES');
+  // A proveniência de cada leitura fica (extrator, versão, modelo, instante): nada é lido de novo.
+  const lida = conferirVersoes(igual(CONSIGNATARIO_ORG), [{ ...versao('p1', CONSIGNATARIO_ORG, 'sha-p'), leitura: { extrator: 'auditoria', extratorVersao: '2', modelo: 'modelo-x', extraidaEm: '2026-10-01T08:00:00.000Z' } }]);
+  assert.deepEqual(lida.versoes[0].leitura, { extrator: 'auditoria', extratorVersao: '2', modelo: 'modelo-x', extraidaEm: '2026-10-01T08:00:00.000Z' });
   // Sem o hash do arquivo, não se prova que é o mesmo documento.
   assert.equal(motivo(conferirVersoes({ tipo: 'DIVERGENTE', valores: [CONSIGNATARIO_ORG, cortado] }, [versao('n1', CONSIGNATARIO_ORG, null), versao('n2', cortado, null)])), 'VERSOES_DIVERGENTES');
   // Versão sem o consignatário lido, anterior à 0106 ou ilegível não contribui (E1/14.18) — e fica no resultado.
@@ -553,7 +595,7 @@ const C2 = conteiner('TSTU000002');
 const SHA = (n: number) => n.toString(16).padStart(64, '0');
 
 /** Uma versão do MBL (ou outro documento) pelo caminho do DONO (S2), com o consignatário como o OCR o teria devolvido. */
-async function mbl(pool: Pool, c: Cenario, v: { id: string; processo: string; conhecimento: string; sha: number; consignee: string | null; recebida?: string; tipo?: 'MBL' | 'HBL' }) {
+async function mbl(pool: Pool, c: Cenario, v: { id: string; processo: string; conhecimento: string; sha: number; consignee: string | null; recebida?: string; tipo?: 'MBL' | 'HBL'; modelo?: string }) {
   const recebida = new Date(v.recebida ?? '2026-10-01T08:00:00Z');
   const campos: CamposDocumentaisExtraidos = { navio: 'NAVIO SINTETICO DE TESTE V001T', consignee: v.consignee, conteineres: [C1, C2] };
   const [r] = await persistirExtracoesAuditoria(pool, c.ctx, [{
@@ -562,7 +604,7 @@ async function mbl(pool: Pool, c: Cenario, v: { id: string; processo: string; co
       remetente: 'agente@agente.teste', recebidaEm: recebida, referenciasBrutas: [v.processo], associacao: 'CITADA',
     },
     resultado: { tipoPorNome: v.tipo ?? 'MBL', tipoDetectado: v.tipo ?? 'MBL', legivel: true, conhecimento: v.conhecimento, camposDocumentais: campos, arquivoSha256: SHA(v.sha) },
-    modelo: 'modelo-teste', extraidaEm: recebida,
+    modelo: v.modelo ?? 'modelo-teste', extraidaEm: recebida,
   }]);
   return r.extracaoId;
 }
@@ -688,18 +730,35 @@ test('O1.8/O1.9 — cadastro institucional, signatário, conferência e consigna
       await assert.rejects(pool.query(`INSERT INTO organizacao_cadastro_institucional (organization_id, cnpj, registrado_por_membership_id, registrado_em) VALUES ($1, $2, $3, $4)`,
         [c.orgId, CNPJ_ORG, c.membershipCaixa, '2026-10-19T00:00:00Z']), /CADASTRO_INSTITUCIONAL_FORA_DE_ORDEM/);
       const atrasado = await registrarCadastroInstitucional({ ...deps(), relogio: relogio('2026-10-19T00:00:00.000Z') }, ator, CADASTRO_COMPLETO);
-      assert.deepEqual(atrasado, { tipo: 'RECUSADO', motivo: 'CADASTRO_INSTITUCIONAL_FORA_DE_ORDEM' }, 'relógio atrasado: recusa, nunca reordena');
+      // Recusa clara e recuperável (O1.9.1): nada gravado; a alteração recusada e o estado atual voltam para conferir e reenviar.
+      assert.ok(atrasado.tipo === 'RECUSADO');
+      assert.equal(atrasado.motivo, 'CADASTRO_INSTITUCIONAL_FORA_DE_ORDEM', 'relógio atrasado: recusa, nunca reordena');
+      assert.match(String(atrasado.mensagem), /NÃO foi gravada/);
+      assert.deepEqual(atrasado.naoGravado, { ...(validarDadosInstitucionais(CADASTRO_COMPLETO) as { dados: object }).dados, motivo: null });
+      assert.equal(atrasado.atual?.cadastroId, id, 'o estado gravado agora');
+      const comAtraso = await api(() => ({ ...deps(), relogio: relogio('2026-10-19T00:00:00.000Z') }));
+      try {
+        comAtraso.como(acesso(c, c.membershipCaixa, 'ADMIN'));
+        const r409 = await comAtraso.pedir('', { ...CADASTRO_COMPLETO, razaoSocial: 'ALTERACAO NAO GRAVADA LTDA' });
+        assert.deepEqual([r409.status, r409.corpo.motivo, r409.corpo.naoGravado.razaoSocial], [409, 'CADASTRO_INSTITUCIONAL_FORA_DE_ORDEM', 'ALTERACAO NAO GRAVADA LTDA']);
+      } finally {
+        await comAtraso.fechar();
+      }
+      assert.equal((await consultarCadastroInstitucional(deps(), ator) as { historico: unknown[] }).historico.length, 1, 'nada foi gravado');
+      // O contrato atual permite reenviar a MESMA alteração recusada.
+      const reenvio = await registrarCadastroInstitucional(deps(), ator, atrasado.naoGravado!);
+      assert.equal(reenvio.tipo, 'REGISTRADO', 'o próprio `naoGravado` é um corpo válido para reenviar');
       // No mesmo instante, a ordem de gravação decide (sequência), nunca o identificador.
       const mesmo = await registrarCadastroInstitucional(deps(), ator, { ...CADASTRO_COMPLETO, razaoSocial: 'SEGUNDO NO MESMO INSTANTE LTDA' });
       const consulta = await consultarCadastroInstitucional(deps(), ator);
       assert.ok(consulta.tipo === 'OK');
-      assert.deepEqual(consulta.historico.map((h) => h.cadastroId), [id, (mesmo as { id: string }).id], 'as tentativas recusadas não entram no histórico');
+      assert.deepEqual(consulta.historico.map((h) => h.cadastroId), [id, (reenvio as { id: string }).id, (mesmo as { id: string }).id], 'as tentativas recusadas não entram no histórico');
       assert.equal(consulta.vigente?.razaoSocial, 'SEGUNDO NO MESMO INSTANTE LTDA');
       // Gravações concorrentes da mesma organização são serializadas: todas entram, em ordem, nenhuma se perde.
       const concorrentes = await Promise.all([1, 2, 3, 4].map((n) => registrarCadastroInstitucional(deps(), ator, { ...CADASTRO_COMPLETO, razaoSocial: `CONCORRENTE ${n} LTDA` })));
       assert.ok(concorrentes.every((x) => x.tipo === 'REGISTRADO'));
       const seqs = (await pool.query(`SELECT sequencia FROM organizacao_cadastro_institucional WHERE organization_id = $1 ORDER BY sequencia`, [c.orgId])).rows.map((x) => Number(x.sequencia));
-      assert.equal(new Set(seqs).size, 6);
+      assert.equal(new Set(seqs).size, 7);
       // A FK do autor é composta (membership DA organização) — estrutural, além do gatilho.
       const fk = (await pool.query(`SELECT pg_get_constraintdef(oid) d FROM pg_constraint WHERE conname = 'organizacao_cadastro_institucional_autor_fk'`)).rows[0].d;
       assert.match(fk, /FOREIGN KEY \(registrado_por_membership_id, organization_id\) REFERENCES organization_memberships\(id, organization_id\)/);
@@ -796,6 +855,13 @@ test('O1.8/O1.9 — cadastro institucional, signatário, conferência e consigna
       assert.deepEqual([motivo(v3), v3.situacaoDoTexto, v3.versoes.length], ['VERIFICADA', 'DIVERGENTE', 3], 'o texto diverge, a identidade não');
       await mbl(pool, c, { id: 'p1-v4', processo: 'IM901', conhecimento: 'MEDU9010001', sha: 4, consignee: `IMPORTADORA SINTETICA\nCNPJ ${mascara(CNPJ_OUTRA)}`, recebida: '2026-10-04T08:00:00Z' });
       assert.equal(motivo(await conferencia('IM901')), 'VERSOES_DIVERGENTES', 'a versão mais nova não vence: sem critério aprovado, exceção');
+      // O MESMO arquivo lido duas vezes (outra versão do extrator) com conclusões diferentes: exceção de extração; leituras preservadas.
+      await mbl(pool, c, { id: 'x1', processo: 'IM912', conhecimento: 'MEDU9120001', sha: 912, consignee: CONSIGNATARIO_ORG });
+      await mbl(pool, c, { id: 'x2', processo: 'IM912', conhecimento: 'MEDU9120001', sha: 912, consignee: `${VALORES_SINTETICOS.ORGANIZACAO_RAZAO_SOCIAL}\nCNPJ 11.222.333`, recebida: '2026-10-05T08:00:00Z', modelo: 'modelo-teste-2' });
+      const extracao = await conferencia('IM912');
+      assert.deepEqual([motivo(extracao), extracao.arquivos.map((a) => [a.arquivoSha256, a.conclusao.tipo, a.extracaoIds.length])],
+        ['LEITURAS_DIVERGENTES_DO_MESMO_ARQUIVO', [[SHA(912), 'LEITURAS_DIVERGENTES', 2]]]);
+      assert.deepEqual(extracao.versoes.map((v) => v.leitura?.modelo).sort(), ['modelo-teste', 'modelo-teste-2'], 'a proveniência de cada leitura');
       // Master compartilhado por vários Houses, com o MESMO arquivo do MBL em duas mensagens (duplicata).
       await mbl(pool, c, { id: 'h1', processo: 'IM910', conhecimento: 'MEDU9100001', sha: 10, consignee: CONSIGNATARIO_ORG });
       await mbl(pool, c, { id: 'h2', processo: 'IM911', conhecimento: 'MEDU9100001', sha: 10, consignee: CONSIGNATARIO_ORG, recebida: '2026-10-02T08:00:00Z' });
@@ -811,6 +877,44 @@ test('O1.8/O1.9 — cadastro institucional, signatário, conferência e consigna
       const outra = await cenario(pool, 'ci-mbl-outra');
       await mbl(pool, outra, { id: 'o1', processo: 'IM910', conhecimento: 'MEDU9100001', sha: 10, consignee: `X\nCNPJ ${mascara(CNPJ_OUTRA)}` });
       assert.equal(motivo(await deps().fontes.identidadeDoConsignatario!(c.orgId, m910)), 'VERIFICADA');
+    });
+
+    await t.test('[CI-27] CNPJ alfanumérico no banco (0110): o cadastro aceita o válido pela API; o banco recusa minúscula, verificador errado e repetidos; a guarda para diante da 0108 original', async () => {
+      const c = await cenario(pool, 'ci-alfa');
+      s.como(acesso(c, c.membershipCaixa, 'ADMIN'));
+      const r = await s.pedir('', { ...CADASTRO_COMPLETO, cnpj: '12.abc.345/01de-35' });
+      assert.equal(r.status, 201, JSON.stringify(r.corpo));
+      assert.equal((await s.pedir('')).corpo.vigente.cnpj, CNPJ_ALFA, 'gravado normalizado');
+      assert.equal((await s.pedir('', { ...CADASTRO_COMPLETO, cnpj: '12.ABC.345/01DE-36' })).status, 422, 'verificador errado');
+      const inserir = (cnpj: string) => pool.query(`INSERT INTO organizacao_cadastro_institucional (organization_id, cnpj, registrado_por_membership_id, registrado_em) VALUES ($1, $2, $3, $4)`,
+        [c.orgId, cnpj, c.membershipCaixa, rel.agora()]);
+      for (const invalido of ['12abc34501de35', '12ABC34501DE36', '00000000000000', '12.ABC.345/01DE-35', 'AAAAAAAAAAAA00']) {
+        await assert.rejects(inserir(invalido), /check constraint/, invalido);
+      }
+      await inserir(CNPJ_ORG);
+      await inserir(CNPJ_ALFA);
+      assert.equal((await pool.query(`SELECT cnpj_valido($1) a, cnpj_valido($2) b, cnpj_digitos_validos($1) c`, [CNPJ_ORG, CNPJ_ALFA])).rows.map((x) => [x.a, x.b, x.c]).join(), 'true,true,true',
+        'o numérico segue pela regra original');
+      // Identidade com o cadastro alfanumérico, de ponta a ponta.
+      await mbl(pool, c, { id: 'alfa1', processo: 'IM950', conhecimento: 'MEDU9500001', sha: 950, consignee: `${CADASTRO_COMPLETO.razaoSocial}\nCNPJ 12.ABC.345/01DE-35` });
+      assert.equal(motivo(await deps().fontes.identidadeDoConsignatario!(c.orgId, await masterDe(pool, c.orgId, 'IM950'))), 'VERIFICADA');
+      // Guarda da 0110: num esquema com a estrutura da 0108 ORIGINAL (sem as colunas da revisão), a migração para.
+      const sql = fs.readFileSync(path.join(raiz, 'demurrage-engine', 'db', 'migrations', '0110_liberacao_cadastro_cnpj_alfanumerico.sql'), 'utf8');
+      const guarda = sql.slice(sql.indexOf('DO $$'), sql.indexOf('$$;') + 3);
+      assert.match(guarda, /0108_ORIGINAL_DETECTADA/);
+      const cli = await pool.connect();
+      try {
+        await cli.query('BEGIN');
+        await cli.query('CREATE SCHEMA guarda_0108_original');
+        await cli.query('SET LOCAL search_path TO guarda_0108_original');
+        await cli.query('CREATE TABLE organizacao_cadastro_institucional (id UUID, cnpj TEXT)');
+        await cli.query('CREATE TABLE organizacao_signatarios_legais (id UUID, signatario_id UUID)');
+        await assert.rejects(cli.query(guarda), /0108_ORIGINAL_DETECTADA/);
+      } finally {
+        await cli.query('ROLLBACK');
+        cli.release();
+      }
+      await pool.query(guarda);
     });
 
     await t.test('[CI-25] concorrência: gravações da mesma organização são serializadas no banco; poderes concorrentes com a revogação nunca entram depois dela', async () => {

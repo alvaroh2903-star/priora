@@ -511,6 +511,7 @@ export function fontesConfiaveisPostgres(db: Db): FontesConfiaveis {
         situacao: ev.situacao.consignee,
         versoes: ev.versoes.map((v) => ({
           extracaoId: v.extracaoId, arquivoSha256: v.origem.arquivoSha256, estado: v.estados.consignee, textoOriginal: v.campos?.consignee ?? null,
+          leitura: { extrator: v.extrator, extratorVersao: v.extratorVersao, modelo: v.modelo, extraidaEm: v.extraidaEm.toISOString() },
         })),
       },
       vigente ? { cadastroId: vigente.cadastroId, cnpj: vigente.cnpj } : null,
