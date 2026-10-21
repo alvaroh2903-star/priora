@@ -154,20 +154,31 @@ export async function getItemAttachmentTexts(
 ): Promise<string[]> {
   try {
     const client = getGraphClient(accessToken);
-    const res = await client
+    // Só METADADOS na listagem. Sem $select o Graph devolve o contentBytes (o
+    // arquivo inteiro em base64) de TODO anexo — os PDFs de cada e-mail, que aqui
+    // eram jogados fora. Couriers e Demurrage chamam isto para até 25 e-mails ao
+    // abrir o painel: em 21/10 isso estourou os 512 MB do Render várias vezes, e
+    // cada reinício deslogava todo mundo. O @odata.type vem junto por ser uma
+    // coleção polimórfica (mesmo recurso do getForwardedFileAttachments).
+    const lista: any = await client
       .api(`/me/messages/${messageId}/attachments`)
-      .header('Prefer', 'outlook.body-content-type="text"')
-      .expand('microsoft.graph.itemAttachment/item')
+      .select('id,name,contentType,size,isInline')
       .get();
+    const itemAtts = ((lista?.value as any[]) || []).filter(
+      (a) => a['@odata.type'] === '#microsoft.graph.itemAttachment',
+    );
     const texts: string[] = [];
-    for (const att of (res.value as any[]) || []) {
-      if (att['@odata.type'] === '#microsoft.graph.itemAttachment' && att.item) {
-        const it = att.item;
-        const subject = it.subject || '';
-        const body = it.body?.content || it.bodyPreview || '';
-        const joined = `${subject}\n${body}`.trim();
-        if (joined) texts.push(joined);
-      }
+    // Só os e-mails encaminhados COMO anexo são abertos (costuma ser 0 ou 1).
+    for (const ia of itemAtts) {
+      const full: any = await client
+        .api(`/me/messages/${messageId}/attachments/${ia.id}`)
+        .header('Prefer', 'outlook.body-content-type="text"')
+        .expand('microsoft.graph.itemAttachment/item')
+        .get();
+      const it = full?.item;
+      if (!it) continue;
+      const joined = `${it.subject || ''}\n${it.body?.content || it.bodyPreview || ''}`.trim();
+      if (joined) texts.push(joined);
     }
     return texts;
   } catch {

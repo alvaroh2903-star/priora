@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { mapLimit } from '../browser/carriers/concurrency';
 import { requireAuth, AuthedRequest } from '../middleware/requireAuth';
 import {
   searchLogisticsMessages,
@@ -310,16 +311,15 @@ async function buildCourierView(accessToken: string) {
     // ela (nunca penduramos o request inteiro por causa de um anexo).
     const withAtt = messages.filter((m) => m.hasAttachments).slice(0, 25);
     const attMap = new Map<string, string>();
-    await Promise.all(
-      withAtt.map(async (m) => {
-        const texts = await withTimeout(
-          getItemAttachmentTexts(accessToken, m.id),
-          8000,
-          'itemAttachment',
-        ).catch(() => [] as string[]);
-        if (texts.length) attMap.set(m.id, texts.join('\n\n'));
-      }),
-    );
+    // No máximo 5 e-mails por vez (antes: os 25 juntos).
+    await mapLimit(withAtt, 5, async (m) => {
+      const texts = await withTimeout(
+        getItemAttachmentTexts(accessToken, m.id),
+        8000,
+        'itemAttachment',
+      ).catch(() => [] as string[]);
+      if (texts.length) attMap.set(m.id, texts.join('\n\n'));
+    });
 
     // Texto completo por e-mail: assunto + corpo inteiro + e-mails anexados.
     const fullTextOf = (m: LogisticsSummary): string =>

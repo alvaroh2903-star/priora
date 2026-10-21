@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { mapLimit } from '../browser/carriers/concurrency';
 import { requireAuth, AuthedRequest } from '../middleware/requireAuth';
 import {
   searchLogisticsMessages,
@@ -289,16 +290,15 @@ demurrageRouter.get('/', async (req: AuthedRequest, res, next) => {
     // E-mails encaminhados como anexo: puxa o texto do anexo (best-effort).
     const withAtt = messages.filter((m) => m.hasAttachments).slice(0, 25);
     const attMap = new Map<string, string>();
-    await Promise.all(
-      withAtt.map(async (m) => {
-        const texts = await withTimeout(
-          getItemAttachmentTexts(req.accessToken!, m.id),
-          8000,
-          'itemAttachment',
-        ).catch(() => [] as string[]);
-        if (texts.length) attMap.set(m.id, texts.join('\n\n'));
-      }),
-    );
+    // No máximo 5 e-mails por vez (antes: os 25 juntos).
+    await mapLimit(withAtt, 5, async (m) => {
+      const texts = await withTimeout(
+        getItemAttachmentTexts(req.accessToken!, m.id),
+        8000,
+        'itemAttachment',
+      ).catch(() => [] as string[]);
+      if (texts.length) attMap.set(m.id, texts.join('\n\n'));
+    });
 
     const fullTextOf = (m: LogisticsSummary): string =>
       [m.bodyPreview || '', m.body?.content || '', attMap.get(m.id) || '']
