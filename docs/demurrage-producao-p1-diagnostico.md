@@ -11,6 +11,10 @@
 > itens listados no §7 **não fazem parte** deste encerramento: são trabalho
 > futuro separado, cada um dependente de autorização explícita do usuário.
 > Ver §6 para o detalhe do congelamento e os relatórios de entrega.
+> **Adição à Entrega 1 — controle de capacidade do handoff: APROVADO E
+> CONGELADO** (decisão formal do usuário; código `19fc8d9`, relatório
+> `6c04234`). Era o item 3 do §7, agora concluído — ver §6 e
+> `docs/demurrage-producao-p1-handoff-capacidade.md`.
 
 ## 0. Status executivo
 
@@ -195,7 +199,7 @@ Os itens 2 e 3 podem, a princípio, ser cobertos reaproveitando/estendendo `GET 
 5. **Proteção contra IDs de outra organização**: todo FK/trigger de imutabilidade já existente (D12/D16 §7) continua valendo sem mudança — a nova rota de handoff herda a mesma garantia só por passar `organizationId` resolvido (nunca confiado) para o MESMO `registrarProcessoDemurrage`.
 6. **Proteção contra replay**: já resolvida pela chave de idempotência do contrato (§2.1) para o handoff. Para o segredo de serviço em si, recomenda-se um nonce/timestamp assinado por chamada (janela curta) SE e quando o handoff for exposto por HTTP além do ambiente de teste controlado — detalhe de implementação da entrega 1, não deste diagnóstico.
 7. **Atribuição de auditoria**: toda escrita via handoff grava `origem.sistema`/`origemEventoId` (§2.2) no ledger `demurrage_registros`, já append-only — a atribuição "isto veio da Liberação, evento X" já fica registrada sem trabalho extra. Para as rotas operacionais (§3), a atribuição já é por `membershipId` real em cada serviço.
-8. **Expectativa de rate limiting**: nenhum rate limiting existe hoje em NENHUMA rota deste repositório (confirmado por ausência total do termo em `src/`). Para a rota de handoff exposta por HTTP, recomenda-se um limite simples por organização (ex.: N requisições/minuto) na própria rota nova — não uma mudança de infraestrutura; não bloqueia a entrega 1, mas deve ser considerado antes de abrir a rota para tráfego não controlado.
+8. **Expectativa de rate limiting**: nenhum rate limiting existe hoje em NENHUMA rota deste repositório (confirmado por ausência total do termo em `src/`). Para a rota de handoff exposta por HTTP, recomenda-se um limite simples por organização (ex.: N requisições/minuto) na própria rota nova — não uma mudança de infraestrutura; não bloqueia a entrega 1, mas deve ser considerado antes de abrir a rota para tráfego não controlado. **[Atualização]** implementado por credencial e por organização e **aprovado e congelado** — ver `docs/demurrage-producao-p1-handoff-capacidade.md` (taxas sustentadas de reposição, não limite rígido por janela móvel).
 9. **Manuseio de segredos**: seguir o padrão já estabelecido em `config.ts` (variável de ambiente lida uma vez, nunca logada, nunca com default não-vazio em produção) — o mesmo tratamento já dado a `SESSION_SECRET`/`GEMINI_API_KEY`/etc.
 
 ---
@@ -301,29 +305,46 @@ Nenhuma das três entregas toca cálculo, relógio, tarifa, cadência de trackin
 | 1 — Handoff de entrada | **APROVADA E CONGELADA** | v1.3 | 1037/1037 |
 | 2 — Rotas de ação operacional | **APROVADA E CONGELADA** | v1.2 | 1107/1107 |
 | 3 — Leitura para o frontend redesenhado | **APROVADA E CONGELADA** | v1.1 | 1154/1154 |
+| Adição à Entrega 1 — controle de capacidade da rota HTTP do handoff | **APROVADO E CONGELADO** | código `19fc8d9`, relatório `6c04234` | 1181/1181 |
 
 **Backend da Produção P1: FORMALMENTE CONCLUÍDO** (decisão final do
 usuário, com o congelamento da Entrega 3 v1.1). Cada superfície congelada só
 muda mediante: defeito comprovado; problema de integridade de dados (ou
 falha de segurança, nas Entregas 1 e 2); ou aprovação explícita do usuário.
 
+**Controle de capacidade do handoff** (adição estreita à Entrega 1,
+autorizada pelo usuário — `docs/demurrage-producao-p1-handoff-capacidade.md`):
+**APROVADO E CONGELADO**. Semântica aprovada: token bucket por credencial
+(taxa sustentada de reposição de 60 tentativas/min, capacidade imediata de
+10) e por organização (120/min, capacidade imediata de 20); 60/120 são taxas
+sustentadas de reposição, não tetos rígidos por janela móvel — está aceito
+que uma janela móvel de 60 s admita, em teoria, até 70 por credencial e 140
+por organização. Resultados finais: capacidade 27/27, Entrega 1 60/60,
+Entrega 2 70/70, Entrega 3 47/47, Demurrage Engine 1181/1181, V1 25/25,
+D13 UI 66/66, typecheck e build limpos. Só muda mediante defeito
+comprovado, problema de integridade/segurança ou autorização explícita do
+usuário.
+
 ---
 
 ## 7. Trabalho futuro separado (fora da Produção P1)
 
 Os itens abaixo **não fazem parte** do backend da Produção P1 concluído e
-não foram iniciados. Cada um é uma frente própria, que depende de
-autorização explícita do usuário para começar e não reabre nenhuma
-superfície congelada, salvo pelas regras acima:
+não foram iniciados — **exceto o item 3**, que foi autorizado depois,
+implementado como adição estreita à Entrega 1 e está **aprovado e
+congelado** (ver o status consolidado no §6). Cada item restante é uma
+frente própria, que depende de autorização explícita do usuário para
+começar e não reabre nenhuma superfície congelada, salvo pelas regras
+acima:
 
 1. Implementação do frontend (redesenho; requer aprovação explícita de
    design do usuário).
 2. Chamador Liberação → handoff (o lado da Liberação que invoca a entrada
    de handoff congelada na Entrega 1 — §2.3).
 3. Limitação de taxa (rate limiting) do handoff antes de qualquer exposição
-   externa (§5, item 8). **Implementada** como adição estreita à Entrega 1,
-   autorizada pelo usuário — `docs/demurrage-producao-p1-handoff-capacidade.md`
-   (**aguardando revisão**; não congelada).
+   externa (§5, item 8). **Concluída: APROVADA E CONGELADA** como adição
+   estreita à Entrega 1, autorizada pelo usuário (código `19fc8d9`,
+   relatório `6c04234`) — `docs/demurrage-producao-p1-handoff-capacidade.md`.
 4. Administração de tarifas.
 5. Administração de VesselCall (§3, nota sobre a pendência de VesselCall).
 6. Tracking manual (§3, item 2).

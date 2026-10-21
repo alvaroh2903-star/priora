@@ -1,7 +1,11 @@
 # Produção P1 — Entrega 1: controle de capacidade da rota HTTP do handoff
 
-**Status: AGUARDANDO REVISÃO.** Adição estreita à Entrega 1 (congelada),
-autorizada explicitamente pelo usuário. Não declara nada congelado.
+> **STATUS: APROVADO E CONGELADO** (decisão formal do usuário). Código
+> `19fc8d9`, relatório/validação `6c04234`. Semântica aprovada, resultados
+> finais, superfície congelada e regra de alteração em **§0**.
+
+Adição estreita à Entrega 1 (congelada), autorizada explicitamente pelo
+usuário.
 
 **Baseline:** branch `claude/practical-cerf-mnz7oj`, HEAD `b220ff0` (backend
 da Produção P1 concluído e congelado). Esta adição toca só a rota HTTP do
@@ -15,11 +19,95 @@ Liberação, de tarifas ou de outra frente foi iniciado.
 |---|---|
 | Ponto de inserção | Middleware da rota `POST /` (a que entra no processamento), **depois** da autenticação HMAC completa (credencial, assinatura, timestamp, nonce) e **antes** do parse do corpo, da reivindicação de idempotência e do serviço |
 | Algoritmo | Balde de fichas (token bucket) com reposição contínua, calculado **dentro do PostgreSQL** com o relógio do banco |
-| Dimensões | Por credencial (60/min, rajada 10) e por organização somando as credenciais (120/min, rajada 20) — padrões configuráveis |
+| Dimensões | Por credencial: taxa sustentada de reposição de 60 tentativas/min e capacidade imediata (rajada) de 10. Por organização, somando as credenciais: 120/min e 20. Máximo teórico numa janela móvel de 60 s: 70 por credencial e 140 por organização (§0, §3.4). Padrões configuráveis |
 | Estado | Uma linha por credencial e uma por organização (migration `0047`); nenhum histórico de requisições |
 | Atomicidade | Uma chamada de função = uma transação curta; organização travada antes da credencial; admite só se as duas têm ficha; recusa não consome nenhuma |
 | Recusa | `429`, `Retry-After` em segundos inteiros arredondados para cima, corpo exato `{"error":"limite_temporario"}` |
 | Falha do controle | A mesma resposta genérica de falha inesperada da rota (`500 {"resultado":"FALHA","detalhe":{"motivo":…}}`), sem processar o handoff |
+
+---
+
+## 0. Decisão formal e congelamento
+
+**O controle de capacidade da rota HTTP do handoff está APROVADO E
+CONGELADO** (decisão formal do usuário, depois da revisão de `6c04234`).
+
+### 0.1 Semântica aprovada (token bucket)
+
+- **Por credencial:** taxa **sustentada de reposição** de 60 tentativas
+  por minuto (1 ficha/s), com **capacidade imediata** do balde (rajada)
+  de 10.
+- **Por organização** (somando todas as credenciais dela): taxa
+  **sustentada de reposição** de 120 tentativas por minuto (2 fichas/s),
+  com **capacidade imediata** de 20.
+- **60/120 são taxas sustentadas de reposição; 10/20 são a capacidade
+  imediata do balde.** Não são tetos rígidos por janela móvel.
+- **Aceito:** em teoria, uma janela móvel de 60 s pode admitir até **70
+  tentativas por credencial** e **140 por organização** (rajada + taxa ×
+  60 s, quando o balde começa a janela cheio). O máximo da credencial vale
+  por geração da credencial: uma rotação do segredo recomeça o balde da
+  credencial cheio (§3.3, §3.4); o máximo de 140 da organização vale
+  através de rotações. Não existe — nem é prometido em nenhum ponto desta
+  documentação — limite rígido de 60/120 em toda janela móvel de 60 s.
+- **Rejeitado explicitamente:** janela deslizante, histórico por
+  tentativa ou qualquer outra arquitetura adicional; redução das taxas
+  para 50/100.
+- **Aprovados conforme implementados:** a atomicidade entre os dois
+  limites (§6), o `Retry-After` (§3.1, §3.2, §7), a posição do middleware
+  (§2) e a regra de que uma recusa não cria nem consome registro de
+  idempotência (§7).
+
+### 0.2 Commits
+
+| Papel | Commit |
+|---|---|
+| Implementação (código, migration `0047`, testes, relatório) | `19fc8d9` |
+| Relatório da validação em worktree limpo (somente documentação) | `6c04234` |
+| Este registro de congelamento | somente documentação (commit seguinte a `6c04234`) |
+
+### 0.3 Resultados finais (worktree limpo, `19fc8d9` — §10.2)
+
+| Suíte | Resultado |
+|---|---|
+| Controle de capacidade (`handoffCapacidade.test.ts`) | **27/27** |
+| Entrega 1 (handoff) | **60/60** |
+| Entrega 2 (ações) | **70/70** |
+| Entrega 3 (leitura) | **47/47** |
+| Demurrage Engine completo | **1181/1181** |
+| V1 | **25/25** |
+| D13 UI | **66/66** |
+| Typecheck (`tsc --noEmit`) e build (`npm run build`) | **limpos** |
+
+Nenhuma falha, nenhum teste pulado, cancelado ou `todo`.
+
+### 0.4 Superfície congelada
+
+- Migration `0047_handoff_controle_capacidade.sql` (tabelas de baldes,
+  restrição `UNIQUE (id, organization_id)` em `demurrage_handoff_credenciais`,
+  função `demurrage_handoff_capacidade_admitir`, fórmula e arredondamento).
+- `src/demurrage-engine/handoff/capacidade.ts` (configuração, validação,
+  decisão, contadores, logs, middleware) e a ligação em
+  `src/routes/demurrageHandoffRoutes.ts` (primeiro handler de
+  `POST /`, depois da autenticação).
+- Contrato HTTP da recusa: `429`, `Retry-After` em segundos inteiros
+  arredondados para cima, corpo `{"error":"limite_temporario"}`; falha do
+  controle → resposta genérica de falha existente, sem processar o handoff.
+- Variáveis `PRIORA_HANDOFF_CAPACIDADE_*` e os padrões aprovados
+  60/10 (credencial) e 120/20 (organização).
+- `src/demurrage-engine/__tests__/handoffCapacidade.test.ts`.
+
+### 0.5 Regra de alteração
+
+Esta superfície só muda mediante: (1) **defeito comprovado**; (2)
+**problema de integridade de dados ou de segurança**; ou (3)
+**autorização explícita do usuário**. Usar em produção valores diferentes
+dos padrões aprovados altera a política aprovada e segue a mesma regra.
+
+### 0.6 Próximo trabalho (separado, não iniciado)
+
+Conectar a Liberação ao handoff (chamador Liberação → handoff). Nenhum
+trabalho de frontend ou de design foi iniciado; qualquer etapa que toque
+frontend/design será anunciada explicitamente antes.
 
 ---
 
@@ -193,33 +281,19 @@ de §3.1 (corretos, mas não medidos numa janela real de 60 s).
 
 - **Rajada [teste]:** no máximo 10 admissões seguidas por credencial (20 por organização).
 - **Reposição [teste]:** 1 ficha/s por credencial, 2 fichas/s por organização, nunca acima da rajada; com os padrões, toda recusa traz `Retry-After: 1`.
-- **Ritmo sustentado [fórmula]:** em média, nunca mais que 60/min por credencial e 120/min por organização; o excedente em relação a essa média nunca passa da rajada, em janela de qualquer tamanho.
+- **Ritmo sustentado [fórmula]:** a média de longo prazo é limitada pela taxa de reposição — 60/min por credencial e 120/min por organização. Isso **não** é um limite por janela: em uma janela de qualquer tamanho, o excedente sobre `taxa × duração` é de no máximo a rajada (10/20).
 - **Janela de T segundos [fórmula]:** admite no máximo `⌊f₀ + taxa × T⌋`, onde `f₀ ∈ [0, rajada]` são as fichas no início da janela. Numa janela de 60 s, a contagem passa de 60/120 sempre que `f₀ ≥ 1` — isto é, sempre que o tráfego anterior esteve abaixo da taxa (ociosidade de ≥ 1 s ou qualquer ritmo menor que 1/s) — e chega a **70/140** quando `f₀` = rajada (69/139 numa janela semiaberta). Só fica em 60/120 enquanto o tráfego mantém o balde vazio.
 - **Por geração da credencial:** o limite da credencial vale por geração — uma rotação começa um balde cheio novo (é o pedido: "rotação cria capacidade de credencial independente"). O limite da organização continua valendo através das rotações.
 - **Concorrência / múltiplas instâncias [teste]:** nunca mais admissões do que os baldes permitem — estado único no banco, cada decisão sob lock das duas linhas (§6).
 
-> **Ponto para decisão do usuário (interpretação da política).** O token
-> bucket com capacidade = rajada e reposição = limite/60 por segundo é a
-> realização padrão de "N por minuto com rajada B" e é o modelo pedido
-> ("token bucket ou equivalente com reposição contínua"). Ele **não** é um
-> teto estrito de 60/120 em toda janela deslizante de 60 s (pior caso
-> 70/140, acima). Nenhum balde de fichas — nem combinação de baldes —
-> consegue ao mesmo tempo rajada 10, ritmo sustentado de 60/min e teto
-> estrito de 60 em toda janela. Opções, se a revisão quiser o teto estrito:
->
-> - **(a) Só configuração:** `…_POR_MINUTO = limite − rajada` (ex.: 50 com
->   rajada 10; 100 com rajada 20) → no máximo 60/120 em qualquer janela,
->   mas o ritmo sustentado cai para 50/100 por minuto (um cliente constante
->   de 1/s teria ~1 em 6 requisições recusadas) e "POR_MINUTO" deixa de
->   significar "aceitas por minuto".
-> - **(b) Registro limitado de admissões:** na mesma função, guardar as
->   últimas N admissões de cada balde (N = limite: 60/120 carimbos por
->   linha, ~0,5–1 KB) e exigir também "menos de N nos últimos 60 s", junto
->   com o balde atual para a rajada → teto estrito, ritmo 60/120 e rajada
->   10/20 ao mesmo tempo; uma linha por credencial/organização, transação
->   curta. Exige baixar o máximo configurável (hoje 1.000.000).
->
-> Nenhuma das duas foi aplicada sem decisão explícita.
+> **Decisão formal do usuário (§0.1): manter esta semântica de token
+> bucket.** 60/120 são a taxa sustentada de reposição e 10/20 a capacidade
+> imediata do balde; o máximo teórico de **70 por credencial e 140 por
+> organização numa janela móvel de 60 s** está aceito. O controle **não**
+> impõe — e esta documentação não promete — limite rígido de 60/120 em
+> toda janela móvel. Foram consideradas e **rejeitadas** na decisão:
+> reduzir as taxas para 50/100 e acrescentar janela deslizante, histórico
+> por tentativa ou outra arquitetura adicional.
 
 ---
 
@@ -451,7 +525,7 @@ política). Achados e o tratamento de cada um, todos dentro deste escopo:
 | T3 | menor | `#21` não provocava falha real do PostgreSQL | `#21b`: `lock_timeout` real dentro da função; baldes intactos e nenhum balde novo | `#21b` |
 | T4 | info | Teste de log não procurava os **valores** de nonce e timestamp | Valores incluídos na lista proibida | — |
 | T5 | info | Nenhum teste conferia os contadores da instância | Deltas conferidos em `#1`, `#3` (dimensão organização, com a linha de log), `#21`, `#21b` e no teste de log (dimensão credencial) | — |
-| POL-1 | info | Interpretação: token bucket não é teto estrito por janela deslizante | Mantido o modelo pedido; decisão do usuário registrada com opções (§3.4) | — |
+| POL-1 | info | Interpretação: token bucket não é teto rígido por janela móvel | Decisão formal do usuário: manter o token bucket; máximo teórico de 70/140 por janela móvel de 60 s aceito (§0.1, §3.4) | — |
 | POL-2 | menor | §3.4 dizia que 70/140 só ocorria após 10 s de ociosidade | Texto corrigido: qualquer `f₀ ≥ 1` no início da janela | — |
 | POL-3 | info | Limite da credencial vale por geração (rotação) | Qualificado em §3.4 | — |
 | POL-4 | info | `POR_MINUTO` lido como teto | §5 e `.env.example`: é a taxa; pior caso `POR_MINUTO + RAJADA` | — |
@@ -590,6 +664,12 @@ arquivos de teste com ajuste mecânico, `.env.example` e 3 documentos):
 
 ### 14.1 Mudar os limites
 
+> Os valores **aprovados e congelados** são os padrões 60/10 (credencial)
+> e 120/20 (organização) — §0.1. Usar outros valores em produção altera a
+> política aprovada e só acontece pela regra de alteração de §0.5. O
+> procedimento abaixo é o mecanismo operacional para quando houver essa
+> autorização (ou para ambientes de teste).
+
 1. Definir as variáveis do §5 no ambiente de **todas** as instâncias (inteiros positivos; remover a variável volta ao padrão).
 2. Reiniciar as instâncias. Conferir no log de inicialização a linha `[demurrage-handoff] controle de capacidade ativo: …` com os valores novos.
 3. Valor inválido: a instância não sobe e o erro cita a variável (`ErroConfigCapacidadeHandoff: … PRIORA_HANDOFF_CAPACIDADE_… = "…"`). Corrigir e reiniciar.
@@ -638,7 +718,7 @@ arquivos de teste com ajuste mecânico, `.env.example` e 3 documentos):
 
 ## 15. Limitações registradas
 
-1. **Teto estrito por janela deslizante:** não garantido — até `rajada + limite` (70/140) numa janela de 60 s, sempre que o tráfego anterior deixou fichas no balde (§3.4). Pendente de decisão do usuário.
+1. **Sem limite rígido por janela móvel (aceito na decisão formal, §0.1):** uma janela móvel de 60 s pode admitir até `rajada + taxa × 60 s` — 70 por credencial (por geração da credencial) e 140 por organização com os padrões — sempre que o tráfego anterior deixou fichas no balde (§3.4).
 2. **Contadores de instância** são por processo e zeram no reinício; os totais duráveis por balde são a fonte compartilhada.
 3. Inalterado da Entrega 1: falha de banco **dentro da autenticação** continua fora do escopo deste controle (comportamento congelado).
 
@@ -646,12 +726,15 @@ arquivos de teste com ajuste mecânico, `.env.example` e 3 documentos):
 
 ## 16. Status
 
-- Controle de capacidade **implementado e validado** (código `19fc8d9`;
-  regressão sequencial em worktree limpo toda verde — §10.2).
-- **Aguardando revisão do usuário. Não declarado congelado.**
-- **Decisão pendente do usuário (§3.4):** manter o balde de fichas (pior
-  caso 70/140 numa janela de 60 s, média 60/120) ou exigir teto estrito por
-  janela deslizante — opção (a), só configuração, ou (b), registro
-  limitado de admissões.
-- Nenhum frontend alterado ou declarado; chamador da Liberação **não**
-  iniciado; nenhuma outra frente começada.
+- **APROVADO E CONGELADO** (decisão formal do usuário — §0). Código
+  `19fc8d9`; relatório da validação `6c04234`.
+- Semântica aprovada: token bucket com taxa sustentada de reposição 60/120
+  por minuto e capacidade imediata 10/20; máximo teórico de 70/140 numa
+  janela móvel de 60 s aceito (§0.1).
+- Resultados finais: capacidade 27/27, Entrega 1 60/60, Entrega 2 70/70,
+  Entrega 3 47/47, Demurrage Engine 1181/1181, V1 25/25, D13 UI 66/66,
+  typecheck e build limpos (§0.3, §10.2).
+- Alterações só por defeito comprovado, problema de integridade/segurança
+  ou autorização explícita do usuário (§0.5).
+- Nenhum frontend alterado ou declarado. Próximo trabalho separado:
+  chamador Liberação → handoff (não iniciado).
