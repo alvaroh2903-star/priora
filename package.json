@@ -10,6 +10,8 @@
     "dev": "ts-node src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
+    "test:diag": "TS_NODE_PREFER_TS_EXTS=true node -r ts-node/register --test src/diag/*.test.ts",
+    "diag:resumo": "TS_NODE_PREFER_TS_EXTS=true ts-node src/diag/relatoriosResumo.ts",
     "typecheck": "tsc --noEmit",
     "test": "node -r ts-node/register --test src/auditoria/preAlerta/*.test.ts"
   },

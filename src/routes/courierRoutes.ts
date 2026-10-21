@@ -37,10 +37,18 @@ import {
   Resolution,
 } from '../couriers/referenceResolver';
 import { config } from '../config';
+import {
+  diagRelatorios,
+  diagAutenticado,
+  observarExterna,
+  registrarCobertura,
+} from '../diag/relatoriosDiag';
 
 export const courierRouter = Router();
 
+courierRouter.use(diagRelatorios('couriers'));
 courierRouter.use(requireAuth);
+courierRouter.use(diagAutenticado);
 
 /** Normaliza o carrier detectado pelo filtro para exibição no card. */
 function displayCarrier(c: string | null): string {
@@ -265,10 +273,15 @@ function agenteDe(msg?: LogisticsSummary): string {
  * fica "carregando infinito".
  */
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  // Diagnóstico (só mede): sem rastro ativo, obs.p é a própria promessa.
+  const obs = observarExterna(label, p);
   return Promise.race([
-    p,
+    obs.p,
     new Promise<T>((_, reject) =>
-      setTimeout(() => reject(new Error(`timeout ${label} (${ms}ms)`)), ms),
+      setTimeout(() => {
+        obs.estourou();
+        reject(new Error(`timeout ${label} (${ms}ms)`));
+      }, ms),
     ),
   ]);
 }
@@ -309,6 +322,14 @@ async function buildCourierView(accessToken: string) {
     // tem timeout próprio e é best-effort: se uma travar/demorar, seguimos sem
     // ela (nunca penduramos o request inteiro por causa de um anexo).
     const withAtt = messages.filter((m) => m.hasAttachments).slice(0, 25);
+    registrarCobertura(() => ({
+      fonte: source,
+      limiteBusca: source === 'inbox' ? 40 : 60,
+      mensagens: messages.length,
+      mensagensComAnexo: messages.filter((m) => m.hasAttachments).length,
+      limiteAnexos: 25,
+      anexosSelecionados: withAtt.length,
+    }));
     const attMap = new Map<string, string>();
     await Promise.all(
       withAtt.map(async (m) => {
@@ -320,6 +341,7 @@ async function buildCourierView(accessToken: string) {
         if (texts.length) attMap.set(m.id, texts.join('\n\n'));
       }),
     );
+    registrarCobertura(() => ({ anexosComTexto: attMap.size }));
 
     // Texto completo por e-mail: assunto + corpo inteiro + e-mails anexados.
     const fullTextOf = (m: LogisticsSummary): string =>
@@ -618,6 +640,11 @@ async function buildCourierView(accessToken: string) {
       .filter((c) => c.estado !== 'Concluído')
       .sort((a, b) => (a.data < b.data ? 1 : -1));
     const concluidos = couriersAll.filter((c) => c.estado === 'Concluído').length;
+    registrarCobertura(() => ({
+      conversas: groups.size,
+      couriers: couriers.length,
+      processosSemCourier: processosSemCourier.size,
+    }));
 
     // Atividades recentes: derivadas dos e-mails CANDIDATOS mais recentes.
     const seenAtiv = new Set<string>();

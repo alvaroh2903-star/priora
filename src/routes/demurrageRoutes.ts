@@ -27,20 +27,33 @@ import {
   procKey,
 } from '../demurrage/demurrageStore';
 import { config } from '../config';
+import {
+  diagRelatorios,
+  diagAutenticado,
+  observarExterna,
+  registrarCobertura,
+} from '../diag/relatoriosDiag';
 
 export const demurrageRouter = Router();
 
+demurrageRouter.use(diagRelatorios('demurrage'));
 demurrageRouter.use(requireAuth);
+demurrageRouter.use(diagAutenticado);
 
 /* ------------------------------------------------------------------ *
  * Helpers
  * ------------------------------------------------------------------ */
 
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  // Diagnóstico (só mede): sem rastro ativo, obs.p é a própria promessa.
+  const obs = observarExterna(label, p);
   return Promise.race([
-    p,
+    obs.p,
     new Promise<T>((_, reject) =>
-      setTimeout(() => reject(new Error(`timeout ${label} (${ms}ms)`)), ms),
+      setTimeout(() => {
+        obs.estourou();
+        reject(new Error(`timeout ${label} (${ms}ms)`));
+      }, ms),
     ),
   ]);
 }
@@ -210,6 +223,14 @@ demurrageRouter.get('/', async (req: AuthedRequest, res, next) => {
 
     // E-mails encaminhados como anexo: puxa o texto do anexo (best-effort).
     const withAtt = messages.filter((m) => m.hasAttachments).slice(0, 25);
+    registrarCobertura(() => ({
+      fonte: source,
+      limiteBusca: source === 'inbox' ? 40 : 60,
+      mensagens: messages.length,
+      mensagensComAnexo: messages.filter((m) => m.hasAttachments).length,
+      limiteAnexos: 25,
+      anexosSelecionados: withAtt.length,
+    }));
     const attMap = new Map<string, string>();
     await Promise.all(
       withAtt.map(async (m) => {
@@ -221,6 +242,7 @@ demurrageRouter.get('/', async (req: AuthedRequest, res, next) => {
         if (texts.length) attMap.set(m.id, texts.join('\n\n'));
       }),
     );
+    registrarCobertura(() => ({ anexosComTexto: attMap.size }));
 
     const fullTextOf = (m: LogisticsSummary): string =>
       [m.bodyPreview || '', m.body?.content || '', attMap.get(m.id) || '']
@@ -294,6 +316,13 @@ demurrageRouter.get('/', async (req: AuthedRequest, res, next) => {
     candidates.sort((a, b) => b.score - a.score);
     const AI_CAP = 14;
     const toAnalyze = aiEnabled ? candidates.slice(0, AI_CAP) : [];
+    registrarCobertura(() => ({
+      conversas: groups.size,
+      candidatas: candidates.length,
+      iaHabilitada: aiEnabled,
+      limiteIa: AI_CAP,
+      iaSelecionadas: toAnalyze.length,
+    }));
     const extractions = new Map<string, DemurrageExtraction>();
     await Promise.all(
       toAnalyze.map(async (c) => {
@@ -307,6 +336,7 @@ demurrageRouter.get('/', async (req: AuthedRequest, res, next) => {
         if (ext) extractions.set(c.cid, ext);
       }),
     );
+    registrarCobertura(() => ({ extracoesIa: extractions.size }));
 
     // Monta os cards agregando por processo (ou, sem processo, por container).
     const acc = new Map<string, CardAccumulator>();
@@ -412,6 +442,7 @@ demurrageRouter.get('/', async (req: AuthedRequest, res, next) => {
       .filter((c) => c.bucket === 'risco')
       .sort((a, b) => (a.diasRestantes ?? 999) - (b.diasRestantes ?? 999));
     const pend = cards.filter((c) => c.bucket === 'pend');
+    registrarCobertura(() => ({ cards: cards.length }));
 
     const custoValor = moneyOf(custo);
     const pendValor = moneyOf(pend);

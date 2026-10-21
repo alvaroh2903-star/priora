@@ -188,16 +188,95 @@ class Component extends DCLogic {
   componentWillUnmount(){ this._alive=false; }
 
   // Fetch com TIMEOUT: um módulo lento/fora nunca trava a tela.
+  // Diagnóstico: diagTentativa SÓ observa — mesmo limite, mesmo resultado
+  // (dados ou null), nenhuma tentativa a mais.
   fetchJson(url, ms){
+    var d=this.diagTentativa(url, ms||15000);
     return Promise.race([
-      fetch(url, { credentials:'same-origin' })
-        .then(function(r){ return r.ok ? r.json().catch(function(){return null;}) : null; })
-        .catch(function(){ return null; }),
-      new Promise(function(res){ setTimeout(function(){ res(null); }, ms||15000); })
+      fetch(url, { credentials:'same-origin', headers:d.headers })
+        .then(function(r){ d.resposta(r); return r.ok ? r.json().catch(function(){ d.falha('json_invalido'); return null; }) : null; })
+        .catch(function(){ d.falha('erro_rede'); return null; })
+        .then(function(v){ d.fim('rede', v); return v; }),
+      new Promise(function(res){ setTimeout(function(){ d.fim('timeout', null); res(null); }, ms||15000); })
     ]);
   }
 
+  // ── Diagnóstico do carregamento (Stage 0) ──────────────────────────────
+  // IDs aleatórios e opacos: OPERAÇÃO do usuário (abrir a aba / "Tentar
+  // novamente") e TENTATIVA HTTP (cada fetch). Vão nos headers X-Priora-Op /
+  // X-Priora-Attempt para o servidor correlacionar. Os eventos ficam em
+  // window.__prioraDiag.log e só vão ao servidor (sendBeacon) se ele responder
+  // com X-Priora-Diag: on. Nada aqui muda timeouts, retries ou a tela.
+  diagEstado(){
+    var w=(typeof window!=='undefined')?window:{};
+    return w.__prioraDiag || (w.__prioraDiag={ ligado:false, fila:[], log:[] });
+  }
+  diagId(){
+    try { var b=new Uint8Array(8); crypto.getRandomValues(b); return Array.prototype.map.call(b,function(x){ return ('0'+x.toString(16)).slice(-2); }).join(''); }
+    catch(e){ return (Math.random().toString(16).slice(2)+'0000000000000000').slice(0,16); }
+  }
+  diagVisivel(){ try { return document.visibilityState!=='hidden'; } catch(e){ return true; } }
+  diagNovaOp(recursos, gatilho){
+    try {
+      var self=this, op=this.diagId();
+      this._diagOps=this._diagOps||{}; this._diagOpT0=this._diagOpT0||{};
+      recursos.forEach(function(u){ self._diagOps[u]=op; });
+      this._diagOpT0[op]=Date.now();
+      this.diagEvento({ e:'op', op:op, gatilho:gatilho, recursos:recursos, visivel:this.diagVisivel() });
+    } catch(e){}
+  }
+  diagEvento(ev){
+    try {
+      var st=this.diagEstado();
+      st.log.push(ev); if(st.log.length>200) st.log.shift();
+      st.fila.push(ev); if(st.fila.length>50) st.fila.shift();
+      if(st.ligado) this.diagEnviar();
+    } catch(e){}
+  }
+  diagEnviar(){
+    try {
+      var st=this.diagEstado();
+      if(!st.fila.length || typeof navigator==='undefined' || !navigator.sendBeacon) return;
+      navigator.sendBeacon('/api/diag/relatorios', new Blob([JSON.stringify(st.fila.splice(0,50))], { type:'application/json' }));
+    } catch(e){}
+  }
+  diagTentativa(url, limiteMs){
+    var self=this, t0=Date.now(), att=this.diagId(), ramo1=null, falha=null, ev={ e:'tentativa', att:att, url:url };
+    try {
+      var op=(this._diagOps||{})[url]||null, cont=this._diagN=this._diagN||{}, k=(op||'-')+url;
+      var voo=this._diagVoo=this._diagVoo||{}, emVoo=0, mesma=0;
+      cont[k]=(cont[k]||0)+1;
+      for(var a in voo){ emVoo++; if(voo[a]===url) mesma++; }
+      voo[att]=url;
+      ev={ e:'tentativa', op:op, att:att, url:url, n:cont[k], limiteMs:limiteMs, emVoo:emVoo, emVooMesmaUrl:mesma,
+           opMs:(op && this._diagOpT0 && this._diagOpT0[op]!=null) ? t0-this._diagOpT0[op] : null, visivel:this.diagVisivel() };
+    } catch(e){}
+    var headers={ 'X-Priora-Attempt':att }; if(ev.op) headers['X-Priora-Op']=ev.op;
+    function desfecho(v){ return v ? 'ok' : (falha || (ev.status ? 'http_'+ev.status : 'erro_rede')); }
+    return {
+      headers:headers,
+      resposta:function(r){ try { ev.status=r.status; if(r.headers && r.headers.get('X-Priora-Diag')==='on') self.diagEstado().ligado=true; } catch(e){} },
+      falha:function(f){ falha=f; },
+      fim:function(ramo, v){
+        try {
+          var ms=Date.now()-t0;
+          if(ramo==='rede' && self._diagVoo) delete self._diagVoo[att];
+          if(!ramo1){
+            ramo1=ramo;
+            self.diagEvento(Object.assign({}, ev, { ms:ms, desfecho: ramo==='timeout' ? 'timeout' : desfecho(v) }));
+          } else if(ramo1==='timeout' && ramo==='rede'){
+            // A resposta chegou DEPOIS de a tela desistir: o servidor seguiu trabalhando.
+            self.diagEvento({ e:'tardia', op:ev.op, att:att, url:url, n:ev.n, ms:ms, aposLimiteMs:Math.max(0, ms-limiteMs),
+                              status:(ev.status==null?null:ev.status), desfecho:desfecho(v) });
+          }
+          if(ramo==='rede' && self.diagEstado().ligado) self.diagEnviar();
+        } catch(e){}
+      }
+    };
+  }
+
   load(){
+    this.diagNovaOp(['/api/couriers','/api/demurrage'], 'montagem');
     // MESMA fonte da aba Couriers (/api/couriers): os couriers de lá aparecem AQUI.
     this.loadCouriers(0);
     // Custo de demurrage: OPCIONAL. Se o módulo estiver fora/lento a tela
@@ -287,7 +366,7 @@ class Component extends DCLogic {
   renderVals(){
     var self=this, resp=this.state.resp, st=this.state.status;
     var loading=(st==='loading'), errored=(st.indexOf('error')===0), ready=(st==='done'&&!!resp);
-    if (!ready) return { loading:loading, errored:errored, ready:false, errorMsg:(errored?st.slice(st.indexOf(':')+1):''), onRetry:function(){ self.loadCouriers(0); } };
+    if (!ready) return { loading:loading, errored:errored, ready:false, errorMsg:(errored?st.slice(st.indexOf(':')+1):''), onRetry:function(){ self.diagNovaOp(['/api/couriers'], 'repetir'); self.loadCouriers(0); } };
 
     var s=this.computeStats(resp.couriers||[], (resp.processosSemCourier||[]).length);
     var PURPLE='#4327E6', PURPLE_SOFT='#C9C2F7', GREEN='#177D54', AMBER='#E08A1E', RED='#C2333A', MUTED='#9AA0B4';

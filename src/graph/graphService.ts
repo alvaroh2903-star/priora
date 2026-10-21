@@ -1,4 +1,9 @@
 import { Client } from '@microsoft/microsoft-graph-client';
+import {
+  registrarAnexosListados,
+  registrarCobertura,
+  registrarFalhaSilenciada,
+} from '../diag/relatoriosDiag';
 
 /** Cria um cliente do Microsoft Graph autenticado com um access token. */
 export function getGraphClient(accessToken: string): Client {
@@ -120,6 +125,8 @@ export async function searchLogisticsMessages(
       'id,conversationId,subject,from,receivedDateTime,bodyPreview,body,isRead,hasAttachments,webLink',
     )
     .get();
+  // Diagnóstico: o Graph sinaliza (nextLink) que havia mais resultados que o top.
+  registrarCobertura(() => ({ buscaTemMais: Boolean(response?.['@odata.nextLink']) }));
 
   return response.value as LogisticsSummary[];
 }
@@ -139,6 +146,7 @@ export async function listRecentSummaries(
     )
     .orderby('receivedDateTime DESC')
     .get();
+  registrarCobertura(() => ({ inboxTemMais: Boolean(response?.['@odata.nextLink']) }));
   return response.value as LogisticsSummary[];
 }
 
@@ -160,6 +168,9 @@ export async function getItemAttachmentTexts(
       .expand('microsoft.graph.itemAttachment/item')
       .get();
     const texts: string[] = [];
+    registrarAnexosListados(() =>
+      ((res.value as any[]) || []).map((a) => ({ tipo: a?.['@odata.type'], bytes: a?.size })),
+    );
     for (const att of (res.value as any[]) || []) {
       if (att['@odata.type'] === '#microsoft.graph.itemAttachment' && att.item) {
         const it = att.item;
@@ -170,7 +181,8 @@ export async function getItemAttachmentTexts(
       }
     }
     return texts;
-  } catch {
+  } catch (err) {
+    registrarFalhaSilenciada('itemAttachment', err);
     return [];
   }
 }
