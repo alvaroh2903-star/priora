@@ -4,6 +4,9 @@ import { getPool } from '../demurrage-engine/db/pool';
 import { AutenticacaoHandoffDeps, HandoffAuthedRequest, criarAutenticarHandoffHttp } from '../demurrage-engine/handoff/autenticacaoHttp';
 import { RespostaHandoff, processarEventoHandoff } from '../demurrage-engine/handoff/handoffService';
 import { classificarFalhaHandoff } from '../demurrage-engine/handoff/erros';
+import {
+  ConfigCapacidadeHandoff, carregarConfigCapacidadeHandoff, criarControleCapacidadeHandoff, descreverConfigCapacidadeHandoff,
+} from '../demurrage-engine/handoff/capacidade';
 
 /**
  * Produção P1 (Entrega 1) — adaptador HTTP FINO do handoff.
@@ -18,10 +21,18 @@ import { classificarFalhaHandoff } from '../demurrage-engine/handoff/erros';
  * app): a assinatura HMAC precisa dos bytes EXATOS do corpo, e o parser
  * global já consumiria/alteraria esse buffer antes de chegar aqui. Por isso
  * este router é montado em `index.ts` ANTES do `express.json()` global.
+ *
+ * Controle de capacidade (adição estreita autorizada à Entrega 1 —
+ * `handoff/capacidade.ts`, migration 0047): logo DEPOIS da autenticação e
+ * ANTES do parse do corpo e do serviço. Acima do limite (por credencial ou
+ * por organização) a rota responde `429 {"error":"limite_temporario"}` com
+ * `Retry-After`, sem tocar a idempotência nem o serviço do handoff.
  */
 
 export interface DemurrageHandoffRoutesDeps extends AutenticacaoHandoffDeps {
   pool?: () => Pool;
+  /** Limites de capacidade; ausente = lidos (e validados) das variáveis de ambiente. */
+  capacidade?: ConfigCapacidadeHandoff;
 }
 
 function statusHttpDoResultado(r: RespostaHandoff['resultado']): number {
@@ -40,6 +51,7 @@ function statusHttpDoResultado(r: RespostaHandoff['resultado']): number {
 export function criarDemurrageHandoffRouter(deps: DemurrageHandoffRoutesDeps = {}): Router {
   const router = Router();
   const pool = () => (deps.pool ?? getPool)();
+  const configCapacidade = deps.capacidade ?? carregarConfigCapacidadeHandoff();
 
   // Corpo cru (bytes exatos) — a assinatura HMAC cobre o corpo exato, não uma
   // reserialização do JSON parseado (que poderia divergir em espaços/ordem).
@@ -50,7 +62,9 @@ export function criarDemurrageHandoffRouter(deps: DemurrageHandoffRoutesDeps = {
   });
   router.use(criarAutenticarHandoffHttp(deps));
 
-  router.post('/', async (req: HandoffAuthedRequest, res: Response) => {
+  // Capacidade só na rota que ENTRA no processamento (não em `router.use`):
+  // requisição autenticada que não casa com ela não consome tentativa.
+  router.post('/', criarControleCapacidadeHandoff({ pool, config: configCapacidade }), async (req: HandoffAuthedRequest, res: Response) => {
     let entradaJson: unknown;
     try {
       entradaJson = req.corpoBruto && req.corpoBruto.length ? JSON.parse(req.corpoBruto.toString('utf8')) : {};
@@ -74,4 +88,10 @@ export function criarDemurrageHandoffRouter(deps: DemurrageHandoffRoutesDeps = {
   return router;
 }
 
-export const demurrageHandoffRouter = criarDemurrageHandoffRouter();
+// Configuração lida (e validada) na IMPORTAÇÃO deste módulo pelo `index.ts`:
+// valor inválido lança `ErroConfigCapacidadeHandoff` e derruba a
+// inicialização antes do `listen` — nunca sobe com o limite desligado.
+const configCapacidadePadrao = carregarConfigCapacidadeHandoff();
+export const demurrageHandoffRouter = criarDemurrageHandoffRouter({ capacidade: configCapacidadePadrao });
+// eslint-disable-next-line no-console
+console.log(descreverConfigCapacidadeHandoff(configCapacidadePadrao));

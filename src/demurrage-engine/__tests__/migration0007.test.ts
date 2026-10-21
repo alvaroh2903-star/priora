@@ -137,7 +137,10 @@ test('0007 — organization_id imutável nas tabelas de tenant', { skip: !url },
       'demurrage_handoff_processo_links',
       // Produção P1 Entrega 2: chave de idempotência das rotas de ação
       // operacional (só o registro de minuta precisa dela) — migration 0042.
-      'demurrage_acoes_idempotencia'];
+      'demurrage_acoes_idempotencia',
+      // Controle de capacidade da rota do handoff (adição à Entrega 1):
+      // baldes por organização e por credencial — migration 0047.
+      'demurrage_handoff_capacidade_organizacoes', 'demurrage_handoff_capacidade_credenciais'];
     const { rows } = await pool.query(`
       SELECT c.table_name,
              EXISTS (SELECT 1 FROM pg_trigger tg

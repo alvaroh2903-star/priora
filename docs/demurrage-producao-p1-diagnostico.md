@@ -321,7 +321,9 @@ superfície congelada, salvo pelas regras acima:
 2. Chamador Liberação → handoff (o lado da Liberação que invoca a entrada
    de handoff congelada na Entrega 1 — §2.3).
 3. Limitação de taxa (rate limiting) do handoff antes de qualquer exposição
-   externa (§5, item 8).
+   externa (§5, item 8). **Implementada** como adição estreita à Entrega 1,
+   autorizada pelo usuário — `docs/demurrage-producao-p1-handoff-capacidade.md`
+   (**aguardando revisão**; não congelada).
 4. Administração de tarifas.
 5. Administração de VesselCall (§3, nota sobre a pendência de VesselCall).
 6. Tracking manual (§3, item 2).

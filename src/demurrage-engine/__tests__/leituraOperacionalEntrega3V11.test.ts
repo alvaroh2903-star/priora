@@ -911,12 +911,12 @@ test('Entrega 3 v1.1 #M1: migration 0046 — instalação limpa (0001→0046), u
   try {
     // Instalação limpa.
     await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
-    const limpa = await runMigrations(pool);
+    const limpa = await runMigrations(pool, { until: MIGRATION_0046 });
     assert.equal(limpa.applied[limpa.applied.length - 1], MIGRATION_0046);
     assert.deepEqual(await definicaoIndice0046(pool), {
       def: `CREATE INDEX ${INDICE_0046} ON public.demurrage_pendencias USING btree (processo_id, estado, criado_em, id)`, valido: true,
     });
-    assert.deepEqual((await runMigrations(pool)).applied, [], 'reexecução após instalação limpa é no-op');
+    assert.deepEqual((await runMigrations(pool, { until: MIGRATION_0046 })).applied, [], 'reexecução após instalação limpa é no-op');
 
     // Upgrade a partir da 0045, com dados reais em todas as tabelas tocadas pelas leituras.
     await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
@@ -935,13 +935,13 @@ test('Entrega 3 v1.1 #M1: migration 0046 — instalação limpa (0001→0046), u
       await pool.query(`INSERT INTO minutas (container_id, estado_minuta) VALUES ($1,'RECEBIDA')`, [c]);
     }
     const antes = await impressaoDigital(pool);
-    const upgrade = await runMigrations(pool);
+    const upgrade = await runMigrations(pool, { until: MIGRATION_0046 });
     assert.deepEqual(upgrade.applied, [MIGRATION_0046], 'o upgrade aplica SÓ a 0046');
     assert.equal(await impressaoDigital(pool), antes, 'nenhuma linha de nenhuma tabela mudou');
     assert.deepEqual(await definicaoIndice0046(pool), {
       def: `CREATE INDEX ${INDICE_0046} ON public.demurrage_pendencias USING btree (processo_id, estado, criado_em, id)`, valido: true,
     });
-    const rerun = await runMigrations(pool);
+    const rerun = await runMigrations(pool, { until: MIGRATION_0046 });
     assert.deepEqual(rerun.applied, [], 'reexecução é no-op');
     assert.equal(await impressaoDigital(pool), antes);
   } finally { await pool.end(); }
@@ -990,7 +990,7 @@ test('Entrega 3 v1.1 #M2: plano da consulta REAL de pendências resolvidas — s
       assert.ok(nos.every((n) => n['Index Name'] === undefined), `até a 0045 nenhum índice serve à consulta resolvida: ${JSON.stringify(nos.map((n) => n['Node Type']))}`);
     }
 
-    const r46 = await runMigrations(pool);
+    const r46 = await runMigrations(pool, { until: MIGRATION_0046 });
     assert.deepEqual(r46.applied, [MIGRATION_0046]);
     await pool.query('ANALYZE demurrage_pendencias');
     for (const [i, c] of capturadas.entries()) {

@@ -248,7 +248,7 @@ test('v1.2 #5: banco novo — migração limpa 0001→0044 cria a FK composta e 
   try {
     await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
     const r = await runMigrations(pool);
-    assert.equal(r.applied[r.applied.length - 1], '0046_leitura_operacional_pendencias_por_processo.sql');
+    assert.equal(r.applied[r.applied.length - 1], '0047_handoff_controle_capacidade.sql');
 
     const { rows: fk } = await pool.query(
       `SELECT 1 FROM pg_constraint WHERE conname = 'minutas_idempotencia_organizacao_do_container'`,
