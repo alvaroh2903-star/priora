@@ -33,13 +33,46 @@ import { codificarCursorAssinado, decodificarCursorAssinado, hmacLeitura } from 
  *  - qualquer cursor malformado, adulterado, de outra organização, de outra
  *    rota/versão ou com filtros divergentes é SEMPRE `400 cursor_invalido`
  *    — nunca uma tentativa de "recuperar" ou interpretar parcialmente.
+ *
+ * Entrega 3 v1.1 (corretiva — precisão da chave): `criado_em` é
+ * `TIMESTAMPTZ` com resolução de MICROSSEGUNDOS, mas a v1 montava
+ * `ultimaChave` via `new Date(...).toISOString()` — o driver `pg` já entrega
+ * a coluna como `Date` do JavaScript, que só tem MILISSEGUNDOS. A chave do
+ * cursor ficava truncada (ex.: `...16.004474` virava `...16.004`), e a
+ * comparação da página seguinte repetia a última linha (rotas ASC — e com
+ * `limite=1` nunca avançava) ou pulava linhas empatadas/no mesmo
+ * milissegundo (rota DESC). Agora a chave sai do PRÓPRIO PostgreSQL como
+ * texto exato (`expressaoChaveExata`, 6 dígitos de fração, UTC), viaja no
+ * cursor sem nunca passar por `Date`, e volta ao SQL como
+ * `$n::timestamptz` — ida e volta sem perda. A versão `v` de cada rota
+ * subiu para `.v2`: cursores v1 (chave truncada) são rejeitados com o mesmo
+ * `400 cursor_invalido`, nunca reinterpretados.
  */
+
+/** Formato EXATO da chave de ordenação no cursor: ISO-8601 UTC com 6 dígitos de fração (microssegundos). */
+const RE_CHAVE_EXATA = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/;
+const RE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Expressão SQL que serializa uma coluna `TIMESTAMPTZ` no formato EXATO de
+ * `RE_CHAVE_EXATA`, sem perda de microssegundos e independente do
+ * `TimeZone`/`DateStyle` da sessão. `coluna` é sempre um identificador fixo
+ * escrito no próprio código (nunca entrada do chamador).
+ *
+ * Premissa: valores finitos d.C. entre os anos 0001 e 9999 (`infinity`
+ * vira NULL, anos a.C. perdem a era e anos ≥ 10000 têm 5 dígitos). Nas três
+ * tabelas ordenadas, `criado_em` é sempre `DEFAULT now()` — nenhuma escrita
+ * de produção define o valor.
+ */
+export function expressaoChaveExata(coluna: string): string {
+  return `to_char(${coluna} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
+}
 
 export interface CursorKeysetPayload {
   v: string;
   organizationId: string;
   filtrosHash: string;
-  /** Valor serializado (ISO) da coluna de ordenação do ÚLTIMO item da página anterior. */
+  /** Chave de ordenação EXATA (texto, microssegundos — ver `expressaoChaveExata`) do ÚLTIMO item da página anterior. */
   ultimaChave: string;
   /** `id` (UUID) do ÚLTIMO item da página anterior — desempate imutável e determinístico. */
   ultimoId: string;
@@ -74,6 +107,12 @@ export function decodificarCursorKeyset(
   // qual deles falhou na resposta — o mesmo código fechado para todos (nunca
   // vaza "quase certo, só a organização está errada").
   if (payload.v !== versaoEsperada || payload.organizationId !== organizationId || payload.filtrosHash !== filtrosHashAtual) {
+    throw new ErroLeitura(400, 'cursor_invalido');
+  }
+  // Defesa em profundidade (a assinatura já impede adulteração): confere só
+  // a FORMA da chave (6 dígitos de fração, UTC) e do id. Como só o servidor
+  // assina cursores, a chave é sempre um `to_char` do próprio banco.
+  if (!RE_CHAVE_EXATA.test(payload.ultimaChave) || !RE_UUID.test(payload.ultimoId)) {
     throw new ErroLeitura(400, 'cursor_invalido');
   }
   return payload;

@@ -698,7 +698,8 @@ test('v1.1 #25: migração limpa 0001→0045 aplica em ordem e reexecutar é um 
     assert.ok(r1.applied.includes('0043_acoes_minuta_idempotencia_atomica.sql'));
     assert.ok(r1.applied.includes('0044_acoes_minuta_idempotencia_tenant_e_chave.sql'));
     assert.ok(r1.applied.includes('0045_leitura_operacional_indices.sql'));
-    assert.equal(r1.applied[r1.applied.length - 1], '0045_leitura_operacional_indices.sql');
+    assert.ok(r1.applied.includes('0046_leitura_operacional_pendencias_por_processo.sql'));
+    assert.equal(r1.applied[r1.applied.length - 1], '0046_leitura_operacional_pendencias_por_processo.sql');
     const r2 = await runMigrations(pool);
     assert.deepEqual(r2.applied, [], 'reexecutar não reaplica nada');
   } finally { await pool.end(); }

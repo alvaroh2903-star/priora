@@ -7,8 +7,19 @@ import { testDatabaseUrl } from './testDb';
  * ANALYZE) para decidir se alguma migration de índice é necessária.
  *
  * Script standalone (NÃO é `*.test.ts` — não entra na suíte automática,
- * mesmo padrão de `gestaoBenchmarkG7.ts`, D14 Gate G7):
- *   DEMURRAGE_TEST_DATABASE_URL=... npx tsx src/demurrage-engine/__tests__/leituraOperacionalBenchmarkEntrega3.ts
+ * mesmo padrão de `gestaoBenchmarkG7.ts`, D14 Gate G7).
+ *
+ * ATENÇÃO (documentação corrigida na Entrega 3 v1.1): o script começa com
+ * `DROP SCHEMA public CASCADE; CREATE SCHEMA public;` — APAGA todo o banco
+ * apontado por `DEMURRAGE_TEST_DATABASE_URL` (ou `DEMURRAGE_DATABASE_URL`/
+ * `DATABASE_URL`). Use sempre um banco descartável. O projeto não tem `tsx`
+ * como dependência; execute com o `ts-node` já instalado:
+ *   DEMURRAGE_TEST_DATABASE_URL=postgres://.../banco_descartavel \
+ *   node -r ts-node/register src/demurrage-engine/__tests__/leituraOperacionalBenchmarkEntrega3.ts
+ * Aplica TODAS as migrations existentes antes de medir (a partir da v1.1,
+ * inclusive a 0046) — mede só o estado "depois"; os números "antes" do
+ * relatório da Entrega 3 não são reproduzíveis por este script. A evidência
+ * antes/depois da 0046 está em `leituraOperacionalPlanoEntrega3V11.ts`.
  *
  * Cenário de pior caso para cada rota: 10.000 linhas na tabela relevante,
  * no MESMO padrão que a rota realmente consulta — uma organização com

@@ -51,6 +51,7 @@ test('migrations: aplica todas as migrations pendentes em um banco novo e é ide
       '0042_acoes_idempotencia.sql', '0043_acoes_minuta_idempotencia_atomica.sql',
       '0044_acoes_minuta_idempotencia_tenant_e_chave.sql',
       '0045_leitura_operacional_indices.sql',
+      '0046_leitura_operacional_pendencias_por_processo.sql',
     ];
 
     const first = await runMigrations(pool);

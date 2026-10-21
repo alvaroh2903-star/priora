@@ -9,9 +9,11 @@ import { buscarTimelineProcesso } from '../demurrage-engine/leitura/timeline';
 import { normalizarFiltrosFila, buscarOpcoesFiltros } from '../demurrage-engine/leitura/filtros';
 import { ErroLeitura } from '../demurrage-engine/leitura/contrato';
 import { organizacaoDoProcesso } from '../demurrage-engine/acoes/organizacaoRecurso';
-import { buscarPendenciasProcesso, normalizarFiltrosPendencias } from '../demurrage-engine/leitura/pendenciasOperacionais';
+import { buscarPendenciasProcesso, cursorPendenciasOuErro, normalizarFiltrosPendencias } from '../demurrage-engine/leitura/pendenciasOperacionais';
 import { buscarReaberturas, normalizarFiltrosReaberturas } from '../demurrage-engine/leitura/reaberturasOperacionais';
 import { buscarMinutas, normalizarFiltrosMinutas } from '../demurrage-engine/leitura/minutasOperacionais';
+import { paginacaoOperacionalDaQuery } from '../demurrage-engine/leitura/parametrosOperacionais';
+import { responderErroLeituraOperacional } from '../demurrage-engine/leitura/falhaLeituraOperacional';
 
 /**
  * Fase D12 (Gate G7) — rotas internas (SOMENTE LEITURA) da Demurrage V2.
@@ -143,54 +145,82 @@ export function criarDemurrageV2Router(deps: DemurrageV2RoutesDeps = {}): Router
    * já resolveu `req.autorizacao` (organização NUNCA da requisição); cada
    * handler só valida filtros/paginação e chama UMA função de `leitura/*`
    * (só `SELECT`, custo constante por página, cursor keyset assinado).
+   *
+   * Entrega 3 v1.1 (corretiva): `limite`/datas/cursor validados de forma
+   * ESTRITA (`leitura/parametrosOperacionais.ts`) antes de qualquer consulta
+   * da leitura — inclusive, em `/pendencias`, antes da verificação de posse
+   * do processo (a resposta 400 não depende do processo, então não vaza
+   * existência). Falha inesperada vira `500 { error: 'erro_interno' }`
+   * genérico com log sanitizado (`leitura/falhaLeituraOperacional.ts`) —
+   * nunca a mensagem do banco. As rotas D12 acima NÃO mudam.
    * ====================================================================== */
 
+  const ROTA_PENDENCIAS = 'GET /processos/:processoId/pendencias';
+  const ROTA_REABERTURAS = 'GET /reaberturas';
+  const ROTA_MINUTAS = 'GET /minutas';
+
   /** GET /processos/:processoId/pendencias — pendências ACIONÁVEIS de um processo conhecido. */
-  router.get('/processos/:processoId/pendencias', async (req: AutorizedRequest, res: Response, next: NextFunction) => {
+  router.get('/processos/:processoId/pendencias', async (req: AutorizedRequest, res: Response) => {
     try {
       const processoId = idOuErro(req.params.processoId, 'processoId');
       const org = req.autorizacao!.organizationId;
+      const filtros = normalizarFiltrosPendencias(req.query as Record<string, unknown>);
+      const { limite, cursor } = paginacaoOperacionalDaQuery(req.query as Record<string, unknown>);
+      cursorPendenciasOuErro({ organizationId: org, processoId, filtros, cursor });
+
       const orgDoRecurso = await organizacaoDoProcesso(pool(), processoId);
       if (orgDoRecurso !== org) { res.status(404).json({ error: 'nao_encontrado' }); return; }
 
-      const filtros = normalizarFiltrosPendencias(req.query as Record<string, unknown>);
-      const { limite, cursor } = paginacaoDaQuery(req.query);
       const resposta = await buscarPendenciasProcesso(pool(), {
         organizationId: org, processoId, filtros, limite, cursor, papel: req.autorizacao!.papel,
       });
       res.json(resposta);
     } catch (err) {
-      tratarErroLeitura(err, res, next);
+      responderErroLeituraOperacional(err, res, ROTA_PENDENCIAS);
     }
   });
 
   /** GET /reaberturas — reaberturas da organização (padrão: SOLICITADA, aguardando autorização). */
-  router.get('/reaberturas', async (req: AutorizedRequest, res: Response, next: NextFunction) => {
+  router.get('/reaberturas', async (req: AutorizedRequest, res: Response) => {
     try {
       const filtros = normalizarFiltrosReaberturas(req.query as Record<string, unknown>);
-      const { limite, cursor } = paginacaoDaQuery(req.query);
+      const { limite, cursor } = paginacaoOperacionalDaQuery(req.query as Record<string, unknown>);
       const resposta = await buscarReaberturas(pool(), {
         organizationId: req.autorizacao!.organizationId, filtros, limite, cursor, papel: req.autorizacao!.papel,
       });
       res.json(resposta);
     } catch (err) {
-      tratarErroLeitura(err, res, next);
+      responderErroLeituraOperacional(err, res, ROTA_REABERTURAS);
     }
   });
 
   /** GET /minutas — minutas da organização (padrão: RECEBIDA, aguardando validação). */
-  router.get('/minutas', async (req: AutorizedRequest, res: Response, next: NextFunction) => {
+  router.get('/minutas', async (req: AutorizedRequest, res: Response) => {
     try {
       const filtros = normalizarFiltrosMinutas(req.query as Record<string, unknown>);
-      const { limite, cursor } = paginacaoDaQuery(req.query);
+      const { limite, cursor } = paginacaoOperacionalDaQuery(req.query as Record<string, unknown>);
       const resposta = await buscarMinutas(pool(), {
         organizationId: req.autorizacao!.organizationId, filtros, limite, cursor, papel: req.autorizacao!.papel,
       });
       res.json(resposta);
     } catch (err) {
-      tratarErroLeitura(err, res, next);
+      responderErroLeituraOperacional(err, res, ROTA_MINUTAS);
     }
   });
+
+  // Falha inesperada levantada ANTES do handler (ex.: `autorizarInterno` sem
+  // conseguir consultar o banco) chega aqui por `next(err)` — SÓ nestes três
+  // caminhos. Erros das rotas D12 acima não casam estes caminhos e seguem,
+  // como antes, para o tratador padrão do app.
+  for (const [caminho, rota] of [
+    ['/processos/:processoId/pendencias', ROTA_PENDENCIAS],
+    ['/reaberturas', ROTA_REABERTURAS],
+    ['/minutas', ROTA_MINUTAS],
+  ] as const) {
+    router.use(caminho, (err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+      responderErroLeituraOperacional(err, res, rota);
+    });
+  }
 
   return router;
 }

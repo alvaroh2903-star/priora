@@ -3,7 +3,8 @@ import { ehGestor } from '../closing/closingService';
 import { PapelRbac } from '../scheduler/failurePolicy';
 import { sanitizarEvidencia } from '../freeTime/freeTimeTentativas';
 import { ErroLeitura, isoTimestamp } from './contrato';
-import { codificarCursorKeyset, decodificarCursorKeyset, hashFiltrosKeyset } from './cursorKeyset';
+import { codificarCursorKeyset, decodificarCursorKeyset, expressaoChaveExata, hashFiltrosKeyset } from './cursorKeyset';
+import { dataOuErro } from './parametrosOperacionais';
 
 /**
  * Produção P1 (Entrega 3) — leitura operacional nº2: reaberturas aguardando
@@ -30,14 +31,30 @@ import { codificarCursorKeyset, decodificarCursorKeyset, hashFiltrosKeyset } fro
  * em `ClosingService`/`closingService.ts` — nenhuma regra de papel
  * duplicada. Só informativo: `ClosingService.autorizarReabertura` sempre
  * revalida papel e estado no momento da escrita.
+ *
+ * Entrega 3 v1.1 (corretiva):
+ *  - chave do cursor EXATA (microssegundos — ver `cursorKeyset.ts`),
+ *    comparação por linha `(criado_em, id) > (chave, id)`, cursor `.v2`;
+ *    datas validadas como datas de calendário reais antes da consulta;
+ *  - `autorizadaEm` NÃO vem mais de `atualizado_em` (que a transição
+ *    posterior para `REFECHADA` reescreve). É o `criado_em` do evento
+ *    `REABERTURA_AUTORIZADA` do ledger append-only `closing_events`
+ *    (trigger `closing_events_append_only`, migration 0016) — gravado por
+ *    `ClosingService.autorizarReabertura` (único escritor desse tipo) com
+ *    `payload.reaberturaId` desde a Fase 8 e, desde a D15-A, na MESMA
+ *    transação da autorização; nunca alterado depois. O `payload` guarda o
+ *    id como veio na URL da rota de ação (que aceita UUID em maiúsculas),
+ *    por isso a comparação é `lower(...) = r.id::text`. Sem esse evento
+ *    (nenhuma autorização comprovada), `autorizadaEm` é `null` — nunca
+ *    inferido de outra coluna. Nenhum caminho de escrita das Entregas 1/2
+ *    foi alterado.
  */
 
 export const CONTRATO_REABERTURAS_V1 = 'demurrage.leitura.reaberturas.v1' as const;
-export const VERSAO_CURSOR_REABERTURAS = 'p1e3.reaberturas.v1';
+export const VERSAO_CURSOR_REABERTURAS = 'p1e3.reaberturas.v2';
 
 const MAX_LIMITE = 200;
 const LIMITE_PADRAO = 50;
-const RE_DATA = /^\d{4}-\d{2}-\d{2}$/;
 const RE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ESTADOS_REABERTURA = ['SOLICITADA', 'AUTORIZADA', 'RECALCULADA', 'REFECHADA'] as const;
 export type EstadoReaberturaFiltro = (typeof ESTADOS_REABERTURA)[number];
@@ -76,10 +93,8 @@ export function normalizarFiltrosReaberturas(query: Record<string, unknown>): Fi
     if (!RE_UUID.test(solicitanteMembershipId)) erroValor('solicitanteMembershipId');
     f.solicitanteMembershipId = solicitanteMembershipId;
   }
-  const criadoDesde = primeiraString(query.criadoDesde);
-  if (criadoDesde !== undefined) { if (!RE_DATA.test(criadoDesde)) erroValor('criadoDesde'); f.criadoDesde = criadoDesde; }
-  const criadoAte = primeiraString(query.criadoAte);
-  if (criadoAte !== undefined) { if (!RE_DATA.test(criadoAte)) erroValor('criadoAte'); f.criadoAte = criadoAte; }
+  if (query.criadoDesde !== undefined) f.criadoDesde = dataOuErro(query.criadoDesde, 'criadoDesde');
+  if (query.criadoAte !== undefined) f.criadoAte = dataOuErro(query.criadoAte, 'criadoAte');
   if (f.criadoDesde && f.criadoAte && f.criadoAte < f.criadoDesde) throw new ErroLeitura(400, 'periodo_invertido', { campo: 'criado' });
   return f;
 }
@@ -132,7 +147,10 @@ interface LinhaReabertura {
   estado: EstadoReaberturaFiltro;
   justificativa: string | null;
   criado_em: Date;
-  atualizado_em: Date;
+  /** `criado_em` do evento `REABERTURA_AUTORIZADA` (ledger append-only) — `null` sem autorização comprovada. */
+  autorizada_em: Date | null;
+  /** Chave de ordenação EXATA (texto com microssegundos) — só para o cursor, nunca exposta no item. */
+  chave_ordenacao: string;
   solicitante_membership_id: string | null;
   solicitante_nome: string | null;
   autorizada_por: string | null;
@@ -165,15 +183,18 @@ export async function buscarReaberturas(pool: Pool, input: BuscarReaberturasInpu
 
   if (cursorRecebido) {
     // Ordem OFICIAL: mais antiga solicitação primeiro (fila operacionalmente justa) — ASC.
+    // Comparação por LINHA com a chave EXATA (microssegundos) e o id como desempate.
     params.push(cursorRecebido.ultimaChave, cursorRecebido.ultimoId);
     const a = params.length - 1;
     const b = params.length;
-    where.push(`(r.criado_em > $${a}::timestamptz OR (r.criado_em = $${a}::timestamptz AND r.id > $${b}))`);
+    where.push(`(r.criado_em, r.id) > ($${a}::timestamptz, $${b}::uuid)`);
   }
 
   params.push(limite + 1);
   const { rows } = await pool.query<LinhaReabertura>(
-    `SELECT r.id, r.processo_id, p.numero_processo, r.estado, r.justificativa, r.criado_em, r.atualizado_em, r.autorizada_por,
+    `SELECT r.id, r.processo_id, p.numero_processo, r.estado, r.justificativa, r.criado_em, r.autorizada_por,
+            ${expressaoChaveExata('r.criado_em')} AS chave_ordenacao,
+            aut.autorizada_em,
             om_sol.id AS solicitante_membership_id, u_sol.nome AS solicitante_nome,
             om_aut.id AS autorizador_membership_id, u_aut.nome AS autorizador_nome
        FROM reaberturas r
@@ -182,6 +203,13 @@ export async function buscarReaberturas(pool: Pool, input: BuscarReaberturasInpu
        LEFT JOIN usuarios u_sol ON u_sol.id = r.solicitada_por
        LEFT JOIN organization_memberships om_aut ON om_aut.usuario_id = r.autorizada_por AND om_aut.organization_id = p.organization_id
        LEFT JOIN usuarios u_aut ON u_aut.id = r.autorizada_por
+       LEFT JOIN LATERAL (
+         SELECT min(ce.criado_em) AS autorizada_em
+           FROM closing_events ce
+          WHERE ce.processo_id = r.processo_id
+            AND ce.tipo_evento = 'REABERTURA_AUTORIZADA'
+            AND lower(ce.payload->>'reaberturaId') = r.id::text
+       ) aut ON true
       WHERE ${where.join(' AND ')}
       ORDER BY r.criado_em ASC, r.id ASC
       LIMIT $${params.length}`,
@@ -200,7 +228,7 @@ export async function buscarReaberturas(pool: Pool, input: BuscarReaberturasInpu
     solicitante: r.solicitante_membership_id ? { membershipId: r.solicitante_membership_id, nome: r.solicitante_nome ?? '' } : null,
     justificativaResumo: sanitizarEvidencia(r.justificativa),
     podeAutorizar,
-    autorizadaEm: r.autorizada_por ? isoTimestamp(r.atualizado_em) : null,
+    autorizadaEm: isoTimestamp(r.autorizada_em),
     autorizador: r.autorizada_por && r.autorizador_membership_id
       ? { membershipId: r.autorizador_membership_id, nome: r.autorizador_nome ?? '' }
       : null,
@@ -210,7 +238,7 @@ export async function buscarReaberturas(pool: Pool, input: BuscarReaberturasInpu
   const cursorSaida = temProxima && ultima
     ? codificarCursorKeyset({
         v: VERSAO_CURSOR_REABERTURAS, organizationId: input.organizationId, filtrosHash: filtrosHashAtual,
-        ultimaChave: new Date(ultima.criado_em).toISOString(), ultimoId: ultima.id,
+        ultimaChave: ultima.chave_ordenacao, ultimoId: ultima.id,
       })
     : null;
 

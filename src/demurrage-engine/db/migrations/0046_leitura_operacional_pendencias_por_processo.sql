@@ -1,0 +1,32 @@
+-- Demurrage Engine V2 — migration ADITIVA (Produção P1, Entrega 3 v1.1 —
+-- corretiva das leituras operacionais). 0001-0045 NÃO são reescritas.
+-- Nenhuma regra de negócio muda e nenhuma linha existente é alterada — só
+-- um índice novo.
+--
+-- `GET /processos/:processoId/pendencias?estado=resolvida` filtra
+-- `processo_id = $ AND estado = 'resolvida'` e ordena por
+-- `criado_em DESC, id DESC` (cursor keyset por `(criado_em, id)`). Até a
+-- 0045, o único índice secundário de `demurrage_pendencias` era o único
+-- PARCIAL `demurrage_pendencias_aberta_unica` (0028, `WHERE estado =
+-- 'aberta'`), inútil para `resolvida` — o plano observado era `Seq Scan` na
+-- tabela INTEIRA (pendências resolvidas de TODAS as organizações, que só
+-- crescem) + `Sort`. Evidência antes/depois: relatório
+-- `docs/demurrage-producao-p1-entrega-3-v1-1.md` §4.
+--
+-- Colunas: as duas igualdades da consulta primeiro (`processo_id`,
+-- `estado`), depois exatamente a ordem keyset da rota (`criado_em`, `id`) —
+-- percorrido para trás para o `DESC, DESC`, e a comparação por linha
+-- `(criado_em, id) < ($chave, $id)` do cursor vira condição do próprio
+-- índice. NÃO é parcial de propósito: a consulta compara `estado = $n`
+-- (parâmetro), e um índice `WHERE estado = 'resolvida'` só seria utilizável
+-- em plano customizado; com `estado` como coluna, o índice serve a qualquer
+-- plano — e também à leitura padrão `estado = 'aberta'` (que hoje ordena em
+-- memória).
+--
+-- Operação: o runner aplica cada migration dentro de uma transação, então
+-- `CREATE INDEX CONCURRENTLY` não é possível (mesmo padrão da 0045). Enquanto
+-- o índice é construído, a tabela fica com lock SHARE — leituras seguem, mas
+-- INSERT/UPDATE em `demurrage_pendencias` esperam o fim da construção.
+-- Aplicar em janela de baixo tráfego.
+CREATE INDEX demurrage_pendencias_processo_estado_criado_idx
+  ON demurrage_pendencias (processo_id, estado, criado_em, id);

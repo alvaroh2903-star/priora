@@ -2,7 +2,8 @@ import { Pool } from 'pg';
 import { ehGestor } from '../closing/closingService';
 import { PapelRbac } from '../scheduler/failurePolicy';
 import { ErroLeitura, isoTimestamp } from './contrato';
-import { codificarCursorKeyset, decodificarCursorKeyset, hashFiltrosKeyset } from './cursorKeyset';
+import { codificarCursorKeyset, decodificarCursorKeyset, expressaoChaveExata, hashFiltrosKeyset } from './cursorKeyset';
+import { dataOuErro } from './parametrosOperacionais';
 import { IdentidadeSegura } from './reaberturasOperacionais';
 
 /**
@@ -24,14 +25,18 @@ import { IdentidadeSegura } from './reaberturasOperacionais';
  * (MANAGER/ADMIN), a MESMA função congelada em `ClosingService` — nenhuma
  * regra de papel duplicada; só informativo, `ClosingService.validarMinuta`
  * sempre revalida papel e estado (achado #2 da Entrega 2 v1.2).
+ *
+ * Entrega 3 v1.1 (corretiva): chave do cursor EXATA (microssegundos — ver
+ * `cursorKeyset.ts`), comparação por linha `(criado_em, id) > (chave, id)`,
+ * cursor `.v2`; datas validadas como datas de calendário reais antes da
+ * consulta.
  */
 
 export const CONTRATO_MINUTAS_V1 = 'demurrage.leitura.minutas.v1' as const;
-export const VERSAO_CURSOR_MINUTAS = 'p1e3.minutas.v1';
+export const VERSAO_CURSOR_MINUTAS = 'p1e3.minutas.v2';
 
 const MAX_LIMITE = 200;
 const LIMITE_PADRAO = 50;
-const RE_DATA = /^\d{4}-\d{2}-\d{2}$/;
 const RE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ESTADOS_MINUTA = ['RECEBIDA', 'VALIDADA', 'REJEITADA'] as const;
 export type EstadoMinutaFiltro = (typeof ESTADOS_MINUTA)[number];
@@ -65,10 +70,8 @@ export function normalizarFiltrosMinutas(query: Record<string, unknown>): Filtro
   if (processoId !== undefined) { if (!RE_UUID.test(processoId)) erroValor('processoId'); f.processoId = processoId; }
   const containerId = primeiraString(query.containerId);
   if (containerId !== undefined) { if (!RE_UUID.test(containerId)) erroValor('containerId'); f.containerId = containerId; }
-  const recebidaDesde = primeiraString(query.recebidaDesde);
-  if (recebidaDesde !== undefined) { if (!RE_DATA.test(recebidaDesde)) erroValor('recebidaDesde'); f.recebidaDesde = recebidaDesde; }
-  const recebidaAte = primeiraString(query.recebidaAte);
-  if (recebidaAte !== undefined) { if (!RE_DATA.test(recebidaAte)) erroValor('recebidaAte'); f.recebidaAte = recebidaAte; }
+  if (query.recebidaDesde !== undefined) f.recebidaDesde = dataOuErro(query.recebidaDesde, 'recebidaDesde');
+  if (query.recebidaAte !== undefined) f.recebidaAte = dataOuErro(query.recebidaAte, 'recebidaAte');
   if (f.recebidaDesde && f.recebidaAte && f.recebidaAte < f.recebidaDesde) throw new ErroLeitura(400, 'periodo_invertido', { campo: 'recebida' });
   const divergente = primeiraString(query.divergente);
   if (divergente !== undefined) {
@@ -130,6 +133,8 @@ interface LinhaMinuta {
   evidencia_ref: string | null;
   recebida_membership_id: string | null;
   recebida_nome: string | null;
+  /** Chave de ordenação EXATA (texto com microssegundos) — só para o cursor, nunca exposta no item. */
+  chave_ordenacao: string;
 }
 
 export async function buscarMinutas(pool: Pool, input: BuscarMinutasInput): Promise<MinutasRespostaV1> {
@@ -155,16 +160,18 @@ export async function buscarMinutas(pool: Pool, input: BuscarMinutasInput): Prom
 
   if (cursorRecebido) {
     // Ordem OFICIAL: recebida mais antiga primeiro — ASC.
+    // Comparação por LINHA com a chave EXATA (microssegundos) e o id como desempate.
     params.push(cursorRecebido.ultimaChave, cursorRecebido.ultimoId);
     const a = params.length - 1;
     const b = params.length;
-    where.push(`(m.criado_em > $${a}::timestamptz OR (m.criado_em = $${a}::timestamptz AND m.id > $${b}))`);
+    where.push(`(m.criado_em, m.id) > ($${a}::timestamptz, $${b}::uuid)`);
   }
 
   params.push(limite + 1);
   const { rows } = await pool.query<LinhaMinuta>(
     `SELECT m.id, m.estado_minuta, c.processo_id, p.numero_processo, m.container_id, c.numero AS container_numero,
-            m.criado_em, m.numero_informado, m.data_informada, m.divergente_do_tracking, m.evidencia_ref,
+            m.criado_em, ${expressaoChaveExata('m.criado_em')} AS chave_ordenacao,
+            m.numero_informado, m.data_informada, m.divergente_do_tracking, m.evidencia_ref,
             om.id AS recebida_membership_id, u.nome AS recebida_nome
        FROM minutas m
        JOIN containers c ON c.id = m.container_id
@@ -199,7 +206,7 @@ export async function buscarMinutas(pool: Pool, input: BuscarMinutasInput): Prom
   const cursorSaida = temProxima && ultima
     ? codificarCursorKeyset({
         v: VERSAO_CURSOR_MINUTAS, organizationId: input.organizationId, filtrosHash: filtrosHashAtual,
-        ultimaChave: new Date(ultima.criado_em).toISOString(), ultimoId: ultima.id,
+        ultimaChave: ultima.chave_ordenacao, ultimoId: ultima.id,
       })
     : null;
 
