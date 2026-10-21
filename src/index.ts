@@ -54,6 +54,19 @@ import { isAllowedDiagUrl, DIAG_URL_REFUSED } from './browser/carriers/diagUrlPo
 
 const app = express();
 
+/*
+ * Promessa rejeitada sem tratamento: o Node 22 DERRUBA o processo por padrão —
+ * e cada reinício no Render desloga todo mundo (sessões no disco temporário).
+ * Aqui o erro é registrado (log + /health/jobs) e o servidor segue no ar.
+ */
+const recentErrors: Array<{ at: string; tipo: string; msg: string }> = [];
+process.on('unhandledRejection', (reason) => {
+  console.error('[erro-nao-tratado] promessa rejeitada:', reason);
+  const msg = reason instanceof Error ? `${reason.message} | ${(reason.stack || '').split('\n').slice(1, 4).join(' | ')}` : String(reason);
+  recentErrors.push({ at: new Date().toISOString(), tipo: 'unhandledRejection', msg: msg.slice(0, 500) });
+  if (recentErrors.length > 10) recentErrors.shift();
+});
+
 // Em produção o app roda atrás do proxy HTTPS do host (Render etc.).
 // Sem isto, o express-session não seta o cookie "secure" e o login quebra.
 if (config.isProduction) {
@@ -1419,10 +1432,32 @@ app.get('/health/jobs', (req, res) => {
     // Tempo desde que ESTE processo subiu: se for baixo e a lista estiver vazia,
     // o serviço reiniciou (foi isso que levou os jobs, não o TTL).
     processoDePeSeg: Math.round(process.uptime()),
+    // Memória do processo (a instância tem 512 MB): o pico desde que subiu
+    // mostra se um reinício foi falta de memória.
+    memoriaMB: memoryMb(),
+    // Promessas rejeitadas sem tratamento desde o boot (antes derrubavam o processo).
+    errosRecentes: recentErrors,
     emMemoria,
     emDisco,
   });
 });
+
+/*
+ * Memória: amostra a cada 15 s e guarda o PICO desde o boot. Acima de 400 MB
+ * (perto do teto de 512 MB do plano), registra no log — se o Render matar o
+ * processo por falta de memória, o log mostra o que vinha subindo antes.
+ */
+let rssPeakMb = 0;
+const mb = (n: number) => Math.round(n / 1_048_576);
+function memoryMb() {
+  const m = process.memoryUsage();
+  return { rss: mb(m.rss), heapUsado: mb(m.heapUsed), pico: rssPeakMb };
+}
+setInterval(() => {
+  const rss = mb(process.memoryUsage().rss);
+  if (rss > rssPeakMb) rssPeakMb = rss;
+  if (rss > 400) console.warn(`[memoria] rss=${rss} MB (pico ${rssPeakMb} MB) — perto do teto de 512 MB`);
+}, 15_000).unref();
 
 /** Consulta o resultado de uma raspagem assíncrona. */
 app.get('/health/job', (req, res) => {
