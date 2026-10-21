@@ -1,5 +1,12 @@
 # Produção P1 — Entrega 3 v1.1: corretiva (chave exata do cursor, validação de parâmetros, erro inesperado genérico, índice de pendências resolvidas, `autorizadaEm`, documentação)
 
+> **ATUALIZAÇÃO — decisão final do usuário:** a corretiva descrita abaixo foi
+> **APROVADA**. **A Entrega 3 v1.1 está APROVADA E CONGELADA** (código
+> `d86132e`, relatório `7ef692f`), e o **backend da Produção P1 está
+> formalmente concluído**. Ver `docs/demurrage-producao-p1-diagnostico.md`
+> §6 para o status consolidado e a superfície congelada, e §7 para o
+> trabalho futuro separado.
+
 **Baseline:** branch `claude/practical-cerf-mnz7oj`, Entrega 3 original no
 commit `507bf67` (não congelada). Entregas 1 e 2 **congeladas** — nenhum
 arquivo-fonte delas foi alterado (ver §11). Migrations 0001–0045 **não foram
@@ -617,10 +624,26 @@ Verificado sobre `git diff 507bf67 d86132e`:
 
 ## 13. Status
 
-- Entrega 3 com a corretiva v1.1: **implementada e validada (§9),
-  aguardando nova revisão final. Não congelada.**
+- Entrega 3 com a corretiva v1.1: implementada e validada (§9).
 - Entregas 1 e 2: congeladas, sem alteração de código-fonte.
 - Frontend: **nenhum arquivo alterado**. Nenhum redesenho iniciado.
+
+**Decisão final do usuário (pós-entrega):** corretiva v1.1 aprovada; Entrega 3
+**APROVADA E CONGELADA**, com baseline no commit de código `d86132e` e no
+commit de relatório `7ef692f`. A superfície congelada — as três rotas
+(`/processos/:processoId/pendencias`, `/reaberturas`, `/minutas`), a projeção
+de contexto seguro das pendências, a paginação keyset exata e os contratos
+do cursor v2, o comportamento de organização e papel reusado do D12, o
+comportamento somente leitura, as migrations `0045` e `0046`, o
+`autorizadaEm` real derivado do evento de autorização e os contratos de
+resposta e filtros documentados — só muda mediante defeito comprovado,
+problema de integridade de dados ou aprovação explícita do usuário. Os
+totais finais são os do §9 (Demurrage Engine 1154/1154; V1 25/25; D13 UI
+66/66; `tsc` e build limpos) e as limitações aceitas são exatamente as do
+§12, preservadas sem alteração. Com este congelamento, o **backend da
+Produção P1 está formalmente concluído**; frontend e demais frentes seguem
+como trabalho futuro separado (`docs/demurrage-producao-p1-diagnostico.md`
+§7).
 
 ---
 

@@ -3,8 +3,13 @@
 > **Atualizado pela corretiva v1.1** (`docs/demurrage-producao-p1-entrega-3-v1-1.md`),
 > após a revisão final do commit `507bf67`. Os trechos marcados **[v1.1]**
 > corrigem afirmações que não correspondiam ao código ou aos testes da
-> entrega original. A Entrega 3 **ainda não está congelada** — aguarda nova
-> revisão final.
+> entrega original.
+>
+> **ATUALIZAÇÃO — decisão final do usuário:** a Entrega 3, com a corretiva
+> v1.1, está **APROVADA E CONGELADA** (código `d86132e`, relatório
+> `7ef692f`), e o **backend da Produção P1 está formalmente concluído**. Ver
+> `docs/demurrage-producao-p1-diagnostico.md` §6 para a superfície congelada
+> e o status consolidado.
 
 **Base:** branch `claude/practical-cerf-mnz7oj`, commit de status/congelamento
 `a2e72dd`. Entregas 1 e 2 **aprovadas e congeladas** — nenhuma delas foi
@@ -536,6 +541,8 @@ e totais de regressão da entrega).
 
 ---
 
-Delivery 3 (with the v1.1 corrective) is ready for a new final review; it is
-**not** frozen yet. Frontend work has not started and requires the user's
-explicit design approval.
+Delivery 3 (with the v1.1 corrective) is **APPROVED AND FROZEN** by the
+user's final decision (code `d86132e`, report `7ef692f`), and the Demurrage
+Production P1 backend is formally complete. Frontend work has not started
+and remains separate future work requiring the user's explicit design
+approval.

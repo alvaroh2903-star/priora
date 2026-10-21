@@ -3,14 +3,14 @@
 **Baseline do backend congelado:** `d5b4fbc` (D16 v1.1). Este documento não altera nenhum arquivo de código — é o diagnóstico e o plano exigidos antes de qualquer implementação.
 
 > **Status da Produção P1 (atualizado após decisão final do usuário):**
-> **Entrega 1 — APROVADA E CONGELADA.** **Entrega 2 — APROVADA E CONGELADA**
-> (decisão final do usuário, após a corretiva v1.2). **Entrega 3 —
-> IMPLEMENTADA, aguardando auditoria final e decisão de congelamento do
-> usuário** (ver `docs/demurrage-producao-p1-entrega-3.md`) — ainda não
-> declarada aprovada. Produção P1 como um todo **não está declarada
-> completa**; o backend está pronto para aceitação, mas o frontend não foi
-> iniciado e requer aprovação explícita de design do usuário. Ver §6 para o
-> detalhe do congelamento e os relatórios de entrega.
+> **Entrega 1 — APROVADA E CONGELADA** (após a corretiva v1.3).
+> **Entrega 2 — APROVADA E CONGELADA** (após a corretiva v1.2).
+> **Entrega 3 — APROVADA E CONGELADA** (decisão final do usuário, após a
+> corretiva v1.1; código `d86132e`, relatório `7ef692f`).
+> **Backend da Produção P1 — FORMALMENTE CONCLUÍDO.** O frontend e os demais
+> itens listados no §7 **não fazem parte** deste encerramento: são trabalho
+> futuro separado, cada um dependente de autorização explícita do usuário.
+> Ver §6 para o detalhe do congelamento e os relatórios de entrega.
 
 ## 0. Status executivo
 
@@ -249,22 +249,84 @@ profundidade).
 
 ### Entrega 3 — Leitura para o frontend redesenhado
 
-**STATUS: IMPLEMENTADA — aguardando auditoria final e decisão de
-congelamento do usuário.** Não aprovada ainda; ver
-`docs/demurrage-producao-p1-entrega-3.md` para o relatório completo
-(contratos finais, matriz de campos seguros, matriz de papel/capacidade,
-contrato de cursor, decisão de índice com evidência de EXPLAIN ANALYZE,
-totais de regressão).
+**STATUS: APROVADA E CONGELADA (decisão final do usuário, após a corretiva v1.1).**
+Baseline do congelamento: branch `claude/practical-cerf-mnz7oj`, commit de
+código da corretiva `d86132e`, commit do relatório da corretiva `7ef692f`.
+Não alterar a superfície congelada desta entrega, salvo: defeito
+comprovado; problema de integridade de dados; ou aprovação explícita do
+usuário. Relatórios, em ordem: `docs/demurrage-producao-p1-entrega-3.md`
+(implementação original, `507bf67`, corrigido pela v1.1 — trechos marcados
+**[v1.1]**); `docs/demurrage-producao-p1-entrega-3-v1-1.md` (corretiva:
+chave exata do cursor, validação estrita de parâmetros, 500 genérico,
+índice de pendências resolvidas — migration 0046 —, `autorizadaEm` real
+derivado do evento de autorização, documentação corrigida).
+
+**Superfície congelada:**
+- `GET /api/demurrage/v2/processos/:processoId/pendencias`;
+- `GET /api/demurrage/v2/reaberturas`;
+- `GET /api/demurrage/v2/minutas`;
+- a projeção de contexto seguro das pendências (allowlist fechada por tipo);
+- a paginação keyset exata e os contratos do cursor v2;
+- o comportamento de organização e papel reusado do D12;
+- o comportamento somente leitura (zero-escrita);
+- a migration `0045`;
+- a migration corretiva `0046`;
+- o `autorizadaEm` real, derivado do evento de autorização;
+- os contratos de resposta e os filtros documentados da Entrega 3.
+
+**Limitações aceitas no congelamento:** exatamente as registradas em
+`docs/demurrage-producao-p1-entrega-3-v1-1.md` §12, preservadas sem
+alteração.
 
 **Escopo:** as lacunas do §4.2 (lista de pendências com `id`; exposição de `reaberturaId`/`minutaId` pendentes) — só leitura, zero-escrita, mesma régua de paginação/assinatura/isolamento já estabelecida.
 **Gate de aceitação:** nova(s) rota(s) comprovadamente zero-escrita (mesmo padrão de fingerprint do D12 G7); isolamento organizacional idêntico ao resto de `/api/demurrage/v2`.
 **Regressão:** suíte completa + D13 UI (sem alterar a tela existente — só preparar o contrato que o redesenho futuro vai consumir).
-**Regressão desta entrega:** Demurrage Engine 1130/1130; V1 25/25; D13 UI
-66/66; `tsc --noEmit` limpo; build limpo; nenhum arquivo de frontend
-alterado. Migration aditiva: `0045_leitura_operacional_indices.sql` (dois
-índices, justificados por EXPLAIN ANALYZE — ver relatório).
+**Regressão final no congelamento (v1.1)** — validação sequencial em
+worktree limpo do commit `d86132e`, PostgreSQL real
+(`docs/demurrage-producao-p1-entrega-3-v1-1.md` §9): testes novos da
+corretiva 24/24; Entrega 3 23/23; Entrega 2 (ações) 70/70; Entrega 1
+(handoff) 60/60; D12 read-model 75/75; Demurrage Engine completo 1154/1154;
+V1 25/25; D13 UI 66/66 — em todas as etapas 0 falhas, 0 skips, 0
+cancelados, 0 todo; `tsc --noEmit` limpo; build limpo; nenhum arquivo de
+frontend alterado. Migrations aditivas da entrega:
+`0045_leitura_operacional_indices.sql` e
+`0046_leitura_operacional_pendencias_por_processo.sql`.
 
 Nenhuma das três entregas toca cálculo, relógio, tarifa, cadência de tracking ou regra de responsabilidade/fechamento — todas são fios novos sobre serviços já congelados e já testados.
+
+### Status consolidado da Produção P1
+
+| Entrega | Status | Corretiva final | Regressão do Demurrage Engine no congelamento |
+|---|---|---|---|
+| 1 — Handoff de entrada | **APROVADA E CONGELADA** | v1.3 | 1037/1037 |
+| 2 — Rotas de ação operacional | **APROVADA E CONGELADA** | v1.2 | 1107/1107 |
+| 3 — Leitura para o frontend redesenhado | **APROVADA E CONGELADA** | v1.1 | 1154/1154 |
+
+**Backend da Produção P1: FORMALMENTE CONCLUÍDO** (decisão final do
+usuário, com o congelamento da Entrega 3 v1.1). Cada superfície congelada só
+muda mediante: defeito comprovado; problema de integridade de dados (ou
+falha de segurança, nas Entregas 1 e 2); ou aprovação explícita do usuário.
+
+---
+
+## 7. Trabalho futuro separado (fora da Produção P1)
+
+Os itens abaixo **não fazem parte** do backend da Produção P1 concluído e
+não foram iniciados. Cada um é uma frente própria, que depende de
+autorização explícita do usuário para começar e não reabre nenhuma
+superfície congelada, salvo pelas regras acima:
+
+1. Implementação do frontend (redesenho; requer aprovação explícita de
+   design do usuário).
+2. Chamador Liberação → handoff (o lado da Liberação que invoca a entrada
+   de handoff congelada na Entrega 1 — §2.3).
+3. Limitação de taxa (rate limiting) do handoff antes de qualquer exposição
+   externa (§5, item 8).
+4. Administração de tarifas.
+5. Administração de VesselCall (§3, nota sobre a pendência de VesselCall).
+6. Tracking manual (§3, item 2).
+7. Administração de divergências de Free Time (§3, item 4b).
+8. Aposentadoria do V1 legado.
 
 ---
 
