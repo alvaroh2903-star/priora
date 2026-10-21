@@ -440,9 +440,35 @@ corrigido).
 
 ## 9. Validação sequencial (PostgreSQL real)
 
-_Preenchida no commit seguinte (somente documentação), com o resultado da
-validação sequencial completa executada num worktree limpo criado a partir
-do commit desta corretiva._
+Executada num **worktree limpo** criado com `git worktree add --detach
+d86132e` (o commit de código desta corretiva; este relatório é completado
+no commit seguinte, que só altera documentação), com `npm ci` a partir do
+lockfile — sem `node_modules` nem arquivos compartilhados com o worktree de
+desenvolvimento. PostgreSQL 16.15 real, banco novo e vazio; Node v22.22.0;
+`DEMURRAGE_DATABASE_URL` e `DEMURRAGE_TEST_DATABASE_URL` apontando para o
+mesmo banco. Uma etapa por vez, na ordem abaixo, nunca em paralelo.
+
+| # | Etapa | Comando / arquivos | Testes | Pass | Fail | Skipped | Cancelled | Todo | Duração |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 | Novos testes da corretiva | `leituraOperacionalEntrega3V11Unidade.test.ts` + `leituraOperacionalEntrega3V11.test.ts` | 24 | 24 | 0 | 0 | 0 | 0 | 19,0 s |
+| 2 | Entrega 3 | `leituraOperacionalEntrega3.test.ts` | 23 | 23 | 0 | 0 | 0 | 0 | 15,9 s |
+| 3 | Entrega 2 (ações) | `demurrageAcoesEntrega2(.V11/.V12).test.ts`, `acoesSemLogicaDeNegocio.test.ts` | 70 | 70 | 0 | 0 | 0 | 0 | 51,1 s |
+| 4 | Entrega 1 (handoff) | `handoffProducaoP1(V11).test.ts`, `handoffVinculoConcorrenciaV13.test.ts`, `handoffVinculoTransacaoV12.test.ts` | 60 | 60 | 0 | 0 | 0 | 0 | 48,5 s |
+| 5 | D12 read-model (com as duas variáveis de banco) | `demurrageV2Routes.test.ts` + `leitura{Autorizacao,Contrato,D12V12,Detalhe,Fila,FilaV11,Filtros,Timeline,TimelineV11}.test.ts` | 75 | 75 | 0 | 0 | 0 | 0 | 72,9 s |
+| 6 | Suíte completa do Demurrage Engine | `npm run test:demurrage-engine` | **1154** | **1154** | 0 | 0 | 0 | 0 | 710,2 s |
+| 7 | V1 | `npm run test` | 25 | 25 | 0 | 0 | 0 | 0 | 2,7 s |
+| 8 | D13 UI | `npm run test:demurrage-ui` | 66 | 66 | 0 | 0 | 0 | 0 | 26,2 s |
+| 9 | TypeScript | `tsc --noEmit` | — | limpo (saída vazia, exit 0) | | | | | |
+| 10 | Build de produção | `npm run build` | — | limpo (exit 0) | | | | | |
+
+A etapa 6 contém as etapas 1–5 (mesma pasta `__tests__`): 1154 = 1130 da
+Entrega 3 original + 24 testes novos. Etapas 3 + 4 = 130, o mesmo total da
+regressão das Entregas 1/2 na validação original. Lembrete (§6): `tsc`
+(etapas 9 e 10) não verifica `*.test.ts`; os tipos dos testes são
+verificados pelo `ts-node` nas etapas 1–8.
+
+`git status --porcelain` no worktree limpo: vazio antes e depois de todas
+as etapas (só `dist/` e `node_modules/`, ignorados pelo `.gitignore`).
 
 ---
 
@@ -506,8 +532,38 @@ contra esta corretiva:
 
 ## 11. Isolamento e escopo
 
-_Preenchida no commit seguinte (somente documentação), com as verificações
-de escopo feitas sobre o commit desta corretiva._
+Verificado sobre `git diff 507bf67 d86132e`:
+
+- **Nenhuma dependência de trabalho não commitado:** a validação do §9 rodou
+  num worktree limpo do próprio commit, com dependências instaladas do
+  lockfile; `git status --porcelain` vazio antes e depois.
+- **Nenhum arquivo de frontend:** 0 caminhos em `public/`, `*.html`,
+  `*.css`, `*.jsx` ou `src/frontend-tests/`; D13 UI 66/66.
+- **Entrega 1 sem mudança de comportamento:** 0 arquivos em
+  `src/demurrage-engine/handoff/`, `src/demurrage-engine/registro/` ou
+  `src/routes/demurrageHandoffRoutes.ts`; testes de handoff 60/60 sem
+  alteração.
+- **Entrega 2 — código-fonte intocado:** 0 arquivos em
+  `src/demurrage-engine/acoes/`, `closing/`, `persistence/` ou
+  `src/routes/demurrageAcoesRoutes.ts`. O instante real de autorização foi
+  obtido **sem nenhuma mudança** no caminho de escrita (derivado do ledger
+  — §5.3), então a "menor mudança comprovada" na Entrega 2 acabou sendo
+  nenhuma. Nos testes da Entrega 2, só a atualização mecânica da lista de
+  migrations (`demurrageAcoesEntrega2V11.test.ts`: `0045` → `0046` como
+  última e uma linha `includes(0046)`; `demurrageAcoesEntrega2V12.test.ts`:
+  `0045` → `0046` como última). Testes de ações 70/70.
+- **Migrations:** 0001–0045 intocadas; só `0046` adicionada.
+- **D12 e app:** `src/index.ts`, `src/middleware/`, `leitura/autorizacao.ts`,
+  `filaOperacional.ts`, `timeline.ts`, `detalhe.ts`, `filtros.ts`,
+  `contrato.ts`, `cursorAssinado.ts` e `pendenciaContextoSeguro.ts`: 0
+  mudanças. Em `src/routes/demurrageV2Routes.ts`, fora dos imports, todos os
+  trechos alterados estão na seção da Entrega 3 (os handlers D12 nas linhas
+  69–140 não mudaram); `#E2` prova que os erros D12 continuam no tratador do
+  app.
+- **Nenhuma regra de negócio nova:** as mudanças são de leitura (formato do
+  cursor, validação de parâmetros de consulta, resposta de erro, derivação
+  de `autorizadaEm` de um evento já gravado) e um índice. Nenhum cálculo,
+  relógio, tarifa, estado ou permissão foi alterado.
 
 ---
 
@@ -561,8 +617,8 @@ de escopo feitas sobre o commit desta corretiva._
 
 ## 13. Status
 
-- Entrega 3 com a corretiva v1.1: **implementada, aguardando nova revisão
-  final. Não congelada.**
+- Entrega 3 com a corretiva v1.1: **implementada e validada (§9),
+  aguardando nova revisão final. Não congelada.**
 - Entregas 1 e 2: congeladas, sem alteração de código-fonte.
 - Frontend: **nenhum arquivo alterado**. Nenhum redesenho iniciado.
 
