@@ -10,5 +10,8 @@ export function familiaV006(op: Operacao, relacoes: RelacaoContainer[]): Resulta
     valorContainer: (c) => c.pesoLiquidoKg,
     valorTotal: (d) => d.pesoLiquidoTotalKg,
     campoIncerto: 'pesoLiquidoKg',
+    medidaContainer: (c) => c.medidas?.pesoLiquido ?? null,
+    medidaTotal: (d) => d.medidas?.pesoLiquidoTotal ?? null,
+    campoIncertoTotal: 'pesoLiquidoTotalKg',
   });
 }

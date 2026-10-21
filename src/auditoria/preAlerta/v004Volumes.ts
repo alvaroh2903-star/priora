@@ -41,7 +41,11 @@ export function familiaV004(op: Operacao): ResultadoFamilia {
     { doc: 'MBL', valor: fmt(totalM) },
     { doc: 'Σ Houses', valor: fmt(soma) },
   ];
-  if (totalM == null || soma == null) {
+  const incQtd = [master, ...op.houses].some((d) => (d.leituraIncerta ?? []).includes('qtdVolumesTotal'));
+  if (incQtd) {
+    // Leitura incerta (ex.: "1.000" sem convenção) → 👤, nunca conclusão automática.
+    ev.push(mk('V-004.1', 'Quantidade de Volumes', 'ValidacaoHumana', 'Alta', null, val1, 'Leitura incerta da quantidade de volumes — confirmar no documento.'));
+  } else if (totalM == null || soma == null) {
     ev.push(mk('V-004.1', 'Quantidade de Volumes', 'NaoAvaliada', 'Alta', null, val1, 'Quantidade de volumes ausente no MBL ou em algum House.'));
   } else {
     const igual = numeroIgual(totalM, soma);

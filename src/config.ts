@@ -74,6 +74,19 @@ export const config = {
      */
     enabled: (process.env.MISTRAL_OCR_ENABLED || '').trim().toLowerCase() !== 'false',
   },
+  /**
+   * PB-001 (Fase 2 — deterministic-first): Mistral OCR → parser determinístico →
+   * CanonicalDocument → adaptador → motor. ZERO Gemini no caminho normal.
+   */
+  pb001: {
+    /**
+     * ROLLBACK EXPLÍCITO (padrão FALSE): estruturação do documento inteiro pelo
+     * Gemini no lugar do parser determinístico. NUNCA liga sozinho (nem quando o
+     * parser deixa campos sem leitura). GEMINI_LEGACY_STRUCTURING_FALLBACK_ENABLED=true.
+     */
+    geminiLegacyStructuringFallbackEnabled:
+      (process.env.GEMINI_LEGACY_STRUCTURING_FALLBACK_ENABLED || '').trim().toLowerCase() === 'true',
+  },
   /** FedEx Track API (OAuth2 client_credentials). Opcional: sem as chaves, o
    *  rastreio ao vivo fica indisponível, mas o resto do app funciona. */
   fedex: {
