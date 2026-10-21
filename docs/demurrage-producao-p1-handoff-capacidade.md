@@ -308,7 +308,8 @@ Regras (`handoff/capacidade.ts`, `carregarConfigCapacidadeHandoff`):
   correção.
 - **`lock_timeout` de 2 s** (`set_config(…, true)`, local à transação): sob
   contenção extrema a chamada falha em vez de prender a conexão; a rota
-  responde a falha genérica (§7) e o handoff **não** é processado.
+  responde a falha genérica (§7), o handoff **não** é processado e nenhum
+  balde é criado ou consumido (rollback da transação inteira — `#21b`).
 - **Atomicidade entre as dimensões:** a decisão e as duas atualizações
   acontecem na mesma transação; ou as duas perdem 1 ficha, ou nenhuma.
 
@@ -362,8 +363,9 @@ ruído em tráfego normal).
 
 **Nunca logados** (verificado pelo teste de log): segredo HMAC, assinatura,
 corpo bruto (nem conteúdo de documento/e-mail que ele carregaria),
-cabeçalhos de autenticação (`x-handoff-*`), mensagem ou detalhe bruto do
-erro do banco. O `credencialId` logado é o id do registro da credencial
+cabeçalhos de autenticação (`x-handoff-*` — nem os nomes nem os valores de
+assinatura, nonce e timestamp), mensagem ou detalhe bruto do erro do
+banco. O `credencialId` logado é o id do registro da credencial
 (não é segredo; é enviado em claro em todo pedido).
 
 ---
@@ -373,9 +375,14 @@ erro do banco. O `credencialId` logado é o id do registro da credencial
 Arquivo novo: `src/demurrage-engine/__tests__/handoffCapacidade.test.ts`
 (PostgreSQL real; servidores Express reais na porta 0 com o router de
 produção). Determinismo: os testes injetam limites pequenos (ex.: 1/min,
-rajada 2) para que a reposição durante o teste seja desprezível, e
+rajada 2) para que a reposição durante o teste seja desprezível,
 "avançam o relógio do banco" deslocando `atualizado_em` para o passado no
-fixture (`make_interval`) — nenhum `sleep`.
+fixture (`make_interval`), congelam a reposição com `atualizado_em` no
+futuro quando precisam de contagem exata com os limites padrão (`#20b`) e
+comparam `Retry-After` com a espera que a própria decisão gravou. Nenhum
+`sleep`; as únicas esperas são o `lock_timeout` real de 2 s da função em
+`#21b` e o polling de milissegundos de `#18b` até a conexão atrasada estar
+de fato bloqueada no lock.
 
 | # pedido | Requisito | Teste |
 |---|---|---|
@@ -453,13 +460,80 @@ política). Achados e o tratamento de cada um, todos dentro deste escopo:
 
 ### 10.2 Regressão sequencial
 
-⟨preenchido após a validação em worktree limpo⟩
+Executada num **worktree limpo** criado com `git worktree add` e
+posicionado em `19fc8d9` (o commit de código desta adição; este relatório
+é completado no commit seguinte, que só altera documentação), com
+`npm ci` a partir do lockfile — sem `node_modules` nem arquivos
+compartilhados com o worktree de desenvolvimento. PostgreSQL 16.15 real,
+banco novo e vazio; Node v22.22.0; `DEMURRAGE_DATABASE_URL` e
+`DEMURRAGE_TEST_DATABASE_URL` apontando para o mesmo banco. Uma etapa por
+vez, na ordem abaixo, nunca em paralelo.
+
+| # | Etapa | Comando / arquivos | Testes | Pass | Fail | Skipped | Cancelled | Todo | Duração |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 | Novos testes de capacidade | `handoffCapacidade.test.ts` | 27 | 27 | 0 | 0 | 0 | 0 | 28,5 s |
+| 2 | Entrega 1 (handoff) | `handoffProducaoP1(V11).test.ts`, `handoffVinculoConcorrenciaV13.test.ts`, `handoffVinculoTransacaoV12.test.ts` | 60 | 60 | 0 | 0 | 0 | 0 | 48,8 s |
+| 3 | Entrega 2 (ações) | `demurrageAcoesEntrega2(.V11/.V12).test.ts`, `acoesSemLogicaDeNegocio.test.ts` | 70 | 70 | 0 | 0 | 0 | 0 | 47,0 s |
+| 4 | Entrega 3 (leitura) | `leituraOperacionalEntrega3.test.ts`, `leituraOperacionalEntrega3V11.test.ts`, `leituraOperacionalEntrega3V11Unidade.test.ts` | 47 | 47 | 0 | 0 | 0 | 0 | 34,3 s |
+| 5 | Suíte completa do Demurrage Engine | `npm run test:demurrage-engine` | **1181** | **1181** | 0 | 0 | 0 | 0 | 807,7 s |
+| 6 | V1 | `npm run test` | 25 | 25 | 0 | 0 | 0 | 0 | 3,6 s |
+| 7 | D13 UI | `npm run test:demurrage-ui` | 66 | 66 | 0 | 0 | 0 | 0 | 30,0 s |
+| 8 | TypeScript | `tsc --noEmit` | — | limpo (saída vazia, exit 0) | | | | | 6,2 s |
+| 9 | Build de produção | `npm run build` | — | limpo (exit 0) | | | | | 7,4 s |
+
+A etapa 5 contém as etapas 1–4 (mesma pasta `__tests__`): 1181 = 1154 do
+congelamento da Entrega 3 v1.1 + 27 testes novos. Os 60 da Entrega 1
+rodam **sem nenhuma alteração** nos seus arquivos e com o controle de
+capacidade ativo nos padrões. Lembrete: `tsc` (etapas 8 e 9) não verifica
+`*.test.ts`; os tipos dos testes são verificados pelo `ts-node` nas
+etapas 1–7.
+
+`git status --porcelain` no worktree limpo: vazio antes e depois de todas
+as etapas (`dist/` e `node_modules/` são ignorados pelo `.gitignore`).
+
+No worktree de desenvolvimento, antes do commit, `handoffCapacidade.test.ts`
+passou em 3 execuções consecutivas (verificação de estabilidade de `#8b`,
+`#18b` e `#21b`) e em todas as execuções seguintes depois das últimas
+adições de teste.
 
 ---
 
 ## 11. Prova de escopo
 
-⟨preenchido após a validação⟩
+Verificado sobre `git diff b220ff0 19fc8d9` (18 arquivos: 1 migration
+nova, 1 módulo novo, a rota do handoff, 1 arquivo de teste novo, 10
+arquivos de teste com ajuste mecânico, `.env.example` e 3 documentos):
+
+- **Nenhum arquivo de frontend:** 0 caminhos em `public/`, `*.html`,
+  `*.css`, `*.jsx` ou `src/frontend-tests/`; D13 UI verde (§10.2, etapa 7).
+- **Entregas 2 e 3 sem mudança de comportamento em produção:** 0 arquivos
+  em `src/demurrage-engine/acoes/`, `closing/`, `persistence/`, `leitura/`,
+  `registro/`, `src/routes/demurrageAcoesRoutes.ts`,
+  `src/routes/demurrageV2Routes.ts`, `src/index.ts` e `src/middleware/`.
+  Nos testes delas, só a atualização mecânica da lista de migrations (§9).
+  Entrega 2 70/70 e Entrega 3 47/47 (§10.2).
+- **Contrato assinado inalterado:** no diretório `handoff/`, o único
+  arquivo do diff é o novo `capacidade.ts` — `assinatura.ts`,
+  `autenticacaoHttp.ts`, `credenciais.ts`, `handoffService.ts` e o
+  contrato não mudaram. Cabeçalhos, string canônica, HMAC, tolerância de
+  timestamp, nonce e payload continuam os mesmos.
+- **Idempotência inalterada para requisições admitidas:** na rota, fora de
+  imports e comentários, o diff é só a configuração, o middleware
+  acrescentado como primeiro handler de `router.post('/')` e o router
+  padrão criado com a configuração validada; o corpo do handler (parse,
+  `processarEventoHandoff`, tradução de status, falha genérica) é o
+  mesmo. `#13` prova a semântica de replay (uma linha só em
+  `demurrage_handoff_eventos`). Os 60 testes da Entrega 1 (HMAC, nonce,
+  timestamp, idempotência, transação, vínculo) **não foram alterados** e
+  passam com o controle ativo nos padrões.
+- **Nenhum serviço externo:** `capacidade.ts` importa só tipos do
+  Express, `pg`, `./erros` e o tipo da requisição autenticada; nenhum
+  `fetch`/HTTP/processo filho/temporizador. A única E/S é uma chamada
+  `pool.query` à função do PostgreSQL.
+- **Migrations:** 0001–0046 intocadas; só `0047` adicionada.
+- **Sem dependência de mudança local:** a validação do §10.2 rodou num
+  worktree limpo do próprio commit, com `npm ci` a partir do lockfile e
+  banco novo; `git status --porcelain` vazio antes e depois.
 
 ---
 
@@ -467,8 +541,9 @@ política). Achados e o tratamento de cada um, todos dentro deste escopo:
 
 1. **Migration primeiro** (`npm run db:migrate:demurrage`), depois a
    aplicação. A aplicação nova sem a `0047` responde **500 genérico** em
-   toda requisição autenticada do handoff (a função não existe) — falha
-   fechada, nunca processamento sem limite.
+   toda requisição autenticada do handoff (a função não existe → SQLSTATE
+   `42883` → `BANCO_DADOS_ERRO`, por construção do tratamento de §7) —
+   falha fechada, nunca processamento sem limite.
 2. O `ALTER TABLE … ADD CONSTRAINT … UNIQUE (id, organization_id)` em
    `demurrage_handoff_credenciais` cria um índice e pega lock exclusivo
    nessa tabela até o fim da transação da migration (tabela pequena: uma
@@ -505,7 +580,9 @@ política). Achados e o tratamento de cada um, todos dentro deste escopo:
   remover a linha de `schema_migrations`.
 - Se for **necessário** remover (não recomendado), em uma transação:
   `DROP FUNCTION demurrage_handoff_capacidade_admitir(UUID, UUID, INTEGER, INTEGER, INTEGER, INTEGER); DROP TABLE demurrage_handoff_capacidade_credenciais; DROP TABLE demurrage_handoff_capacidade_organizacoes; ALTER TABLE demurrage_handoff_credenciais DROP CONSTRAINT demurrage_handoff_credenciais_id_org_unique; DELETE FROM schema_migrations WHERE filename = '0047_handoff_controle_capacidade.sql';`
-  — só com a aplicação antiga já em execução.
+  — só com a aplicação antiga já em execução. (Sequência conferida num
+  banco de desenvolvimento com a `0047` aplicada, dentro de uma transação
+  desfeita com `ROLLBACK`: todos os comandos executam sem erro.)
 
 ---
 
@@ -569,4 +646,12 @@ política). Achados e o tratamento de cada um, todos dentro deste escopo:
 
 ## 16. Status
 
-⟨preenchido após a validação⟩
+- Controle de capacidade **implementado e validado** (código `19fc8d9`;
+  regressão sequencial em worktree limpo toda verde — §10.2).
+- **Aguardando revisão do usuário. Não declarado congelado.**
+- **Decisão pendente do usuário (§3.4):** manter o balde de fichas (pior
+  caso 70/140 numa janela de 60 s, média 60/120) ou exigir teto estrito por
+  janela deslizante — opção (a), só configuração, ou (b), registro
+  limitado de admissões.
+- Nenhum frontend alterado ou declarado; chamador da Liberação **não**
+  iniciado; nenhuma outra frente começada.
