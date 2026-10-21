@@ -12,6 +12,7 @@ import { analysisRouter } from './routes/analysisRoutes';
 import { parseRouter } from './routes/parseRoutes';
 import { processRouter } from './routes/processRoutes';
 import { courierRouter } from './routes/courierRoutes';
+import { diagRouter, diagLimiteCorpo } from './routes/diagRoutes';
 import { trackingRouter } from './routes/trackingRoutes';
 import { demurrageRouter } from './routes/demurrageRoutes';
 import { demurrageBotRouter } from './routes/demurrageBotRoutes';
@@ -73,6 +74,8 @@ if (config.isProduction) {
   app.set('trust proxy', 1);
 }
 
+// Diagnóstico da Relatórios: corpo limitado ANTES do parser JSON global.
+app.use('/api/diag', diagLimiteCorpo);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -143,6 +146,7 @@ app.use('/api/emails', emailRouter);
 app.use('/api/analysis', analysisRouter);
 app.use('/api/parse', parseRouter);
 app.use('/api/processes', processRouter);
+app.use('/api/diag', diagRouter);
 app.use('/api/couriers', courierRouter);
 app.use('/api/tracking', trackingRouter);
 app.use('/api/demurrage/bot', demurrageBotRouter);

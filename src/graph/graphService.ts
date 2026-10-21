@@ -1,4 +1,10 @@
 import { Client } from '@microsoft/microsoft-graph-client';
+import {
+  observarGraph,
+  registrarAnexosListados,
+  registrarCobertura,
+  registrarFalhaEngolida,
+} from '../diag/relatoriosDiag';
 
 /** Cria um cliente do Microsoft Graph autenticado com um access token. */
 export function getGraphClient(accessToken: string): Client {
@@ -111,15 +117,20 @@ export async function searchLogisticsMessages(
   // KQL: "termo1" OR "termo2" OR ... — $search não combina com $orderby.
   const searchQuery = opts.keywords.map((k) => `"${k}"`).join(' OR ');
 
-  const response = await client
-    .api('/me/messages')
-    .header('Prefer', 'outlook.body-content-type="text"')
-    .search(searchQuery)
-    .top(top)
-    .select(
-      'id,conversationId,subject,from,receivedDateTime,bodyPreview,body,isRead,hasAttachments,webLink',
-    )
-    .get();
+  const response = await observarGraph(
+    'busca',
+    client
+      .api('/me/messages')
+      .header('Prefer', 'outlook.body-content-type="text"')
+      .search(searchQuery)
+      .top(top)
+      .select(
+        'id,conversationId,subject,from,receivedDateTime,bodyPreview,body,isRead,hasAttachments,webLink',
+      )
+      .get(),
+  );
+  // Diagnóstico: o Graph sinaliza (nextLink) que havia mais resultados que o top.
+  registrarCobertura(() => ({ buscaTemMais: Boolean(response?.['@odata.nextLink']) }));
 
   return response.value as LogisticsSummary[];
 }
@@ -130,15 +141,19 @@ export async function listRecentSummaries(
   opts: { top?: number } = {},
 ): Promise<LogisticsSummary[]> {
   const client = getGraphClient(accessToken);
-  const response = await client
-    .api('/me/mailFolders/inbox/messages')
-    .header('Prefer', 'outlook.body-content-type="text"')
-    .top(opts.top ?? 40)
-    .select(
-      'id,conversationId,subject,from,receivedDateTime,bodyPreview,body,isRead,hasAttachments,webLink',
-    )
-    .orderby('receivedDateTime DESC')
-    .get();
+  const response = await observarGraph(
+    'inbox',
+    client
+      .api('/me/mailFolders/inbox/messages')
+      .header('Prefer', 'outlook.body-content-type="text"')
+      .top(opts.top ?? 40)
+      .select(
+        'id,conversationId,subject,from,receivedDateTime,bodyPreview,body,isRead,hasAttachments,webLink',
+      )
+      .orderby('receivedDateTime DESC')
+      .get(),
+  );
+  registrarCobertura(() => ({ inboxTemMais: Boolean(response?.['@odata.nextLink']) }));
   return response.value as LogisticsSummary[];
 }
 
@@ -160,28 +175,39 @@ export async function getItemAttachmentTexts(
     // abrir o painel: em 21/10 isso estourou os 512 MB do Render várias vezes, e
     // cada reinício deslogava todo mundo. O @odata.type vem junto por ser uma
     // coleção polimórfica (mesmo recurso do getForwardedFileAttachments).
-    const lista: any = await client
-      .api(`/me/messages/${messageId}/attachments`)
-      .select('id,name,contentType,size,isInline')
-      .get();
+    const lista: any = await observarGraph(
+      'anexos.lista',
+      client
+        .api(`/me/messages/${messageId}/attachments`)
+        .select('id,name,contentType,size,isInline')
+        .get(),
+    );
+    // Diagnóstico: só tipo e tamanho DECLARADO (a listagem não baixa conteúdo).
+    registrarAnexosListados(() =>
+      ((lista?.value as any[]) || []).map((a) => ({ tipo: a?.['@odata.type'], bytes: a?.size })),
+    );
     const itemAtts = ((lista?.value as any[]) || []).filter(
       (a) => a['@odata.type'] === '#microsoft.graph.itemAttachment',
     );
     const texts: string[] = [];
     // Só os e-mails encaminhados COMO anexo são abertos (costuma ser 0 ou 1).
     for (const ia of itemAtts) {
-      const full: any = await client
-        .api(`/me/messages/${messageId}/attachments/${ia.id}`)
-        .header('Prefer', 'outlook.body-content-type="text"')
-        .expand('microsoft.graph.itemAttachment/item')
-        .get();
+      const full: any = await observarGraph(
+        'anexos.item',
+        client
+          .api(`/me/messages/${messageId}/attachments/${ia.id}`)
+          .header('Prefer', 'outlook.body-content-type="text"')
+          .expand('microsoft.graph.itemAttachment/item')
+          .get(),
+      );
       const it = full?.item;
       if (!it) continue;
       const joined = `${it.subject || ''}\n${it.body?.content || it.bodyPreview || ''}`.trim();
       if (joined) texts.push(joined);
     }
     return texts;
-  } catch {
+  } catch (err) {
+    registrarFalhaEngolida('itemAttachment', err);
     return [];
   }
 }

@@ -1,6 +1,7 @@
 import { GoogleGenAI } from '@google/genai';
 import { z } from 'zod/v4';
 import { config } from '../config';
+import { observarIa } from '../diag/relatoriosDiag';
 
 let client: GoogleGenAI | null = null;
 
@@ -220,7 +221,7 @@ async function generateStructuredFromContents<T extends z.ZodType>(
   let lastErr: unknown;
   for (let attempt = 0; attempt <= AI_MAX_RETRIES; attempt++) {
     try {
-      response = await ai.models.generateContent(params);
+      response = await observarIa(ai.models.generateContent(params), attempt);
       break;
     } catch (err) {
       lastErr = err;

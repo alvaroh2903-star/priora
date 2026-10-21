@@ -30,10 +30,18 @@ import {
 import { getAllBotResults, refKey } from '../demurrage/demurrageBotStore';
 import { collectEmailRefs } from '../demurrage/emailRefs';
 import { config } from '../config';
+import {
+  diagRelatorios,
+  diagAutenticado,
+  observarTarefa,
+  registrarCobertura,
+} from '../diag/relatoriosDiag';
 
 export const demurrageRouter = Router();
 
+demurrageRouter.use(diagRelatorios('demurrage'));
 demurrageRouter.use(requireAuth);
+demurrageRouter.use(diagAutenticado);
 
 interface PortalDates {
   gateOut: string | null;
@@ -106,10 +114,15 @@ demurrageRouter.get('/sync-refs', async (req: AuthedRequest, res, next) => {
  * ------------------------------------------------------------------ */
 
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  // Diagnóstico (só mede): sem rastro ativo, obs.p é a própria promessa.
+  const obs = observarTarefa(label, p);
   return Promise.race([
-    p,
+    obs.p,
     new Promise<T>((_, reject) =>
-      setTimeout(() => reject(new Error(`timeout ${label} (${ms}ms)`)), ms),
+      setTimeout(() => {
+        obs.estourou();
+        reject(new Error(`timeout ${label} (${ms}ms)`));
+      }, ms),
     ),
   ]);
 }
@@ -289,6 +302,15 @@ demurrageRouter.get('/', async (req: AuthedRequest, res, next) => {
 
     // E-mails encaminhados como anexo: puxa o texto do anexo (best-effort).
     const withAtt = messages.filter((m) => m.hasAttachments).slice(0, 25);
+    registrarCobertura(() => ({
+      fonte: source,
+      limiteBusca: source === 'inbox' ? 40 : 60,
+      mensagens: messages.length,
+      mensagensComAnexo: messages.filter((m) => m.hasAttachments).length,
+      limiteAnexos: 25,
+      anexosSelecionados: withAtt.length,
+      concorrenciaAnexos: 5,
+    }));
     const attMap = new Map<string, string>();
     // No máximo 5 e-mails por vez (antes: os 25 juntos).
     await mapLimit(withAtt, 5, async (m) => {
@@ -299,6 +321,7 @@ demurrageRouter.get('/', async (req: AuthedRequest, res, next) => {
       ).catch(() => [] as string[]);
       if (texts.length) attMap.set(m.id, texts.join('\n\n'));
     });
+    registrarCobertura(() => ({ anexosComTexto: attMap.size }));
 
     const fullTextOf = (m: LogisticsSummary): string =>
       [m.bodyPreview || '', m.body?.content || '', attMap.get(m.id) || '']
@@ -372,6 +395,13 @@ demurrageRouter.get('/', async (req: AuthedRequest, res, next) => {
     candidates.sort((a, b) => b.score - a.score);
     const AI_CAP = 14;
     const toAnalyze = aiEnabled ? candidates.slice(0, AI_CAP) : [];
+    registrarCobertura(() => ({
+      conversas: groups.size,
+      candidatas: candidates.length,
+      iaHabilitada: aiEnabled,
+      limiteIa: AI_CAP,
+      iaSelecionadas: toAnalyze.length,
+    }));
     const extractions = new Map<string, DemurrageExtraction>();
     await Promise.all(
       toAnalyze.map(async (c) => {
@@ -385,6 +415,7 @@ demurrageRouter.get('/', async (req: AuthedRequest, res, next) => {
         if (ext) extractions.set(c.cid, ext);
       }),
     );
+    registrarCobertura(() => ({ extracoesIa: extractions.size }));
 
     // Datas raspadas do PORTAL (bot), por número de contêiner — para completar o
     // que o e-mail não traz (retirada real = gate-out, devolução = empty-return).
@@ -496,6 +527,7 @@ demurrageRouter.get('/', async (req: AuthedRequest, res, next) => {
       .filter((c) => c.bucket === 'risco')
       .sort((a, b) => (a.diasRestantes ?? 999) - (b.diasRestantes ?? 999));
     const pend = cards.filter((c) => c.bucket === 'pend');
+    registrarCobertura(() => ({ cards: cards.length }));
 
     const custoValor = moneyOf(custo);
     const pendValor = moneyOf(pend);
