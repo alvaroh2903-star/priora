@@ -1,5 +1,26 @@
 # Pacote de revisão — Stage 0 corrigido (v2)
 
+> **⚠ Atualização (22/10/2026): o commit `ddb831e` SUBSTITUI duas descrições deste pacote.** Estas regras prevalecem sobre qualquer trecho abaixo que diga o contrário. O código em revisão passou a ser `8e055b0..ddb831e`; a revisão aceitou as duas correções.
+>
+> 1. **Limite do corpo do envio.** Antes: limite verificado só pelo `Content-Length` (§3 item 5, §4, §5).
+>    - Agora o `POST /api/diag/relatorios` é lido por um parser JSON **só desta rota**, com 16 KB sobre os bytes **interpretados** e sem descompressão.
+>    - Recusas: corpo com `Content-Encoding` (gzip, deflate, br…) ou sem `Content-Type: application/json` → `415`; sem `Content-Length` → `411`; acima de 16 KB → `413`; JSON malformado → `400`.
+>    - O parser global das rotas de negócio não mudou.
+> 2. **Escopo da coleta.** Antes: ativação global do processo, coletando toda sessão autenticada, por "organização + conta" (§3 itens 3–5, §8, 12.1, 12.3).
+>    - Agora a coleta exige a **seleção** `PRIORA_DIAG_ORG` + `PRIORA_DIAG_OPERADOR` + `PRIORA_DIAG_CONTA`: empresa Priora, usuário Priora e conta Microsoft conectada.
+>    - Os três critérios são verificados no servidor: a sessão gravada no login Priora e a conta conectada.
+>    - Sessões não selecionadas, inclusive outro operador na mesma caixa, não recebem header, não abrem rastro, não geram linha e recebem "off" no envio.
+>    - Seleção ausente ou inválida desliga o diagnóstico (`selecao_incompleta` ou `selecao_invalida`, sem valores no log).
+>    - Por isso, os riscos de 12.1 (exposição entre usuários) e de 12.3 (as 1.000 contas lembradas) ficam restritos a um único escopo.
+>
+> **Fontes atuais:**
+>
+> - procedimento: `docs/diagnostico-relatorios-stage0.md` (no `ddb831e`);
+> - diff das correções: `ad86b57...ddb831e`;
+> - proposta de integração e medição: [`Proposta_Integracao_Medicao.md`](Proposta_Integracao_Medicao.md).
+>
+> O restante da nota abaixo e o corpo do pacote são os da publicação original.
+
 > **Nota de publicação (22/10/2026).** Este pacote foi publicado como documentação no branch de revisão, num commit **só de documentação** sobre o `9e1fcaa`. O código em revisão continua sendo `8e055b0..9e1fcaa`.
 >
 > Onde o texto fala em "anexos":

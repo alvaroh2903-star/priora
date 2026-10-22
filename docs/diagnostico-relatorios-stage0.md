@@ -189,8 +189,15 @@ iguais: a resposta, as chamadas ao Graph e à IA e o comportamento da tela.
 
 ## Procedimento de medição real (exige decisão e autorização separadas)
 
-Nada disto foi executado. A duração da janela **não está definida**: é decisão sua
-depois da revisão.
+Nada disto foi executado. A proposta concreta para a primeira janela, pendente de
+aprovação, está em
+[`revisao-stage0/Proposta_Integracao_Medicao.md`](revisao-stage0/Proposta_Integracao_Medicao.md):
+sequência mínima, janela de até 30 min, tetos de chamadas e paradas. Ela prevalece
+sobre os passos genéricos abaixo.
+
+Abrir o painel (`Priora.dc.html`) pré-monta **todas** as abas, e os logins
+redirecionam para ele. Para uma carga só da Relatórios, abrir `/Relatorios.dc.html`
+direto.
 
 1. **Commit:** o commit de revisão aprovado, aplicado ao tip da Linha A da data. Se a
    Linha A tiver avançado, revisar a diferença antes. Confirmar em `/health` o commit
