@@ -195,7 +195,11 @@ async function ate(cond: () => boolean, limite = 4000): Promise<void> {
 const contaA = { 'x-teste-conta': 'objeto-a.tenant-x' };
 const doTipo = (t: string) => registros.filter((r) => r.diag === t);
 
-beforeEach(() => {
+beforeEach(async () => {
+  // Espera o trabalho tardio de testes anteriores terminar (o amostrador só
+  // fica ligado enquanto houver rastro ativo): nenhuma linha atrasada de outro
+  // teste cai na contagem deste.
+  await ate(() => D.timersDoDiagnostico() === 0, 10_000);
   D.__reiniciarDiagParaTeste();
   D.__definirFalhaTeste(null);
   ativa = 'objeto-a.tenant-x';
@@ -469,7 +473,7 @@ test('falhas internas da telemetria não mudam a resposta nem as chamadas extern
   desligar();
   feitas.graph = feitas.ia = 0;
   const base = await resp('/api/couriers', { headers: contaA });
-  await esperar(400);
+  await esperar(800);
   const refGraph = feitas.graph;
   const refIa = feitas.ia;
   ligar();
@@ -485,7 +489,7 @@ test('falhas internas da telemetria não mudam a resposta nem as chamadas extern
       });
     }
     const r = await resp('/api/couriers', { headers: contaA });
-    await esperar(400);
+    await esperar(800);
     D.__definirFalhaTeste(null);
     D.definirSaidaDiag((x) => registros.push(JSON.parse(JSON.stringify(x))));
     assert.equal(r.status, base.status, ponto);
@@ -503,14 +507,18 @@ test('um único timer de amostragem, qualquer que seja a concorrência; zero qua
   const antes = timeouts();
   let pico = 0;
   let picoDiag = 0;
-  const pedidos = Array.from({ length: 100 }, () => pedir('/api/couriers', { headers: { ...contaA, 'x-teste-espera': '150' } }));
   const amostra = setInterval(() => {
     pico = Math.max(pico, timeouts());
     picoDiag = Math.max(picoDiag, D.timersDoDiagnostico());
   }, 20);
-  await Promise.all(pedidos);
-  await ate(() => doTipo('relatorios.tardio').length === 100, 8000);
-  clearInterval(amostra);
+  try {
+    await Promise.all(Array.from({ length: 100 }, () => pedir('/api/couriers', { headers: { ...contaA, 'x-teste-espera': '150' } })));
+    // Todos os rastros (inclusive o trabalho tardio) terminam → amostrador desliga.
+    await ate(() => D.timersDoDiagnostico() === 0, 20_000);
+  } finally {
+    clearInterval(amostra);
+  }
+  assert.equal(doTipo('relatorios.req').length, 100);
   assert.equal(picoDiag, 1);
   assert.equal(D.timersDoDiagnostico(), 0);
   // O resto dos timers é do próprio handler de teste (atrasos falsos e limites).
@@ -550,8 +558,10 @@ test('rastro vencido (10 min) é liberado e encerrado sem vazar memória', async
       next();
     });
     r2.use(D.diagAutenticado);
+    const liberar: Array<() => void> = [];
     r2.get('/', (_req, res) => {
-      void comLimite('claraDemurrage', new Promise(() => undefined), 10).catch(() => null);
+      // Tarefa que não termina sozinha (liberada no fim do teste).
+      void comLimite('claraDemurrage', new Promise<void>((r) => liberar.push(r)), 10).catch(() => null);
       setTimeout(() => res.json({ ok: true }), 30);
     });
     app2.use((req, _res, next) => {
@@ -576,6 +586,7 @@ test('rastro vencido (10 min) é liberado e encerrado sem vazar memória', async
     const tardio = doTipo('relatorios.tardio').find((t) => t.encerradoPorTempo);
     assert.ok(tardio, 'rastro vencido não foi encerrado');
     assert.deepEqual(tardio.pendentesNaoConcluidos, { tarefas: { claraDemurrage: 1 }, chamadasGraph: 0, chamadasIa: 0 });
+    for (const l of liberar) l();
   } finally {
     (performance as any).now = original;
   }
