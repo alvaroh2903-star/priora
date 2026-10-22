@@ -1,0 +1,10 @@
+{
+  "formato": "priora-piloto/v1",
+  "organizacao": { "slug": "exemplo-piloto", "nome": "Exemplo Piloto" },
+  "membros": [
+    { "nome": "Caixa Operacional", "email": "operacao@exemplo-piloto.example", "homeAccountId": "00000000-0000-0000-0000-000000000001.00000000-0000-0000-0000-0000000000aa", "papel": "ADMIN" },
+    { "nome": "Analista Um", "email": "analista1@exemplo-piloto.example", "homeAccountId": null, "papel": "ANALYST" },
+    { "nome": "Gestor Um", "email": "gestor1@exemplo-piloto.example", "homeAccountId": null, "papel": "MANAGER" }
+  ],
+  "caixa": { "homeAccountId": "00000000-0000-0000-0000-000000000001.00000000-0000-0000-0000-0000000000aa", "username": "operacao@exemplo-piloto.example" }
+}
