@@ -4,6 +4,8 @@ import session from 'express-session';
 import { config } from './config';
 import { createFileSessionStore } from './auth/fileSessionStore';
 import { inicializarPersistenciaAuth } from './auth/persistenciaAuth';
+import { segredoDaSessaoAceitoNaPartida } from './auth/segredoDaSessao';
+import { escritaLegadaNoOutlookHabilitada } from './middleware/escritaLegadaOutlook';
 import { authRouter, criarRotaMe } from './auth/authRoutes';
 import { emailRouter } from './routes/emailRoutes';
 import { analysisRouter } from './routes/analysisRoutes';
@@ -98,6 +100,14 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
  * arquivo (comportamento legado); com erro de chave/banco, cai em memória.
  */
 async function main(): Promise<void> {
+  // Em produção, SESSION_SECRET ausente, público ou curto impede a partida —
+  // antes de qualquer conexão (banco, Microsoft) e antes de aceitar requisições.
+  if (!segredoDaSessaoAceitoNaPartida()) process.exit(1);
+
+  if (!escritaLegadaNoOutlookHabilitada()) {
+    console.log('[escrita-legada-outlook] desligada (PRIORA_ESCRITA_LEGADA_OUTLOOK≠on) — envio de e-mail e rascunhos legados respondem 403.');
+  }
+
   await inicializarPersistenciaAuth();
 
   const server = app.listen(config.port, () => {

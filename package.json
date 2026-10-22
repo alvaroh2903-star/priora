@@ -30,6 +30,7 @@
     "test:i1": "TS_NODE_PREFER_TS_EXTS=true node --test-concurrency=1 -r ts-node/register --test src/auditoria/ocr/__tests__/*.test.ts src/auditoria/fatos/__tests__/leiturasDocumentais.test.ts src/liberacao/aplicacao/__tests__/fontesPosteriores.test.ts",
     "test:i2": "TS_NODE_PREFER_TS_EXTS=true node --test-concurrency=1 -r ts-node/register --test src/liberacao/aplicacao/__tests__/produtorDoArmador.test.ts",
     "test:piloto": "TS_NODE_PREFER_TS_EXTS=true node --test-concurrency=1 -r ts-node/register --test src/piloto/__tests__/*.test.ts",
+    "test:escrita-legada": "TS_NODE_PREFER_TS_EXTS=true node --test-concurrency=1 -r ts-node/register --test src/middleware/__tests__/*.test.ts",
     "piloto:provisionar": "ts-node src/piloto/cli.ts"
   },
   "keywords": [

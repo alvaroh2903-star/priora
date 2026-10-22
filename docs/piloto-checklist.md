@@ -1,6 +1,6 @@
 # Checklist de implantação do piloto isolado da Liberação
 
-**Para o ambiente do PILOTO, nunca para a produção.** Derivado do ensaio geral local (O2.7) e da revisão de segurança (O2.8), ambos com dados sintéticos. Ainda não foi executado num ambiente real.
+**Para o ambiente do PILOTO, nunca para a produção.** Derivado do ensaio geral local (O2.7), da revisão de segurança (O2.8) e das proteções implementadas na O2.9, todos com dados sintéticos. Ainda não foi executado num ambiente real.
 
 Marque cada item com a evidência pedida. Item sem evidência = item **não cumprido**. Informação indisponível nunca equivale a condição atendida.
 
@@ -22,9 +22,9 @@ O piloto só abre quando **todos** os itens abaixo estiverem com evidência e as
 | # | Risco | Situação após a O2.8 | Bloqueia? |
 |---|---|---|---|
 | R1 | Scheduler da Demurrage sem interruptor | Isolado por **ausência de dados**. Nenhuma rota, script ou migração do app cria contêiner ou alvo de rastreamento. Num banco novo, o tick lê e não faz nada (ensaio: 0 tabelas alteradas, 0 conexões). Com um contêiner rastreável, o mesmo tick chamaria a porta do armador. Conferência: C4 e G6 | Não, se C4 e G6 tiverem evidência |
-| R2 | `SESSION_SECRET` padrão aceito em silêncio | Sem validação no código. Com o padrão, um cookie assinado com o valor público é aceito como sessão válida, e o `state` do OAuth é forjável. Mitigação manual: B1 + I7 | Sim, até B1 e I7 terem evidência |
-| R3 | Captura automática ligada por padrão | `PRIORA_CAPTURA_PRE_ALERTA=off` impede o laço. Ensaio: sem a variável, o boot percorre as caixas ativas e grava em `email_caixas`; com `off`, nada. Restam caminhos **manuais** fora da flag (G8) | Não, se G2 tiver evidência e G8 estiver decidido |
-| R4 | Escritas no Outlook **fora de qualquer flag** (achado da O2.8) | Qualquer ANALYST, MANAGER ou ADMIN pode, pelo token da caixa (que tem `Mail.Send`): enviar e-mail (`POST /api/emails/send`, também pela página `api-test.html`), criar rascunho de resposta (`POST /api/couriers/reply-draft`) e pedir minuta por rascunho (`POST /api/demurrage/solicitar-minuta`). `PRIORA_LIBERACAO_OUTLOOK_ESCRITA=off` **não** cobre essas rotas | **Sim**, até a decisão G7 |
+| R2 | `SESSION_SECRET` padrão aceito em silêncio | **Corrigido na O2.9.** Com `NODE_ENV=production`, o servidor não sobe se o segredo estiver ausente, for um valor publicado no repositório ou tiver menos de 32 caracteres. O log diz o motivo, nunca o valor. Fora de produção, nada muda. Conferência: B1, B2 e I7 | Não, se B1, B2 e I7 tiverem evidência |
+| R3 | Captura automática ligada por padrão | `PRIORA_CAPTURA_PRE_ALERTA=off` impede o laço. Ensaio: sem a variável, o boot percorre as caixas ativas e grava em `email_caixas`; com `off`, nada. Os caminhos **manuais** fora da flag (backfill e reprocessamento da SI) estão **proibidos** no piloto (G8, conferência C5) | Não, se G2, G8 e C5 tiverem evidência |
+| R4 | Escritas no Outlook fora da flag da Liberação (achado da O2.8) | **Corrigido na O2.9.** Com `PRIORA_ESCRITA_LEGADA_OUTLOOK=off`, o envio de e-mail (`POST /api/emails/send`, também pela página `api-test.html`), o rascunho do Courier (`POST /api/couriers/reply-draft`) e o pedido de minuta (`POST /api/demurrage/solicitar-minuta`) respondem 403 `ESCRITA_LEGADA_OUTLOOK_DESLIGADA` antes da autenticação, do Graph e de qualquer gravação. Sem a variável, tudo segue como antes | Não, se B10, G7 e I8 tiverem evidência |
 | R5 | Rota documentada errada | Corrigida: `POST /api/captura/caixas` | Não |
 
 ## A. Infraestrutura
@@ -45,8 +45,8 @@ Todos ficam no painel do serviço, **nunca** no repositório, em arquivo version
 
 | # | Variável | Regra | Evidência |
 |---|---|---|---|
-| B1 | `SESSION_SECRET` | **Obrigatória e aleatória**, gerada na hora (ex.: `openssl rand -hex 32`, 64 caracteres). **Nunca** o padrão do código (`dev-insecure-secret-change-me`) nem o valor do `.env.example`. O código **não recusa** esses valores: com eles, cookies de sessão e o `state` do OAuth podem ser forjados. Sem a variável, a conferência do Courier também fica `NAO_VERIFICADA`. Ver I7 | definida, com o comprimento conferido, sem expor o valor |
-| B2 | `NODE_ENV=production` | liga o cookie `secure` e o `trust proxy` (HTTPS do host) | definida |
+| B1 | `SESSION_SECRET` | **Obrigatória e aleatória**, gerada na hora (ex.: `openssl rand -hex 32`, 64 caracteres). **Nunca** o padrão do código (`dev-insecure-secret-change-me`) nem o valor do `.env.example`. Com B2, o servidor **recusa a partida** se o segredo estiver ausente, for um desses valores ou tiver menos de 32 caracteres; o log mostra só o motivo (`AUSENTE`, `VALOR_PUBLICO` ou `CURTO`). Sem a variável, a conferência do Courier também fica `NAO_VERIFICADA`. Ver I7 | definida, com o comprimento conferido, sem expor o valor; o serviço subiu |
+| B2 | `NODE_ENV=production`, exatamente assim (minúsculas) | liga o cookie `secure`, o `trust proxy` (HTTPS do host) e a recusa de B1. Outro valor (inclusive `PRODUCTION`) desliga as três | definida |
 | B3 | `DEMURRAGE_DATABASE_URL` | o banco **do piloto**; **sem** `DATABASE_URL` no serviço | `current_database()` conferido |
 | B4 | `PRIORA_TOKEN_CACHE_KEY` | 32 bytes em base64, **exclusiva do piloto**. Sem ela, o cache MSAL fica só em memória, e a caixa precisa ser reconectada a cada reinício | definida |
 | B5 | `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_TENANT_ID`, `AZURE_REDIRECT_URI` | registro de aplicativo do piloto (seção E). Recomendado: `AZURE_TENANT_ID` = o tenant da empresa (não `common`) e "atribuição obrigatória" no aplicativo corporativo, se todas as contas do piloto forem desse tenant | `/auth/entrar` deixa de responder 503 |
@@ -54,6 +54,7 @@ Todos ficam no painel do serviço, **nunca** no repositório, em arquivo version
 | B7 | Chaves de rastreamento (FedEx, DHL, armadores, scraping, CAPTCHA) | **vazias**. FedEx e DHL respondem 503 sem chave. O rastreio por scraping do armador **não depende de chave**: quem o impede é a ausência de dados (C4) | ausentes |
 | B8 | `DATA_DIR` | pasta do serviço (A6) | definida |
 | B9 | `DEMURRAGE_ALERT_TECH_EMAILS`, `DEMURRAGE_ALERT_ORG_EMAILS` | **ausentes**: sem destinatário, nenhum alerta de rastreio da Demurrage é enviado | ausentes |
+| B10 | `PRIORA_ESCRITA_LEGADA_OUTLOOK` | **`off`**: bloqueia o envio de e-mail e os rascunhos legados pela caixa (G7). Ausente ou `on` = comportamento antigo; qualquer outro valor também bloqueia | definida; log do boot (G) e I8 |
 
 ## C. Banco e migrações
 
@@ -62,7 +63,7 @@ Todos ficam no painel do serviço, **nunca** no repositório, em arquivo version
 | C1 | Rodar de uma máquina confiável, apontando **só** para o banco do piloto, com a senha em `PGPASSWORD`: `DEMURRAGE_DATABASE_URL=… npm run db:migrate:demurrage` | saída: todas as migrações aplicadas |
 | C2 | Conferir `SELECT count(*) FROM schema_migrations` = número de arquivos em `src/demurrage-engine/db/migrations` | número igual |
 | C3 | **Nunca** rodar migração com a URL da produção | URL conferida antes de executar |
-| C4 | **Nenhum dado da Demurrage** antes do primeiro boot e a cada semana do piloto. A consulta abaixo deve devolver só zeros | saída da consulta |
+| C4 | **Banco isolado da Demurrage conferido ANTES do primeiro boot**, antes de cada novo boot após manutenção e a cada semana do piloto. A consulta abaixo deve devolver só zeros. Qualquer valor diferente de zero: não subir o serviço | saída da consulta, com data e hora |
 
 ```sql
 SELECT (SELECT count(*) FROM containers)                       AS conteineres,
@@ -72,6 +73,16 @@ SELECT (SELECT count(*) FROM containers)                       AS conteineres,
        (SELECT count(*) FROM ft_divergencia_entregas)          AS avisos_divergencia,
        (SELECT count(*) FROM demurrage_fallback_manual_avisos) AS avisos_fallback,
        (SELECT count(*) FROM demurrage_pos_commit_outbox)      AS pos_commit;
+```
+
+| # | Item | Evidência |
+|---|---|---|
+| C5 | **Nenhum uso dos caminhos manuais da captura** (G8), na mesma rotina de C4. Com a captura desligada, qualquer linha aqui só pode vir do backfill ou do reprocessamento manual da SI. A consulta abaixo deve devolver só zeros | saída da consulta, com data e hora |
+
+```sql
+SELECT (SELECT count(*) FROM si_conversas)             AS conversas_si,
+       (SELECT count(*) FROM si_conversas_descobertas) AS descobertas,
+       (SELECT count(*) FROM si_versoes)               AS versoes_si;
 ```
 
 ## D. Provisionamento (I4)
@@ -111,16 +122,17 @@ Passo a passo completo: [`piloto-provisionamento.md`](piloto-provisionamento.md)
 | G1 | `PRIORA_FATOS_DURAVEIS` | `on` | liga a Liberação (sem ela, as rotas respondem 404) |
 | G2 | `PRIORA_CAPTURA_PRE_ALERTA` | **`off` explícito** | o padrão é **ligado** (só `off` desliga). Sem a variável, o boot já roda a captura: percorre as caixas ativas, lê o Graph e grava em `email_caixas` |
 | G3 | `PRIORA_LIBERACAO_RECONSTRUCAO` | `off` | nada a reconstruir num banco novo |
-| G4 | `PRIORA_LIBERACAO_OUTLOOK_ESCRITA` | `off` | nenhuma escrita no Outlook **pela Liberação documental**. Não cobre as rotas de G7 |
+| G4 | `PRIORA_LIBERACAO_OUTLOOK_ESCRITA` | `off` | nenhuma escrita no Outlook **pela Liberação documental**. É independente de G7: uma não liga nem desliga a outra |
 | G5 | Armador automático | nada a ligar | o produtor não tem nenhum importador no código nem no `dist`. O armador fica `NAO_INTEGRADA` |
 | G6 | Scheduler da Demurrage | ⚠️ **sem interruptor**: sobe com o banco e roda um tick no boot e depois a cada ~1 h | isolamento = C4 (sem dados) + B7 + B9. Conferir no log de cada boot a linha `[demurrage-scheduler] tick …` com `avaliados=0`, `enviadas=0` e `avisos=0/0`. A aba Demurrage do painel não grava nessas tabelas: ela lê a caixa, usa IA (B6) e grava no store legado em arquivo |
-| G7 | Escritas no Outlook **fora de flag**: `POST /api/emails/send` (e a página `/api-test.html`), `POST /api/couriers/reply-draft`, `POST /api/demurrage/solicitar-minuta` | **decisão pendente**: (a) instrução operacional de não usar e conferência diária de Itens Enviados e Rascunhos da caixa; ou (b) a alteração mínima proposta no relatório da O2.8 (flag nova, padrão ligado, piloto `off`), que **precisa de validação** | qualquer membro do piloto envia e-mail ou cria rascunho em nome da caixa. Os botões "Criar rascunho" (Courier) e "Solicitar minuta" (Demurrage) estão na interface |
-| G8 | Caminhos **manuais** da captura fora da flag: backfill (`POST /api/captura/caixas/:id/backfill`, só ADMIN na sessão da caixa) e reprocessamento da Shipping Instructions (`POST /api/processes/:conversationId/shipping-instructions/reprocessar`, qualquer membro não CLIENT) | **decisão pendente**: não usar no piloto, ou aceitar | ambos leem a caixa pelo Graph, podem usar IA (B6) e gravam nas tabelas da SI, mesmo com G2 `off` |
+| G7 | `PRIORA_ESCRITA_LEGADA_OUTLOOK` (B10): envio de e-mail (`POST /api/emails/send` e a página `/api-test.html`), rascunho do Courier (`POST /api/couriers/reply-draft`) e pedido de minuta (`POST /api/demurrage/solicitar-minuta`) | **`off`**; comprovar com I8 | sem a flag, qualquer membro do piloto enviaria e-mail ou criaria rascunho em nome da caixa (o token da caixa tem `Mail.Send`). Com `off`, os botões "Criar rascunho" (Courier) e "Solicitar minuta" (Demurrage) mostram a recusa da API |
+| G8 | Caminhos **manuais** da captura, que nenhuma flag cobre: backfill (`POST /api/captura/caixas/:id/backfill`, só ADMIN na sessão da caixa) e reprocessamento da Shipping Instructions (`POST /api/processes/:conversationId/shipping-instructions/reprocessar`, qualquer membro não CLIENT) | **proibidos no piloto**: instrução às pessoas e conferência C5 | ambos leem a caixa pelo Graph, podem usar IA (B6) e gravam nas tabelas da SI, mesmo com G2 e G7 `off` |
 
 **Conferência após o boot:**
-- o log mostra `captura-pre-alerta desligada` e `liberacao-reconstrucao desligada`;
+- o log mostra `captura-pre-alerta desligada`, `liberacao-reconstrucao desligada` e `escrita-legada-outlook desligada`;
+- o log **não** mostra nenhuma linha `SESSION_SECRET` (se mostrar `recusado`, o serviço não subiu: corrigir B1/B2);
 - o tick da Demurrage sai com tudo zero;
-- a consulta C4 continua só com zeros.
+- as consultas C4 e C5 continuam só com zeros.
 
 ## H. Cadastro institucional
 
@@ -142,11 +154,21 @@ Passo a passo completo: [`piloto-provisionamento.md`](piloto-provisionamento.md)
 | I6 | ANALYST tenta vincular ou trocar a caixa | 403 |
 | I7 | **O servidor não usa o segredo padrão.** Gerar um `state` assinado com o valor **público** do código e chamar o retorno do login. Nenhum segredo real é usado | 400 "Sessão de login expirada". Qualquer outra resposta = `SESSION_SECRET` é o padrão: **não abrir o piloto** |
 
+| I8 | **As três escritas legadas estão bloqueadas.** Chamar as três rotas sem sessão (nada é enviado nem gravado: a recusa vem antes da autenticação) | 403 com `"motivo":"ESCRITA_LEGADA_OUTLOOK_DESLIGADA"` nas três. Um 401 significa que a flag **não** está `off`: **não abrir o piloto** |
+
 Comando de I7 (só usa o valor público do código; troque a URL pela do piloto):
 
 ```bash
 ESTADO=$(node -e "const c=require('crypto');const p=c.randomBytes(16).toString('hex')+'.'+Date.now()+'.pessoa';process.stdout.write(p+'.'+c.createHmac('sha256','dev-insecure-secret-change-me').update(p).digest('hex'))")
 curl -s -o /dev/null -w '%{http_code}\n' "https://<url do piloto>/auth/callback?code=sonda&state=$ESTADO"   # esperado: 400
+```
+
+Comando de I8 (sem sessão e sem segredo; troque a URL pela do piloto):
+
+```bash
+for r in emails/send couriers/reply-draft demurrage/solicitar-minuta; do
+  curl -s -X POST -H 'Content-Type: application/json' --data '{}' "https://<url do piloto>/api/$r"; echo
+done   # esperado, nas três: {"error":"…","motivo":"ESCRITA_LEGADA_OUTLOOK_DESLIGADA"}
 ```
 
 ## J. Reversão
@@ -164,7 +186,8 @@ curl -s -o /dev/null -w '%{http_code}\n' "https://<url do piloto>/auth/callback?
 - uma pessoa vê processo, documento ou cadastro de outra organização;
 - a Liberação afirma uma condição atendida a partir de informação ausente (ex.: "pago", "liberado", "apresentado" sem o fato);
 - um vínculo Processo–Master–House errado é mostrado como fato. Divergência e conflito devem aparecer como exceção;
-- uma escrita externa sem autorização: e-mail enviado ou rascunho criado na caixa a partir da Priora fora do que G7 permitir, ou a captura automática rodando sem ter sido ligada;
+- uma escrita externa sem autorização: e-mail enviado ou rascunho criado na caixa a partir da Priora, qualquer resposta diferente de 403 em I8, ou a captura automática rodando sem ter sido ligada;
+- qualquer linha nas tabelas da consulta C5 (uso de backfill ou reprocessamento manual da SI);
 - qualquer linha nas tabelas da consulta C4, ou um tick da Demurrage com `avaliados`, `enviadas` ou `avisos` diferente de zero;
 - um documento oficial gerado sem cadastro institucional e armador confiáveis;
 - perda de fato já registrado (Courier, Auditoria, vínculo).
@@ -181,3 +204,13 @@ curl -s -o /dev/null -w '%{http_code}\n' "https://<url do piloto>/auth/callback?
 | K6 | Pessoas do piloto conseguem entrar | 100% das declaradas |
 
 **Limitação conhecida, que não reprova:** a maioria dos processos aparece como "não determinável". As fontes de armador, viagem, HeadCargo e e-mails de Wave e emissão não estão integradas. O piloto mede a **correção** do que é mostrado, não a cobertura.
+
+## L. Antes de levar este código a um serviço EXISTENTE (inclusive a produção)
+
+A validação de B1 vale para qualquer serviço com `NODE_ENV=production`. Num serviço que já existe, um segredo ausente ou curto passa a **impedir a partida** no primeiro deploy deste código.
+
+| # | Item | Evidência |
+|---|---|---|
+| L1 | Conferir no painel do serviço, **sem revelar o valor**, que `SESSION_SECRET` existe e tem 32 caracteres ou mais | registro da conferência (quem, quando), sem o valor |
+| L2 | Se não atender: trocar o segredo **antes** do deploy, de forma planejada. Nada troca o segredo automaticamente. A troca encerra todas as sessões (todos entram de novo), invalida logins em andamento (até 15 min) e as linhas do Courier emitidas antes dela | decisão registrada |
+| L3 | `PRIORA_ESCRITA_LEGADA_OUTLOOK` ausente no serviço existente = comportamento de antes. Só definir `off` se for decidido bloquear lá também | decisão registrada |

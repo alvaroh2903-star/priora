@@ -1,5 +1,6 @@
-import { Router } from 'express';
+import { NextFunction, RequestHandler, Response, Router } from 'express';
 import { requireAuth, AuthedRequest } from '../middleware/requireAuth';
+import { exigirEscritaLegadaNoOutlook } from '../middleware/escritaLegadaOutlook';
 import {
   searchLogisticsMessages,
   listRecentSummaries,
@@ -27,10 +28,6 @@ import {
   procKey,
 } from '../demurrage/demurrageStore';
 import { config } from '../config';
-
-export const demurrageRouter = Router();
-
-demurrageRouter.use(requireAuth);
 
 /* ------------------------------------------------------------------ *
  * Helpers
@@ -188,7 +185,7 @@ function moneyOf(cards: DemurrageCard[]): number {
  * GET /api/demurrage — monta a aba inteira a partir do Outlook.
  * ------------------------------------------------------------------ */
 
-demurrageRouter.get('/', async (req: AuthedRequest, res, next) => {
+async function montarAbaDemurrage(req: AuthedRequest, res: Response, next: NextFunction): Promise<void> {
   try {
     const keywords = Array.from(
       new Set([...config.logisticsKeywords, ...DEMURRAGE_KEYWORDS]),
@@ -472,7 +469,7 @@ demurrageRouter.get('/', async (req: AuthedRequest, res, next) => {
   } catch (err) {
     next(err);
   }
-});
+}
 
 /* ------------------------------------------------------------------ *
  * POST /api/demurrage/solicitar-minuta — cria RASCUNHO no Outlook pedindo a
@@ -480,57 +477,75 @@ demurrageRouter.get('/', async (req: AuthedRequest, res, next) => {
  * body: { processo, conversationId, cliente? }
  * ------------------------------------------------------------------ */
 
-demurrageRouter.post('/solicitar-minuta', async (req: AuthedRequest, res, next) => {
-  try {
-    const processo = String(req.body?.processo || '').trim();
-    const conversationId = String(req.body?.conversationId || '').trim();
-    const cliente = String(req.body?.cliente || '').trim();
-    if (!processo) {
-      return res.status(400).json({ error: 'Informe o processo.' });
-    }
+/** Graph e store usados pelo pedido de minuta (injetáveis nos testes; o padrão é o runtime real). */
+export interface GraphMinuta {
+  getConversation: typeof getConversation;
+  getMyAddresses: typeof getMyAddresses;
+  createReplyDraft: typeof createReplyDraft;
+}
 
-    let draft: { id: string; webLink: string | null } | null = null;
-    if (conversationId) {
-      const target = await pickReplyTarget(req.accessToken!, conversationId).catch(
-        () => null,
-      );
-      if (target) {
-        const corpo =
-          `Prezados,\n\n` +
-          `Referente ao processo ${processo}${cliente ? ` (${cliente})` : ''}, ` +
-          `solicitamos gentilmente o envio da minuta de demurrage / nota de débito ` +
-          `para documentarmos a cobrança de sobreestadia dos contêineres.\n\n` +
-          `Desde já agradecemos.`;
-        draft = await createReplyDraft(req.accessToken!, target.id, corpo).catch(
+export interface StoreMinuta {
+  setMinutaSolicitada: typeof setMinutaSolicitada;
+  logAtividade: typeof logAtividade;
+}
+
+function criarHandlerSolicitarMinuta(g: GraphMinuta, store: StoreMinuta): RequestHandler {
+  return async (req: AuthedRequest, res, next) => {
+    try {
+      const processo = String(req.body?.processo || '').trim();
+      const conversationId = String(req.body?.conversationId || '').trim();
+      const cliente = String(req.body?.cliente || '').trim();
+      if (!processo) {
+        return res.status(400).json({ error: 'Informe o processo.' });
+      }
+
+      let draft: { id: string; webLink: string | null } | null = null;
+      if (conversationId) {
+        const target = await pickReplyTarget(g, req.accessToken!, conversationId).catch(
           () => null,
         );
+        if (target) {
+          const corpo =
+            `Prezados,\n\n` +
+            `Referente ao processo ${processo}${cliente ? ` (${cliente})` : ''}, ` +
+            `solicitamos gentilmente o envio da minuta de demurrage / nota de débito ` +
+            `para documentarmos a cobrança de sobreestadia dos contêineres.\n\n` +
+            `Desde já agradecemos.`;
+          draft = await g.createReplyDraft(req.accessToken!, target.id, corpo).catch(
+            () => null,
+          );
+        }
       }
+
+      store.setMinutaSolicitada(processo, draft ? 'draft' : 'manual');
+      store.logAtividade(
+        'minuta_solicitada',
+        'Minuta solicitada',
+        cliente ? `${processo} — ${cliente}` : processo,
+      );
+
+      res.json({
+        ok: true,
+        processo,
+        via: draft ? 'draft' : 'manual',
+        draftId: draft?.id || null,
+        webLink: draft?.webLink || null,
+      });
+    } catch (err) {
+      next(err);
     }
-
-    setMinutaSolicitada(processo, draft ? 'draft' : 'manual');
-    logAtividade(
-      'minuta_solicitada',
-      'Minuta solicitada',
-      cliente ? `${processo} — ${cliente}` : processo,
-    );
-
-    res.json({
-      ok: true,
-      processo,
-      via: draft ? 'draft' : 'manual',
-      draftId: draft?.id || null,
-      webLink: draft?.webLink || null,
-    });
-  } catch (err) {
-    next(err);
-  }
-});
+  };
+}
 
 /** Escolhe a mensagem-alvo para responder (o último e-mail do agente). */
-async function pickReplyTarget(accessToken: string, conversationId: string) {
+async function pickReplyTarget(
+  g: Pick<GraphMinuta, 'getConversation' | 'getMyAddresses'>,
+  accessToken: string,
+  conversationId: string,
+) {
   const [msgs, myAddrs] = await Promise.all([
-    getConversation(accessToken, conversationId, { top: 50 }),
-    getMyAddresses(accessToken),
+    g.getConversation(accessToken, conversationId, { top: 50 }),
+    g.getMyAddresses(accessToken),
   ]);
   if (msgs.length === 0) return null;
   const mine = new Set(myAddrs);
@@ -645,3 +660,29 @@ function derivarAtividades(cards: DemurrageCard[]) {
   }
   return out;
 }
+
+/* ------------------------------------------------------------------ *
+ * Router (dependências injetáveis nos testes; o padrão é o runtime real)
+ * ------------------------------------------------------------------ */
+
+export interface DemurrageRouterDeps {
+  auth?: RequestHandler;
+  graph?: Partial<GraphMinuta>;
+  store?: Partial<StoreMinuta>;
+  /** Escrita legada no Outlook (`PRIORA_ESCRITA_LEGADA_OUTLOOK`); padrão: lida do ambiente a cada requisição. */
+  escritaLegada?: () => boolean;
+}
+
+export function criarDemurrageRouter(deps: DemurrageRouterDeps = {}): Router {
+  const router = Router();
+  const g: GraphMinuta = { getConversation, getMyAddresses, createReplyDraft, ...(deps.graph || {}) };
+  const store: StoreMinuta = { setMinutaSolicitada, logAtividade, ...(deps.store || {}) };
+  // O pedido de minuta (rascunho no Outlook) é conferido ANTES da autenticação: desligado, nada mais roda.
+  router.post('/solicitar-minuta', exigirEscritaLegadaNoOutlook(deps.escritaLegada));
+  router.use(deps.auth ?? requireAuth);
+  router.get('/', montarAbaDemurrage);
+  router.post('/solicitar-minuta', criarHandlerSolicitarMinuta(g, store));
+  return router;
+}
+
+export const demurrageRouter = criarDemurrageRouter();

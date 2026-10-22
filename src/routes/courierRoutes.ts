@@ -1,5 +1,6 @@
 import { RequestHandler, Router } from 'express';
 import { requireAuth, AuthedRequest } from '../middleware/requireAuth';
+import { exigirEscritaLegadaNoOutlook } from '../middleware/escritaLegadaOutlook';
 import { GatilhosLiberacao, gatilhosLiberacaoPadrao } from '../liberacao/aplicacao';
 import {
   searchLogisticsMessages,
@@ -1042,6 +1043,8 @@ export interface CourierRouterDeps {
   segredoLinha?: () => string | null;
   /** L2: recálculo da Liberação depois de um fato durável gravado (só no ramo durável). */
   liberacao?: GatilhosLiberacao;
+  /** Escrita legada no Outlook (`PRIORA_ESCRITA_LEGADA_OUTLOOK`); padrão: lida do ambiente a cada requisição. */
+  escritaLegada?: () => boolean;
 }
 
 /** Resposta de uma escrita durável, sem expor nada além do resultado. */
@@ -1060,6 +1063,8 @@ function erroDuravel(err: unknown): { status: number; error: string } | null {
 
 export function criarCourierRouter(deps: CourierRouterDeps = {}): Router {
   const router = Router();
+  // O rascunho no Outlook é conferido ANTES da autenticação: desligado, nada mais roda.
+  router.post('/reply-draft', exigirEscritaLegadaNoOutlook(deps.escritaLegada));
   router.use(deps.auth ?? requireAuth);
   const g: GraphCourier = { ...GRAPH_PADRAO, ...(deps.graph || {}) };
   const iaConfigurada = deps.ia?.configurada ?? isAiConfigured;
