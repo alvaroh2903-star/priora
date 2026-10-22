@@ -11,7 +11,7 @@ Prepara, num banco **exclusivo do piloto**, a organização, as pessoas e os pap
 | Cria a organização (`organizations`), por `slug` | Remover, renomear ou trocar papel (divergência = conflito) |
 | Cria as pessoas (`usuarios`) e as memberships (`organization_memberships`) com o papel **declarado** | Criar papel por padrão, ADMIN implícito ou CLIENT |
 | Grava o vínculo **explícito** da conta Microsoft (`usuarios.home_account_id`) quando ele ainda está vazio | Gravar o vínculo de conta de quem já é membro de **outra** organização |
-| Confere a situação da caixa declarada (pendente, vinculada, pausada, de outra organização) | Vincular a caixa (é da rota `POST /api/captura`, pela própria conta da caixa, ADMIN) |
+| Confere a situação da caixa declarada (pendente, vinculada, pausada, de outra organização) | Vincular a caixa (é da rota `POST /api/captura/caixas`, pela própria conta da caixa, ADMIN) |
 | Simula por padrão; aplica tudo ou nada, numa transação | Deixar estado parcial: qualquer erro desfaz tudo |
 
 Reexecutar o mesmo manifesto não muda nada. Acrescentar ao manifesto só cria o que falta.
@@ -59,7 +59,7 @@ Guarde o manifesto real **fora do repositório**: ele tem nomes e e-mails.
 
 4. **Caixa monitorada.**
    - Na Priora do piloto, conecte a conta Microsoft da caixa.
-   - Vincule a caixa à organização (`POST /api/captura`), logado como essa conta, que é a ADMIN declarada.
+   - Vincule a caixa à organização (`POST /api/captura/caixas`, corpo `{ "organizationId": "<id da organização>" }`), na mesma sessão em que a conta da caixa foi conectada. Essa conta é a ADMIN declarada.
    - Reexecute o passo 2: a caixa deve aparecer como `VINCULADA`.
 
 5. **Pessoas.** Cada pessoa sem conta tenta entrar e informa o identificador. Acrescente-o ao manifesto e repita os passos 2 e 3.
