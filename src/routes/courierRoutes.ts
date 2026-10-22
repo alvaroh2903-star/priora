@@ -1,4 +1,5 @@
 import { RequestHandler, Router } from 'express';
+import { mapLimit } from '../browser/carriers/concurrency';
 import { requireAuth, AuthedRequest } from '../middleware/requireAuth';
 import { exigirEscritaLegadaNoOutlook } from '../middleware/escritaLegadaOutlook';
 import { GatilhosLiberacao, gatilhosLiberacaoPadrao } from '../liberacao/aplicacao';
@@ -384,16 +385,15 @@ async function buildCourierView(accessToken: string, g: GraphCourier = GRAPH_PAD
     // ela (nunca penduramos o request inteiro por causa de um anexo).
     const withAtt = messages.filter((m) => m.hasAttachments).slice(0, 25);
     const attMap = new Map<string, string>();
-    await Promise.all(
-      withAtt.map(async (m) => {
-        const texts = await withTimeout(
-          g.getItemAttachmentTexts(accessToken, m.id),
-          8000,
-          'itemAttachment',
-        ).catch(() => [] as string[]);
-        if (texts.length) attMap.set(m.id, texts.join('\n\n'));
-      }),
-    );
+    // No máximo 5 e-mails por vez (antes: os 25 juntos).
+    await mapLimit(withAtt, 5, async (m) => {
+      const texts = await withTimeout(
+        g.getItemAttachmentTexts(accessToken, m.id),
+        8000,
+        'itemAttachment',
+      ).catch(() => [] as string[]);
+      if (texts.length) attMap.set(m.id, texts.join('\n\n'));
+    });
 
     // Texto completo por e-mail: assunto + corpo inteiro + e-mails anexados.
     const fullTextOf = (m: LogisticsSummary): string =>
@@ -1174,24 +1174,25 @@ export function criarCourierRouter(deps: CourierRouterDeps = {}): Router {
 
         // E-mails encaminhados como ANEXO: injeta o conteúdo do e-mail aninhado no
         // corpo, para a Clara ler o que foi encaminhado (senão fica invisível).
-        await Promise.all(
-          messages
-            .filter((m) => m.hasAttachments)
-            .map(async (m) => {
-              const texts = await withTimeout(
-                g.getItemAttachmentTexts(req.accessToken!, m.id),
-                8000,
-                'itemAttachment',
-              ).catch(() => [] as string[]);
-              if (texts.length) {
-                const extra =
-                  '\n\n--- E-mail encaminhado (anexo) ---\n' + texts.join('\n\n');
-                m.body = {
-                  contentType: m.body?.contentType || 'text',
-                  content: (m.body?.content || '') + extra,
-                };
-              }
-            }),
+        // No máximo 5 e-mails por vez (antes: todos os da conversa juntos).
+        await mapLimit(
+          messages.filter((m) => m.hasAttachments),
+          5,
+          async (m) => {
+            const texts = await withTimeout(
+              g.getItemAttachmentTexts(req.accessToken!, m.id),
+              8000,
+              'itemAttachment',
+            ).catch(() => [] as string[]);
+            if (texts.length) {
+              const extra =
+                '\n\n--- E-mail encaminhado (anexo) ---\n' + texts.join('\n\n');
+              m.body = {
+                contentType: m.body?.contentType || 'text',
+                content: (m.body?.content || '') + extra,
+              };
+            }
+          },
         );
 
         const analysis = await analisar(messages);
