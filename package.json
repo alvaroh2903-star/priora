@@ -26,7 +26,8 @@
     "test:l11a": "TS_NODE_PREFER_TS_EXTS=true node --test-concurrency=1 -r ts-node/register --test src/liberacao/aplicacao/__tests__/l11a.test.ts",
     "test:g3": "TS_NODE_PREFER_TS_EXTS=true node --test-concurrency=1 -r ts-node/register --test src/liberacao/aplicacao/__tests__/g3.test.ts",
     "test:g3c": "TS_NODE_PREFER_TS_EXTS=true node --test-concurrency=1 -r ts-node/register --test src/liberacao/aplicacao/__tests__/g3c.test.ts",
-    "test:armador": "TS_NODE_PREFER_TS_EXTS=true node --test-concurrency=1 -r ts-node/register --test src/auditoria/parser/__tests__/*.test.ts src/liberacao/aplicacao/__tests__/armadorDoMaster.test.ts"
+    "test:armador": "TS_NODE_PREFER_TS_EXTS=true node --test-concurrency=1 -r ts-node/register --test src/auditoria/parser/__tests__/*.test.ts src/liberacao/aplicacao/__tests__/armadorDoMaster.test.ts",
+    "test:i1": "TS_NODE_PREFER_TS_EXTS=true node --test-concurrency=1 -r ts-node/register --test src/auditoria/ocr/__tests__/*.test.ts src/auditoria/fatos/__tests__/leiturasDocumentais.test.ts src/liberacao/aplicacao/__tests__/fontesPosteriores.test.ts"
   },
   "keywords": [
     "outlook",
