@@ -31,6 +31,12 @@ export async function organizacaoDoProcesso(pool: Pool, processoId: string): Pro
   return rows[0]?.organization_id ?? null;
 }
 
+/** Processo do contêiner (isolamento já conferido pela rota) — só para disparar a avaliação de encerramento depois de uma ação. */
+export async function processoDoContainer(pool: Pool, containerId: string): Promise<string | null> {
+  const { rows } = await pool.query(`SELECT processo_id FROM containers WHERE id = $1`, [containerId]);
+  return rows[0]?.processo_id ?? null;
+}
+
 export async function organizacaoDaMinuta(pool: Pool, minutaId: string): Promise<string | null> {
   const { rows } = await pool.query(
     `SELECT c.organization_id FROM minutas m JOIN containers c ON c.id = m.container_id WHERE m.id = $1`,

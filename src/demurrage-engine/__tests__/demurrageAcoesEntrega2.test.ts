@@ -16,6 +16,11 @@ import { ClosingService } from '../closing/closingService';
 import { seedArmadorTables } from '../tariffs/seed/armadorTables';
 import { criarDemurrageAcoesRouter } from '../../routes/demurrageAcoesRoutes';
 import { containerContrato, contratoRegistro, ingerirTrackingDoContainer, numeroContainer, o, resultadoTracking } from './registroDemurrageHelpers';
+import { documentoDeTeste } from './minutaTestHelper';
+import { novoMembro } from './responsabilidadeTestHelper';
+
+/** Produção P1 (correção de minuta): o registro exige o documento (referência auditável). Fixo — retries idênticos mantêm o mesmo hash. */
+const DOC_E2 = documentoDeTeste('entrega2-documento-fixo');
 
 /**
  * Produção P1 (Entrega 2) — suíte de aceitação das rotas internas de ação
@@ -401,7 +406,7 @@ test('Entrega 2 #15: restrição NAO_APLICAVEL (achado D11 v1.1) permanece prese
  * 16-18 — minutas
  * ========================================================================= */
 
-test('Entrega 2 #16: registro de minuta usa o caminho oficial (ClosingService.registrarMinuta) e exige Idempotency-Key', { skip: !url }, async () => {
+test('Entrega 2 #16: registro de minuta usa o caminho oficial (ClosingService.registrarMinuta) e exige Idempotency-Key — e, desde a correção P1, o documento', { skip: !url }, async () => {
   const pool = testPool();
   const app = await subirApp(pool);
   try {
@@ -410,22 +415,36 @@ test('Entrega 2 #16: registro de minuta usa o caminho oficial (ClosingService.re
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const { containerId, numero } = await processoComRelogios(pool, org.id, 'IM-E2-16', 'ECQL');
 
-    const semChave = await post(app.base, `/containers/${containerId}/minutas`, { numeroInformado: numero, dataInformada: '2026-09-10' }, home);
+    const semChave = await post(app.base, `/containers/${containerId}/minutas`, { documento: DOC_E2, numeroInformado: numero, dataInformada: '2026-09-10' }, home);
     assert.equal(semChave.status, 400);
 
     const res = await fetch(`${app.base}/containers/${containerId}/minutas`, {
       method: 'POST', headers: { 'content-type': 'application/json', 'x-test-home-account-id': home, 'idempotency-key': randomUUID() },
-      body: JSON.stringify({ numeroInformado: numero, dataInformada: '2026-09-10' }),
+      body: JSON.stringify({ documento: DOC_E2, numeroInformado: numero, dataInformada: '2026-09-10' }),
     });
     assert.equal(res.status, 201);
     const body = await res.json();
-    assert.equal(body.estado, 'RECEBIDA');
+    // Produção P1: o aceite técnico acontece no próprio registro — a minuta
+    // coerente com a devolução do tracking (2026-09-10) nasce ACEITA (antes:
+    // RECEBIDA aguardando validação de gestor, regra que deixou de valer).
+    assert.equal(body.estado, 'ACEITA');
     const { rows } = await pool.query(`SELECT recebida_por AS "recebidoPor" FROM minutas WHERE id = $1`, [body.minutaId]);
     assert.ok(rows[0]);
+    const semDocumento = await fetch(`${app.base}/containers/${containerId}/minutas`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-test-home-account-id': home, 'idempotency-key': randomUUID() },
+      body: JSON.stringify({ numeroInformado: numero, dataInformada: '2026-09-10' }),
+    });
+    assert.equal(semDocumento.status, 400);
+    assert.equal((await semDocumento.json()).error, 'documento_obrigatorio');
   } finally { await app.close(); await pool.end(); }
 });
 
-test('Entrega 2 #17/#18: validação de minuta usa o closingService; divergência preserva as DUAS evidências', { skip: !url }, async () => {
+test('Entrega 2 #17/#18 (reescrito na correção P1): divergência preserva as DUAS evidências — tracking oficial, minuta registrada, pendência do analista; não há validação por gestor', { skip: !url }, async () => {
+  // Produção P1 (correção de minuta): as expectativas antigas — "validação é
+  // MANAGER/ADMIN", "aceitarDivergencia troca a devolução efetiva pela data
+  // da minuta" — deixaram de valer: não existe aprovação humana de minuta e
+  // a devolução oficial é a do tracking. A garantia que este teste guardava
+  // (as duas evidências preservadas, retry nunca duplica auditoria) continua.
   const pool = testPool();
   const app = await subirApp(pool);
   try {
@@ -436,39 +455,33 @@ test('Entrega 2 #17/#18: validação de minuta usa o closingService; divergênci
     const { containerId, numero } = await processoComRelogios(pool, org.id, 'IM-E2-1718', 'ECQM');
 
     // Minuta com data DIFERENTE do tracking_return_date (2026-09-10) -> divergência.
-    const reg = await fetch(`${app.base}/containers/${containerId}/minutas`, {
-      method: 'POST', headers: { 'content-type': 'application/json', 'x-test-home-account-id': homeAnalyst, 'idempotency-key': randomUUID() },
-      body: JSON.stringify({ numeroInformado: numero, dataInformada: '2026-09-12' }),
+    const chave = randomUUID();
+    const registrar = () => fetch(`${app.base}/containers/${containerId}/minutas`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-test-home-account-id': homeAnalyst, 'idempotency-key': chave },
+      body: JSON.stringify({ documento: DOC_E2, numeroInformado: numero, dataInformada: '2026-09-12' }),
     });
-    const { minutaId } = await reg.json();
+    const reg = await registrar();
+    assert.equal(reg.status, 201);
+    const corpo = await reg.json();
+    assert.equal(corpo.estado, 'DIVERGENTE');
+    assert.equal(corpo.pendencia, 'minuta_divergente_tracking');
 
-    const rejeitadaPorAnalista = await post(app.base, `/minutas/${minutaId}/validar`, {}, homeAnalyst);
-    assert.equal(rejeitadaPorAnalista.status, 403, 'validação é MANAGER/ADMIN — ANALYST não pode');
-
-    const divergente = await post(app.base, `/minutas/${minutaId}/validar`, {}, homeManager);
-    assert.equal(divergente.status, 200);
-    const bodyDiv = await divergente.json();
-    assert.equal(bodyDiv.resultado, 'divergencia_pendente');
+    for (const home of [homeAnalyst, homeManager]) {
+      const v = await post(app.base, `/minutas/${corpo.minutaId}/validar`, { aceitarDivergencia: true }, home);
+      assert.equal(v.status, 410, 'não existe validação/aceite de divergência por ninguém');
+    }
 
     const { rows: container } = await pool.query(`SELECT tracking_return_date AS "trackingReturnDate", effective_return_date AS "effectiveReturnDate" FROM containers WHERE id = $1`, [containerId]);
-    assert.equal(container[0].trackingReturnDate, '2026-09-10', 'tracking preservado');
-    assert.equal(container[0].effectiveReturnDate, null, 'ainda não aceita — nenhuma das duas fontes é descartada');
+    assert.equal(container[0].trackingReturnDate, '2026-09-10', 'tracking preservado e oficial');
+    assert.equal(container[0].effectiveReturnDate, null, 'a minuta nunca vira a devolução');
+    const { rows: m } = await pool.query(`SELECT data_informada, data_tracking_comparada FROM minutas WHERE id = $1`, [corpo.minutaId]);
+    assert.deepEqual(m[0], { data_informada: '2026-09-12', data_tracking_comparada: '2026-09-10' }, 'as DUAS evidências ficam na minuta');
 
-    const aceita = await post(app.base, `/minutas/${minutaId}/validar`, { aceitarDivergencia: true }, homeManager);
-    assert.equal(aceita.status, 200);
-    assert.equal((await aceita.json()).resultado, 'validada');
-    const { rows: container2 } = await pool.query(`SELECT tracking_return_date AS "trackingReturnDate", effective_return_date AS "effectiveReturnDate" FROM containers WHERE id = $1`, [containerId]);
-    assert.equal(container2[0].trackingReturnDate, '2026-09-10', 'tracking AINDA preservado mesmo depois da aceitação');
-    assert.equal(container2[0].effectiveReturnDate, '2026-09-12', 'a minuta validada agora é a devolução efetiva');
-
-    // Retry idempotente: minuta já VALIDADA — a Entrega 2 v1.2 move essa
-    // guarda definitiva para dentro do próprio ClosingService.validarMinuta
-    // (achado #2 da auditoria de v1.2); a rota não faz mais pré-leitura, só
-    // traduz o resultado típado `ja_validada` que o serviço devolve.
-    const retry = await post(app.base, `/minutas/${minutaId}/validar`, { aceitarDivergencia: true }, homeManager);
+    // Retry idempotente (mesma chave, mesmo corpo): mesma minuta, nenhum evento novo.
+    const retry = await registrar();
     assert.equal(retry.status, 200);
-    assert.equal((await retry.json()).resultado, 'ja_validada');
-    const { rows: eventos } = await pool.query(`SELECT count(*)::int n FROM closing_events WHERE container_id = $1 AND tipo_evento = 'MINUTA_VALIDADA'`, [containerId]);
+    assert.equal((await retry.json()).minutaId, corpo.minutaId);
+    const { rows: eventos } = await pool.query(`SELECT count(*)::int n FROM closing_events WHERE container_id = $1 AND tipo_evento = 'MINUTA_DIVERGENTE'`, [containerId]);
     assert.equal(eventos[0].n, 1, 'retry nunca duplica o evento de auditoria');
   } finally { await app.close(); await pool.end(); }
 });
@@ -655,7 +668,7 @@ test('Entrega 2 #26: duas requisições concorrentes com a MESMA Idempotency-Key
     const chave = randomUUID();
     const chamar = () => fetch(`${app.base}/containers/${containerId}/minutas`, {
       method: 'POST', headers: { 'content-type': 'application/json', 'x-test-home-account-id': home, 'idempotency-key': chave },
-      body: JSON.stringify({ numeroInformado: numero, dataInformada: '2026-09-10' }),
+      body: JSON.stringify({ documento: DOC_E2, numeroInformado: numero, dataInformada: '2026-09-10' }),
     });
     const [r1, r2] = await Promise.all([chamar(), chamar()]);
     const [b1, b2] = await Promise.all([r1.json(), r2.json()]);

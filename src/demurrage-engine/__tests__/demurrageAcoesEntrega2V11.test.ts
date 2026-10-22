@@ -17,6 +17,11 @@ import { seedArmadorTables } from '../tariffs/seed/armadorTables';
 import { criarDemurrageAcoesRouter } from '../../routes/demurrageAcoesRoutes';
 import { containerContrato, contratoRegistro, ingerirTrackingDoContainer, numeroContainer, o, resultadoTracking } from './registroDemurrageHelpers';
 import { registrarMinutaIdempotente } from '../acoes/minutaIdempotencia';
+import { documentoDeTeste } from './minutaTestHelper';
+import { novoMembro } from './responsabilidadeTestHelper';
+
+/** Produção P1 (correção de minuta): o registro exige o documento (referência auditável). Fixo — retries idênticos mantêm o mesmo hash. */
+const DOC_E2 = documentoDeTeste('entrega2-documento-fixo');
 
 /**
  * Produção P1 (Entrega 2 v1.1) — suíte de aceitação da CORRETIVA exigida
@@ -158,7 +163,7 @@ test('v1.1 #3: retry idêntico (mesmo contêiner/número/data/evidência) devolv
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const { containerId, numero } = await processoComRelogios(pool, org.id, 'IM-V11-03', 'ECRA');
     const chave = randomUUID();
-    const corpo = { numeroInformado: numero, dataInformada: '2026-09-10', evidenciaRef: 'evid://v11-03' };
+    const corpo = { documento: DOC_E2, numeroInformado: numero, dataInformada: '2026-09-10', evidenciaRef: 'evid://v11-03' };
 
     const r1 = await post(app.base, `/containers/${containerId}/minutas`, corpo, home, { 'idempotency-key': chave });
     assert.equal(r1.status, 201);
@@ -185,10 +190,10 @@ test('v1.1 #4: mesma chave com OUTRO contêiner conflita (idempotency_key_reutil
     const { containerId: c2, numero: n2 } = await processoComRelogios(pool, org.id, 'IM-V11-04B', 'ECRC');
     const chave = randomUUID();
 
-    const r1 = await post(app.base, `/containers/${c1}/minutas`, { numeroInformado: n1, dataInformada: '2026-09-10', evidenciaRef: 'e1' }, home, { 'idempotency-key': chave });
+    const r1 = await post(app.base, `/containers/${c1}/minutas`, { documento: DOC_E2, numeroInformado: n1, dataInformada: '2026-09-10', evidenciaRef: 'e1' }, home, { 'idempotency-key': chave });
     assert.equal(r1.status, 201);
 
-    const r2 = await post(app.base, `/containers/${c2}/minutas`, { numeroInformado: n2, dataInformada: '2026-09-10', evidenciaRef: 'e1' }, home, { 'idempotency-key': chave });
+    const r2 = await post(app.base, `/containers/${c2}/minutas`, { documento: DOC_E2, numeroInformado: n2, dataInformada: '2026-09-10', evidenciaRef: 'e1' }, home, { 'idempotency-key': chave });
     assert.equal(r2.status, 409);
     assert.equal((await r2.json()).error, 'idempotency_key_reutilizada');
 
@@ -207,10 +212,10 @@ test('v1.1 #5: mesma chave com OUTRO número informado conflita, zero escrita no
     const { containerId, numero } = await processoComRelogios(pool, org.id, 'IM-V11-05', 'ECRD');
     const chave = randomUUID();
 
-    const r1 = await post(app.base, `/containers/${containerId}/minutas`, { numeroInformado: numero, dataInformada: '2026-09-10', evidenciaRef: 'e' }, home, { 'idempotency-key': chave });
+    const r1 = await post(app.base, `/containers/${containerId}/minutas`, { documento: DOC_E2, numeroInformado: numero, dataInformada: '2026-09-10', evidenciaRef: 'e' }, home, { 'idempotency-key': chave });
     assert.equal(r1.status, 201);
 
-    const r2 = await post(app.base, `/containers/${containerId}/minutas`, { numeroInformado: 'OUTRO999', dataInformada: '2026-09-10', evidenciaRef: 'e' }, home, { 'idempotency-key': chave });
+    const r2 = await post(app.base, `/containers/${containerId}/minutas`, { documento: DOC_E2, numeroInformado: 'OUTRO999', dataInformada: '2026-09-10', evidenciaRef: 'e' }, home, { 'idempotency-key': chave });
     assert.equal(r2.status, 409);
     assert.equal((await r2.json()).error, 'idempotency_key_reutilizada');
 
@@ -229,10 +234,10 @@ test('v1.1 #6: mesma chave com OUTRA data informada conflita, zero escrita nova'
     const { containerId, numero } = await processoComRelogios(pool, org.id, 'IM-V11-06', 'ECRE');
     const chave = randomUUID();
 
-    const r1 = await post(app.base, `/containers/${containerId}/minutas`, { numeroInformado: numero, dataInformada: '2026-09-10', evidenciaRef: 'e' }, home, { 'idempotency-key': chave });
+    const r1 = await post(app.base, `/containers/${containerId}/minutas`, { documento: DOC_E2, numeroInformado: numero, dataInformada: '2026-09-10', evidenciaRef: 'e' }, home, { 'idempotency-key': chave });
     assert.equal(r1.status, 201);
 
-    const r2 = await post(app.base, `/containers/${containerId}/minutas`, { numeroInformado: numero, dataInformada: '2026-09-11', evidenciaRef: 'e' }, home, { 'idempotency-key': chave });
+    const r2 = await post(app.base, `/containers/${containerId}/minutas`, { documento: DOC_E2, numeroInformado: numero, dataInformada: '2026-09-11', evidenciaRef: 'e' }, home, { 'idempotency-key': chave });
     assert.equal(r2.status, 409);
     assert.equal((await r2.json()).error, 'idempotency_key_reutilizada');
 
@@ -251,10 +256,10 @@ test('v1.1 #7: mesma chave com OUTRA evidência conflita, zero escrita nova', { 
     const { containerId, numero } = await processoComRelogios(pool, org.id, 'IM-V11-07', 'ECRF');
     const chave = randomUUID();
 
-    const r1 = await post(app.base, `/containers/${containerId}/minutas`, { numeroInformado: numero, dataInformada: '2026-09-10', evidenciaRef: 'evid://original' }, home, { 'idempotency-key': chave });
+    const r1 = await post(app.base, `/containers/${containerId}/minutas`, { documento: DOC_E2, numeroInformado: numero, dataInformada: '2026-09-10', evidenciaRef: 'evid://original' }, home, { 'idempotency-key': chave });
     assert.equal(r1.status, 201);
 
-    const r2 = await post(app.base, `/containers/${containerId}/minutas`, { numeroInformado: numero, dataInformada: '2026-09-10', evidenciaRef: 'evid://outra' }, home, { 'idempotency-key': chave });
+    const r2 = await post(app.base, `/containers/${containerId}/minutas`, { documento: DOC_E2, numeroInformado: numero, dataInformada: '2026-09-10', evidenciaRef: 'evid://outra' }, home, { 'idempotency-key': chave });
     assert.equal(r2.status, 409);
     assert.equal((await r2.json()).error, 'idempotency_key_reutilizada');
 
@@ -272,7 +277,7 @@ test('v1.1 #8: duas requisições CONCORRENTES IDÊNTICAS de minuta criam exatam
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const { containerId, numero } = await processoComRelogios(pool, org.id, 'IM-V11-08', 'ECRG');
     const chave = randomUUID();
-    const corpo = { numeroInformado: numero, dataInformada: '2026-09-10', evidenciaRef: 'evid://concorrente' };
+    const corpo = { documento: DOC_E2, numeroInformado: numero, dataInformada: '2026-09-10', evidenciaRef: 'evid://concorrente' };
     const chamar = () => post(app.base, `/containers/${containerId}/minutas`, corpo, home, { 'idempotency-key': chave });
 
     const [r1, r2] = await Promise.all([chamar(), chamar()]);
@@ -296,8 +301,8 @@ test('v1.1 #9: duas requisições CONCORRENTES CONFLITANTES de minuta (mesma cha
     const chave = randomUUID();
 
     const [r1, r2] = await Promise.all([
-      post(app.base, `/containers/${containerId}/minutas`, { numeroInformado: numero, dataInformada: '2026-09-10', evidenciaRef: 'e' }, home, { 'idempotency-key': chave }),
-      post(app.base, `/containers/${containerId}/minutas`, { numeroInformado: numero, dataInformada: '2026-09-11', evidenciaRef: 'e' }, home, { 'idempotency-key': chave }),
+      post(app.base, `/containers/${containerId}/minutas`, { documento: DOC_E2, numeroInformado: numero, dataInformada: '2026-09-10', evidenciaRef: 'e' }, home, { 'idempotency-key': chave }),
+      post(app.base, `/containers/${containerId}/minutas`, { documento: DOC_E2, numeroInformado: numero, dataInformada: '2026-09-11', evidenciaRef: 'e' }, home, { 'idempotency-key': chave }),
     ]);
     const statuses = [r1.status, r2.status].sort();
     assert.deepEqual(statuses, [201, 409], 'exatamente um vencedor (201) e um conflito (409) — nunca dois sucessos, nunca dois conflitos');
@@ -318,7 +323,7 @@ test('v1.1 #10: falha injetada ANTES do commit não deixa minuta nem chave bem-s
     const chave = randomUUID();
     const entrada = {
       organizationId: org.id, containerId, numeroInformado: numero, dataInformada: '2026-09-10', evidenciaRef: 'e',
-      recebidaPor: usuarioId, idempotenciaRota: 'registrar_minuta', idempotenciaChave: chave,
+      membershipId: await membershipIdPorHome(pool, home), documento: DOC_E2, hoje: '2026-10-01', idempotenciaRota: 'registrar_minuta', idempotenciaChave: chave,
     };
 
     await assert.rejects(() => registrarMinutaIdempotente(pool, entrada, {
@@ -346,7 +351,7 @@ test('v1.1 #11: retry depois do COMMIT (simulando um crash do chamador que não 
     const chave = randomUUID();
     const entrada = {
       organizationId: org.id, containerId, numeroInformado: numero, dataInformada: '2026-09-10', evidenciaRef: 'e',
-      recebidaPor: usuarioId, idempotenciaRota: 'registrar_minuta', idempotenciaChave: chave,
+      membershipId: await membershipIdPorHome(pool, home), documento: DOC_E2, hoje: '2026-10-01', idempotenciaRota: 'registrar_minuta', idempotenciaChave: chave,
     };
 
     const r1 = await registrarMinutaIdempotente(pool, entrada);
@@ -374,7 +379,7 @@ test('v1.1 #12: não há janela de duplo-write — a identidade de idempotência
     const chave = randomUUID();
     const entrada = {
       organizationId: org.id, containerId, numeroInformado: numero, dataInformada: '2026-09-10', evidenciaRef: 'e',
-      recebidaPor: usuarioId, idempotenciaRota: 'registrar_minuta', idempotenciaChave: chave,
+      membershipId: await membershipIdPorHome(pool, home), documento: DOC_E2, hoje: '2026-10-01', idempotenciaRota: 'registrar_minuta', idempotenciaChave: chave,
     };
     const r = await registrarMinutaIdempotente(pool, entrada);
     assert.ok(r.ok);
@@ -413,7 +418,7 @@ test('v1.1 #13: chave LEGADA (gravada na tabela genérica 0042, sem hash) é rej
       [org.id, membershipId, chaveLegada],
     );
 
-    const r = await post(app.base, `/containers/${containerId}/minutas`, { numeroInformado: numero, dataInformada: '2026-09-10', evidenciaRef: 'e' }, home, { 'idempotency-key': chaveLegada });
+    const r = await post(app.base, `/containers/${containerId}/minutas`, { documento: DOC_E2, numeroInformado: numero, dataInformada: '2026-09-10', evidenciaRef: 'e' }, home, { 'idempotency-key': chaveLegada });
     assert.equal(r.status, 409);
     assert.equal((await r.json()).error, 'idempotency_key_legado_sem_hash');
 
@@ -435,8 +440,8 @@ test('v1.1 #14: a MESMA chave textual em organizações DIFERENTES nunca interfe
     const { containerId: cB, numero: nB } = await processoComRelogios(pool, orgB.id, 'IM-V11-14B', 'ECRN');
     const chave = randomUUID();
 
-    const rA = await post(app.base, `/containers/${cA}/minutas`, { numeroInformado: nA, dataInformada: '2026-09-10', evidenciaRef: 'e' }, homeA, { 'idempotency-key': chave });
-    const rB = await post(app.base, `/containers/${cB}/minutas`, { numeroInformado: nB, dataInformada: '2026-09-10', evidenciaRef: 'e' }, homeB, { 'idempotency-key': chave });
+    const rA = await post(app.base, `/containers/${cA}/minutas`, { documento: DOC_E2, numeroInformado: nA, dataInformada: '2026-09-10', evidenciaRef: 'e' }, homeA, { 'idempotency-key': chave });
+    const rB = await post(app.base, `/containers/${cB}/minutas`, { documento: DOC_E2, numeroInformado: nB, dataInformada: '2026-09-10', evidenciaRef: 'e' }, homeB, { 'idempotency-key': chave });
     assert.equal(rA.status, 201);
     assert.equal(rB.status, 201, 'a mesma chave textual numa organização DIFERENTE nunca conflita');
 
@@ -595,26 +600,28 @@ test('v1.1 #20: decisão de responsabilidade — retry CONCORRENTE não cria uma
   } finally { await app.close(); await pool.end(); }
 });
 
-test('v1.1 #21: validação de minuta — duas chamadas CONCORRENTES na mesma minuta RECEBIDA nunca duplicam o evento de validação', { skip: !url }, async () => {
+test('v1.1 #21 (P1): registro de minuta — duas requisições CONCORRENTES no mesmo contêiner (chaves diferentes) nunca duplicam aceite nem deixam duas vigentes', { skip: !url }, async () => {
+  // Produção P1 (correção de minuta): a rota de validação por gestor foi
+  // removida (o aceite técnico acontece no registro). A garantia original
+  // deste teste — concorrência na mesma minuta nunca duplica o evento de
+  // aceite — é reprovada sobre o fluxo que a substituiu: dois registros
+  // simultâneos no MESMO contêiner são serializados pelo lock do processo.
   const pool = testPool();
   const app = await subirApp(pool);
   try {
     await setup(pool);
     const org = await criarOrg(pool, 'v11-21');
     const homeAnalyst = await usuarioInterno(pool, org.id, 'ANALYST');
-    const homeManager = await usuarioInterno(pool, org.id, 'MANAGER');
     const { containerId, numero } = await processoComRelogios(pool, org.id, 'IM-V11-21', 'ECRT');
-    const reg = await post(app.base, `/containers/${containerId}/minutas`, { numeroInformado: numero, dataInformada: '2026-09-10', evidenciaRef: 'e' }, homeAnalyst, { 'idempotency-key': randomUUID() });
-    const { minutaId } = await reg.json();
+    const registrar = () => post(app.base, `/containers/${containerId}/minutas`, { documento: DOC_E2, numeroInformado: numero, dataInformada: '2026-09-10', evidenciaRef: 'e' }, homeAnalyst, { 'idempotency-key': randomUUID() });
+    const [r1, r2] = await Promise.all([registrar(), registrar()]);
+    assert.deepEqual([r1.status, r2.status], [201, 201], 'chaves diferentes = duas operações lógicas, ambas aplicadas em série');
 
-    const chamar = () => post(app.base, `/minutas/${minutaId}/validar`, {}, homeManager);
-    const [r1, r2] = await Promise.all([chamar(), chamar()]);
-    assert.ok([r1.status, r2.status].every((s) => s === 200), 'ambas as respostas são 200 — a segunda é um resultado idempotente, nunca um erro');
-
-    const { rows } = await pool.query(`SELECT count(*)::int n FROM closing_events WHERE container_id = $1 AND tipo_evento = 'MINUTA_VALIDADA'`, [containerId]);
-    assert.equal(rows[0].n, 1, 'exatamente UM evento MINUTA_VALIDADA — a serialização por minutaId impediu a duplicação');
-    const { rows: minutas } = await pool.query(`SELECT estado_minuta FROM minutas WHERE id = $1`, [minutaId]);
-    assert.equal(minutas[0].estado_minuta, 'VALIDADA');
+    const { rows } = await pool.query(`SELECT count(*)::int n FROM closing_events WHERE container_id = $1 AND tipo_evento = 'MINUTA_ACEITA'`, [containerId]);
+    assert.equal(rows[0].n, 2, 'um aceite por minuta registrada — nunca duplicado dentro de uma mesma minuta');
+    const { rows: minutas } = await pool.query(`SELECT estado_minuta, substituida_por_id FROM minutas WHERE container_id = $1 ORDER BY versao`, [containerId]);
+    assert.deepEqual(minutas.map((m) => m.estado_minuta), ['SUBSTITUIDA', 'ACEITA']);
+    assert.equal(minutas.filter((m) => m.substituida_por_id === null).length, 1, 'exatamente uma vigente');
   } finally { await app.close(); await pool.end(); }
 });
 
@@ -700,7 +707,7 @@ test('v1.1 #25: migração limpa 0001→0045 aplica em ordem e reexecutar é um 
     assert.ok(r1.applied.includes('0045_leitura_operacional_indices.sql'));
     assert.ok(r1.applied.includes('0046_leitura_operacional_pendencias_por_processo.sql'));
     assert.ok(r1.applied.includes('0047_handoff_controle_capacidade.sql'));
-    assert.equal(r1.applied[r1.applied.length - 1], '0047_handoff_controle_capacidade.sql');
+    assert.equal(r1.applied[r1.applied.length - 1], '0048_minuta_aceite_tecnico_encerramento_automatico.sql');
     const r2 = await runMigrations(pool);
     assert.deepEqual(r2.applied, [], 'reexecutar não reaplica nada');
   } finally { await pool.end(); }

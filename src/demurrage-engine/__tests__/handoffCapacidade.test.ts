@@ -929,7 +929,7 @@ test('capacidade #22/#23: migration 0047 em banco limpo e em upgrade a partir da
     // Banco limpo.
     await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
     const limpa = await runMigrations(pool);
-    assert.equal(limpa.applied[limpa.applied.length - 1], MIGRATION_0047);
+    assert.ok(limpa.applied.includes(MIGRATION_0047));
     const { rows: objs } = await pool.query(
       `SELECT (SELECT count(*) FROM pg_proc WHERE proname = 'demurrage_handoff_capacidade_admitir')::int AS funcao,
               (SELECT count(*) FROM pg_constraint WHERE conname = 'demurrage_handoff_credenciais_id_org_unique')::int AS unica,
@@ -955,11 +955,13 @@ test('capacidade #22/#23: migration 0047 em banco limpo e em upgrade a partir da
       `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE' AND table_name <> 'schema_migrations' ORDER BY table_name`,
     )).rows.map((x) => x.table_name as string);
     const antes = await impressaoDigital(pool, tabelasAntes);
-    const upgrade = await runMigrations(pool);
+    // Escopo deste teste: a fronteira 0046 → 0047 (migrations posteriores — ex.:
+    // 0048 da correção de minuta — têm o seu próprio teste de upgrade).
+    const upgrade = await runMigrations(pool, { until: MIGRATION_0047 });
     assert.deepEqual(upgrade.applied, [MIGRATION_0047], 'o upgrade aplica só a 0047');
     assert.equal(await impressaoDigital(pool, tabelasAntes), antes, 'nenhuma linha pré-existente mudou');
     const depoisUpgrade = await impressaoDigital(pool);
-    const rerun = await runMigrations(pool);
+    const rerun = await runMigrations(pool, { until: MIGRATION_0047 });
     assert.deepEqual(rerun.applied, [], 'reexecução é no-op');
     assert.equal(await impressaoDigital(pool), depoisUpgrade, 'a reexecução não muda nada');
 

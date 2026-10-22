@@ -16,13 +16,21 @@
  *  - `ft_divergencias` (reconhecer/resolver divergência de Free Time —
  *    diagnóstico P1 §3 item 4b, marcado "não obrigatório nesta entrega").
  *
- * Os 14 tipos abaixo são o conjunto COMPLETO e atual da restrição CHECK de
- * `demurrage_pendencias.tipo` (migration 0036) — todos passam pela MESMA
+ * Os 14 tipos abaixo são o conjunto da restrição CHECK de
+ * `demurrage_pendencias.tipo` da migration 0036 — todos passam pela MESMA
  * governança (`resolverPendenciaManual`: motivo obrigatório, autor validado
  * contra `organization_memberships`, resolução idempotente/append-only).
  * Nenhum deles ganha um comportamento especial aqui — o catálogo só prova
  * que a lista é FECHADA e documentada, nunca "qualquer tipo que o chamador
  * mandar".
+ *
+ * Produção P1 (correção de minuta, migration 0048): os dois tipos novos —
+ * `minuta_inconsistente` e `minuta_divergente_tracking` — ficam
+ * DELIBERADAMENTE FORA deste catálogo. Eles espelham o estado da minuta
+ * vigente; só se resolvem (automaticamente) quando o analista registra uma
+ * minuta substituta coerente. Resolvê-los "à mão" deixaria a pendência
+ * resolvida com a minuta ainda DIVERGENTE/INCONSISTENTE — o encerramento
+ * continuaria bloqueado pela minuta, e a fila mostraria um estado falso.
  */
 export const FAMILIAS_PENDENCIA_SUPORTADAS = ['demurrage_pendencia'] as const;
 export type FamiliaPendencia = (typeof FAMILIAS_PENDENCIA_SUPORTADAS)[number];

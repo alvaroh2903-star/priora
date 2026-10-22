@@ -479,9 +479,47 @@ export interface ContagemPorTipo {
   porTipo: Record<string, number>;
 }
 
+/**
+ * Produção P1 (reabertura controlada) — estado de ENCERRAMENTO no contrato.
+ * O encerramento é automático; `bloqueio` é o resultado da última avaliação
+ * automática (motivo do gate + contêiner), `null` quando o processo está
+ * FINAL ou ainda não foi avaliado. Informativo — a decisão é sempre do gate
+ * no momento da avaliação, nunca desta leitura.
+ */
+export interface EncerramentoLeitura {
+  modo: 'automatico';
+  bloqueio: { motivo: string; containerId: string | null } | null;
+  avaliadoEm: string | null;
+}
+
+/** Monta o bloco `encerramento` a partir das colunas de `processos` (0048) — mesma regra na fila e no detalhe. */
+export function encerramentoDoProcesso(row: {
+  apuracao_status: string; encerramento_bloqueio?: string | null; encerramento_bloqueio_container_id?: string | null; encerramento_avaliado_em?: unknown;
+}): EncerramentoLeitura {
+  const bloqueio = row.apuracao_status === 'OPEN' && row.encerramento_bloqueio
+    ? { motivo: row.encerramento_bloqueio, containerId: row.encerramento_bloqueio_container_id ?? null }
+    : null;
+  return { modo: 'automatico', bloqueio, avaliadoEm: isoTimestamp(row.encerramento_avaliado_em ?? null) };
+}
+
+/** Seleção explícita por situação da apuração. Padrão `OPEN`: processo FINAL nunca entra na fila ativa. */
+export type SituacaoApuracaoFiltro = 'OPEN' | 'FINAL' | 'TODOS';
+
+/**
+ * Escopo das listas organizacionais (fila, `/filtros`, `/minutas`). Enquanto
+ * não existir fila pessoal (identidade por sessão — ver diagnóstico de
+ * autenticação no relatório da correção P1), toda lista é a FILA DA EQUIPE:
+ * nunca "ações aguardando você".
+ */
+export const ESCOPO_FILA_DA_EQUIPE = 'fila_da_equipe' as const;
+
 export interface FilaItemV1 {
   contrato: typeof CONTRATO_FILA_ITEM_V1;
   processo: { id: string; numero: string | null };
+  /** Situação da apuração do processo (Produção P1) — FINAL só aparece com filtro explícito. */
+  apuracaoStatus: 'OPEN' | 'FINAL';
+  fechadoEm: string | null;
+  encerramento: EncerramentoLeitura;
   cliente: { id: string; nome: string } | null;
   house: string | null;
   mbl: string | null;
@@ -511,6 +549,10 @@ export interface FilaItemV1 {
 
 export interface FilaRespostaV1 {
   contrato: typeof CONTRATO_LEITURA_V1;
+  /** Sempre a fila da EQUIPE (organização) — não existe fila pessoal ainda. */
+  escopo: typeof ESCOPO_FILA_DA_EQUIPE;
+  /** Situação da apuração aplicada (padrão OPEN — processos FINAL fora da fila ativa). */
+  apuracaoStatus: SituacaoApuracaoFiltro;
   itens: FilaItemV1[];
   total: number;
   cursor: string | null;
@@ -535,13 +577,24 @@ export interface ContainerDetalheV1 {
   gateOut: string | null;
   minutas: Array<{
     id: string;
+    /** RECEBIDA | ACEITA | DIVERGENTE | INCONSISTENTE | SUBSTITUIDA; VALIDADA/REJEITADA só em linha legada. */
     estado: string;
     numeroInformado: string | null;
     dataInformada: string | null;
+    /** LEGADO — data aprovada por gestor no fluxo antigo; sempre null no aceite técnico. */
     dataValidada: string | null;
     divergenteDoTracking: boolean;
+    /** Motivo técnico (INCONSISTENTE) ou da rejeição humana LEGADA (REJEITADA). */
     motivoRejeicao: string | null;
     criadoEm: string;
+    /** Produção P1 — aceite técnico automático. */
+    legado: boolean;
+    vigente: boolean;
+    versao: number | null;
+    substituidaPorId: string | null;
+    dataTrackingComparada: string | null;
+    aguardando: 'DEVOLUCAO_TRACKING' | 'DESCARGA' | null;
+    documento: { id: string; nomeArquivo: string; tipoConteudo: string; tamanhoBytes: number; hashConteudo: string } | null;
   }>;
   trackingAtualizadoEm: string | null;
   falhaTrackingAtiva: boolean;
@@ -571,7 +624,9 @@ export interface ProcessoDetalheV1 {
   agregadoFinanceiro: AgregadoFinanceiroLeitura;
   /** Marco futuro mais próximo entre todos os contêineres/relógios do processo (DV-05). null quando não há nenhum. */
   proximoVencimento: ProximoVencimentoLeitura | null;
-  fechamento: { realizadoPor: string | null; justificativa: string | null; em: string } | null;
+  fechamento: { realizadoPor: string | null; justificativa: string | null; em: string; origem: 'automatico' | 'humano' } | null;
+  /** Produção P1 — encerramento automático (resultado da última avaliação). */
+  encerramento: EncerramentoLeitura;
   reaberturas: Array<{ id: string; estado: string; solicitadaPor: string | null; autorizadaPor: string | null; justificativa: string | null; criadoEm: string }>;
 }
 
@@ -609,6 +664,11 @@ export interface TimelineRespostaV1 {
 
 export interface FiltrosDisponiveisV1 {
   contrato: typeof CONTRATO_LEITURA_V1;
+  escopo: typeof ESCOPO_FILA_DA_EQUIPE;
+  /** Situação da apuração a que as opções e contagens abaixo se referem (padrão OPEN). */
+  apuracaoStatus: SituacaoApuracaoFiltro;
+  /** Totais por situação — o "Finalizados (n)" de um filtro explícito, sem misturar com a fila ativa. */
+  apuracao: { abertos: number; finalizados: number };
   responsaveis: Array<{ membershipId: string; nome: string }>;
   clientes: Array<{ id: string; nome: string }>;
   armadores: Array<{ id: string; codigo: string; nome: string }>;
@@ -672,10 +732,12 @@ export interface FiltroFila {
   periodoFim?: CivilDate;
   busca?: string;
   incluirSilenciosos: boolean;
+  /** Produção P1 — padrão OPEN (fila ativa); FINAL/TODOS só por filtro explícito. */
+  apuracaoStatus: SituacaoApuracaoFiltro;
 }
 
 export function filtroFilaVazio(): FiltroFila {
-  return { periodoCampo: 'descarga', incluirSilenciosos: false };
+  return { periodoCampo: 'descarga', incluirSilenciosos: false, apuracaoStatus: 'OPEN' };
 }
 
 /**

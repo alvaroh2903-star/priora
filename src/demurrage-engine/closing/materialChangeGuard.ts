@@ -327,7 +327,11 @@ export const CHAMADORES_AUDITADOS_COM_CLIENT: Readonly<Record<
     },
     {
       arquivo: 'src/demurrage-engine/closing/closingService.ts',
-      descricao: 'finalizarProcesso e validarMinuta — lockProcesso já adquirido no passo 2 de cada uma, antes do FOR UPDATE em processos/containers e antes desta chamada.',
+      descricao: 'encerrarSeElegivel (núcleo único do encerramento automático e do acionamento administrativo finalizarProcesso) — lockProcesso adquirido logo após o BEGIN, antes do FOR UPDATE em processos/containers e antes desta chamada. (validarMinuta foi removido na correção de minuta da Produção P1.)',
+    },
+    {
+      arquivo: 'src/demurrage-engine/closing/minutaTecnica.ts',
+      descricao: 'limparDevolucaoLegadaSubstituida (devolução efetiva LEGADA perde a base quando a minuta legada que a sustentava foi substituída) — chamada por registrarMinutaTecnica (passo 11; lockProcesso no passo 2, antes do FOR UPDATE em processos/containers/minutas) e por reavaliarMinutasComClient (chamador detém lockProcesso + processo FOR UPDATE: reavaliarMinutasDoProcesso, ClosingService.encerrarSeElegivel e ClosingService.autorizarReabertura; contêineres FOR UPDATE antes desta chamada).',
     },
   ],
   recalcularApuracaoProcessoComClient: [

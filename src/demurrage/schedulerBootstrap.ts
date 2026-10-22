@@ -21,6 +21,7 @@ import {
   processarAvisosPendenciaPendentes, AvisoPendenciaTransport,
 } from '../demurrage-engine/registro/notificacaoPendencia';
 import { criarAvisoPendenciaTransportGraph } from './avisoPendenciaTransportGraph';
+import { varrerEncerramentoAutomatico, ResultadoVarreduraEncerramento } from '../demurrage-engine/closing/encerramentoAutomatico';
 
 export interface TickDeps {
   pool: Pool;
@@ -35,13 +36,21 @@ export interface TickDeps {
   /** D15-B v1.1 — transporte dos avisos de pendência (R07/R08; ausente → entregas ficam PENDING, reprocessáveis). */
   avisoPendenciaTransport?: AvisoPendenciaTransport;
   /** D10 v1.3 / D15-B v1.1 — limites por ciclo das etapas de manutenção. */
-  limites?: { posCommit?: number; avisosFallback?: number; avisosPendencia?: number };
+  limites?: { posCommit?: number; avisosFallback?: number; avisosPendencia?: number; encerramento?: number };
   /** SÓ TESTE: substitui o consumidor da etapa (ex.: simular falha da etapa inteira). */
   processarPosCommit?: typeof processarPosCommitOutboxPendentes;
   /** SÓ TESTE: substitui o consumidor da etapa (ex.: simular falha da etapa inteira). */
   processarAvisosFallback?: typeof processarAvisosFallbackManualPendentes;
   /** SÓ TESTE: substitui o consumidor da etapa (ex.: simular falha da etapa inteira). */
   processarAvisosPendencia?: typeof processarAvisosPendenciaPendentes;
+  /** SÓ TESTE: substitui a varredura de encerramento automático (ex.: simular falha da etapa inteira). */
+  varrerEncerramento?: typeof varrerEncerramentoAutomatico;
+}
+
+/** Produção P1 — contadores da varredura de encerramento automático (rede de segurança). */
+export interface EtapaEncerramentoResultado extends ResultadoVarreduraEncerramento {
+  /** Erro da etapa inteira (isolada — nunca derruba o tick). */
+  erro: string | null;
 }
 
 /** Contadores da etapa de reparo automático do pós-commit do registro (D10 v1.3). */
@@ -136,6 +145,21 @@ async function etapaAvisosFallback(deps: TickDeps, workerId: string): Promise<Et
  * fronteira de erro — uma falha aqui nunca impede tracking, calendário,
  * claims nem qualquer outra etapa/outbox deste tick.
  */
+/**
+ * Produção P1 — varredura de encerramento AUTOMÁTICO (rede de segurança dos
+ * gatilhos por ação/fato). Isolada como as demais etapas de manutenção:
+ * nunca lança, roda mesmo se uma etapa anterior falhou, com o MESMO `hoje`.
+ */
+async function etapaEncerramento(deps: TickDeps, hoje: CivilDate): Promise<EtapaEncerramentoResultado> {
+  try {
+    const r = await (deps.varrerEncerramento ?? varrerEncerramentoAutomatico)(deps.pool, { hoje, limite: deps.limites?.encerramento ?? 200 });
+    return { ...r, erro: null };
+  } catch (e) {
+    console.error('[demurrage-scheduler] etapa encerramento falhou (isolada):', mensagemErro(e));
+    return { avaliados: 0, finalizados: 0, bloqueados: 0, falhas: 0, erro: mensagemErro(e) };
+  }
+}
+
 async function etapaAvisosPendencia(deps: TickDeps, workerId: string): Promise<EtapaAvisosPendenciaResultado> {
   const vazio = { reivindicadas: 0, enviadas: 0, falhadas: 0, possePerdida: 0 };
   if (!deps.avisoPendenciaTransport) {
@@ -182,6 +206,8 @@ export interface TickResultado {
   avisosFallback: EtapaAvisosFallbackResultado;
   /** D15-B v1.1 — avisos de pendência aos gestores (R07/R08). */
   avisosPendencia: EtapaAvisosPendenciaResultado;
+  /** Produção P1 — varredura de encerramento automático. */
+  encerramento: EtapaEncerramentoResultado;
 }
 
 /**
@@ -194,7 +220,7 @@ export async function executarTickDemurrage(deps: TickDeps, hojeInjetado?: Civil
   const hoje = hojeInjetado ?? hojeOperacional(); // fuso local, nunca UTC.
   const workerId = deps.workerId ?? `tick-${process.pid}`;
   // Etapas existentes: INALTERADAS (mesma ordem, mesma propagação de erro).
-  let base: Omit<TickResultado, 'posCommit' | 'avisosFallback' | 'avisosPendencia'> | null = null;
+  let base: Omit<TickResultado, 'posCommit' | 'avisosFallback' | 'avisosPendencia' | 'encerramento'> | null = null;
   let erroBase: unknown = null;
   try {
     const cal = await passagemDoCalendario(deps.pool, hoje);
@@ -226,8 +252,11 @@ export async function executarTickDemurrage(deps: TickDeps, hojeInjetado?: Civil
   const posCommit = await etapaPosCommit(deps, hoje, workerId);
   const avisosFallback = await etapaAvisosFallback(deps, workerId);
   const avisosPendencia = await etapaAvisosPendencia(deps, workerId);
+  // Produção P1 — encerramento automático: DEPOIS de tracking/recálculos/reparos
+  // do tick, para avaliar o estado mais recente; fronteira de erro própria.
+  const encerramento = await etapaEncerramento(deps, hoje);
   if (erroBase) throw erroBase; // comportamento pré-existente preservado: o tick reporta o erro ao laço
-  return { ...base!, posCommit, avisosFallback, avisosPendencia };
+  return { ...base!, posCommit, avisosFallback, avisosPendencia, encerramento };
 }
 
 /** Linha de log de um tick (inclui os contadores das etapas da D10 v1.3). */
@@ -249,7 +278,10 @@ export function formatarLogTick(t: TickResultado): string {
       `avisos-pendencia: reivindicadas=${t.avisosPendencia.reivindicadas} enviadas=${t.avisosPendencia.enviadas} ` +
       `falhadas=${t.avisosPendencia.falhadas} possePerdida=${t.avisosPendencia.possePerdida} ` +
       `restantes=${t.avisosPendencia.restantes ?? '?'} esgotadas=${t.avisosPendencia.esgotadas ?? '?'}` +
-      `${t.avisosPendencia.erro ? ` ERRO=${t.avisosPendencia.erro}` : ''}`
+      `${t.avisosPendencia.erro ? ` ERRO=${t.avisosPendencia.erro}` : ''} | ` +
+      `encerramento: avaliados=${t.encerramento.avaliados} finalizados=${t.encerramento.finalizados} ` +
+      `bloqueados=${t.encerramento.bloqueados} falhas=${t.encerramento.falhas}` +
+      `${t.encerramento.erro ? ` ERRO=${t.encerramento.erro}` : ''}`
   );
 }
 

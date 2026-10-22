@@ -123,6 +123,22 @@ const DEFINICOES: Record<string, DefinicaoTipoPendencia> = {
       { campo: 'fonteNova', rotulo: 'Fonte nova', valor: strOuNull(c.fonteNova) },
     ],
   },
+  // Produção P1 — pendências da minuta (resolvidas registrando uma minuta substituta coerente).
+  minuta_divergente_tracking: {
+    rotulo: 'Minuta diverge da devolução do tracking',
+    mapear: (c) => [
+      { campo: 'minutaId', rotulo: 'Minuta', valor: strOuNull(c.minutaId) },
+      { campo: 'dataMinuta', rotulo: 'Data na minuta', valor: valorSimples(c.dataMinuta) },
+      { campo: 'dataTracking', rotulo: 'Devolução oficial (tracking)', valor: valorSimples(c.dataTracking) },
+    ],
+  },
+  minuta_inconsistente: {
+    rotulo: 'Minuta inconsistente',
+    mapear: (c) => [
+      { campo: 'minutaId', rotulo: 'Minuta', valor: strOuNull(c.minutaId) },
+      { campo: 'motivo', rotulo: 'Motivo técnico', valor: strOuNull(c.motivo) },
+    ],
+  },
   free_time_ausente: {
     rotulo: 'Free Time ausente',
     mapear: (c) => [

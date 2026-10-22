@@ -17,7 +17,13 @@ import { seedArmadorTables } from '../tariffs/seed/armadorTables';
 import { criarDemurrageAcoesRouter } from '../../routes/demurrageAcoesRoutes';
 import { containerContrato, contratoRegistro, ingerirTrackingDoContainer, numeroContainer, o, resultadoTracking } from './registroDemurrageHelpers';
 import { registrarMinutaIdempotente } from '../acoes/minutaIdempotencia';
+import { reavaliarMinutasDoProcesso } from '../closing/minutaTecnica';
 import { normalizarIdempotencyKey, IdempotencyKeyInvalida } from '../acoes/idempotencyKey';
+import { documentoDeTeste } from './minutaTestHelper';
+import { novoMembro } from './responsabilidadeTestHelper';
+
+/** Produção P1 (correção de minuta): o registro exige o documento (referência auditável). Fixo — retries idênticos mantêm o mesmo hash. */
+const DOC_E2 = documentoDeTeste('entrega2-documento-fixo');
 
 /**
  * Produção P1 (Entrega 2 v1.2) — suíte de aceitação da corretiva FINAL de
@@ -145,13 +151,14 @@ test('v1.2 #1: identidade de idempotência com a organização CORRETA do contê
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const { containerId, numero } = await processoComRelogios(pool, org.id, 'IM-V12-01', 'ECSA');
 
-    const r1 = await post(app.base, `/containers/${containerId}/minutas`, { numeroInformado: numero, dataInformada: '2026-09-10' }, home, { 'idempotency-key': randomUUID() });
+    const r1 = await post(app.base, `/containers/${containerId}/minutas`, { documento: DOC_E2, numeroInformado: numero, dataInformada: '2026-09-10' }, home, { 'idempotency-key': randomUUID() });
     assert.equal(r1.status, 201);
 
     const containerId2 = await containerCru(pool, org.id, numeroContainer('ECSB', 1));
     const direto = await registrarMinutaIdempotente(pool, {
       organizationId: org.id, containerId: containerId2, numeroInformado: null, dataInformada: null, evidenciaRef: null,
-      recebidaPor: null, idempotenciaRota: 'registrar_minuta', idempotenciaChave: randomUUID(),
+      membershipId: await novoMembro(pool, org.id, 'ANALYST'), documento: DOC_E2, hoje: '2026-10-01',
+      idempotenciaRota: 'registrar_minuta', idempotenciaChave: randomUUID(),
     });
     assert.ok(direto.ok, `organização correta deveria ser aceita (${JSON.stringify(direto)})`);
   } finally { await app.close(); await pool.end(); }
@@ -191,10 +198,14 @@ test('v1.2 #3: chamada direta ao adaptador (fora da rota) com organização DIFE
     // A rota HTTP confere organizacaoDoContainer ANTES de chamar o adaptador;
     // este teste prova que, mesmo SEM essa checagem de rota, o banco por si
     // só recusa — a garantia não depende de nenhum chamador lembrar de checar.
+    // Membership REAL de A (o ator é resolvido na organização do contêiner); a
+    // identidade de idempotência diz B — é o BANCO que recusa a mistura.
+    const membroA = await novoMembro(pool, orgA.id, 'ANALYST');
     await assert.rejects(
       () => registrarMinutaIdempotente(pool, {
         organizationId: orgB.id, containerId: containerIdA, numeroInformado: null, dataInformada: null, evidenciaRef: null,
-        recebidaPor: null, idempotenciaRota: 'registrar_minuta', idempotenciaChave: randomUUID(),
+        membershipId: membroA, documento: DOC_E2, hoje: '2026-10-01',
+        idempotenciaRota: 'registrar_minuta', idempotenciaChave: randomUUID(),
       }),
       /minutas_idempotencia_organizacao_do_container|foreign key/,
     );
@@ -248,7 +259,7 @@ test('v1.2 #5: banco novo — migração limpa 0001→0044 cria a FK composta e 
   try {
     await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
     const r = await runMigrations(pool);
-    assert.equal(r.applied[r.applied.length - 1], '0047_handoff_controle_capacidade.sql');
+    assert.equal(r.applied[r.applied.length - 1], '0048_minuta_aceite_tecnico_encerramento_automatico.sql');
 
     const { rows: fk } = await pool.query(
       `SELECT 1 FROM pg_constraint WHERE conname = 'minutas_idempotencia_organizacao_do_container'`,
@@ -303,94 +314,92 @@ test('v1.2 #6: upgrade 0043→0044 aplica sobre um banco com minutas idempotente
 
 /* ========================================================================= *
  * 7-12 — achado #2: guarda definitiva de já-processada DENTRO do serviço.
+ *
+ * Produção P1 (correção de minuta): `ClosingService.validarMinuta` e a rota
+ * `POST /minutas/:id/validar` (aprovação de MANAGER/ADMIN) foram REMOVIDOS —
+ * a regra de produto mudou: o aceite é técnico e automático, no registro e
+ * na reavaliação quando os fatos mudam. As expectativas antigas (uma
+ * "validação efetiva" + réplica `ja_validada`/`ja_rejeitada`) deixaram de
+ * valer porque não existe mais decisão humana a proteger. A GARANTIA de
+ * fundo do achado #2 — o serviço, chamado direto e em concorrência, nunca
+ * reprocessa nem duplica efeito — é reprovada aqui sobre o que a substituiu.
  * ========================================================================= */
 
-test('v1.2 #7: duas chamadas CONCORRENTES a ClosingService.validarMinuta (sem rota, sem lock de rota) produzem exatamente UMA validação efetiva', { skip: !url }, async () => {
+test('v1.2 #7 (P1): duas reavaliações CONCORRENTES da mesma minuta (sem rota, sem lock de rota) produzem exatamente UM aceite técnico', { skip: !url }, async () => {
   const pool = testPool();
   try {
     await setup(pool);
     const org = await criarOrg(pool, 'v12-07');
-    const home = await usuarioInterno(pool, org.id, 'MANAGER');
+    const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const membershipId = await membershipIdPorHome(pool, home);
-    const { containerId, numero } = await processoComRelogios(pool, org.id, 'IM-V12-07', 'ECSF');
+    const { processoId, containerId, numero } = await processoComRelogios(pool, org.id, 'IM-V12-07', 'ECSF');
     const svc = new ClosingService(pool);
-    const m = await svc.registrarMinuta({ containerId, numeroInformado: numero, dataInformada: '2026-09-10' });
-
-    const [r1, r2] = await Promise.all([
-      svc.validarMinuta({ minutaId: m.id, membershipId, config: cfg }),
-      svc.validarMinuta({ minutaId: m.id, membershipId, config: cfg }),
-    ]);
-
-    const validadas = [r1, r2].filter((r) => (r as any).ok && (r as any).resultado === 'validada');
-    const jaValidadas = [r1, r2].filter((r) => (r as any).ok && (r as any).resultado === 'ja_validada');
-    assert.equal(validadas.length, 1, `exatamente UMA validação efetiva (${JSON.stringify([r1, r2])})`);
-    assert.equal(jaValidadas.length, 1, 'a outra chamada recebe uma réplica idempotente típada, nunca reprocessa');
-    assert.deepEqual(
-      { dataValidada: (jaValidadas[0] as any).dataValidada, divergente: (jaValidadas[0] as any).divergente },
-      { dataValidada: (validadas[0] as any).dataValidada, divergente: (validadas[0] as any).divergente },
-      'a réplica idempotente devolve exatamente o mesmo resultado decidido pela validação efetiva',
+    const r = await svc.registrarMinuta({ containerId, membershipId, numeroInformado: numero, dataInformada: '2026-09-10', documento: DOC_E2, config: cfg });
+    assert.ok(r.ok && r.minuta.estado === 'ACEITA');
+    // Simula "registrada antes do tracking" (RECEBIDA aguardando a devolução) — o caso em que a reavaliação decide.
+    await pool.query(
+      `UPDATE minutas SET estado_minuta = 'RECEBIDA', aguardando = 'DEVOLUCAO_TRACKING', data_tracking_comparada = NULL,
+              fatos_avaliacao = jsonb_build_object('tracking', NULL, 'descarga', '2026-09-01', 'gateOut', NULL) WHERE id = $1`,
+      [r.ok && r.minuta.id],
     );
+    const antes = (await pool.query(`SELECT count(*)::int n FROM closing_events WHERE container_id = $1 AND tipo_evento = 'MINUTA_ACEITA'`, [containerId])).rows[0].n;
 
-    const { rows: eventos } = await pool.query(`SELECT count(*)::int n FROM closing_events WHERE container_id = $1 AND tipo_evento = 'MINUTA_VALIDADA'`, [containerId]);
-    assert.equal(eventos[0].n, 1, 'exatamente UM evento MINUTA_VALIDADA — nunca duplicado por concorrência direta no serviço');
-    const { rows: recalc } = await pool.query(`SELECT count(*)::int n FROM closing_events WHERE container_id = $1 AND tipo_evento = 'RECALCULO'`, [containerId]);
-    assert.equal(recalc[0].n, 1, 'exatamente UM efeito de recálculo — a réplica idempotente nunca recalcula');
-    const { rows: minutaFinal } = await pool.query(`SELECT estado_minuta FROM minutas WHERE id = $1`, [m.id]);
-    assert.equal(minutaFinal[0].estado_minuta, 'VALIDADA');
+    const [a, b] = await Promise.all([
+      reavaliarMinutasDoProcesso(pool, processoId, cfg.hoje),
+      reavaliarMinutasDoProcesso(pool, processoId, cfg.hoje),
+    ]);
+    assert.equal(a.reavaliadas + b.reavaliadas, 1, `exatamente UMA reavaliação efetiva (${JSON.stringify([a, b])})`);
+    const depois = (await pool.query(`SELECT count(*)::int n FROM closing_events WHERE container_id = $1 AND tipo_evento = 'MINUTA_ACEITA'`, [containerId])).rows[0].n;
+    assert.equal(depois - antes, 1, 'exatamente UM evento de aceite — nunca duplicado por concorrência direta no serviço');
+    assert.equal((await pool.query(`SELECT estado_minuta FROM minutas WHERE container_id = $1`, [containerId])).rows[0].estado_minuta, 'ACEITA');
   } finally { await pool.end(); }
 });
 
-test('v1.2 #8: chamada direta repetida numa minuta já VALIDADA é um no-op estrito (sem novo evento, sem novo recálculo)', { skip: !url }, async () => {
+test('v1.2 #8 (P1): reavaliação repetida de uma minuta já ACEITA é um no-op estrito (sem UPDATE, sem evento, sem recálculo)', { skip: !url }, async () => {
   const pool = testPool();
   try {
     await setup(pool);
     const org = await criarOrg(pool, 'v12-08');
-    const home = await usuarioInterno(pool, org.id, 'MANAGER');
+    const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const membershipId = await membershipIdPorHome(pool, home);
-    const { containerId, numero } = await processoComRelogios(pool, org.id, 'IM-V12-08', 'ECSG');
+    const { processoId, containerId, numero } = await processoComRelogios(pool, org.id, 'IM-V12-08', 'ECSG');
     const svc = new ClosingService(pool);
-    const m = await svc.registrarMinuta({ containerId, numeroInformado: numero, dataInformada: '2026-09-10' });
+    const r = await svc.registrarMinuta({ containerId, membershipId, numeroInformado: numero, dataInformada: '2026-09-10', documento: DOC_E2, config: cfg });
+    assert.ok(r.ok && r.minuta.estado === 'ACEITA');
+    const linhaAntes = (await pool.query(`SELECT atualizado_em, avaliada_em FROM minutas WHERE container_id = $1`, [containerId])).rows[0];
+    const eventosAntes = (await pool.query(`SELECT count(*)::int n FROM closing_events WHERE container_id = $1`, [containerId])).rows[0].n;
 
-    const r1 = await svc.validarMinuta({ minutaId: m.id, membershipId, config: cfg });
-    assert.equal((r1 as any).resultado, 'validada');
+    for (let i = 0; i < 3; i++) assert.deepEqual(await reavaliarMinutasDoProcesso(pool, processoId, cfg.hoje), { reavaliadas: 0 });
 
-    const r2 = await svc.validarMinuta({ minutaId: m.id, membershipId, config: cfg });
-    assert.deepEqual(r2, { ok: true, resultado: 'ja_validada', dataValidada: (r1 as any).dataValidada, divergente: (r1 as any).divergente });
-
-    const r3 = await svc.validarMinuta({ minutaId: m.id, membershipId, config: cfg, aceitarDivergencia: true });
-    assert.equal((r3 as any).resultado, 'ja_validada', 'nem mesmo aceitarDivergencia reabre uma minuta já decidida — a guarda vem ANTES de qualquer gate');
-
-    const { rows: eventos } = await pool.query(`SELECT count(*)::int n FROM closing_events WHERE container_id = $1 AND tipo_evento = 'MINUTA_VALIDADA'`, [containerId]);
-    assert.equal(eventos[0].n, 1);
-    const { rows: recalc } = await pool.query(`SELECT count(*)::int n FROM closing_events WHERE container_id = $1 AND tipo_evento = 'RECALCULO'`, [containerId]);
-    assert.equal(recalc[0].n, 1);
+    assert.deepEqual((await pool.query(`SELECT atualizado_em, avaliada_em FROM minutas WHERE container_id = $1`, [containerId])).rows[0], linhaAntes, 'nenhum UPDATE');
+    assert.equal((await pool.query(`SELECT count(*)::int n FROM closing_events WHERE container_id = $1`, [containerId])).rows[0].n, eventosAntes, 'nenhum evento novo (nem RECALCULO)');
   } finally { await pool.end(); }
 });
 
-test('v1.2 #9: chamada direta repetida numa minuta já REJEITADA é um no-op estrito (sem novo evento)', { skip: !url }, async () => {
+test('v1.2 #9 (P1): reavaliação repetida de uma minuta INCONSISTENTE é um no-op estrito (sem evento, pendência intocada)', { skip: !url }, async () => {
   const pool = testPool();
   try {
     await setup(pool);
     const org = await criarOrg(pool, 'v12-09');
-    const home = await usuarioInterno(pool, org.id, 'MANAGER');
+    const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const membershipId = await membershipIdPorHome(pool, home);
-    const { containerId } = await processoComRelogios(pool, org.id, 'IM-V12-09', 'ECSH');
+    const { processoId, containerId } = await processoComRelogios(pool, org.id, 'IM-V12-09', 'ECSH');
     const svc = new ClosingService(pool);
-    // Número informado DIVERGENTE do contêiner real -> rejeitada (NUMERO_DIVERGENTE).
-    const m = await svc.registrarMinuta({ containerId, numeroInformado: 'NUMERO0ERRADO', dataInformada: '2026-09-10' });
+    // Número informado DIVERGENTE do contêiner real -> INCONSISTENTE (NUMERO_DIVERGENTE).
+    const r = await svc.registrarMinuta({ containerId, membershipId, numeroInformado: 'NUMERO0ERRADO', dataInformada: '2026-09-10', documento: DOC_E2, config: cfg });
+    assert.ok(r.ok && r.minuta.estado === 'INCONSISTENTE' && r.minuta.motivoRejeicao === 'NUMERO_DIVERGENTE');
+    const pendAntes = (await pool.query(`SELECT id, estado FROM demurrage_pendencias WHERE container_id = $1`, [containerId])).rows;
 
-    const r1 = await svc.validarMinuta({ minutaId: m.id, membershipId, config: cfg });
-    assert.deepEqual(r1, { ok: true, resultado: 'rejeitada', motivo: 'NUMERO_DIVERGENTE' });
+    assert.deepEqual(await reavaliarMinutasDoProcesso(pool, processoId, cfg.hoje), { reavaliadas: 0 });
+    assert.deepEqual(await reavaliarMinutasDoProcesso(pool, processoId, cfg.hoje), { reavaliadas: 0 });
 
-    const r2 = await svc.validarMinuta({ minutaId: m.id, membershipId, config: cfg });
-    assert.deepEqual(r2, { ok: true, resultado: 'ja_rejeitada', motivo: 'NUMERO_DIVERGENTE' });
-
-    const { rows: eventos } = await pool.query(`SELECT count(*)::int n FROM closing_events WHERE container_id = $1 AND tipo_evento = 'MINUTA_REJEITADA'`, [containerId]);
-    assert.equal(eventos[0].n, 1, 'exatamente UM evento de rejeição — a réplica nunca grava de novo');
+    const { rows: eventos } = await pool.query(`SELECT count(*)::int n FROM closing_events WHERE container_id = $1 AND tipo_evento = 'MINUTA_INCONSISTENTE'`, [containerId]);
+    assert.equal(eventos[0].n, 1, 'exatamente UM evento de inconsistência — a reavaliação nunca grava de novo');
+    assert.deepEqual((await pool.query(`SELECT id, estado FROM demurrage_pendencias WHERE container_id = $1`, [containerId])).rows, pendAntes);
   } finally { await pool.end(); }
 });
 
-test('v1.2 #12: rota HTTP permanece compatível — duas requisições concorrentes continuam ambas 200, exatamente um evento', { skip: !url }, async () => {
+test('v1.2 #12 (P1): a rota de validação foi REMOVIDA — requisições concorrentes recebem ambas 410, nenhuma leitura de minuta, nenhum evento', { skip: !url }, async () => {
   const pool = testPool();
   const app = await subirApp(pool);
   try {
@@ -399,18 +408,16 @@ test('v1.2 #12: rota HTTP permanece compatível — duas requisições concorren
     const homeAnalyst = await usuarioInterno(pool, org.id, 'ANALYST');
     const homeManager = await usuarioInterno(pool, org.id, 'MANAGER');
     const { containerId, numero } = await processoComRelogios(pool, org.id, 'IM-V12-12', 'ECSI');
-    const reg = await post(app.base, `/containers/${containerId}/minutas`, { numeroInformado: numero, dataInformada: '2026-09-10' }, homeAnalyst, { 'idempotency-key': randomUUID() });
-    const { minutaId } = await reg.json();
+    const reg = await post(app.base, `/containers/${containerId}/minutas`, { documento: DOC_E2, numeroInformado: numero, dataInformada: '2026-09-10' }, homeAnalyst, { 'idempotency-key': randomUUID() });
+    const { minutaId, estado } = await reg.json();
+    assert.equal(estado, 'ACEITA', 'o aceite já aconteceu no registro, sem gestor');
+    const eventosAntes = (await pool.query(`SELECT count(*)::int n FROM closing_events WHERE container_id = $1`, [containerId])).rows[0].n;
 
     const chamar = () => post(app.base, `/minutas/${minutaId}/validar`, {}, homeManager);
     const [r1, r2] = await Promise.all([chamar(), chamar()]);
-    assert.ok([r1.status, r2.status].every((s) => s === 200), 'ambas 200 — a segunda é a réplica idempotente típada do serviço');
-    const [b1, b2] = await Promise.all([r1.json(), r2.json()]);
-    const resultados = [b1.resultado, b2.resultado].sort();
-    assert.deepEqual(resultados, ['ja_validada', 'validada'], 'exatamente uma validação efetiva e uma réplica idempotente, refletidas na rota');
-
-    const { rows } = await pool.query(`SELECT count(*)::int n FROM closing_events WHERE container_id = $1 AND tipo_evento = 'MINUTA_VALIDADA'`, [containerId]);
-    assert.equal(rows[0].n, 1);
+    assert.deepEqual([r1.status, r2.status], [410, 410]);
+    assert.deepEqual(await r1.json(), { error: 'rota_removida', detalhe: { substituidaPor: 'aceite_tecnico_automatico_no_registro' } });
+    assert.equal((await pool.query(`SELECT count(*)::int n FROM closing_events WHERE container_id = $1`, [containerId])).rows[0].n, eventosAntes);
   } finally { await app.close(); await pool.end(); }
 });
 
@@ -426,7 +433,7 @@ test('v1.2 #13: Idempotency-Key vazio é rejeitado (400)', { skip: !url }, async
     const org = await criarOrg(pool, 'v12-13');
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const { containerId } = await processoComRelogios(pool, org.id, 'IM-V12-13', 'ECSJ');
-    const r = await post(app.base, `/containers/${containerId}/minutas`, { numeroInformado: 'x', dataInformada: '2026-09-10' }, home, { 'idempotency-key': '' });
+    const r = await post(app.base, `/containers/${containerId}/minutas`, { documento: DOC_E2, numeroInformado: 'x', dataInformada: '2026-09-10' }, home, { 'idempotency-key': '' });
     assert.equal(r.status, 400);
   } finally { await app.close(); await pool.end(); }
 });
@@ -447,7 +454,7 @@ test('v1.2 #14: Idempotency-Key só com espaço em branco é rejeitado — pelo 
     const org = await criarOrg(pool, 'v12-14');
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const { containerId } = await processoComRelogios(pool, org.id, 'IM-V12-14', 'ECSK');
-    const r = await post(app.base, `/containers/${containerId}/minutas`, { numeroInformado: 'x', dataInformada: '2026-09-10' }, home, { 'idempotency-key': '   ' });
+    const r = await post(app.base, `/containers/${containerId}/minutas`, { documento: DOC_E2, numeroInformado: 'x', dataInformada: '2026-09-10' }, home, { 'idempotency-key': '   ' });
     assert.equal(r.status, 400, 'o transporte HTTP entrega isso como cabeçalho vazio — ainda assim 400, nunca aceito como chave válida');
   } finally { await app.close(); await pool.end(); }
 });
@@ -461,7 +468,7 @@ test('v1.2 #15: Idempotency-Key acima do limite (200 caracteres) é rejeitado (4
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const { containerId } = await processoComRelogios(pool, org.id, 'IM-V12-15', 'ECSL');
     const chaveGigante = 'a'.repeat(201);
-    const r = await post(app.base, `/containers/${containerId}/minutas`, { numeroInformado: 'x', dataInformada: '2026-09-10' }, home, { 'idempotency-key': chaveGigante });
+    const r = await post(app.base, `/containers/${containerId}/minutas`, { documento: DOC_E2, numeroInformado: 'x', dataInformada: '2026-09-10' }, home, { 'idempotency-key': chaveGigante });
     assert.equal(r.status, 400);
     assert.equal((await r.json()).error, 'idempotency_key_invalida');
     const { rows } = await pool.query(`SELECT count(*)::int n FROM minutas WHERE container_id = $1`, [containerId]);
@@ -478,7 +485,7 @@ test('v1.2 #16: Idempotency-Key com caractere fora do conjunto permitido (espaç
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const { containerId } = await processoComRelogios(pool, org.id, 'IM-V12-16', 'ECSM');
     for (const chaveInvalida of ['chave com espaco', 'chave"aspas', 'chave\\barra']) {
-      const r = await post(app.base, `/containers/${containerId}/minutas`, { numeroInformado: 'x', dataInformada: '2026-09-10' }, home, { 'idempotency-key': chaveInvalida });
+      const r = await post(app.base, `/containers/${containerId}/minutas`, { documento: DOC_E2, numeroInformado: 'x', dataInformada: '2026-09-10' }, home, { 'idempotency-key': chaveInvalida });
       assert.equal(r.status, 400, `deveria rejeitar: ${JSON.stringify(chaveInvalida)}`);
       assert.equal((await r.json()).error, 'idempotency_key_invalida');
     }
@@ -493,7 +500,7 @@ test('v1.2 #17: chaves equivalentes (mesmo valor, espaço nas bordas diferente) 
     const org = await criarOrg(pool, 'v12-17');
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const { containerId, numero } = await processoComRelogios(pool, org.id, 'IM-V12-17', 'ECSN');
-    const corpo = { numeroInformado: numero, dataInformada: '2026-09-10' };
+    const corpo = { documento: DOC_E2, numeroInformado: numero, dataInformada: '2026-09-10' };
 
     const r1 = await post(app.base, `/containers/${containerId}/minutas`, corpo, home, { 'idempotency-key': '  CHAVE-EQUIVALENTE-V12-17  ' });
     assert.equal(r1.status, 201);

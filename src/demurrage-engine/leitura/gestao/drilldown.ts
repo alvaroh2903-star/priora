@@ -162,7 +162,7 @@ function specDoIndicador(
     case 'G-A9': {
       const params: unknown[] = [organizationId];
       const f = filtroProcesso(params);
-      return { grao: 'processo', params, baseSql: `SELECT p.id AS id_ord FROM processos p WHERE p.organization_id = $1 AND p.estado_mais_relevante = 'DEVOLVIDO_AGUARDANDO_TRATAMENTO'${f}` };
+      return { grao: 'processo', params, baseSql: `SELECT p.id AS id_ord FROM processos p WHERE p.organization_id = $1 AND p.estado_mais_relevante = 'DEVOLVIDO_AGUARDANDO_TRATAMENTO' AND p.apuracao_status = 'OPEN'${f}` };
     }
     case 'G-A10': {
       const params: unknown[] = [organizationId];

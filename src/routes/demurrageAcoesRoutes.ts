@@ -4,19 +4,20 @@ import { requireAuth } from '../middleware/requireAuth';
 import { getPool } from '../demurrage-engine/db/pool';
 import { autorizarInterno, AutorizedRequest, criarAutorizarInterno, tratarErroLeitura } from '../demurrage-engine/leitura/autorizacao';
 import { ClosingService } from '../demurrage-engine/closing/closingService';
+import { textoArmazenavel } from '../demurrage-engine/closing/minutaValidation';
 import { decidirResponsabilidade } from '../demurrage-engine/responsabilidade/decidirResponsabilidade';
 import { resolverPendenciaManual } from '../demurrage-engine/registro/pendencias';
 import { aplicarFallbackManualContainer, CampoFreeTime } from '../demurrage-engine/acoes/fallbackManualAdapter';
 import { validarComandoPendencia } from '../demurrage-engine/acoes/pendenciaCatalogo';
 import {
-  organizacaoDoContainer, organizacaoDoProcesso, organizacaoDaMinuta, organizacaoDaReabertura,
-  processoENumeroDoContainer,
+  organizacaoDoContainer, organizacaoDoProcesso, organizacaoDaReabertura,
+  processoDoContainer, processoENumeroDoContainer,
 } from '../demurrage-engine/acoes/organizacaoRecurso';
 import { buscarFechamentoMaisRecente, buscarReaberturaPorId } from '../demurrage-engine/acoes/leituraIdempotente';
 import { registrarMinutaIdempotente } from '../demurrage-engine/acoes/minutaIdempotencia';
 import { normalizarIdempotencyKey, IdempotencyKeyInvalida } from '../demurrage-engine/acoes/idempotencyKey';
 import { buscarPendenciaPersistida, verificarTipoPendenciaPersistido } from '../demurrage-engine/acoes/pendenciaVerificacao';
-import { comLockPorChave } from '../demurrage-engine/acoes/serializacaoPorChave';
+import { comEncerramentoAutomatico } from '../demurrage-engine/acoes/encerramentoAposAcao';
 import { ErroRotaAcao, classificarFalhaAcao, tratarErroRotaAcao } from '../demurrage-engine/acoes/erros';
 import { ReaberturaRepository } from '../demurrage-engine/persistence/reaberturaRepository';
 import { hojeOperacional } from '../demurrage-engine/time/operationalDate';
@@ -40,6 +41,17 @@ import { hojeOperacional } from '../demurrage-engine/time/operationalDate';
  * (containers/field_observations/relogios/valores_apurados/responsabilidade_decisoes/
  * minutas/fechamentos/reaberturas) — só os helpers de leitura/organização
  * (que são isolamento, não regra) e os serviços congelados fazem isso.
+ *
+ * Produção P1 (reabertura controlada — correção de minuta e encerramento):
+ *  - o registro de minuta (3a) exige o DOCUMENTO (referência auditável) e
+ *    devolve o aceite técnico automático (ACEITA/DIVERGENTE/INCONSISTENTE/
+ *    RECEBIDA); qualquer papel interno registra; não existe validação por
+ *    gestor — a antiga rota 3b responde `410 rota_removida`;
+ *  - o encerramento é AUTOMÁTICO: depois de cada ação que pode liberar o
+ *    último gate (fallback, responsabilidade, minuta, pendência) a rota
+ *    devolve também `encerramento` (resultado da avaliação). A rota 4
+ *    (`finalizar`) é só acionamento administrativo (MANAGER/ADMIN) da MESMA
+ *    avaliação — nunca etapa obrigatória.
  */
 
 const RE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -102,13 +114,15 @@ export function criarDemurrageAcoesRouter(deps: DemurrageAcoesRoutesDeps = {}): 
       const resolvido = await processoENumeroDoContainer(pool(), org, containerId);
       if (!resolvido) { res.status(404).json({ error: 'nao_encontrado' }); return; }
 
-      const resultado = await aplicarFallbackManualContainer(pool(), {
-        organizationId: org, numeroProcesso: resolvido.numeroProcesso, numeroContainer: resolvido.numeroContainer,
-        campo: campo as CampoFreeTime, valorDias, observadoEm, evidenciaRef, justificativa,
-        autorMembershipId: req.autorizacao!.membershipId,
-      });
+      const { resultado, encerramento } = await comEncerramentoAutomatico(pool(), await processoDoContainer(pool(), containerId), hojeOperacional(),
+        () => aplicarFallbackManualContainer(pool(), {
+          organizationId: org, numeroProcesso: resolvido.numeroProcesso, numeroContainer: resolvido.numeroContainer,
+          campo: campo as CampoFreeTime, valorDias, observadoEm, evidenciaRef, justificativa,
+          autorMembershipId: req.autorizacao!.membershipId,
+        }),
+        (r) => r.ok);
 
-      if (resultado.ok) { res.status(200).json({ resultado: 'aplicado', processoId: resultado.resultado.processoId, containers: resultado.resultado.containers }); return; }
+      if (resultado.ok) { res.status(200).json({ resultado: 'aplicado', processoId: resultado.resultado.processoId, containers: resultado.resultado.containers, encerramento }); return; }
       if (resultado.motivo === 'pos_commit_incompleto') { res.status(200).json({ resultado: 'aceito_com_pendencia', processoId: resultado.processoId }); return; }
       const status = resultado.codigo === 'PROCESSO_FINAL' || resultado.codigo === 'CONTAINER_EM_OUTRO_PROCESSO' || resultado.codigo === 'CHAVE_IDEMPOTENCIA_REUTILIZADA' ? 409 : 400;
       res.status(status).json({ error: resultado.codigo, detalhe: resultado.detalhe });
@@ -135,15 +149,17 @@ export function criarDemurrageAcoesRouter(deps: DemurrageAcoesRoutesDeps = {}): 
       const evidenciaRef = campoObrigatorio(corpo, 'evidenciaRef');
       const periodos = Array.isArray(corpo.periodos) ? corpo.periodos : [];
 
-      const r = await decidirResponsabilidade(pool(), {
-        organizationId: org, containerId, autorMembershipId: req.autorizacao!.membershipId,
-        status: status as any, baseRelogio: baseRelogio as any, justificativa: justificativa as string, evidenciaRef: evidenciaRef as string,
-        periodos: periodos as any, motivoEstruturado: (corpo.motivoEstruturado as any) ?? null,
-        substituiDecisaoId: (corpo.substituiDecisaoId as string) ?? null, motivoCorrecao: (corpo.motivoCorrecao as string) ?? null,
-        hojeReferencia: hojeOperacional(),
-      });
+      const { resultado: r, encerramento } = await comEncerramentoAutomatico(pool(), await processoDoContainer(pool(), containerId), hojeOperacional(),
+        () => decidirResponsabilidade(pool(), {
+          organizationId: org, containerId, autorMembershipId: req.autorizacao!.membershipId,
+          status: status as any, baseRelogio: baseRelogio as any, justificativa: justificativa as string, evidenciaRef: evidenciaRef as string,
+          periodos: periodos as any, motivoEstruturado: (corpo.motivoEstruturado as any) ?? null,
+          substituiDecisaoId: (corpo.substituiDecisaoId as string) ?? null, motivoCorrecao: (corpo.motivoCorrecao as string) ?? null,
+          hojeReferencia: hojeOperacional(),
+        }),
+        (x) => x.ok);
 
-      if (r.ok) { res.status(200).json({ decisaoId: r.decisaoId, versao: r.versao, status: r.status }); return; }
+      if (r.ok) { res.status(200).json({ decisaoId: r.decisaoId, versao: r.versao, status: r.status, encerramento }); return; }
       const status4xx = r.codigo === 'AUTOR_NAO_AUTORIZADO' ? 403
         : (r.codigo === 'PROCESSO_NAO_ENCONTRADO' || r.codigo === 'CONTAINER_NAO_ENCONTRADO') ? 404
         : (r.codigo === 'VERSAO_DESATUALIZADA' || r.codigo === 'EXIGE_REABERTURA') ? 409 : 400;
@@ -155,16 +171,17 @@ export function criarDemurrageAcoesRouter(deps: DemurrageAcoesRoutesDeps = {}): 
   });
 
   /* ====================================================================== *
-   * 3a — Registro/recebimento de minuta (upload), por contêiner.
-   *      ÚNICA rota desta entrega que exige `Idempotency-Key`. Entrega 2
-   *      v1.1 (corretiva, achado #2): a identidade de idempotência não usa
-   *      mais a tabela genérica `demurrage_acoes_idempotencia` (0042) — vive
-   *      atomicamente nas colunas de `minutas` (0043), amarrada ao
-   *      contêiner-alvo e a um hash canônico do pedido
-   *      (`acoes/minutaIdempotencia.ts`). Sem janela entre a escrita de
-   *      negócio e a reivindicação da chave; chave reutilizada com outro
-   *      contêiner/corpo é um conflito explícito, nunca um resultado antigo
-   *      devolvido por engano.
+   * 3a — Registro de minuta (com o documento), por contêiner.
+   *      ÚNICA rota que exige `Idempotency-Key` (Entrega 2 v1.1: identidade
+   *      de idempotência atômica nas colunas de `minutas`, amarrada ao
+   *      contêiner e a um hash canônico do pedido). Produção P1 (correção de
+   *      minuta): qualquer papel interno registra; o corpo traz o DOCUMENTO
+   *      (referência auditável do arquivo real — `documento.origem`,
+   *      `referencia`, `nomeArquivo`, `tipoConteudo`, `tamanhoBytes`,
+   *      `hashConteudo` SHA-256); a verificação técnica AUTOMÁTICA decide o
+   *      estado na mesma transação (ACEITA/DIVERGENTE/INCONSISTENTE/RECEBIDA)
+   *      e substitui a minuta vigente anterior do contêiner. Sem aprovação de
+   *      gestor. Depois do registro, o encerramento automático é avaliado.
    * ====================================================================== */
   router.post('/containers/:containerId/minutas', async (req: AutorizedRequest, res: Response, next: NextFunction) => {
     try {
@@ -184,14 +201,39 @@ export function criarDemurrageAcoesRouter(deps: DemurrageAcoesRoutesDeps = {}): 
       }
 
       const corpo = corpoOuVazio(req);
+      const textoOuNulo = (campo: string, max: number): string | null => {
+        const v = corpo[campo];
+        if (v === undefined || v === null) return null;
+        if (typeof v !== 'string' || v.length > max || !textoArmazenavel(v)) throw new ErroRotaAcao(400, 'valor_invalido', { campo });
+        return v;
+      };
       const resultado = await registrarMinutaIdempotente(pool(), {
-        organizationId: org, containerId,
-        numeroInformado: (corpo.numeroInformado as string) ?? null, dataInformada: (corpo.dataInformada as string) ?? null,
-        evidenciaRef: (corpo.evidenciaRef as string) ?? null, recebidaPor: req.autorizacao!.usuarioId,
-        idempotenciaRota: 'registrar_minuta', idempotenciaChave: chaveIdempotencia,
+        organizationId: org, containerId, membershipId: req.autorizacao!.membershipId,
+        numeroInformado: textoOuNulo('numeroInformado', 64), dataInformada: textoOuNulo('dataInformada', 64),
+        evidenciaRef: textoOuNulo('evidenciaRef', 1000), documento: corpo.documento,
+        idempotenciaRota: 'registrar_minuta', idempotenciaChave: chaveIdempotencia, hoje: hojeOperacional(),
       });
-      if (!resultado.ok) { res.status(409).json({ error: resultado.motivo }); return; }
-      res.status(resultado.novo ? 201 : 200).json({ minutaId: resultado.minuta.id, estado: resultado.minuta.estado });
+      if (!resultado.ok) {
+        const status = resultado.motivo === 'ator_nao_autorizado' ? 403
+          : resultado.motivo === 'container_nao_encontrado' ? 404
+          : (resultado.motivo === 'documento_obrigatorio' || resultado.motivo === 'documento_invalido') ? 400 : 409;
+        const campo = 'campo' in resultado && resultado.campo ? { campo: resultado.campo } : {};
+        res.status(status).json({ error: resultado.motivo, ...campo });
+        return;
+      }
+      const m = resultado.minuta;
+      res.status(resultado.novo ? 201 : 200).json({
+        minutaId: m.id, estado: m.estado, versao: m.versao,
+        avaliacao: {
+          regra: m.regraAvaliacao, dataInformada: m.dataInformada, dataTrackingComparada: m.dataTrackingComparada,
+          motivoInconsistencia: m.estado === 'INCONSISTENTE' ? m.motivoRejeicao : null, aguardando: m.aguardando,
+        },
+        documento: resultado.documento,
+        substituidas: resultado.substituidas,
+        pendencia: resultado.pendencia,
+        exigeReabertura: resultado.exigeReabertura,
+        encerramento: resultado.encerramento,
+      });
     } catch (err) {
       if (err instanceof ErroRotaAcao) { tratarErroRotaAcao(err, res, next); return; }
       respostaFalhaInesperada(res, err);
@@ -199,51 +241,21 @@ export function criarDemurrageAcoesRouter(deps: DemurrageAcoesRoutesDeps = {}): 
   });
 
   /* ====================================================================== *
-   * 3b — Validação de minuta (MANAGER/ADMIN, verificado pelo próprio serviço).
-   *      Entrega 2 v1.2 (corretiva, achado #2): a guarda definitiva de
-   *      já-processada agora vive DENTRO de `ClosingService.validarMinuta`
-   *      — depois do lock consultivo e da releitura travada da minuta —,
-   *      não só aqui na rota. A v1.1 fazia uma PRÉ-LEITURA fora do serviço
-   *      (e serializava "ler → decidir" com `comLockPorChave`) porque o
-   *      serviço, sozinho, reprocessava uma minuta já VALIDADA/REJEITADA; a
-   *      pré-leitura virou redundante e foi removida — a rota agora só
-   *      chama o serviço e traduz o resultado típado (que já inclui
-   *      `ja_validada`/`ja_rejeitada` como réplicas idempotentes, sem
-   *      evento/recálculo/escrita novos). `comLockPorChave` é mantido só
-   *      como serialização de REQUISIÇÃO (reduz contenção/trabalho
-   *      duplicado sob concorrência na mesma minuta) — a corretude não
-   *      depende mais dele: uma chamada direta ao serviço, sem rota e sem
-   *      esse lock, tem exatamente a mesma garantia.
+   * 3b — REMOVIDA (Produção P1, correção de minuta). A validação de minuta
+   *      por MANAGER/ADMIN não existe mais: o aceite é técnico e automático,
+   *      no próprio registro (3a). Resposta explícita e sem efeito colateral
+   *      — nenhuma leitura de minuta, nenhuma escrita — em vez de um 404
+   *      genérico, para que um chamador antigo saiba o que mudou.
    * ====================================================================== */
-  router.post('/minutas/:minutaId/validar', async (req: AutorizedRequest, res: Response, next: NextFunction) => {
-    try {
-      const minutaId = idOuErro(req.params.minutaId, 'minutaId');
-      const org = req.autorizacao!.organizationId;
-      const orgDoRecurso = await organizacaoDaMinuta(pool(), minutaId);
-      if (orgDoRecurso !== org) { res.status(404).json({ error: 'nao_encontrado' }); return; }
-
-      const corpo = corpoOuVazio(req);
-      const r = await comLockPorChave(pool(), `demurrage:acoes:minuta_validar:${minutaId}`, async () => {
-        const svc = new ClosingService(pool());
-        return svc.validarMinuta({
-          minutaId, membershipId: req.autorizacao!.membershipId, config: { hoje: hojeOperacional() }, aceitarDivergencia: corpo.aceitarDivergencia === true,
-        });
-      });
-
-      if (r.ok) { res.status(200).json(r); return; }
-      const status = r.motivo === 'apenas_manager_admin' ? 403 : (r.motivo === 'minuta_nao_encontrada' || r.motivo === 'container_nao_encontrado') ? 404 : 409;
-      res.status(status).json({ error: r.motivo });
-    } catch (err) {
-      if (err instanceof ErroRotaAcao) { tratarErroRotaAcao(err, res, next); return; }
-      respostaFalhaInesperada(res, err);
-    }
+  router.post('/minutas/:minutaId/validar', (_req: AutorizedRequest, res: Response) => {
+    res.status(410).json({ error: 'rota_removida', detalhe: { substituidaPor: 'aceite_tecnico_automatico_no_registro' } });
   });
 
   /* ====================================================================== *
-   * 4 — Fechamento (finalização) do processo.
-   *      Idempotente: `ja_final` é traduzido para o MESMO sucesso 200 (lê o
-   *      fechamento já existente) em vez de erro — nenhum gate é contornado,
-   *      só a resposta de um retry depois do sucesso é tornada estável.
+   * 4 — Acionamento ADMINISTRATIVO do encerramento (MANAGER/ADMIN).
+   *      O encerramento é automático; esta rota só antecipa a MESMA
+   *      avaliação (mesmos gates — nenhum contornado). Idempotente:
+   *      `ja_final` é o MESMO sucesso 200 (lê o fechamento já existente).
    * ====================================================================== */
   router.post('/processos/:processoId/finalizar', async (req: AutorizedRequest, res: Response, next: NextFunction) => {
     try {
@@ -336,7 +348,8 @@ export function criarDemurrageAcoesRouter(deps: DemurrageAcoesRoutesDeps = {}): 
    *     basta estar no catálogo — tem que ser EXATAMENTE o tipo persistido
    *     na linha (acoes/pendenciaVerificacao.ts). Divergência é 409, zero
    *     escrita — nunca resolve uma pendência de um tipo "disfarçada" de
-   *     outro.
+   *     outro. As pendências de minuta (0048) ficam FORA do catálogo: só uma
+   *     minuta substituta coerente as resolve.
    * ====================================================================== */
   router.post('/pendencias/:pendenciaId/resolver', async (req: AutorizedRequest, res: Response, next: NextFunction) => {
     try {
@@ -354,8 +367,10 @@ export function criarDemurrageAcoesRouter(deps: DemurrageAcoesRoutesDeps = {}): 
       if (divergencia) { res.status(409).json({ error: divergencia }); return; }
 
       const motivo = campoObrigatorio(corpo, 'motivo') as string;
-      const r = await resolverPendenciaManual(pool(), { pendenciaId, organizationId: org, autorMembershipId: req.autorizacao!.membershipId, motivo });
-      res.status(200).json({ resultado: r.resolvida ? 'resolvida' : 'ja_resolvida' });
+      const { resultado: r, encerramento } = await comEncerramentoAutomatico(pool(), persistida.processoId, hojeOperacional(),
+        () => resolverPendenciaManual(pool(), { pendenciaId, organizationId: org, autorMembershipId: req.autorizacao!.membershipId, motivo }),
+        (x) => x.resolvida);
+      res.status(200).json({ resultado: r.resolvida ? 'resolvida' : 'ja_resolvida', encerramento });
     } catch (err) {
       if (err instanceof ErroRotaAcao) { tratarErroRotaAcao(err, res, next); return; }
       respostaFalhaInesperada(res, err);

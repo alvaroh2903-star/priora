@@ -67,7 +67,7 @@ export const REGISTRO_INDICADORES: readonly IndicadorDescritor[] = [
   r({ id: 'G-A6', grupo: 'A', grao: 'container', tipo: 'contagem', drilldownDisponivel: true, estrategiaComposicao: "'rocketExposta' = ANY(containers.estado_badges)", dataNatural: null, requerPeriodo: false, aceitaFiltrosOperacionais: true }),
   r({ id: 'G-A7', grupo: 'A', grao: 'container', tipo: 'contagem', drilldownDisponivel: true, estrategiaComposicao: "'trackingDesatualizado' = ANY(containers.estado_badges)", dataNatural: null, requerPeriodo: false, aceitaFiltrosOperacionais: true }),
   r({ id: 'G-A8', grupo: 'A', grao: 'processo', tipo: 'contagem', drilldownDisponivel: true, estrategiaComposicao: 'estado_mais_relevante=PENDENCIA_DE_DADOS OR pendência aberta', dataNatural: null, requerPeriodo: false, aceitaFiltrosOperacionais: true }),
-  r({ id: 'G-A9', grupo: 'A', grao: 'processo', tipo: 'contagem', drilldownDisponivel: true, estrategiaComposicao: "estado_mais_relevante = 'DEVOLVIDO_AGUARDANDO_TRATAMENTO'", dataNatural: null, requerPeriodo: false, aceitaFiltrosOperacionais: true }),
+  r({ id: 'G-A9', grupo: 'A', grao: 'processo', tipo: 'contagem', drilldownDisponivel: true, estrategiaComposicao: "estado_mais_relevante = 'DEVOLVIDO_AGUARDANDO_TRATAMENTO' AND apuracao_status = 'OPEN'", dataNatural: null, requerPeriodo: false, aceitaFiltrosOperacionais: true }),
   r({ id: 'G-A10', grupo: 'A', grao: 'processo', tipo: 'contagem', drilldownDisponivel: true, estrategiaComposicao: "apuracao_status = 'FINAL'", dataNatural: null, requerPeriodo: false, aceitaFiltrosOperacionais: true }),
 
   // ---- Grupo B — financeiro.ts (agregados monetários; numerador/denominador/grupos já estão na própria resposta) ----

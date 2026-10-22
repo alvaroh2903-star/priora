@@ -634,8 +634,8 @@ test('v1.1 migração 0032 → 0033: decisões existentes preservadas; a nova re
     // ativar` (chamado por `seedRocketTermoPorEmbarque`, usado por `cenario`
     // abaixo) agora exige a coluna `ativada_em` — alheia ao que este teste
     // verifica, só precisa existir para `cenario` funcionar neste schema
-    // congelado em 0032; este teste nunca avança além de 0033, então não há
-    // "undo" (a migration 0037 real nunca roda aqui).
+    // congelado em 0032. Ao final (gate de fechamento), as duas réplicas são
+    // removidas e as migrations reais 0034+ rodam — ver o comentário lá.
     await pool.query(`ALTER TABLE tariff_tables ADD COLUMN ativada_em TIMESTAMPTZ`);
 
     // Decisões criadas ANTES da 0033 (serviço vigente na 0032).
@@ -686,6 +686,17 @@ test('v1.1 migração 0032 → 0033: decisões existentes preservadas; a nova re
     }), /LACUNA/);
 
     // E a decisão de antes da 0033 continua passando pelo gate de fechamento.
+    // Produção P1 (correção de minuta/encerramento, migration 0048): o gate de
+    // fechamento ATUAL lê colunas da 0048 (`minutas.regra_avaliacao`,
+    // `fechamentos.origem`, `processos.encerramento_*`), então ele só pode rodar
+    // sobre o schema atual. O assunto deste teste (a 0033 preserva as decisões
+    // pré-existentes) já foi verificado acima; aqui o banco segue o caminho real
+    // de upgrade até a última migration, com os dados pré-0033 dentro. As duas
+    // réplicas locais de 0036/0037 saem antes, para que as migrations reais as
+    // criem (a 0037 preenche `ativada_em = criado_em`, o mesmo fato).
+    await pool.query(`DROP TABLE free_time_tentativas`);
+    await pool.query(`ALTER TABLE tariff_tables DROP COLUMN ativada_em`);
+    await runMigrations(pool);
     await minutaValidadaDireta(pool, cli.containerId, 'MIGCLI', '2026-01-10');
     assert.deepEqual(
       await new ClosingService(pool).finalizarProcesso({ processoId: cli.processoId, membershipId: gestorCli, config: cfg }),

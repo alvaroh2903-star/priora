@@ -26,13 +26,14 @@ import { TipoDemurragePendencia, TIPOS_DEMURRAGE_PENDENCIA_SUPORTADOS } from './
 
 export interface PendenciaPersistida {
   organizationId: string;
+  processoId: string;
   tipo: string;
   estado: 'aberta' | 'resolvida';
 }
 
 export async function buscarPendenciaPersistida(pool: Pool, pendenciaId: string): Promise<PendenciaPersistida | null> {
   const { rows } = await pool.query(
-    `SELECT organization_id AS "organizationId", tipo, estado FROM demurrage_pendencias WHERE id = $1`,
+    `SELECT organization_id AS "organizationId", processo_id AS "processoId", tipo, estado FROM demurrage_pendencias WHERE id = $1`,
     [pendenciaId],
   );
   return rows[0] ?? null;

@@ -2,7 +2,10 @@ import { CivilDate, toOrdinal } from '../temporal/civilDate';
 
 /**
  * Fase 8 — validação de coerência da minuta (decisão funcional da Priora; o
- * Blueprint não fixa fórmula), função PURA. Uma minuta só pode ser VALIDADA se:
+ * Blueprint não fixa fórmula), função PURA. Produção P1 (correção de minuta):
+ * é a parte ESTRUTURAL da verificação técnica automática
+ * (`avaliarMinutaTecnicamente`, abaixo) — nenhum gestor aprova nada. Uma
+ * minuta só é estruturalmente coerente se:
  *  - o número do contêiner corresponder;
  *  - a data for válida/legível;
  *  - data_minuta >= discharge_date;
@@ -40,6 +43,16 @@ function normalizarNumero(s: string | null): string {
 }
 
 /** Data civil legível: 'AAAA-MM-DD' com componentes de calendário reais. */
+/**
+ * Texto que o PostgreSQL aceita sem erro nem alteração silenciosa: sem U+0000
+ * (proibido em `text`/`jsonb`) e sem surrogate UTF-16 isolado (vira U+FFFD em
+ * `text` e é recusado em `jsonb`). Entrada fora disso é erro de VALIDAÇÃO
+ * (400), nunca falha de banco (500).
+ */
+export function textoArmazenavel(s: string): boolean {
+  return !/\u0000|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(s);
+}
+
 export function dataLegivel(s: string | null): s is CivilDate {
   if (!s || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
   const [y, m, d] = s.split('-').map(Number);
@@ -75,4 +88,42 @@ export function validarMinuta(input: MinutaValidationInput): MinutaValidationRes
     return { valida: false, motivo: 'DATA_ANTERIOR_AO_GATE_OUT' };
   }
   return { valida: true, dataValidada: input.dataInformada };
+}
+
+/**
+ * Produção P1 (correção de minuta) — verificação técnica AUTOMÁTICA da
+ * minuta, função PURA. Não existe aprovação humana: o resultado decide
+ * sozinho o estado da minuta.
+ *
+ *  - INCONSISTENTE: falhou a coerência estrutural (`validarMinuta` acima —
+ *    número do contêiner, data legível, cronologia descarga/Gate Out, data
+ *    futura);
+ *  - RECEBIDA (aguardando): a coerência não é verificável ainda — descarga
+ *    desconhecida, ou o tracking ainda não confirmou a devolução. A minuta
+ *    NUNCA fabrica a devolução: sem tracking, ela espera;
+ *  - DIVERGENTE: coerente, mas a data difere da devolução oficial do tracking
+ *    (sem tolerância — mesma comparação exata do fluxo anterior);
+ *  - ACEITA: coerente e igual à devolução do tracking.
+ */
+export type ResultadoAvaliacaoTecnica =
+  | { estado: 'ACEITA'; dataTracking: CivilDate }
+  | { estado: 'DIVERGENTE'; dataMinuta: CivilDate; dataTracking: CivilDate }
+  | { estado: 'INCONSISTENTE'; motivo: MotivoRejeicao }
+  | { estado: 'RECEBIDA'; aguardando: 'DESCARGA' | 'DEVOLUCAO_TRACKING' };
+
+export interface AvaliacaoTecnicaInput extends MinutaValidationInput {
+  trackingReturnDate: CivilDate | null;
+}
+
+export function avaliarMinutaTecnicamente(input: AvaliacaoTecnicaInput): ResultadoAvaliacaoTecnica {
+  const coerencia = validarMinuta(input);
+  if (!coerencia.valida) {
+    if (coerencia.motivo === 'DESCARGA_DESCONHECIDA') return { estado: 'RECEBIDA', aguardando: 'DESCARGA' };
+    return { estado: 'INCONSISTENTE', motivo: coerencia.motivo };
+  }
+  if (input.trackingReturnDate === null) return { estado: 'RECEBIDA', aguardando: 'DEVOLUCAO_TRACKING' };
+  if (coerencia.dataValidada !== input.trackingReturnDate) {
+    return { estado: 'DIVERGENTE', dataMinuta: coerencia.dataValidada, dataTracking: input.trackingReturnDate };
+  }
+  return { estado: 'ACEITA', dataTracking: input.trackingReturnDate };
 }

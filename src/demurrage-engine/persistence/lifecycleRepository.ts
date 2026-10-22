@@ -164,11 +164,17 @@ export class LifecycleRepository {
     );
     const falhaTrackingPorContainer = new Set<string>(ir.map((r) => r.container_id));
 
-    // Minuta recebida/validada por contêiner — só é USADA quando emptyReturn é
+    // Minuta recebida/aceita por contêiner — só é USADA quando emptyReturn é
     // true (abaixo), mas é buscada para todo o lote para manter o número de
-    // consultas constante (nunca condicional por item).
+    // consultas constante (nunca condicional por item). Produção P1: só conta
+    // minuta VIGENTE — RECEBIDA, ACEITA ou VALIDADA legada; DIVERGENTE/
+    // INCONSISTENTE não comprovam (pendência aberta) e contam como minuta
+    // pendente. Substituída já fica fora pelo próprio estado: o CHECK
+    // `minutas_substituicao_coerente` (0048) garante estado SUBSTITUIDA ⇔
+    // `substituida_por_id` preenchido (filtrar só pelo estado também mantém
+    // a consulta válida em schemas anteriores à 0048).
     const { rows: mr } = await this.pool.query(
-      `SELECT container_id, bool_or(estado_minuta IN ('RECEBIDA', 'VALIDADA')) AS tem
+      `SELECT container_id, bool_or(estado_minuta IN ('RECEBIDA', 'ACEITA', 'VALIDADA')) AS tem
          FROM minutas WHERE container_id = ANY($1) GROUP BY container_id`,
       [ids],
     );

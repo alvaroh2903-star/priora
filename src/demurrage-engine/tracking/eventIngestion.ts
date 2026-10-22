@@ -11,6 +11,7 @@ import { CivilDate } from '../temporal/civilDate';
 import { sincronizarVesselCall } from './vesselCallSync';
 import { VesselCallRepository } from '../persistence/vesselCallRepository';
 import { atualizarFotografia } from '../registro/fotografia';
+import { avaliarEncerramentoAposFatoDeTracking } from '../closing/encerramentoAutomatico';
 
 /**
  * Ingestão do resultado da API central de tracking (Fase 5).
@@ -239,6 +240,22 @@ export async function ingestTrackingResult(input: IngestInput): Promise<IngestRe
       await atualizarFotografia(pool, containerId, { origem: { tipo: 'tracking', trackingFetchId: fetch.id, trackingTargetId: target.id } });
     } catch (err) {
       console.error('[fotografia] falha isolada (ingestão preservada):', String((err as any)?.message ?? err).slice(0, 300));
+    }
+  }
+
+  // 3c) Produção P1 — encerramento AUTOMÁTICO: um fato promovido (devolução,
+  // descarga, Gate Out) reavalia a minuta vigente contra a devolução oficial
+  // e tenta encerrar o processo (ex.: contêiner devolvido dentro do Free Time
+  // conclui sem minuta, sem gestor). Isolado como a fotografia: uma falha
+  // aqui nunca desfaz a ingestão — a varredura do scheduler reavalia.
+  const reavaliar = Array.from(new Set(promocoes
+    .filter((p) => p.outcome === 'promovida' && (p.campo === 'trackingReturnDate' || p.campo === 'dischargeDate' || p.campo === 'gateOutDate'))
+    .map((p) => p.containerId)));
+  if (reavaliar.length) {
+    try {
+      await avaliarEncerramentoAposFatoDeTracking(pool, reavaliar, hoje);
+    } catch (err) {
+      console.error('[encerramento-automatico] falha isolada (ingestão preservada):', String((err as any)?.code ?? 'erro'));
     }
   }
 

@@ -7,8 +7,9 @@ import { blocoPrazoRelogio, escolherProximoVencimentoProcesso, CandidatoProximoV
 import { hojeOperacional } from '../time/operationalDate';
 import { CivilDate } from '../temporal/civilDate';
 import {
-  CONTRATO_FILA_ITEM_V1, CONTRATO_LEITURA_V1, ErroLeitura, FilaItemV1, FilaRespostaV1, FiltroFila, LiderLeitura,
-  ValorEnvelope, envelopeDoRelogio, isoTimestamp, motorClienteAplicavelDe, rotularEstado, selecionarValorAtivo, agregarFinanceiroProcesso, filtroFilaVazio,
+  CONTRATO_FILA_ITEM_V1, CONTRATO_LEITURA_V1, ESCOPO_FILA_DA_EQUIPE, ErroLeitura, FilaItemV1, FilaRespostaV1, FiltroFila, LiderLeitura,
+  SituacaoApuracaoFiltro, ValorEnvelope, encerramentoDoProcesso, envelopeDoRelogio, isoTimestamp, motorClienteAplicavelDe, rotularEstado,
+  selecionarValorAtivo, agregarFinanceiroProcesso, filtroFilaVazio,
 } from './contrato';
 import { codificarCursorAssinado, decodificarCursorAssinado, hmacLeitura } from './cursorAssinado';
 
@@ -38,13 +39,21 @@ import { codificarCursorAssinado, decodificarCursorAssinado, hmacLeitura } from 
  *    contêiner) — contêineres diferentes nunca satisfazem partes diferentes
  *    da combinação. A busca textual casa número do processo/HBL/MBL OU o
  *    número de um contêiner que também satisfaça os demais filtros de contêiner.
+ *
+ * Produção P1 (reabertura controlada): a situação da apuração é filtro de
+ * PROCESSO (SQL) com padrão `OPEN` — processo FINAL (encerrado, automática
+ * ou administrativamente) nunca entra na fila ativa nem nas contagens de
+ * `/filtros`; é consultável pelo filtro explícito `apuracaoStatus=FINAL`
+ * (ou `TODOS`) e pelo detalhe direto. Busca, ordem, total e cursor seguem
+ * o mesmo conjunto filtrado (o filtro entra no hash do cursor). Toda lista
+ * aqui é a FILA DA EQUIPE (organização) — não existe fila pessoal ainda.
  */
 
 const MAX_LIMITE = 200;
 const LIMITE_PADRAO = 50;
 
 /** Identidade do esquema de serialização canônica dos filtros/ordem (entra no hash do cursor). */
-export const VERSAO_CURSOR_FILA = 'd12.fila.v1.1';
+export const VERSAO_CURSOR_FILA = 'd12.fila.v1.2';
 
 /** Mesmo limite padrão de tentativas do worker (`processarRecalculosPendentes`, maxTentativas = 5). */
 const RECALCULO_MAX_TENTATIVAS = 5;
@@ -99,6 +108,11 @@ function construirWhereProcesso(organizationId: string, filtros: FiltroFila, par
   if (filtros.armadorId) {
     params.push(filtros.armadorId);
     where.push(`p.armador_id = $${params.length}`);
+  }
+  const apuracao: SituacaoApuracaoFiltro = filtros.apuracaoStatus ?? 'OPEN';
+  if (apuracao !== 'TODOS') {
+    params.push(apuracao);
+    where.push(`p.apuracao_status = $${params.length}`);
   }
   if (filtros.comPendencia) where.push(existsPendenciaAberta('p.id'));
   if (filtros.comFalhaTecnica) where.push(existsFalhaTecnica('p.id'));
@@ -224,6 +238,7 @@ export function serializarFiltrosCanonico(organizationId: string, hoje: CivilDat
     ['periodoFim', f.periodoFim ?? null],
     ['busca', f.busca ?? null],
     ['incluirSilenciosos', f.incluirSilenciosos === true],
+    ['apuracaoStatus', f.apuracaoStatus ?? 'OPEN'],
   ];
   return JSON.stringify(pares);
 }
@@ -267,6 +282,11 @@ interface ProcessoCandidato {
   responsavel_membership_id: string | null;
   responsavel_nome: string | null;
   processo_calc_em: unknown;
+  apuracao_status: 'OPEN' | 'FINAL';
+  fechado_em: unknown;
+  encerramento_bloqueio: string | null;
+  encerramento_bloqueio_container_id: string | null;
+  encerramento_avaliado_em: unknown;
 }
 
 async function buscarProcessosCandidatos(pool: Pool, organizationId: string, filtros: FiltroFila): Promise<ProcessoCandidato[]> {
@@ -276,7 +296,8 @@ async function buscarProcessosCandidatos(pool: Pool, organizationId: string, fil
     `SELECT p.id AS processo_id, p.numero_processo, p.cliente_id, cli.nome AS cliente_nome,
             p.hbl, p.mbl, p.armador_id, arm.codigo_interno AS armador_codigo, arm.nome AS armador_nome,
             p.responsavel_operacional_membership_id AS responsavel_membership_id, resp_u.nome AS responsavel_nome,
-            p.lifecycle_calculated_at AS processo_calc_em
+            p.lifecycle_calculated_at AS processo_calc_em,
+            p.apuracao_status, p.fechado_em, p.encerramento_bloqueio, p.encerramento_bloqueio_container_id, p.encerramento_avaliado_em
        FROM processos p
        LEFT JOIN clientes cli ON cli.id = p.cliente_id
        LEFT JOIN armadores arm ON arm.id = p.armador_id
@@ -542,6 +563,9 @@ export async function buscarFilaOperacional(pool: Pool, input: BuscarFilaInput):
     return {
       contrato: CONTRATO_FILA_ITEM_V1,
       processo: { id: candidato.processo_id, numero: candidato.numero_processo },
+      apuracaoStatus: candidato.apuracao_status,
+      fechadoEm: isoTimestamp(candidato.fechado_em),
+      encerramento: encerramentoDoProcesso(candidato),
       cliente: candidato.cliente_id ? { id: candidato.cliente_id, nome: candidato.cliente_nome ?? '' } : null,
       house: candidato.hbl,
       mbl: candidato.mbl,
@@ -573,6 +597,8 @@ export async function buscarFilaOperacional(pool: Pool, input: BuscarFilaInput):
 
   return {
     contrato: CONTRATO_LEITURA_V1,
+    escopo: ESCOPO_FILA_DA_EQUIPE,
+    apuracaoStatus: f.apuracaoStatus ?? 'OPEN',
     itens,
     total: ordem.length,
     cursor: cursorSaida,
@@ -588,14 +614,19 @@ export { compararDesempate };
  * D12 v1.2, item 5 — contagem por estado e por balde para `/filtros`, com a
  * MESMA derivação atual da fila (nenhuma regra duplicada: reaproveita
  * `buscarProcessosCandidatos`/`buscarContainersDosCandidatos`/`derivarEmLote`/
- * `consolidarProcesso`, todas já congeladas/compartilhadas). SEM filtro de
- * processo (conta TODOS, inclusive SILENCIOSO — a tela decide depois o que
- * exibir) e SEM paginação — só a contagem. Custo constante (as mesmas
- * consultas em lote da fila, nunca uma por processo).
+ * `consolidarProcesso`, todas já congeladas/compartilhadas). Sem filtro de
+ * processo além da situação da apuração (conta inclusive SILENCIOSO — a tela
+ * decide depois o que exibir) e SEM paginação — só a contagem. Custo
+ * constante (as mesmas consultas em lote da fila, nunca uma por processo).
+ *
+ * Produção P1: a situação da apuração é a MESMA da fila (padrão `OPEN`) —
+ * os contadores da fila ativa nunca incluem processo FINAL.
  */
-export async function contarEstadosEBaldes(pool: Pool, organizationId: string, hoje?: CivilDate): Promise<{ estados: Array<{ codigo: string; total: number }>; baldes: Array<{ codigo: string; total: number }> }> {
+export async function contarEstadosEBaldes(
+  pool: Pool, organizationId: string, hoje?: CivilDate, apuracaoStatus: SituacaoApuracaoFiltro = 'OPEN',
+): Promise<{ estados: Array<{ codigo: string; total: number }>; baldes: Array<{ codigo: string; total: number }> }> {
   const h = hoje ?? hojeOperacional();
-  const candidatos = await buscarProcessosCandidatos(pool, organizationId, filtroFilaVazio());
+  const candidatos = await buscarProcessosCandidatos(pool, organizationId, { ...filtroFilaVazio(), apuracaoStatus });
   const containers = await buscarContainersDosCandidatos(pool, organizationId, candidatos.map((c) => c.processo_id));
   const containersPorProcesso = new Map<string, ContainerCandidato[]>();
   for (const c of containers) {

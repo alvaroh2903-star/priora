@@ -11,7 +11,7 @@ import {
   AutorLeitura, CONTRATO_LEITURA_V1, ContainerDetalheV1, DecisaoResponsabilidadeLeitura, DoisRelogiosLeitura, LiderLeitura,
   ProcessoDetalheV1, RelogioLeitura, ResponsabilidadeLeitura, TabelaComercialLeitura,
   ValorAtivoSelecionado, envelopeDoRelogio, isoTimestamp, motorClienteAplicavelDe, normalizarMotivoInvalidacao, prazoRelogioLeituraDe,
-  rotularEstado, selecionarValorAtivo, agregarFinanceiroProcesso,
+  rotularEstado, selecionarValorAtivo, agregarFinanceiroProcesso, encerramentoDoProcesso,
 } from './contrato';
 
 /**
@@ -155,8 +155,11 @@ async function buscarDadosBatchContainers(
   }
 
   const { rows: minutasRows } = await pool.query(
-    `SELECT id, container_id, estado_minuta, numero_informado, data_informada, data_validada, divergente_do_tracking, motivo_rejeicao, criado_em
-       FROM minutas WHERE container_id = ANY($1) ORDER BY container_id, criado_em`,
+    `SELECT m.id, m.container_id, m.estado_minuta, m.numero_informado, m.data_informada, m.data_validada, m.divergente_do_tracking,
+            m.motivo_rejeicao, m.criado_em, m.regra_avaliacao, m.versao, m.substituida_por_id, m.data_tracking_comparada, m.aguardando,
+            d.id AS documento_id, d.nome_arquivo, d.tipo_conteudo, d.tamanho_bytes, d.hash_conteudo
+       FROM minutas m LEFT JOIN documentos d ON d.minuta_id = m.id
+      WHERE m.container_id = ANY($1) ORDER BY m.container_id, m.criado_em, m.id`,
     [containerIds],
   );
   const minutasPorContainer = new Map<string, any[]>();
@@ -370,6 +373,17 @@ function montarDetalheContainerDeDados(
       dataInformada: m.data_informada, dataValidada: m.data_validada,
       divergenteDoTracking: m.divergente_do_tracking ?? false,
       motivoRejeicao: m.motivo_rejeicao ?? null, criadoEm: isoTimestamp(m.criado_em)!,
+      legado: m.regra_avaliacao === null,
+      vigente: m.substituida_por_id === null && m.estado_minuta !== 'SUBSTITUIDA',
+      versao: m.versao ?? null,
+      substituidaPorId: m.substituida_por_id ?? null,
+      dataTrackingComparada: m.data_tracking_comparada ?? null,
+      aguardando: m.aguardando ?? null,
+      // Metadados do documento (nunca a referência de armazenamento — essa só
+      // pela leitura dedicada e autorizada `/minutas/:id/documento`).
+      documento: m.documento_id
+        ? { id: m.documento_id, nomeArquivo: m.nome_arquivo, tipoConteudo: m.tipo_conteudo, tamanhoBytes: Number(m.tamanho_bytes), hashConteudo: m.hash_conteudo }
+        : null,
     })),
     trackingAtualizadoEm: pacote.facts.ultimaConsultaValida,
     falhaTrackingAtiva: pacote.facts.falhaTrackingAtiva,
@@ -503,12 +517,12 @@ export async function buscarDetalheProcesso(pool: Pool, organizationId: string, 
   const falhasTecnicas = { total: Object.values(falhaPorTipo).reduce((a, b) => a + b, 0), porTipo: falhaPorTipo };
 
   const { rows: fechRows } = await pool.query(
-    `SELECT f.justificativa, f.criado_em, u.nome AS realizado_por_nome FROM fechamentos f LEFT JOIN usuarios u ON u.id = f.realizado_por
+    `SELECT f.justificativa, f.criado_em, f.origem, u.nome AS realizado_por_nome FROM fechamentos f LEFT JOIN usuarios u ON u.id = f.realizado_por
       WHERE f.processo_id = $1 ORDER BY f.criado_em DESC LIMIT 1`,
     [processoId],
   );
   const fechamento = p.apuracao_status === 'FINAL' && fechRows.length
-    ? { realizadoPor: fechRows[0].realizado_por_nome, justificativa: fechRows[0].justificativa, em: isoTimestamp(fechRows[0].criado_em)! }
+    ? { realizadoPor: fechRows[0].realizado_por_nome, justificativa: fechRows[0].justificativa, em: isoTimestamp(fechRows[0].criado_em)!, origem: fechRows[0].origem }
     : null;
 
   const { rows: reabRows } = await pool.query(
@@ -540,6 +554,7 @@ export async function buscarDetalheProcesso(pool: Pool, organizationId: string, 
     agregadoFinanceiro,
     proximoVencimento,
     fechamento,
+    encerramento: encerramentoDoProcesso(p),
     reaberturas: reabRows.map((r) => ({ id: r.id, estado: r.estado, solicitadaPor: r.solicitada_por_nome, autorizadaPor: r.autorizada_por_nome, justificativa: r.justificativa, criadoEm: isoTimestamp(r.criado_em)! })),
   };
 }

@@ -18,6 +18,7 @@ import { ClosingService } from '../closing/closingService';
 import { passagemDoCalendario } from '../apuracao/passagemCalendario';
 import { decidirResponsabilidade } from '../responsabilidade/decidirResponsabilidade';
 import { seedArmadorTables } from '../tariffs/seed/armadorTables';
+import { registrarMinutaDeTeste } from './minutaTestHelper';
 import { seedRocketTermoPorEmbarque } from '../tariffs/seed/rocketTermoPorEmbarque';
 import {
   criarRascunho, ativar, criarVersaoCorrigida, substituirFaixas, TariffTableImutavelError, FaixaEntrada,
@@ -148,13 +149,25 @@ async function registrarPadrao(pool: Pool, p: {
   return { processoId: r.processoId, containerId: r.containers[0].containerId, registro: r };
 }
 
-/** Finaliza com minuta validada (comprovação) — sempre pelos serviços de fechamento. */
+/**
+ * Registra a minuta coerente (comprovação) e leva o processo a FINAL — sempre
+ * pelos serviços de fechamento.
+ *
+ * Produção P1 (correção de minuta e encerramento): a minuta é registrada pelo
+ * ANALISTA e aceita por verificação técnica automática (não há mais
+ * `validarMinuta` de gestor), e o encerramento é AUTOMÁTICO — quando todos os
+ * gates reais estão satisfeitos, o próprio registro (ou um gatilho anterior,
+ * ex.: a devolução pelo tracking num processo sem custo) já leva o processo a
+ * FINAL. O helper devolve `{ ok: true }` quando o processo terminou FINAL pelos
+ * gates reais; senão, o resultado do acionamento administrativo (que mostra o
+ * gate que bloqueou, exatamente como antes).
+ */
 async function minutaValidadaEFinaliza(pool: Pool, p: { orgId: string; processoId: string; containerId: string; numero: string; dataRetorno: string; hoje: string }) {
   const closing = new ClosingService(pool);
   const gestor = await novoGestor(pool, p.orgId);
-  const minuta = await closing.registrarMinuta({ containerId: p.containerId, numeroInformado: p.numero, dataInformada: p.dataRetorno });
-  const v = await closing.validarMinuta({ minutaId: minuta.id, membershipId: gestor, config: { hoje: p.hoje } });
-  assert.equal((v as any).resultado, 'validada', `minuta deveria validar: ${JSON.stringify(v)}`);
+  const minuta = await registrarMinutaDeTeste(pool, { containerId: p.containerId, numero: p.numero, data: p.dataRetorno, hoje: p.hoje });
+  assert.equal(minuta.minuta.estado, 'ACEITA', `minuta deveria ser aceita tecnicamente: ${JSON.stringify(minuta.minuta)}`);
+  if (minuta.encerramento.resultado === 'finalizado' || minuta.encerramento.resultado === 'ja_final') return { ok: true };
   return closing.finalizarProcesso({ processoId: p.processoId, membershipId: gestor, config: { hoje: p.hoje } });
 }
 
@@ -328,10 +341,14 @@ test('D16 #4: contêiner devolvido sem custo (dentro do Free Time) chega a FINAL
     assert.equal(rel.rocket.dias_demurrage, 0);
     assert.equal((await valoresAtivos(pool, s.containerId)).length, 0, 'nenhum valor ativo — zero confirmado');
 
+    // Produção P1 (encerramento automático): a devolução dentro do Free Time,
+    // confirmada pelo tracking, já levou o processo a FINAL na própria ingestão
+    // — sem minuta, sem gestor. A finalização manual deixou de ser obrigatória;
+    // o acionamento administrativo é idempotente.
+    assert.equal(await apuracaoStatus(pool, s.processoId), 'FINAL');
     const gestor = await novoGestor(pool, org.id);
     const fin = await new ClosingService(pool).finalizarProcesso({ processoId: s.processoId, membershipId: gestor, config: { hoje: '2026-10-04' } });
-    assert.deepEqual(fin, { ok: true });
-    assert.equal(await apuracaoStatus(pool, s.processoId), 'FINAL');
+    assert.deepEqual(fin, { ok: false, motivo: 'ja_final' });
     assert.equal(await contar(pool, `SELECT count(*)::int n FROM minutas WHERE container_id=$1`, [s.containerId]), 0, 'nenhuma minuta foi necessária');
     assert.equal(await contar(pool, `SELECT count(*)::int n FROM fechamentos WHERE processo_id=$1`, [s.processoId]), 1);
     assert.equal((await eventosFechamento(pool, s.processoId, 'FECHAMENTO_FINAL')).length, 1);
@@ -591,7 +608,13 @@ test('D16 #9: responsabilidade DIVIDIDA entre cliente e Rocket — dias e valore
  * #10 — Divergência minuta × cronologia (tracking) detectada e resolvida
  * ================================================================== */
 
-test('D16 #10: divergência minuta × tracking é DETECTADA (bloqueia), preserva as duas fontes e é RESOLVIDA por revisão explícita do Gestor', { skip: !url }, async () => {
+test('D16 #10 (reescrito na correção de minuta P1): divergência minuta × tracking é DETECTADA, preserva as duas fontes e é RESOLVIDA por minuta substituta coerente — nunca por revisão de gestor', { skip: !url }, async () => {
+  // Produção P1: a expectativa antiga ("o Gestor aceita a data da minuta e o
+  // effective_return_date passa a ser 10-05") deixou de valer — a devolução
+  // OFICIAL é a do tracking; minuta divergente vira pendência do ANALISTA, que
+  // registra uma substituta coerente. Este processo é sem custo (retorno 10-03,
+  // LFD 10-08): o tracking já o encerra automaticamente; a minuta divergente
+  // chega DEPOIS do FINAL — fato material, exige reabertura, nada mutado.
   const pool = testPool();
   try {
     const org = await setup(pool);
@@ -599,35 +622,30 @@ test('D16 #10: divergência minuta × tracking é DETECTADA (bloqueia), preserva
     const numero = numeroContainer('DSUJ', 1);
     const s = await registrarPadrao(pool, { orgId: org.id, numeroProcesso: 'IM-D16-MINDIV', numero, house: 14, master: 14 });
     await ingerirTrackingDoContainer(pool, s.containerId, tracking(numero, { descarga: '2026-09-25', gateOut: '2026-09-28', retorno: '2026-10-03' }), '2026-10-03');
+    assert.equal(await apuracaoStatus(pool, s.processoId), 'FINAL', 'devolução no prazo confirmada pelo tracking → encerramento automático');
 
-    const closing = new ClosingService(pool);
-    const gestor = await novoGestor(pool, org.id);
-    const minuta = await closing.registrarMinuta({ containerId: s.containerId, numeroInformado: numero, dataInformada: '2026-10-05', evidenciaRef: 'minuta-terminal-1005.pdf' });
-
-    // Detectada: não é aceita automaticamente.
-    const v1 = await closing.validarMinuta({ minutaId: minuta.id, membershipId: gestor, config: { hoje: '2026-10-06' } });
-    assert.deepEqual(v1, { ok: true, resultado: 'divergencia_pendente', dataInformada: '2026-10-05', trackingReturnDate: '2026-10-03' });
+    const minuta = await registrarMinutaDeTeste(pool, { containerId: s.containerId, numero, data: '2026-10-05', hoje: '2026-10-06', evidenciaRef: 'minuta-terminal-1005.pdf' });
+    assert.equal(minuta.minuta.estado, 'DIVERGENTE', 'detectada: não é aceita automaticamente');
+    assert.equal(minuta.exigeReabertura, true);
+    assert.equal(minuta.pendencia, 'minuta_divergente_tracking');
     let c = await containerRow(pool, s.containerId);
-    assert.equal(c.effective_return_date, null, 'nada alterado sem revisão humana');
+    assert.equal(c.effective_return_date, null, 'nada alterado');
     assert.equal(c.tracking_return_date, '2026-10-03', 'evidência do tracking preservada');
-    assert.equal((await pool.query(`SELECT divergente_do_tracking, data_informada FROM minutas WHERE id=$1`, [minuta.id])).rows[0].divergente_do_tracking, true);
-    assert.equal((await eventosFechamento(pool, s.processoId, 'DIVERGENCIA_TRACKING_MINUTA')).length, 1);
-    const bloqueado = await closing.finalizarProcesso({ processoId: s.processoId, membershipId: gestor, config: { hoje: '2026-10-06' } });
-    assert.deepEqual(bloqueado, { ok: false, motivo: 'divergencia_pendente' }, 'divergência conhecida bloqueia até mesmo o fechamento zero-custo');
+    assert.equal((await pool.query(`SELECT divergente_do_tracking, data_informada FROM minutas WHERE id=$1`, [minuta.minuta.id])).rows[0].divergente_do_tracking, true);
+    assert.equal((await eventosFechamento(pool, s.processoId, 'MINUTA_DIVERGENTE')).length, 1);
 
-    // Resolvida: revisão EXPLÍCITA do Gestor aceitando a data documental.
-    const v2 = await closing.validarMinuta({ minutaId: minuta.id, membershipId: gestor, aceitarDivergencia: true, config: { hoje: '2026-10-06' } });
-    assert.deepEqual(v2, { ok: true, resultado: 'validada', dataValidada: '2026-10-05', divergente: true });
+    // Resolvida: substituta coerente (mesma data do tracking) — pendência resolvida pelo sistema.
+    const subst = await registrarMinutaDeTeste(pool, { containerId: s.containerId, numero, data: '2026-10-03', hoje: '2026-10-06' });
+    assert.equal(subst.minuta.estado, 'ACEITA');
+    assert.equal(subst.exigeReabertura, false);
+    const pend = (await pool.query(`SELECT estado FROM demurrage_pendencias WHERE container_id = $1 AND tipo = 'minuta_divergente_tracking'`, [s.containerId])).rows;
+    assert.deepEqual(pend, [{ estado: 'resolvida' }]);
     c = await containerRow(pool, s.containerId);
-    assert.equal(c.effective_return_date, '2026-10-05');
-    assert.equal(c.tracking_return_date, '2026-10-03', 'tracking_return_date NUNCA é apagado — as duas fontes coexistem');
+    assert.equal(c.effective_return_date, null);
+    assert.equal(c.tracking_return_date, '2026-10-03', 'tracking_return_date NUNCA é apagado');
     const rel = await relogios(pool, s.containerId);
-    assert.equal(rel.cliente.data_final_apuracao, '2026-10-05', 'recalculado com a data validada');
-    assert.equal(rel.cliente.dias_demurrage, 0, 'ainda dentro do Free Time (LFD 10-08)');
-    assert.equal((await eventosFechamento(pool, s.processoId, 'DIVERGENCIA_TRACKING_MINUTA')).length, 1, 'divergência registrada uma única vez');
-
-    const fin = await closing.finalizarProcesso({ processoId: s.processoId, membershipId: gestor, config: { hoje: '2026-10-06' } });
-    assert.deepEqual(fin, { ok: true });
+    assert.equal(rel.cliente.data_final_apuracao, '2026-10-03', 'relógios seguem a devolução oficial (tracking)');
+    assert.equal(await apuracaoStatus(pool, s.processoId), 'FINAL');
   } finally { await pool.end(); }
 });
 
@@ -649,8 +667,8 @@ async function cenarioFinalZero(pool: Pool, sufixo: string) {
   await ingerirTrackingDoContainer(pool, s.containerId, tracking(numero, { descarga: '2026-09-25', gateOut: '2026-09-26', retorno: '2026-09-28' }), '2026-09-28');
   const closing = new ClosingService(pool);
   const gestor = await novoGestor(pool, org.id);
-  const fin = await closing.finalizarProcesso({ processoId: s.processoId, membershipId: gestor, config: { hoje: '2026-09-29' } });
-  assert.deepEqual(fin, { ok: true }, 'pré-condição: FINAL zero-custo');
+  // Produção P1: a devolução no prazo confirmada pelo tracking encerra AUTOMATICAMENTE.
+  assert.equal(await apuracaoStatus(pool, s.processoId), 'FINAL', 'pré-condição: FINAL zero-custo (automático)');
   // O armador CORRIGE o Empty Return para 10-02 (fora do Free Time) — fato material.
   const correcao = tracking(numero, { descarga: '2026-09-25', gateOut: '2026-09-26', retorno: '2026-10-02' });
   return { orgId: org.id, ...s, numero, closing, gestor, correcao };
@@ -1421,12 +1439,19 @@ test('D16 #22: isolamento de organização — registro, tracking, responsabilid
     });
     assert.equal(decA.ok, true);
 
+    // Produção P1: o membership de OUTRA organização não registra minuta em A;
+    // o de A registra, o aceite é técnico e o processo encerra AUTOMATICAMENTE.
     const closing = new ClosingService(pool);
-    const minuta = await closing.registrarMinuta({ containerId: a.containerId, numeroInformado: nA, dataInformada: '2026-10-04' });
-    assert.deepEqual(await closing.validarMinuta({ minutaId: minuta.id, membershipId: gestorB, config: { hoje: '2026-10-05' } }), { ok: false, motivo: 'apenas_manager_admin' });
-    assert.equal((await closing.validarMinuta({ minutaId: minuta.id, membershipId: gestorA, config: { hoje: '2026-10-05' } }) as any).resultado, 'validada');
+    const docIso = { origem: 'referencia_externa', referencia: 'teste://d16/iso', nomeArquivo: 'iso.pdf', tipoConteudo: 'application/pdf', tamanhoBytes: 10, hashConteudo: 'b'.repeat(64) };
+    assert.deepEqual(
+      await closing.registrarMinuta({ containerId: a.containerId, membershipId: gestorB, numeroInformado: nA, dataInformada: '2026-10-04', documento: docIso, config: { hoje: '2026-10-05' } }),
+      { ok: false, motivo: 'ator_nao_autorizado' },
+    );
+    const minuta = await closing.registrarMinuta({ containerId: a.containerId, membershipId: gestorA, numeroInformado: nA, dataInformada: '2026-10-04', documento: docIso, config: { hoje: '2026-10-05' } });
+    assert.ok(minuta.ok && minuta.minuta.estado === 'ACEITA');
+    assert.deepEqual(minuta.ok && minuta.encerramento, { resultado: 'finalizado' });
     assert.deepEqual(await closing.finalizarProcesso({ processoId: a.processoId, membershipId: gestorB, config: { hoje: '2026-10-05' } }), { ok: false, motivo: 'apenas_manager_admin' });
-    assert.deepEqual(await closing.finalizarProcesso({ processoId: a.processoId, membershipId: gestorA, config: { hoje: '2026-10-05' } }), { ok: true });
+    assert.deepEqual(await closing.finalizarProcesso({ processoId: a.processoId, membershipId: gestorA, config: { hoje: '2026-10-05' } }), { ok: false, motivo: 'ja_final' });
     assert.deepEqual(await closing.solicitarReabertura({ processoId: a.processoId, membershipId: analistaB, justificativa: 'cross' }), { ok: false, motivo: 'ator_nao_autorizado' });
     const sol = await closing.solicitarReabertura({ processoId: a.processoId, membershipId: gestorA, justificativa: 'Revisão interna de A.' });
     assert.deepEqual(await closing.autorizarReabertura({ reaberturaId: (sol as any).reaberturaId, membershipId: gestorB, config: { hoje: '2026-10-06' } }), { ok: false, motivo: 'apenas_manager_admin' });

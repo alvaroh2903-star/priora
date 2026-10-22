@@ -136,7 +136,9 @@ export async function montarGestaoOperacional(
     `SELECT
         count(*) FILTER (WHERE p.prioridade_balde = 'CRITICA_7_14')::int AS a4_critico_7_14,
         count(*) FILTER (WHERE p.prioridade_balde = 'CRITICA_15')::int AS a5_critico_15,
-        count(*) FILTER (WHERE p.estado_mais_relevante = 'DEVOLVIDO_AGUARDANDO_TRATAMENTO')::int AS a9_aguardando_tratamento,
+        -- Produção P1 (correção de minuta/encerramento): processo FINAL nunca está
+        -- "aguardando tratamento" — o estado consolidado persistido não conhece o FINAL.
+        count(*) FILTER (WHERE p.estado_mais_relevante = 'DEVOLVIDO_AGUARDANDO_TRATAMENTO' AND p.apuracao_status = 'OPEN')::int AS a9_aguardando_tratamento,
         count(*) FILTER (WHERE p.apuracao_status = 'FINAL')::int AS a10_concluidos,
         count(*) FILTER (
           WHERE p.estado_mais_relevante = 'PENDENCIA_DE_DADOS'

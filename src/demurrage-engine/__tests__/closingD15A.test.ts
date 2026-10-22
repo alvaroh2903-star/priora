@@ -11,6 +11,13 @@ import { ClosingService } from '../closing/closingService';
 import { promoverHouseFreeTimeComClient } from '../freeTime/houseFreeTimeService';
 import { promoverMasterFreeTime } from '../freeTime/masterFreeTimeService';
 import { novoGestor, novoMembro } from './responsabilidadeTestHelper';
+import { createHash, randomUUID } from 'crypto';
+
+/** Produção P1 — o registro de minuta exige o documento (referência auditável). */
+const docD15A = (tag: string) => ({
+  origem: 'referencia_externa', referencia: `teste://d15a/${tag}`, nomeArquivo: `${tag}.pdf`, tipoConteudo: 'application/pdf',
+  tamanhoBytes: 2048, hashConteudo: createHash('sha256').update(tag).digest('hex'),
+});
 
 /**
  * Fase D15-A — testes de aceitação obrigatórios (diagnóstico f22d153, escopo
@@ -219,29 +226,41 @@ test('D15-A: fato material com valor IDÊNTICO ao selecionado nunca bloqueia nem
  *     ANTES de devolver exige_reabertura.
  * ================================================================== */
 
-test('D15-A #3: minuta divergente em processo FINAL registra tracking E minuta antes de exige_reabertura', { skip: !url }, async () => {
+test('D15-A #3 (reescrito na correção de minuta P1): minuta divergente registrada em processo FINAL guarda tracking E minuta num fato material e exige reabertura', { skip: !url }, async () => {
+  // Produção P1: não existe mais `validarMinuta` (aprovação de gestor). A
+  // garantia de D15-A continua — nunca um retorno "mudo", nunca mutar a
+  // projeção FINAL —, agora no próprio REGISTRO (aceite técnico automático):
+  // a minuta é persistida (DIVERGENTE, evidência preservada), o fato material
+  // é registrado com as duas evidências e a resposta diz `exigeReabertura`.
   const pool = testPool();
   try {
     await setupBanco(pool);
     const cen = await cenarioFinal(pool, 'MATV0000001');
-    const m = await cen.svc.registrarMinuta({ containerId: cen.containerId, numeroInformado: 'MATV0000001', dataInformada: '2026-09-20' });
-    const r = await cen.svc.validarMinuta({ minutaId: m.id, membershipId: cen.gestorId, config: cfg });
-    assert.deepEqual(r, { ok: false, motivo: 'exige_reabertura' });
+    const registrar = () => cen.svc.registrarMinuta({
+      containerId: cen.containerId, membershipId: cen.gestorId, numeroInformado: 'MATV0000001', dataInformada: '2026-09-20',
+      documento: docD15A(randomUUID()), config: cfg,
+    });
+    const r = await registrar();
+    assert.ok(r.ok);
+    if (!r.ok) return;
+    assert.equal(r.minuta.estado, 'DIVERGENTE');
+    assert.equal(r.exigeReabertura, true);
     assert.equal((await container(pool, cen.containerId)).effective_return_date, null, 'projeção FINAL nunca mutada');
 
     const ev = await eventosMateriais(pool, cen.containerId);
     assert.equal(ev.length, 1);
     assert.equal(ev[0].payload.campo, 'minutaDivergente');
-    assert.equal(ev[0].payload.valorAnterior, '2026-09-10', 'evidência congelada (relógios/tracking)');
+    assert.equal(ev[0].payload.valorAnterior, '2026-09-10', 'evidência congelada (tracking)');
     assert.equal(ev[0].payload.valorNovo, '2026-09-20', 'evidência da minuta');
     assert.equal(ev[0].payload.trackingReturnDate, '2026-09-10', 'as DUAS evidências ficam no mesmo registro');
     assert.equal(ev[0].origem, 'humano');
     assert.equal(ev[0].ator_usuario_id, (await pool.query(`SELECT usuario_id FROM organization_memberships WHERE id=$1`, [cen.gestorId])).rows[0].usuario_id, 'ator real, resolvido por membership');
 
-    // Reprocessar a MESMA validação não duplica o evento (idempotente).
-    const r2 = await cen.svc.validarMinuta({ minutaId: m.id, membershipId: cen.gestorId, config: cfg });
-    assert.deepEqual(r2, { ok: false, motivo: 'exige_reabertura' });
+    // Registrar de novo a MESMA divergência não duplica o fato material (idempotente por conteúdo).
+    const r2 = await registrar();
+    assert.ok(r2.ok && r2.exigeReabertura);
     assert.equal((await eventosMateriais(pool, cen.containerId)).length, 1, 'nenhum evento duplicado');
+    assert.equal((await pool.query(`SELECT apuracao_status FROM processos WHERE id = $1`, [cen.processoId])).rows[0].apuracao_status, 'FINAL');
   } finally { await pool.end(); }
 });
 
@@ -321,29 +340,37 @@ test('D15-A #6: duas autorizações de reabertura concorrentes produzem exatamen
  * 7/8 — Falha injetada: rollback TOTAL, nenhum estado parcial.
  * ================================================================== */
 
-test('D15-A #7: falha entre a validação da minuta e o recálculo desfaz TUDO (nenhum estado parcial)', { skip: !url }, async () => {
+test('D15-A #7 (reescrito na correção de minuta P1): falha no meio do registro da minuta desfaz TUDO (nenhum estado parcial)', { skip: !url }, async () => {
+  // Produção P1: a etapa "validação → recálculo" não existe mais (a minuta
+  // nunca recalcula nem muda a devolução). A garantia de atomicidade de D15-A
+  // vale para o fluxo que a substituiu: registro + documento + substituição
+  // + aceite técnico + pendência numa transação — falha antes do COMMIT não
+  // deixa nada para trás.
   const pool = testPool();
   try {
     await setupBanco(pool);
     const base = await seedZero(pool, 'ROLV0000001');
-    // Dias de demurrage (abre o relógio) via minuta que muda a data de retorno.
     const svc = new ClosingService(pool);
-    const m = await svc.registrarMinuta({ containerId: base.containerId, numeroInformado: 'ROLV0000001', dataInformada: '2026-09-12' });
-    const gestorId = await novoGestor(pool, base.orgId);
-    const minutaAntes = (await pool.query(`SELECT estado_minuta FROM minutas WHERE id=$1`, [m.id])).rows[0];
+    const analistaId = await novoMembro(pool, base.orgId, 'ANALYST');
+    const m = await svc.registrarMinuta({ containerId: base.containerId, membershipId: analistaId, numeroInformado: 'ROLV0000001', dataInformada: '2026-09-12', documento: docD15A('a'), config: cfg });
+    assert.ok(m.ok && m.minuta.estado === 'DIVERGENTE');
+    const minutasAntes = (await pool.query(`SELECT id, estado_minuta, substituida_por_id FROM minutas ORDER BY id`)).rows;
     const containerAntes = await container(pool, base.containerId);
+    const pendAntes = (await pool.query(`SELECT id, estado FROM demurrage_pendencias ORDER BY id`)).rows;
+    const eventosAntes = (await pool.query(`SELECT count(*)::int AS n FROM closing_events`)).rows[0].n;
 
     await assert.rejects(
-      () => svc.validarMinuta({
-        minutaId: m.id, membershipId: gestorId, config: cfg, aceitarDivergencia: true,
-        _testeFalhaEntreValidacaoERecalculo: () => { throw new Error('falha injetada D15-A #7'); },
+      () => svc.registrarMinuta({
+        containerId: base.containerId, membershipId: analistaId, numeroInformado: 'ROLV0000001', dataInformada: '2026-09-10', documento: docD15A('b'), config: cfg,
+        _testeAntesDoCommit: () => { throw new Error('falha injetada D15-A #7'); },
       }),
       /falha injetada D15-A #7/,
     );
 
-    const minutaDepois = (await pool.query(`SELECT estado_minuta FROM minutas WHERE id=$1`, [m.id])).rows[0];
+    assert.deepEqual((await pool.query(`SELECT id, estado_minuta, substituida_por_id FROM minutas ORDER BY id`)).rows, minutasAntes, 'minutas exatamente como antes — rollback total');
+    assert.deepEqual((await pool.query(`SELECT id, estado FROM demurrage_pendencias ORDER BY id`)).rows, pendAntes);
+    assert.equal((await pool.query(`SELECT count(*)::int AS n FROM closing_events`)).rows[0].n, eventosAntes);
     const containerDepois = await container(pool, base.containerId);
-    assert.deepEqual(minutaDepois, minutaAntes, 'minuta permanece exatamente como antes (RECEBIDA) — rollback total');
     assert.equal(containerDepois.effective_return_date, containerAntes.effective_return_date, 'container intocado — rollback total');
     assert.equal(containerDepois.effective_return_minuta_id, containerAntes.effective_return_minuta_id);
   } finally { await pool.end(); }

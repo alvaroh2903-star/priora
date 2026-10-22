@@ -57,6 +57,15 @@ export class PendenciaResolucaoError extends Error {
   }
 }
 
+/**
+ * Produção P1 (correção de minuta) — pendências que ESPELHAM o estado da
+ * minuta vigente: só se resolvem automaticamente (minuta substituta coerente
+ * ou fato que muda a avaliação), nunca por resolução manual — ficam fora do
+ * catálogo de `acoes/pendenciaCatalogo.ts` e as leituras não oferecem
+ * `podeResolver` para elas.
+ */
+export const TIPOS_PENDENCIA_SO_RESOLUCAO_AUTOMATICA: readonly string[] = ['minuta_divergente_tracking', 'minuta_inconsistente'];
+
 /** Papéis internos autorizados a resolver manualmente uma pendência — mesma régua já aprovada em outras ações de gestão (nunca CLIENT). */
 export const PAPEIS_RESOLUCAO_PENDENCIA: readonly string[] = ['ANALYST', 'MANAGER', 'ADMIN'];
 

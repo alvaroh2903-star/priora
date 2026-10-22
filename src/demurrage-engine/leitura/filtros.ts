@@ -1,7 +1,9 @@
 import { Pool } from 'pg';
 import { ESTADOS_OPERACIONAIS, EstadoOperacional, ORDEM_BALDE, PrioridadeBalde } from '../lifecycle/types';
 import { CivilDate } from '../temporal/civilDate';
-import { CampoPeriodo, CONTRATO_LEITURA_V1, ErroLeitura, FiltroFila, FiltrosDisponiveisV1, filtroFilaVazio } from './contrato';
+import {
+  CampoPeriodo, CONTRATO_LEITURA_V1, ESCOPO_FILA_DA_EQUIPE, ErroLeitura, FiltroFila, FiltrosDisponiveisV1, SituacaoApuracaoFiltro, filtroFilaVazio,
+} from './contrato';
 import { contarEstadosEBaldes } from './filaOperacional';
 
 /**
@@ -18,12 +20,18 @@ import { contarEstadosEBaldes } from './filaOperacional';
  * `contarEstadosEBaldes` (mesma derivação atual, mesmas funções congeladas),
  * para que fila, detalhe e `/filtros` concordem sempre sobre o mesmo
  * instante. Nenhuma soma financeira aqui (DV-01 fica só na fila/detalhe).
+ *
+ * Produção P1 (reabertura controlada): `apuracaoStatus` (`OPEN` padrão,
+ * `FINAL`, `TODOS`) seleciona explicitamente a situação da apuração na fila
+ * e em `/filtros` — opções e contagens da visão ativa nunca incluem processo
+ * FINAL; `apuracao.{abertos,finalizados}` dá os dois totais separados.
  */
 
 const RE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const RE_DATA = /^\d{4}-\d{2}-\d{2}$/;
 const BALDES: PrioridadeBalde[] = Object.keys(ORDEM_BALDE) as PrioridadeBalde[];
 const CAMPOS_PERIODO: CampoPeriodo[] = ['descarga', 'devolucao'];
+const SITUACOES_APURACAO: SituacaoApuracaoFiltro[] = ['OPEN', 'FINAL', 'TODOS'];
 
 function erroValor(campo: string): never {
   throw new ErroLeitura(400, 'valor_invalido', { campo });
@@ -43,6 +51,14 @@ function boolOuErro(valor: string, campo: string): boolean {
 function primeiraString(v: unknown): string | undefined {
   if (v === undefined || v === null) return undefined;
   return Array.isArray(v) ? String(v[0]) : String(v);
+}
+
+/** `apuracaoStatus` da query string: `OPEN` (padrão), `FINAL` ou `TODOS`; qualquer outro valor é `400 valor_invalido`. */
+export function normalizarSituacaoApuracao(query: Record<string, unknown>): SituacaoApuracaoFiltro {
+  const v = primeiraString(query.apuracaoStatus);
+  if (v === undefined) return 'OPEN';
+  if (!SITUACOES_APURACAO.includes(v as SituacaoApuracaoFiltro)) erroValor('apuracaoStatus');
+  return v as SituacaoApuracaoFiltro;
 }
 
 /**
@@ -121,6 +137,13 @@ export function normalizarFiltrosFila(query: Record<string, unknown>): FiltroFil
   const busca = primeiraString(query.busca);
   if (busca !== undefined && busca.trim().length > 0) f.busca = busca.trim();
 
+  f.apuracaoStatus = normalizarSituacaoApuracao(query);
+  // Produção P1 (achado da revisão): encerrado sem demurrage é CONCLUIDO_PARA_ROCKET
+  // → balde SILENCIOSO. Quem pede explicitamente FINAL/TODOS quer encontrar os
+  // finalizados — então, sem `incluirSilenciosos` explícito, eles entram (o valor
+  // efetivo é o que vai para o hash do cursor e para `incluiuSilenciosos`).
+  if (incluirSilenciosos === undefined && f.apuracaoStatus !== 'OPEN') f.incluirSilenciosos = true;
+
   return f;
 }
 
@@ -131,32 +154,45 @@ export function normalizarFiltrosFila(query: Record<string, unknown>): FiltroFil
  * persistida. Aditivo: o resumo futuro da D13 lê as contagens já prontas
  * daqui, sem precisar chamar a fila uma vez por balde.
  */
-export async function buscarOpcoesFiltros(pool: Pool, organizationId: string, hoje?: CivilDate): Promise<FiltrosDisponiveisV1> {
-  const [responsaveis, clientes, armadores, contagens] = await Promise.all([
+export async function buscarOpcoesFiltros(
+  pool: Pool, organizationId: string, hoje?: CivilDate, apuracaoStatus: SituacaoApuracaoFiltro = 'OPEN',
+): Promise<FiltrosDisponiveisV1> {
+  // Mesma seleção de situação da fila: `$2` NULL = TODOS.
+  const situacao = apuracaoStatus === 'TODOS' ? null : apuracaoStatus;
+  const [responsaveis, clientes, armadores, contagens, porSituacao] = await Promise.all([
     pool.query(
       `SELECT DISTINCT m.id AS membership_id, u.nome
          FROM processos p
          JOIN organization_memberships m ON m.id = p.responsavel_operacional_membership_id
          JOIN usuarios u ON u.id = m.usuario_id
-        WHERE p.organization_id = $1
+        WHERE p.organization_id = $1 AND ($2::text IS NULL OR p.apuracao_status = $2)
         ORDER BY u.nome`,
-      [organizationId],
+      [organizationId, situacao],
     ),
     pool.query(
       `SELECT DISTINCT c.id, c.nome FROM processos p JOIN clientes c ON c.id = p.cliente_id
-        WHERE p.organization_id = $1 ORDER BY c.nome`,
-      [organizationId],
+        WHERE p.organization_id = $1 AND ($2::text IS NULL OR p.apuracao_status = $2) ORDER BY c.nome`,
+      [organizationId, situacao],
     ),
     pool.query(
       `SELECT DISTINCT a.id, a.codigo_interno, a.nome FROM processos p JOIN armadores a ON a.id = p.armador_id
-        WHERE p.organization_id = $1 ORDER BY a.nome`,
+        WHERE p.organization_id = $1 AND ($2::text IS NULL OR p.apuracao_status = $2) ORDER BY a.nome`,
+      [organizationId, situacao],
+    ),
+    contarEstadosEBaldes(pool, organizationId, hoje, apuracaoStatus),
+    pool.query(
+      `SELECT count(*) FILTER (WHERE apuracao_status = 'OPEN')::int AS abertos,
+              count(*) FILTER (WHERE apuracao_status = 'FINAL')::int AS finalizados
+         FROM processos WHERE organization_id = $1`,
       [organizationId],
     ),
-    contarEstadosEBaldes(pool, organizationId, hoje),
   ]);
 
   return {
     contrato: CONTRATO_LEITURA_V1,
+    escopo: ESCOPO_FILA_DA_EQUIPE,
+    apuracaoStatus,
+    apuracao: { abertos: porSituacao.rows[0].abertos, finalizados: porSituacao.rows[0].finalizados },
     responsaveis: responsaveis.rows.map((r) => ({ membershipId: r.membership_id, nome: r.nome })),
     clientes: clientes.rows.map((r) => ({ id: r.id, nome: r.nome })),
     armadores: armadores.rows.map((r) => ({ id: r.id, codigo: r.codigo_interno, nome: r.nome })),

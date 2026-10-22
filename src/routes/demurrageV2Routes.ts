@@ -6,12 +6,13 @@ import { autorizarInterno, AutorizedRequest, criarAutorizarInterno, tratarErroLe
 import { buscarFilaOperacional } from '../demurrage-engine/leitura/filaOperacional';
 import { buscarDetalheContainer, buscarDetalheProcesso } from '../demurrage-engine/leitura/detalhe';
 import { buscarTimelineProcesso } from '../demurrage-engine/leitura/timeline';
-import { normalizarFiltrosFila, buscarOpcoesFiltros } from '../demurrage-engine/leitura/filtros';
+import { normalizarFiltrosFila, normalizarSituacaoApuracao, buscarOpcoesFiltros } from '../demurrage-engine/leitura/filtros';
 import { ErroLeitura } from '../demurrage-engine/leitura/contrato';
 import { organizacaoDoProcesso } from '../demurrage-engine/acoes/organizacaoRecurso';
 import { buscarPendenciasProcesso, cursorPendenciasOuErro, normalizarFiltrosPendencias } from '../demurrage-engine/leitura/pendenciasOperacionais';
 import { buscarReaberturas, normalizarFiltrosReaberturas } from '../demurrage-engine/leitura/reaberturasOperacionais';
 import { buscarMinutas, normalizarFiltrosMinutas } from '../demurrage-engine/leitura/minutasOperacionais';
+import { buscarDocumentoDaMinuta } from '../demurrage-engine/leitura/documentoMinuta';
 import { paginacaoOperacionalDaQuery } from '../demurrage-engine/leitura/parametrosOperacionais';
 import { responderErroLeituraOperacional } from '../demurrage-engine/leitura/falhaLeituraOperacional';
 
@@ -82,7 +83,7 @@ export function criarDemurrageV2Router(deps: DemurrageV2RoutesDeps = {}): Router
   /** GET /filtros — opções e contagens (seção 6). Antes de `/processos/:processoId` não colide (caminho fixo). */
   router.get('/filtros', async (req: AutorizedRequest, res: Response, next: NextFunction) => {
     try {
-      const opcoes = await buscarOpcoesFiltros(pool(), req.autorizacao!.organizationId);
+      const opcoes = await buscarOpcoesFiltros(pool(), req.autorizacao!.organizationId, undefined, normalizarSituacaoApuracao(req.query as Record<string, unknown>));
       res.json(opcoes);
     } catch (err) {
       tratarErroLeitura(err, res, next);
@@ -158,6 +159,7 @@ export function criarDemurrageV2Router(deps: DemurrageV2RoutesDeps = {}): Router
   const ROTA_PENDENCIAS = 'GET /processos/:processoId/pendencias';
   const ROTA_REABERTURAS = 'GET /reaberturas';
   const ROTA_MINUTAS = 'GET /minutas';
+  const ROTA_DOCUMENTO_MINUTA = 'GET /minutas/:minutaId/documento';
 
   /** GET /processos/:processoId/pendencias — pendências ACIONÁVEIS de um processo conhecido. */
   router.get('/processos/:processoId/pendencias', async (req: AutorizedRequest, res: Response) => {
@@ -194,7 +196,7 @@ export function criarDemurrageV2Router(deps: DemurrageV2RoutesDeps = {}): Router
     }
   });
 
-  /** GET /minutas — minutas da organização (padrão: RECEBIDA, aguardando validação). */
+  /** GET /minutas — minutas da organização, a fila da EQUIPE (padrão: vigentes que exigem ação do analista — divergente, inconsistente, recebida legada). */
   router.get('/minutas', async (req: AutorizedRequest, res: Response) => {
     try {
       const filtros = normalizarFiltrosMinutas(req.query as Record<string, unknown>);
@@ -208,6 +210,22 @@ export function criarDemurrageV2Router(deps: DemurrageV2RoutesDeps = {}): Router
     }
   });
 
+  /**
+   * GET /minutas/:minutaId/documento — referência AUDITÁVEL do documento da
+   * minuta (Produção P1). Organização sempre da sessão, dentro do próprio
+   * WHERE: outra organização é 404 idêntico a inexistente. Só leitura.
+   */
+  router.get('/minutas/:minutaId/documento', async (req: AutorizedRequest, res: Response) => {
+    try {
+      const minutaId = idOuErro(req.params.minutaId, 'minutaId');
+      const documento = await buscarDocumentoDaMinuta(pool(), req.autorizacao!.organizationId, minutaId);
+      if (!documento) { res.status(404).json({ error: 'nao_encontrado' }); return; }
+      res.json(documento);
+    } catch (err) {
+      responderErroLeituraOperacional(err, res, ROTA_DOCUMENTO_MINUTA);
+    }
+  });
+
   // Falha inesperada levantada ANTES do handler (ex.: `autorizarInterno` sem
   // conseguir consultar o banco) chega aqui por `next(err)` — SÓ nestes três
   // caminhos. Erros das rotas D12 acima não casam estes caminhos e seguem,
@@ -216,6 +234,7 @@ export function criarDemurrageV2Router(deps: DemurrageV2RoutesDeps = {}): Router
     ['/processos/:processoId/pendencias', ROTA_PENDENCIAS],
     ['/reaberturas', ROTA_REABERTURAS],
     ['/minutas', ROTA_MINUTAS],
+    ['/minutas/:minutaId/documento', ROTA_DOCUMENTO_MINUTA],
   ] as const) {
     router.use(caminho, (err: unknown, _req: Request, res: Response, _next: NextFunction) => {
       responderErroLeituraOperacional(err, res, rota);

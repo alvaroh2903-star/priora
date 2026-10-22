@@ -13,14 +13,22 @@ import { seedRocketTermoPorEmbarque } from '../tariffs/seed/rocketTermoPorEmbarq
 import { decidirResponsabilidade } from '../responsabilidade/decidirResponsabilidade';
 import { novoGestor } from './responsabilidadeTestHelper';
 import { montarGestaoEficiencia } from '../leitura/gestao/eficiencia';
+import { registrarMinutaDeTeste } from './minutaTestHelper';
 
 /**
  * Fase D14 (Gate G4) — eficiência e conclusão (Grupo D, Cap. 30.4). Os
  * contêineres FINAL abaixo são construídos pela via OFICIAL: `ContainerRepository.
  * applyObservation` + `decidirResponsabilidade` (D11, congelado) + `ClosingService.
- * registrarMinuta/validarMinuta/finalizarProcesso` (D10 v1.3, congelado) — o MESMO
- * gate de fechamento real, nunca um `UPDATE processos SET apuracao_status='FINAL'`
- * direto. `eficiencia.ts` só agrega o que esse gate já produziu.
+ * registrarMinuta/finalizarProcesso` — o MESMO gate de fechamento real, nunca um
+ * `UPDATE processos SET apuracao_status='FINAL'` direto. `eficiencia.ts` só
+ * agrega o que esse gate já produziu.
+ *
+ * Produção P1 (correção de minuta e encerramento): a devolução OFICIAL é a do
+ * tracking (`setDevolucao` grava `tracking_return_date`; antes gravava
+ * `effective_return_date`, que só a validação de minuta por gestor escrevia —
+ * caminho removido); a minuta é registrada pelo analista e aceita por
+ * verificação técnica, e o processo com demurrage encerra AUTOMATICAMENTE no
+ * próprio registro quando todos os gates estão satisfeitos.
  */
 
 const url = testDatabaseUrl();
@@ -75,7 +83,7 @@ async function novoContainer(pool: Pool, orgId: string, processoId: string, nume
   return c.id;
 }
 
-const setEffective = (pool: Pool, id: string, d: string) => pool.query(`UPDATE containers SET effective_return_date = $2 WHERE id = $1`, [id, d]);
+const setDevolucao = (pool: Pool, id: string, d: string) => pool.query(`UPDATE containers SET tracking_return_date = $2 WHERE id = $1`, [id, d]);
 /** Exposição Rocket (`exposicao_armador`) resolve a tabela pelo `processos.armador_id` (Cap. 24) — nunca inferido do contêiner. */
 const setArmador = (pool: Pool, processoId: string, codigoArmador: string) =>
   pool.query(`UPDATE processos SET armador_id = (SELECT id FROM armadores WHERE codigo_interno = $2) WHERE id = $1`, [processoId, codigoArmador]);
@@ -93,7 +101,7 @@ test('D14 G4 — os 8 indicadores de conclusão + integridade + total, construí
     const procA = await new ProcessoRepository(pool).create({ organizationId: org.id, numeroProcesso: 'IM-D14-G4-A', clienteId: null });
     await condicaoEmbarque(pool, org.id, procA.id, tabelaEmbarque);
     const containerA = await novoContainer(pool, org.id, procA.id, 'EFAA0000001', { discharge: '2026-01-01', houseFT: 5, masterFT: 100 });
-    await setEffective(pool, containerA, '2026-01-10');
+    await setDevolucao(pool, containerA, '2026-01-10');
     await recalcularApuracaoContainer(pool, containerA, { dataReferencia: '2026-01-10' as any });
     const relClienteA = await relogio(pool, containerA, 'cliente');
     assert.equal(relClienteA.dias_demurrage, 5);
@@ -103,18 +111,16 @@ test('D14 G4 — os 8 indicadores de conclusão + integridade + total, construí
       periodos: [{ lado: 'CLIENTE', inicio: relClienteA.primeiro_dia_demurrage, fim: relClienteA.data_final_apuracao }],
       justificativa: 'Sem causa Rocket alegada.', evidenciaRef: 'evid://a', hojeReferencia: '2026-01-11' as any,
     });
-    const closingA = new ClosingService(pool);
-    const minutaA = await closingA.registrarMinuta({ containerId: containerA, numeroInformado: 'EFAA0000001', dataInformada: '2026-01-10' as any });
-    await closingA.validarMinuta({ minutaId: minutaA.id, membershipId: await novoGestor(pool, org.id), config: { hoje: '2026-01-11' as any } });
-    const finA = await closingA.finalizarProcesso({ processoId: procA.id, membershipId: await novoGestor(pool, org.id), config: { hoje: '2026-01-11' as any } });
-    assert.deepEqual(finA, { ok: true });
+    const minutaA = await registrarMinutaDeTeste(pool, { containerId: containerA, numero: 'EFAA0000001', data: '2026-01-10', hoje: '2026-01-11' });
+    assert.equal(minutaA.minuta.estado, 'ACEITA');
+    assert.deepEqual(minutaA.encerramento, { resultado: 'finalizado' }, 'todos os gates satisfeitos → FINAL automático no registro');
 
     // B — exposição só da Rocket (Master FT pequeno, House FT enorme): CONFIRMADA_ROCKET.
     const procB = await new ProcessoRepository(pool).create({ organizationId: org.id, numeroProcesso: 'IM-D14-G4-B', clienteId: null });
     await condicaoEmbarque(pool, org.id, procB.id, tabelaEmbarque);
     const containerB = await novoContainer(pool, org.id, procB.id, 'EFBB0000001', { discharge: '2026-02-01', houseFT: 100, masterFT: 3 });
     await setArmador(pool, procB.id, 'MAERSK');
-    await setEffective(pool, containerB, '2026-02-10');
+    await setDevolucao(pool, containerB, '2026-02-10');
     await recalcularApuracaoContainer(pool, containerB, { dataReferencia: '2026-02-10' as any });
     const relRocketB = await relogio(pool, containerB, 'rocket');
     assert.ok(relRocketB.dias_demurrage > 0, 'pré-condição: Rocket em demurrage');
@@ -124,17 +130,15 @@ test('D14 G4 — os 8 indicadores de conclusão + integridade + total, construí
       periodos: [{ lado: 'ROCKET', inicio: relRocketB.primeiro_dia_demurrage, fim: relRocketB.data_final_apuracao }],
       justificativa: 'Causa 100% Rocket.', evidenciaRef: 'evid://b', hojeReferencia: '2026-02-11' as any,
     });
-    const closingB = new ClosingService(pool);
-    const minutaB = await closingB.registrarMinuta({ containerId: containerB, numeroInformado: 'EFBB0000001', dataInformada: '2026-02-10' as any });
-    await closingB.validarMinuta({ minutaId: minutaB.id, membershipId: await novoGestor(pool, org.id), config: { hoje: '2026-02-11' as any } });
-    const finB = await closingB.finalizarProcesso({ processoId: procB.id, membershipId: await novoGestor(pool, org.id), config: { hoje: '2026-02-11' as any } });
-    assert.deepEqual(finB, { ok: true });
+    const minutaB = await registrarMinutaDeTeste(pool, { containerId: containerB, numero: 'EFBB0000001', data: '2026-02-10', hoje: '2026-02-11' });
+    assert.equal(minutaB.minuta.estado, 'ACEITA');
+    assert.deepEqual(minutaB.encerramento, { resultado: 'finalizado' }, 'todos os gates satisfeitos → FINAL automático no registro');
 
     // C — zero custo nos dois lados (FTs enormes, devolução dentro do Free Time): ZERO_CONFIRMADO, sem decisão, sem minuta.
     const procC = await new ProcessoRepository(pool).create({ organizationId: org.id, numeroProcesso: 'IM-D14-G4-C', clienteId: null });
     await condicaoEmbarque(pool, org.id, procC.id, tabelaEmbarque);
     const containerC = await novoContainer(pool, org.id, procC.id, 'EFCC0000001', { discharge: '2026-03-01', houseFT: 60, masterFT: 60 });
-    await setEffective(pool, containerC, '2026-03-05');
+    await setDevolucao(pool, containerC, '2026-03-05');
     await recalcularApuracaoContainer(pool, containerC, { dataReferencia: '2026-03-05' as any });
     const closingC = new ClosingService(pool);
     const finC = await closingC.finalizarProcesso({ processoId: procC.id, membershipId: await novoGestor(pool, org.id), config: { hoje: '2026-03-05' as any } });
@@ -144,7 +148,7 @@ test('D14 G4 — os 8 indicadores de conclusão + integridade + total, construí
     const procD = await new ProcessoRepository(pool).create({ organizationId: org.id, numeroProcesso: 'IM-D14-G4-D', clienteId: null });
     await condicaoEmbarque(pool, org.id, procD.id, tabelaEmbarque);
     const containerD = await novoContainer(pool, org.id, procD.id, 'EFDD0000001', { discharge: '2026-04-01', houseFT: 5, masterFT: 100 });
-    await setEffective(pool, containerD, '2026-04-10');
+    await setDevolucao(pool, containerD, '2026-04-10');
     await recalcularApuracaoContainer(pool, containerD, { dataReferencia: '2026-04-10' as any });
     const relClienteD = await relogio(pool, containerD, 'cliente');
     assert.equal(relClienteD.dias_demurrage, 5);
@@ -164,11 +168,9 @@ test('D14 G4 — os 8 indicadores de conclusão + integridade + total, construí
       evidenciaRef: 'evid://d2', hojeReferencia: '2026-04-11' as any,
     });
     assert.equal(rD.ok, true, `decisão DIVIDIDA falhou: ${JSON.stringify(rD)}`);
-    const closingD = new ClosingService(pool);
-    const minutaD = await closingD.registrarMinuta({ containerId: containerD, numeroInformado: 'EFDD0000001', dataInformada: '2026-04-10' as any });
-    await closingD.validarMinuta({ minutaId: minutaD.id, membershipId: await novoGestor(pool, org.id), config: { hoje: '2026-04-11' as any } });
-    const finD = await closingD.finalizarProcesso({ processoId: procD.id, membershipId: await novoGestor(pool, org.id), config: { hoje: '2026-04-11' as any } });
-    assert.deepEqual(finD, { ok: true });
+    const minutaD = await registrarMinutaDeTeste(pool, { containerId: containerD, numero: 'EFDD0000001', data: '2026-04-10', hoje: '2026-04-11' });
+    assert.equal(minutaD.minuta.estado, 'ACEITA');
+    assert.deepEqual(minutaD.encerramento, { resultado: 'finalizado' }, 'todos os gates satisfeitos → FINAL automático no registro');
 
     const resp = await montarGestaoEficiencia(pool, org.id, { inicio: '2000-01-01' as any, fim: '2100-12-31' as any }, '2026-04-11' as any);
     const { concluidos } = resp;
@@ -196,7 +198,7 @@ test('D14 G4 — processo ainda OPEN nunca entra em nenhuma média ou indicador 
     const proc = await new ProcessoRepository(pool).create({ organizationId: org.id, numeroProcesso: 'IM-D14-G4-OPEN', clienteId: null });
     await condicaoEmbarque(pool, org.id, proc.id, tabelaEmbarque);
     const containerId = await novoContainer(pool, org.id, proc.id, 'OPNN0000001', { discharge: '2026-05-01', houseFT: 5, masterFT: 100 });
-    await setEffective(pool, containerId, '2026-05-10'); // devolvido, mas o processo NUNCA foi finalizado.
+    await setDevolucao(pool, containerId, '2026-05-10'); // devolvido, mas o processo NUNCA foi finalizado.
     await recalcularApuracaoContainer(pool, containerId, { dataReferencia: '2026-05-10' as any });
 
     const resp = await montarGestaoEficiencia(pool, org.id, { inicio: '2000-01-01' as any, fim: '2100-12-31' as any }, '2026-05-10' as any);
@@ -215,7 +217,7 @@ test('D14 G4 — reabertura e refechamento contam o contêiner UMA VEZ nos totai
     const proc = await new ProcessoRepository(pool).create({ organizationId: org.id, numeroProcesso: 'IM-D14-G4-REAB', clienteId: null });
     await condicaoEmbarque(pool, org.id, proc.id, tabelaEmbarque);
     const containerId = await novoContainer(pool, org.id, proc.id, 'REAB0000001', { discharge: '2026-06-01', houseFT: 60, masterFT: 60 });
-    await setEffective(pool, containerId, '2026-06-05');
+    await setDevolucao(pool, containerId, '2026-06-05');
     await recalcularApuracaoContainer(pool, containerId, { dataReferencia: '2026-06-05' as any });
     const closing = new ClosingService(pool);
     const fin1 = await closing.finalizarProcesso({ processoId: proc.id, membershipId: await novoGestor(pool, org.id), config: { hoje: '2026-06-05' as any } });
@@ -253,7 +255,7 @@ test('D14 G4 — datas naturais por família: o período de G-D1/D2/D3 usa a dat
     const proc = await new ProcessoRepository(pool).create({ organizationId: org.id, numeroProcesso: 'IM-D14-G4-DATE', clienteId: null });
     await condicaoEmbarque(pool, org.id, proc.id, tabelaEmbarque);
     const containerId = await novoContainer(pool, org.id, proc.id, 'DATE0000001', { discharge: '2026-03-01', houseFT: 60, masterFT: 60 });
-    await setEffective(pool, containerId, '2026-03-05');
+    await setDevolucao(pool, containerId, '2026-03-05');
     await recalcularApuracaoContainer(pool, containerId, { dataReferencia: '2026-03-05' as any });
     const closing = new ClosingService(pool);
     const fin = await closing.finalizarProcesso({ processoId: proc.id, membershipId: await novoGestor(pool, org.id), config: { hoje: '2026-03-05' as any } });
@@ -310,7 +312,7 @@ test('D14 v1.1 #2 — G-D4: DOIS motores comerciais ATIVOS/FINAL no mesmo lado c
     const proc = await new ProcessoRepository(pool).create({ organizationId: org.id, numeroProcesso: 'IM-D14-V11-2-A', clienteId: null });
     await condicaoEmbarque(pool, org.id, proc.id, tabelaEmbarque);
     const containerId = await novoContainer(pool, org.id, proc.id, 'DMAA0000001', { discharge: '2026-05-01', houseFT: 5, masterFT: 100 });
-    await setEffective(pool, containerId, '2026-05-10');
+    await setDevolucao(pool, containerId, '2026-05-10');
     await recalcularApuracaoContainer(pool, containerId, { dataReferencia: '2026-05-10' as any });
     const relCliente = await relogio(pool, containerId, 'cliente');
     assert.equal(relCliente.dias_demurrage, 5, 'pré-condição: 5 dias de demurrage no lado cliente');
@@ -335,11 +337,9 @@ test('D14 v1.1 #2 — G-D4: DOIS motores comerciais ATIVOS/FINAL no mesmo lado c
       periodos: [{ lado: 'CLIENTE', inicio: relCliente.primeiro_dia_demurrage, fim: relCliente.data_final_apuracao }],
       justificativa: 'Sem causa Rocket alegada.', evidenciaRef: 'evid://v11-2', hojeReferencia: '2026-05-11' as any,
     });
-    const closing = new ClosingService(pool);
-    const minuta = await closing.registrarMinuta({ containerId, numeroInformado: 'DMAA0000001', dataInformada: '2026-05-10' as any });
-    await closing.validarMinuta({ minutaId: minuta.id, membershipId: await novoGestor(pool, org.id), config: { hoje: '2026-05-11' as any } });
-    const fin = await closing.finalizarProcesso({ processoId: proc.id, membershipId: await novoGestor(pool, org.id), config: { hoje: '2026-05-11' as any } });
-    assert.deepEqual(fin, { ok: true });
+    const minuta = await registrarMinutaDeTeste(pool, { containerId, numero: 'DMAA0000001', data: '2026-05-10', hoje: '2026-05-11' });
+    assert.equal(minuta.minuta.estado, 'ACEITA');
+    assert.deepEqual(minuta.encerramento, { resultado: 'finalizado' }, 'todos os gates satisfeitos → FINAL automático no registro');
 
     const resp = await montarGestaoEficiencia(pool, org.id, { inicio: '2000-01-01' as any, fim: '2100-12-31' as any }, '2026-05-11' as any);
     assert.equal(resp.mediaDiasDemurrageCliente.amostra, 1, 'o contêiner conta UMA VEZ, nunca duas por ter duas linhas ativas de motores diferentes');
@@ -357,7 +357,7 @@ test('D14 G4 — integridadePendenciaRemanescente nunca é mascarada como "sem c
     const proc = await new ProcessoRepository(pool).create({ organizationId: org.id, numeroProcesso: 'IM-D14-G4-INT', clienteId: null });
     await condicaoEmbarque(pool, org.id, proc.id, tabelaEmbarque);
     const containerId = await novoContainer(pool, org.id, proc.id, 'INTT0000001', { discharge: '2026-07-01', houseFT: 60, masterFT: 60 });
-    await setEffective(pool, containerId, '2026-07-05');
+    await setDevolucao(pool, containerId, '2026-07-05');
     // Deixa o relógio do cliente PENDING (processo ainda OPEN — o guard de
     // `relogios` só bloqueia escrita quando o processo JÁ é FINAL, então esta
     // linha é aceita normalmente aqui).

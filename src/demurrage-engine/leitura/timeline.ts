@@ -22,8 +22,14 @@ import { codificarCursorAssinado, decodificarCursorAssinado } from './cursorAssi
 const RESUMO_TIPO_EVENTO: Record<string, string> = {
   EMPTY_RETURN: 'Empty Return registrado',
   MINUTA_RECEBIDA: 'Minuta recebida',
-  MINUTA_VALIDADA: 'Minuta validada',
-  MINUTA_REJEITADA: 'Minuta rejeitada',
+  MINUTA_VALIDADA: 'Minuta validada (fluxo legado)',
+  MINUTA_REJEITADA: 'Minuta rejeitada (fluxo legado)',
+  // Produção P1 — aceite técnico automático (sem aprovação de gestor).
+  MINUTA_ACEITA: 'Minuta aceita na verificação técnica automática',
+  MINUTA_DIVERGENTE: 'Minuta diverge da devolução do tracking',
+  MINUTA_INCONSISTENTE: 'Minuta inconsistente na verificação técnica',
+  MINUTA_SUBSTITUIDA: 'Minuta substituída por uma mais recente',
+  FATO_MATERIAL_POS_FINAL: 'Fato material recebido após o encerramento',
   DIVERGENCIA_TRACKING_MINUTA: 'Divergência entre tracking e minuta',
   RECALCULO: 'Recálculo da apuração',
   FECHAMENTO_FINAL: 'Processo fechado (FINAL)',

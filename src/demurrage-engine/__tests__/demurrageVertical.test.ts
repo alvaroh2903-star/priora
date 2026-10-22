@@ -10,6 +10,7 @@ import { SnapshotRepository } from '../persistence/snapshotRepository';
 import { ClosingService } from '../closing/closingService';
 import { passagemDoCalendario } from '../apuracao/passagemCalendario';
 import { seedArmadorTables } from '../tariffs/seed/armadorTables';
+import { registrarMinutaDeTeste } from './minutaTestHelper';
 import { seedRocketTermoPorEmbarque } from '../tariffs/seed/rocketTermoPorEmbarque';
 import { confirmarResponsabilidadeClienteIntegral, novoGestor } from './responsabilidadeTestHelper';
 import {
@@ -223,11 +224,15 @@ test('D10 gate5: cenário A — registro → Aguardando descarga → descarga �
     assert.equal(rel2.cliente.dias_demurrage, 0);
     assert.equal(rel2.rocket.dias_demurrage, 0);
 
-    // 9) finalizar SEM minuta (regra congelada: zero confirmado fecha sem comprovação).
+    // 9) SEM minuta (zero confirmado fecha sem comprovação). Produção P1: o
+    //    encerramento é AUTOMÁTICO — a devolução no prazo, confirmada pelo
+    //    tracking, já levou o processo a FINAL na própria ingestão; o
+    //    acionamento administrativo é idempotente (ja_final).
     const closing = new ClosingService(pool);
     const gestorA = await novoGestor(pool, org.id);
     const fin = await closing.finalizarProcesso({ processoId: r1.processoId, membershipId: gestorA, config: { hoje: '2026-10-04' } });
-    assert.deepEqual(fin, { ok: true });
+    assert.deepEqual(fin, { ok: false, motivo: 'ja_final' });
+    assert.equal((await pool.query(`SELECT origem FROM fechamentos WHERE processo_id=$1`, [r1.processoId])).rows[0].origem, 'automatico');
 
     // 10) FINAL.
     const proc = (await pool.query(`SELECT apuracao_status FROM processos WHERE id=$1`, [r1.processoId])).rows[0];
@@ -333,14 +338,15 @@ test('D10 gate6: cenário B — descarga → estoura os dois Free Times → valo
     const tentativa2 = await closing.finalizarProcesso({ processoId: r1.processoId, membershipId: gestorB, config: { hoje: '2026-10-05' } });
     assert.deepEqual(tentativa2, { ok: false, motivo: 'comprovacao_pendente' });
 
-    // Minuta + validação (serviços já existentes — nenhuma regra de fechamento alterada).
-    const minuta = await closing.registrarMinuta({ containerId, numeroInformado: numero, dataInformada: '2026-10-04' });
-    const validacao = await closing.validarMinuta({ minutaId: minuta.id, membershipId: gestorB, config: { hoje: '2026-10-05' } });
-    assert.equal((validacao as any).resultado, 'validada');
-
-    // Agora finaliza.
+    // Minuta registrada pelo analista (Produção P1 — correção de minuta: o aceite é
+    // técnico e automático no registro; não existe mais validação por gestor) e,
+    // com todos os gates satisfeitos, o processo encerra SOZINHO — a antiga
+    // finalização manual deixou de ser etapa obrigatória.
+    const minuta = await registrarMinutaDeTeste(pool, { containerId, numero, data: '2026-10-04', hoje: '2026-10-05' });
+    assert.equal(minuta.minuta.estado, 'ACEITA');
+    assert.deepEqual(minuta.encerramento, { resultado: 'finalizado' });
     const finB = await closing.finalizarProcesso({ processoId: r1.processoId, membershipId: gestorB, config: { hoje: '2026-10-05' } });
-    assert.deepEqual(finB, { ok: true });
+    assert.deepEqual(finB, { ok: false, motivo: 'ja_final' }, 'acionamento administrativo é idempotente');
     const procB = (await pool.query(`SELECT apuracao_status FROM processos WHERE id=$1`, [r1.processoId])).rows[0];
     assert.equal(procB.apuracao_status, 'FINAL');
 
@@ -461,8 +467,8 @@ test('D10 integridade — LIMITAÇÃO EXTERNA REAL: tabelas do Blueprint (vocabu
     await confirmarResponsabilidadeClienteIntegral(pool, { containerId, hoje: '2026-10-01' });
     const closing = new ClosingService(pool);
     const gestorLim = await novoGestor(pool, org.id);
-    const minuta = await closing.registrarMinuta({ containerId, numeroInformado: numero, dataInformada: '2026-09-30' });
-    await closing.validarMinuta({ minutaId: minuta.id, membershipId: gestorLim, config: { hoje: '2026-10-01' } });
+    const minuta = await registrarMinutaDeTeste(pool, { containerId, numero, data: '2026-09-30', hoje: '2026-10-01' });
+    assert.deepEqual(minuta.encerramento, { resultado: 'bloqueado', motivo: 'valor_rocket_nao_confirmado', containerId });
     const fin = await closing.finalizarProcesso({ processoId: r.processoId, membershipId: gestorLim, config: { hoje: '2026-10-01' } });
     assert.deepEqual(fin, { ok: false, motivo: 'valor_rocket_nao_confirmado' }, 'UNAVAILABLE bloqueia o FINAL — regra congelada preservada, nada é forçado a fechar');
   } finally { await pool.end(); }
@@ -495,6 +501,8 @@ test('D10: ausência do HeadCargo não é fabricada nem bloqueia o fechamento se
     const closing = new ClosingService(pool);
     const gestorHc = await novoGestor(pool, org.id);
     const fin = await closing.finalizarProcesso({ processoId: r.processoId, membershipId: gestorHc, config: { hoje: '2026-09-29' } });
-    assert.deepEqual(fin, { ok: true }, 'zero-custo fecha sem depender de qualquer estado do HeadCargo');
+    // Produção P1: o encerramento automático já fechou na ingestão do tracking (zero-custo).
+    assert.deepEqual(fin, { ok: false, motivo: 'ja_final' }, 'zero-custo fecha (automaticamente) sem depender de qualquer estado do HeadCargo');
+    assert.equal((await pool.query(`SELECT apuracao_status FROM processos WHERE id=$1`, [r.processoId])).rows[0].apuracao_status, 'FINAL');
   } finally { await pool.end(); }
 });

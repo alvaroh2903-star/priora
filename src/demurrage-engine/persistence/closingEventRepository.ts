@@ -14,7 +14,12 @@ export type TipoEventoFechamento =
   // Fase D11 (Gate G_timeline, aditivo): eventos da decisão de Responsabilidade
   // Rocket × Cliente — cada um referencia a versão da decisão, autor e motivo
   // no payload (nunca o payload documental bruto).
-  | 'RESPONSABILIDADE_CONFIRMADA' | 'RESPONSABILIDADE_CORRIGIDA' | 'RESPONSABILIDADE_INVALIDADA';
+  | 'RESPONSABILIDADE_CONFIRMADA' | 'RESPONSABILIDADE_CORRIGIDA' | 'RESPONSABILIDADE_INVALIDADA'
+  // Produção P1 (correção de minuta, migration 0048): aceite técnico
+  // automático e substituição — sempre `origem = 'automatico'`, exceto o
+  // registro em si (MINUTA_RECEBIDA, humano). MINUTA_VALIDADA/REJEITADA
+  // ficam só como leitura de legado.
+  | 'MINUTA_ACEITA' | 'MINUTA_DIVERGENTE' | 'MINUTA_INCONSISTENTE' | 'MINUTA_SUBSTITUIDA';
 
 export interface ClosingEvent {
   id: string;

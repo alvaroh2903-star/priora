@@ -1,5 +1,5 @@
 import { Pool } from 'pg';
-import { PAPEIS_RESOLUCAO_PENDENCIA } from '../registro/pendencias';
+import { PAPEIS_RESOLUCAO_PENDENCIA, TIPOS_PENDENCIA_SO_RESOLUCAO_AUTOMATICA } from '../registro/pendencias';
 import { PapelInterno } from './autorizacao';
 import { ErroLeitura, isoTimestamp } from './contrato';
 import { contextoSeguroPendencia, ContextoSeguroPendencia } from './pendenciaContextoSeguro';
@@ -30,7 +30,9 @@ import { dataOuErro, textoFiltroOuErro } from './parametrosOperacionais';
  * `registro/pendencias.ts` (`PAPEIS_RESOLUCAO_PENDENCIA`) — nenhuma regra de
  * papel duplicada. É só INFORMATIVO: a rota de resolução (Entrega 2) sempre
  * revalida papel e estado no momento da escrita; uma leitura desatualizada
- * nunca autoriza a ação por si só.
+ * nunca autoriza a ação por si só. Produção P1: nunca `true` para as
+ * pendências de minuta (`TIPOS_PENDENCIA_SO_RESOLUCAO_AUTOMATICA`) — a rota
+ * de resolução sempre as recusa; a ação é registrar uma minuta substituta.
  *
  * Entrega 3 v1.1 (corretiva): chave do cursor EXATA (microssegundos, vinda
  * do PostgreSQL — ver `cursorKeyset.ts`), comparação da página seguinte por
@@ -216,7 +218,7 @@ export async function buscarPendenciasProcesso(pool: Pool, input: BuscarPendenci
     processo: { id: r.processo_id, numero: r.numero_processo },
     container: r.container_id ? { id: r.container_id, numero: r.container_numero! } : null,
     contexto: contextoSeguroPendencia(r.tipo, r.contexto),
-    podeResolver,
+    podeResolver: podeResolver && !TIPOS_PENDENCIA_SO_RESOLUCAO_AUTOMATICA.includes(r.tipo),
   }));
 
   const ultima = pagina[pagina.length - 1];

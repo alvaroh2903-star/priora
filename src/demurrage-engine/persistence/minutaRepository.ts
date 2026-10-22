@@ -4,13 +4,27 @@ import { CivilDate } from '../temporal/civilDate';
 import { MotivoRejeicao } from '../closing/minutaValidation';
 
 /**
- * Persistência da Minuta (Fase 8). Upload nasce RECEBIDA e NÃO altera datas/
- * valores. A validação (MANAGER/ADMIN) transita para VALIDADA/REJEITADA — o
- * caminho de fechamento é do closingService. A minuta EFETIVA de um contêiner é
- * a apontada por `containers.effective_return_minuta_id` (fonte da devolução).
+ * Persistência da Minuta (Fase 8; Produção P1 — correção de minuta).
+ *
+ * Fluxo vigente (`closing/minutaTecnica.ts`): o analista/responsável interno
+ * REGISTRA a minuta com o documento; a verificação técnica AUTOMÁTICA decide
+ * o estado — RECEBIDA (aguardando), ACEITA, DIVERGENTE ou INCONSISTENTE —, e
+ * uma nova minuta do mesmo contêiner deixa a anterior SUBSTITUIDA. Não existe
+ * aprovação de MANAGER/ADMIN. A data do tracking é a devolução oficial: o
+ * fluxo vigente nunca grava data em `containers.effective_return_date` (só
+ * limpa a efetiva legada cuja minuta foi substituída, em processo OPEN).
+ *
+ * LEGADO (migration 0048): `VALIDADA`/`REJEITADA` e `RECEBIDA` com
+ * `regra_avaliacao` NULL vêm do fluxo antigo (aprovação humana). Continuam
+ * legíveis e com a mesma semântica de comprovação de antes
+ * (`comprovacaoLegada`), nunca são reavaliadas nem reescritas
+ * automaticamente; deixam de valer quando uma minuta nova as substitui.
  */
 
-export type EstadoMinuta = 'RECEBIDA' | 'VALIDADA' | 'REJEITADA';
+export type EstadoMinuta =
+  | 'RECEBIDA' | 'ACEITA' | 'DIVERGENTE' | 'INCONSISTENTE' | 'SUBSTITUIDA'
+  /** LEGADO — só leitura. */
+  | 'VALIDADA' | 'REJEITADA';
 
 export interface Minuta {
   id: string;
@@ -25,21 +39,36 @@ export interface Minuta {
   recebidaPor: string | null;
   validadaPor: string | null;
   supersedesId: string | null;
+  /** `minuta.tecnica.v1` no fluxo vigente; `null` = linha legada. */
+  regraAvaliacao: string | null;
+  versao: number | null;
+  substituidaPorId: string | null;
+  dataTrackingComparada: CivilDate | null;
+  aguardando: 'DEVOLUCAO_TRACKING' | 'DESCARGA' | null;
 }
 
-function mapRow(r: any): Minuta {
+export function mapRowMinuta(r: any): Minuta {
   return {
     id: r.id, containerId: r.container_id, estado: r.estado_minuta,
     numeroInformado: r.numero_informado, dataInformada: r.data_informada,
     dataValidada: r.data_validada, divergenteDoTracking: r.divergente_do_tracking,
     motivoRejeicao: r.motivo_rejeicao, evidenciaRef: r.evidencia_ref,
     recebidaPor: r.recebida_por, validadaPor: r.validada_por, supersedesId: r.supersedes_id,
+    regraAvaliacao: r.regra_avaliacao ?? null, versao: r.versao ?? null,
+    substituidaPorId: r.substituida_por_id ?? null, dataTrackingComparada: r.data_tracking_comparada ?? null,
+    aguardando: r.aguardando ?? null,
   };
 }
 
 export class MinutaRepository {
   constructor(private pool: Pool = getPool()) {}
 
+  /**
+   * LEGADO / FIXTURE — cria uma linha RECEBIDA do fluxo ANTIGO
+   * (`regra_avaliacao` NULL, sem documento). Nenhum caminho de produção
+   * chama isto (o registro vigente é `closing/minutaTecnica.ts`); permanece
+   * para os testes que montam dado legado e para provar a compatibilidade.
+   */
   async criarRecebida(input: {
     containerId: string; numeroInformado: string | null; dataInformada: CivilDate | null;
     evidenciaRef?: string | null; recebidaPor?: string | null; supersedesId?: string | null;
@@ -49,52 +78,37 @@ export class MinutaRepository {
        VALUES ($1, 'RECEBIDA', $2, $3, $4, $5, $6) RETURNING *`,
       [input.containerId, input.numeroInformado, input.dataInformada, input.evidenciaRef ?? null, input.recebidaPor ?? null, input.supersedesId ?? null],
     );
-    return mapRow(rows[0]);
+    return mapRowMinuta(rows[0]);
   }
 
   async findById(id: string): Promise<Minuta | null> {
     const { rows } = await this.pool.query(`SELECT * FROM minutas WHERE id = $1`, [id]);
-    return rows.length ? mapRow(rows[0]) : null;
+    return rows.length ? mapRowMinuta(rows[0]) : null;
   }
 
   async listByContainer(containerId: string): Promise<Minuta[]> {
-    const { rows } = await this.pool.query(`SELECT * FROM minutas WHERE container_id = $1 ORDER BY criado_em`, [containerId]);
-    return rows.map(mapRow);
+    const { rows } = await this.pool.query(`SELECT * FROM minutas WHERE container_id = $1 ORDER BY criado_em, id`, [containerId]);
+    return rows.map(mapRowMinuta);
   }
 
-  /** Existe minuta RECEBIDA ou VALIDADA (para o documentaryStatus da Fase 7). */
-  async temRecebidaOuValidada(containerId: string): Promise<boolean> {
+  /** Minuta vigente do fluxo técnico (no máximo uma — índice `minutas_vigente_unica`). */
+  async vigenteTecnica(containerId: string): Promise<Minuta | null> {
     const { rows } = await this.pool.query(
-      `SELECT bool_or(estado_minuta IN ('RECEBIDA', 'VALIDADA')) AS tem FROM minutas WHERE container_id = $1`,
+      `SELECT * FROM minutas WHERE container_id = $1 AND regra_avaliacao IS NOT NULL AND substituida_por_id IS NULL`,
       [containerId],
     );
-    return rows[0]?.tem === true;
+    return rows.length ? mapRowMinuta(rows[0]) : null;
   }
 
   /**
-   * Existe minuta VALIDADA do contêiner (clarificação A: "comprovação concluída"
-   * no gate de FINAL = minuta VALIDADA do contêiner relevante). Não cria nova
-   * entidade/estado de comprovação — reusa o próprio fluxo da minuta.
+   * Comprovação LEGADA (v1.3, fluxo antigo) — usada pelo gate de FINAL só
+   * quando o contêiner NÃO tem minuta vigente do fluxo técnico: existe minuta
+   * VALIDADA (aprovação humana antiga) correspondente à evidência efetiva, e
+   * nenhuma RECEBIDA legada marcada divergente aguardando a revisão que não
+   * existe mais (resolvida registrando uma minuta nova, que substitui ambas).
+   * Linhas já substituídas nunca contam.
    */
-  async temValidada(containerId: string): Promise<boolean> {
-    const { rows } = await this.pool.query(
-      `SELECT bool_or(estado_minuta = 'VALIDADA') AS tem FROM minutas WHERE container_id = $1`,
-      [containerId],
-    );
-    return rows[0]?.tem === true;
-  }
-
-  /**
-   * Comprovação para o gate de FINAL (v1.3, item 3): não basta existir QUALQUER
-   * minuta VALIDADA. A comprovação só está concluída quando:
-   *  - existe minuta VALIDADA CORRESPONDENTE à evidência efetiva do fechamento
-   *    (data_validada == data final que será congelada); e
-   *  - NÃO há divergência de data ainda PENDENTE de decisão (minuta RECEBIDA
-   *    marcada como divergente do tracking, aguardando revisão do Gestor).
-   * Uma minuta VALIDADA antiga não libera FINAL enquanto uma nova divergência de
-   * devolução estiver aguardando revisão.
-   */
-  async comprovacao(
+  async comprovacaoLegada(
     containerId: string,
     dataFinalEvidencia: CivilDate | null,
   ): Promise<{ validadaCorrespondente: boolean; divergenciaPendente: boolean }> {
@@ -102,7 +116,7 @@ export class MinutaRepository {
       `SELECT
          bool_or(estado_minuta = 'VALIDADA' AND data_validada = $2) AS correspondente,
          bool_or(estado_minuta = 'RECEBIDA' AND divergente_do_tracking = true) AS divergente_pendente
-       FROM minutas WHERE container_id = $1`,
+       FROM minutas WHERE container_id = $1 AND substituida_por_id IS NULL AND regra_avaliacao IS NULL`,
       [containerId, dataFinalEvidencia],
     );
     return {
@@ -111,6 +125,13 @@ export class MinutaRepository {
     };
   }
 
+  /**
+   * LEGADO / FIXTURE — transição humana do fluxo ANTIGO (aprovação de gestor).
+   * Nenhum caminho de produção chama isto (há auditoria estática); permanece
+   * só para montar dado legado em teste. O CHECK
+   * `minutas_fluxo_tecnico_sem_aprovacao_humana` (0048) impede aplicá-lo a
+   * uma minuta do fluxo técnico.
+   */
   async marcarValidada(id: string, dataValidada: CivilDate, divergente: boolean, validadaPor: string | null): Promise<void> {
     await this.pool.query(
       `UPDATE minutas SET estado_minuta = 'VALIDADA', data_validada = $2, divergente_do_tracking = $3,
@@ -120,6 +141,7 @@ export class MinutaRepository {
     );
   }
 
+  /** LEGADO / FIXTURE — ver `marcarValidada`. */
   async marcarRejeitada(id: string, motivo: MotivoRejeicao, validadaPor: string | null): Promise<void> {
     await this.pool.query(
       `UPDATE minutas SET estado_minuta = 'REJEITADA', motivo_rejeicao = $2, validada_por = $3, atualizado_em = now()

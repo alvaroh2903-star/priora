@@ -7,6 +7,7 @@ import { OrganizationRepository } from '../persistence/organizationRepository';
 import { ProcessoRepository } from '../persistence/processoRepository';
 import { ContainerRepository } from '../persistence/containerRepository';
 import { MinutaRepository } from '../persistence/minutaRepository';
+import { registrarMinutaDeTeste } from './minutaTestHelper';
 import { TrackingTargetRepository } from '../persistence/trackingTargetRepository';
 import { ClosingService } from '../closing/closingService';
 import { ingestTrackingResult } from '../tracking/eventIngestion';
@@ -111,7 +112,12 @@ test('v1.3-1: ingestão com at cacheado (D13) sem Empty Return não regride a ap
 
 /* ---- Item 2: exceção documental FINAL comparada com a data final congelada ---- */
 
-test('v1.3-2: em FINAL, minuta só confirma sem reabertura se casar com a data CONGELADA (não com tracking posterior)', { skip: !url }, async () => {
+test('v1.3-2 (reescrito na correção de minuta P1): em FINAL, minuta só confirma sem reabertura se casar com a data CONGELADA; tracking posterior não reabre sozinho', { skip: !url }, async () => {
+  // Produção P1: não existe mais validação por gestor nem `effective_return_date`
+  // escrito pela minuta. A garantia da v1.3 continua: em FINAL, a referência é a
+  // data CONGELADA no fechamento — um tracking posterior (bloqueado pelo guard de
+  // D15-A como fato material) não serve de prova, e uma minuta com outra data
+  // exige reabertura (fato material com as duas evidências).
   const pool = testPool();
   try {
     await setupBanco(pool);
@@ -127,20 +133,23 @@ test('v1.3-2: em FINAL, minuta só confirma sem reabertura se casar com a data C
     assert.deepEqual(await svc.finalizarProcesso({ processoId: p.id, membershipId: gestorId, config: cfg }), { ok: true });
     assert.equal((await relogio(pool, c, 'cliente')).data_final_apuracao, '2026-09-10', 'data final congelada = 09-10');
 
-    // Tracking POSTERIOR move a evidência para 09-16 (preservada; não barrada em FINAL).
-    await setTracking(pool, c, '2026-09-16');
+    // Tracking POSTERIOR (09-16) chega pelo caminho real: bloqueado em FINAL, preservado como fato material.
+    const out = await new ContainerRepository(pool).applyObservation({
+      containerId: c, organizationId: o.id, campo: 'trackingReturnDate', valor: '2026-09-16', fonte: 'tracking_service', observadoEm: new Date('2026-09-16T00:00:00Z'),
+    });
+    assert.equal(out.exigeReabertura, true);
 
-    // Minuta confirmando a data POSTERIOR (09-16) ≠ congelada (09-10) → exige reabertura,
-    // MESMO que o tracking atual já seja 09-16 (não serve como prova).
-    const mY = await svc.registrarMinuta({ containerId: c, numeroInformado: 'HDMUCONG001', dataInformada: '2026-09-16' });
-    assert.deepEqual(await svc.validarMinuta({ minutaId: mY.id, membershipId: gestorId, config: cfg }), { ok: false, motivo: 'exige_reabertura' });
+    // Minuta confirmando a data POSTERIOR (09-16) ≠ congelada (09-10) → exige reabertura.
+    const mY = await registrarMinutaDeTeste(pool, { containerId: c, numero: 'HDMUCONG001', data: '2026-09-16', hoje: cfg.hoje });
+    assert.equal(mY.exigeReabertura, true);
+    assert.equal(mY.minuta.estado, 'DIVERGENTE', 'difere da devolução oficial (tracking selecionado, 09-10)');
 
-    // Minuta confirmando exatamente a data congelada (09-10) → validação documental (segue FINAL).
-    const mX = await svc.registrarMinuta({ containerId: c, numeroInformado: 'HDMUCONG001', dataInformada: '2026-09-10' });
-    const r = await svc.validarMinuta({ minutaId: mX.id, membershipId: gestorId, config: cfg });
-    assert.equal((r as any).resultado, 'validada');
+    // Minuta confirmando exatamente a data congelada (09-10) → aceite documental (segue FINAL).
+    const mX = await registrarMinutaDeTeste(pool, { containerId: c, numero: 'HDMUCONG001', data: '2026-09-10', hoje: cfg.hoje });
+    assert.equal(mX.minuta.estado, 'ACEITA');
+    assert.equal(mX.exigeReabertura, false);
     assert.equal((await pool.query(`SELECT apuracao_status FROM processos WHERE id=$1`, [p.id])).rows[0].apuracao_status, 'FINAL');
-    assert.equal((await pool.query(`SELECT effective_return_date FROM containers WHERE id=$1`, [c])).rows[0].effective_return_date, '2026-09-10');
+    assert.equal((await pool.query(`SELECT effective_return_date FROM containers WHERE id=$1`, [c])).rows[0].effective_return_date, null, 'a minuta nunca escreve a devolução');
   } finally { await pool.end(); }
 });
 

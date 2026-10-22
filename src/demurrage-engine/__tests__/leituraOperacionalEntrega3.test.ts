@@ -242,8 +242,11 @@ test('Entrega 3 #8: filtro estado=resolvida funciona', { skip: !url }, async () 
   } finally { await app.close(); await pool.end(); }
 });
 
-test('Entrega 3 #9: allowlist de contexto seguro — todos os 14 tipos suportados têm campos seguros, nunca o JSON bruto', () => {
-  assert.equal(TIPOS_COM_CONTEXTO_SEGURO_DEFINIDO.length, 14);
+test('Entrega 3 #9: allowlist de contexto seguro — todos os 16 tipos suportados têm campos seguros, nunca o JSON bruto', () => {
+  // Produção P1 (correção de minuta, migration 0048): o CHECK de
+  // `demurrage_pendencias.tipo` ganhou `minuta_inconsistente` e
+  // `minuta_divergente_tracking` (14 → 16), cada um com allowlist própria.
+  assert.equal(TIPOS_COM_CONTEXTO_SEGURO_DEFINIDO.length, 16);
   const bruto = {
     campo: 'houseFreeTimeDays', fonte: 'manual_fallback', codigo: 'XYZ', tipoOriginal: '40HC',
     motivo: 'm', diasDemurrageCliente: 3, valorRegistrado: 1, valorConflitante: 2,
@@ -322,7 +325,7 @@ test('Entrega 3 #12: resultado de /reaberturas traz o reaberturaId exigido pela 
   } finally { await app.close(); await pool.end(); }
 });
 
-test('Entrega 3 #13: /minutas — padrão só devolve RECEBIDA', { skip: !url }, async () => {
+test('Entrega 3 #13 (P1): /minutas — padrão devolve só o que exige ação (aqui: a RECEBIDA legada), nunca a VALIDADA', { skip: !url }, async () => {
   const pool = testPool();
   const app = await subirApp(pool);
   try {
@@ -339,10 +342,21 @@ test('Entrega 3 #13: /minutas — padrão só devolve RECEBIDA', { skip: !url },
     assert.equal(body.itens.length, 1, 'só a RECEBIDA aparece no padrão');
     assert.equal(body.itens[0].estado, 'RECEBIDA');
     assert.equal(body.itens[0].container.id, c1);
+    // Produção P1: contrato v2 — a RECEBIDA inserida aqui é LEGADA (aguardava a
+    // validação humana que não existe mais); a ação do analista é registrar uma substituta.
+    assert.equal(body.contrato, 'demurrage.leitura.minutas.v2');
+    assert.equal(body.escopo, 'fila_da_equipe');
+    assert.equal(body.itens[0].legado, true);
+    assert.equal(body.itens[0].acaoNecessaria, 'registrar_minuta_substituta');
   } finally { await app.close(); await pool.end(); }
 });
 
-test('Entrega 3 #14: resultado de /minutas traz o minutaId exigido pela rota de validação da Entrega 2', { skip: !url }, async () => {
+test('Entrega 3 #14 (reescrito na correção P1): o item de /minutas traz o contêiner exigido pela ação do analista (registrar a substituta), que tira o item da lista', { skip: !url }, async () => {
+  // Produção P1 (correção de minuta): a rota de VALIDAÇÃO por gestor foi
+  // removida (410) — a expectativa antiga ("o minutaId lido é aceito pela rota
+  // de validação") deixou de valer. A garantia deste teste — a leitura
+  // devolve exatamente o identificador que a ação exige, sem tradução — vale
+  // para a ação que a substituiu: registrar a minuta substituta no contêiner.
   const pool = testPool();
   const app = await subirApp(pool);
   try {
@@ -356,10 +370,17 @@ test('Entrega 3 #14: resultado de /minutas traz o minutaId exigido pela rota de 
     const minutaId = lido.itens[0].minutaId;
     assert.ok(minutaId);
     assert.equal(lido.itens[0].temEvidencia, false);
+    assert.equal(lido.itens[0].container.id, containerId);
 
     const acaoBase = app.base.replace('/api/demurrage/v2', '/api/demurrage/v2/acoes');
     const validar = await post(acaoBase, `/minutas/${minutaId}/validar`, {}, homeManager);
-    assert.equal(validar.status, 200, 'o ID lido é aceito, sem tradução, pela rota congelada da Entrega 2 v1.2');
+    assert.equal(validar.status, 410, 'não existe mais validação por gestor');
+    const substituta = await post(acaoBase, `/containers/${lido.itens[0].container.id}/minutas`, {
+      numeroInformado: numero, dataInformada: '2026-09-10',
+      documento: { origem: 'referencia_externa', referencia: 'teste://e3-14', nomeArquivo: 'e3-14.pdf', tipoConteudo: 'application/pdf', tamanhoBytes: 10, hashConteudo: 'c'.repeat(64) },
+    }, homeManager, { 'idempotency-key': randomUUID() });
+    assert.equal(substituta.status, 201, 'o contêiner lido é aceito, sem tradução, pela ação de registro');
+    assert.deepEqual((await (await get(app.base, '/minutas', homeManager)).json()).itens, [], 'a legada foi substituída — nenhum item irremovível');
   } finally { await app.close(); await pool.end(); }
 });
 
@@ -424,8 +445,11 @@ test('Entrega 3 #16/#17: flags de capacidade corretas por papel, e NUNCA dispens
       get(app.base, '/minutas', homeAnalyst).then((r) => r.json()),
       get(app.base, '/minutas', homeManager).then((r) => r.json()),
     ]);
-    assert.equal(minAnalyst.itens[0].podeValidar, false, 'ANALYST não valida minuta');
-    assert.equal(minManager.itens[0].podeValidar, true, 'MANAGER valida');
+    // Produção P1: `podeValidar` saiu do contrato (não existe aprovação de gestor);
+    // a ação sobre a minuta é a mesma para qualquer papel interno.
+    assert.ok(!('podeValidar' in minAnalyst.itens[0]));
+    assert.equal(minAnalyst.itens[0].acaoNecessaria, 'registrar_minuta_substituta');
+    assert.equal(minManager.itens[0].acaoNecessaria, 'registrar_minuta_substituta');
 
     // #17: mesmo que um cliente HTTP ignorasse a flag, a rota de ação da Entrega 2
     // revalida o papel no momento da mutação — a leitura nunca autoriza por si só.
@@ -433,7 +457,7 @@ test('Entrega 3 #16/#17: flags de capacidade corretas por papel, e NUNCA dispens
     const minutaId = minAnalyst.itens[0].minutaId;
     const reaberturaId = reabAnalyst.itens[0].reaberturaId;
     const tentativaValidar = await post(acaoBase, `/minutas/${minutaId}/validar`, {}, homeAnalyst);
-    assert.equal(tentativaValidar.status, 403, 'bloqueado na mutação, mesmo que a leitura tivesse sido lida antes');
+    assert.equal(tentativaValidar.status, 410, 'a validação não existe para ninguém (P1)');
     const tentativaAutorizar = await post(acaoBase, `/reaberturas/${reaberturaId}/autorizar`, {}, homeAnalyst);
     assert.equal(tentativaAutorizar.status, 403);
   } finally { await app.close(); await pool.end(); }

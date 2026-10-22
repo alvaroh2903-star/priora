@@ -140,7 +140,10 @@ test('0007 — organization_id imutável nas tabelas de tenant', { skip: !url },
       'demurrage_acoes_idempotencia',
       // Controle de capacidade da rota do handoff (adição à Entrega 1):
       // baldes por organização e por credencial — migration 0047.
-      'demurrage_handoff_capacidade_organizacoes', 'demurrage_handoff_capacidade_credenciais'];
+      'demurrage_handoff_capacidade_organizacoes', 'demurrage_handoff_capacidade_credenciais',
+      // Produção P1 (correção de minuta): `documentos` (Fase 8) passa a carregar
+      // organization_id para a referência auditável do documento da minuta — migration 0048.
+      'documentos'];
     const { rows } = await pool.query(`
       SELECT c.table_name,
              EXISTS (SELECT 1 FROM pg_trigger tg

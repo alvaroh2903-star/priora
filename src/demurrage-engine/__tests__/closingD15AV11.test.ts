@@ -9,7 +9,8 @@ import { ContainerRepository } from '../persistence/containerRepository';
 import { ClosingService } from '../closing/closingService';
 import { promoverHouseFreeTimeComClient } from '../freeTime/houseFreeTimeService';
 import { promoverMasterFreeTime } from '../freeTime/masterFreeTimeService';
-import { novoGestor } from './responsabilidadeTestHelper';
+import { novoGestor, novoMembro } from './responsabilidadeTestHelper';
+import { createHash } from 'crypto';
 
 /**
  * Fase D15-A v1.1 (corretiva) — os 10 testes obrigatórios do audit sobre
@@ -423,31 +424,37 @@ test('D15-A v1.1 #3: falha injetada depois da observação bruta (Master Free Ti
  * com erro claro em vez de travar a suíte.
  * ================================================================== */
 
-test('D15-A v1.1 #2: validarMinuta concorrente com finalizarProcesso no MESMO processo nunca deadlock — estado final satisfaz os gates normais', { skip: !url, timeout: 15000 }, async () => {
+test('D15-A v1.1 #2 (reescrito na correção de minuta P1): registro de minuta concorrente com finalizarProcesso no MESMO processo nunca deadlock — estado final satisfaz os gates normais', { skip: !url, timeout: 15000 }, async () => {
+  // Produção P1: `validarMinuta` não existe mais — o aceite técnico acontece
+  // no próprio REGISTRO, sob o mesmo protocolo de lock (consultivo do
+  // processo primeiro). A garantia de D15-A v1.1 é a mesma: nunca deadlock,
+  // e o estado final satisfaz os gates em qualquer ordem. Quem vence a
+  // corrida só muda QUEM encerra: o acionamento administrativo (ok) ou o
+  // encerramento automático disparado pelo registro (finalizar → ja_final).
   const pool = testPoolComLockTimeout(5000);
   try {
     await setupBanco(pool);
     const base = await seedZero(pool, 'DLOCKV000001');
     const svc = new ClosingService(pool);
     const gestorId = await novoGestor(pool, base.orgId);
-    // Minuta SEM divergência (mesma data do tracking) — resultado de negócio
-    // idêntico nas duas ordens possíveis; só o CAMINHO interno (OPEN × FINAL
-    // dentro de validarMinuta) muda conforme quem vence a corrida pelo lock.
-    const m = await svc.registrarMinuta({ containerId: base.containerId, numeroInformado: base.numero, dataInformada: '2026-09-10' });
+    const analistaId = await novoMembro(pool, base.orgId, 'ANALYST');
 
     const [rv, rf] = await Promise.all([
-      svc.validarMinuta({ minutaId: m.id, membershipId: gestorId, config: cfg }),
+      svc.registrarMinuta({
+        containerId: base.containerId, membershipId: analistaId, numeroInformado: base.numero, dataInformada: '2026-09-10',
+        documento: { origem: 'referencia_externa', referencia: 'teste://dlock', nomeArquivo: 'dlock.pdf', tipoConteudo: 'application/pdf', tamanhoBytes: 10, hashConteudo: createHash('sha256').update('dlock').digest('hex') },
+        config: cfg,
+      }),
       svc.finalizarProcesso({ processoId: base.processoId, membershipId: gestorId, config: cfg }),
     ]);
 
-    assert.ok((rv as any).ok, `validarMinuta deveria suceder em qualquer ordem — nunca deadlock (${JSON.stringify(rv)})`);
-    assert.equal((rv as any).resultado, 'validada');
-    assert.deepEqual(rf, { ok: true }, `finalizarProcesso deveria suceder em qualquer ordem — nunca deadlock (${JSON.stringify(rf)})`);
+    assert.ok(rv.ok, `registro deveria suceder em qualquer ordem — nunca deadlock (${JSON.stringify(rv)})`);
+    assert.equal(rv.ok && rv.minuta.estado, 'ACEITA');
+    assert.ok(rf.ok || rf.motivo === 'ja_final', `finalizarProcesso: ok ou ja_final — nunca deadlock (${JSON.stringify(rf)})`);
 
     const proc = (await pool.query(`SELECT apuracao_status FROM processos WHERE id=$1`, [base.processoId])).rows[0];
     assert.equal(proc.apuracao_status, 'FINAL', 'gate normal satisfeito — processo fechou');
-    const minuta = (await pool.query(`SELECT estado_minuta FROM minutas WHERE id=$1`, [m.id])).rows[0];
-    assert.equal(minuta.estado_minuta, 'VALIDADA', 'gate normal satisfeito — minuta validada');
+    assert.equal((await pool.query(`SELECT count(*)::int AS n FROM fechamentos WHERE processo_id=$1`, [base.processoId])).rows[0].n, 1, 'exatamente um fechamento');
   } finally { await pool.end(); }
 });
 

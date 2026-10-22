@@ -2,9 +2,9 @@ import { Pool, PoolClient } from 'pg';
 import { getPool } from '../db/pool';
 import { CivilDate } from '../temporal/civilDate';
 import { PapelRbac } from '../scheduler/failurePolicy';
-import { validarMinuta as validarCoerencia } from './minutaValidation';
-import { registrarFatoMaterialPosFinal, lockProcesso } from './materialChangeGuard';
-import { MinutaRepository, Minuta } from '../persistence/minutaRepository';
+import { lockProcesso } from './materialChangeGuard';
+import { registrarMinutaTecnica, reavaliarMinutasComClient, RegistrarMinutaTecnicaInput, ResultadoRegistroMinutaTecnica } from './minutaTecnica';
+import { MinutaRepository } from '../persistence/minutaRepository';
 import { ClosingEventRepository } from '../persistence/closingEventRepository';
 import { ReaberturaRepository } from '../persistence/reaberturaRepository';
 import { LifecycleRepository } from '../persistence/lifecycleRepository';
@@ -14,13 +14,23 @@ import {
 } from '../apuracao/recalcularApuracao';
 
 /**
- * Fase 8 v1.1 — orquestração do fechamento: minuta (upload → validação/rejeição),
- * effective_return_date (só de minuta VALIDADA), recálculo (pipeline ÚNICO
+ * Fase 8 v1.1 — orquestração do fechamento: minuta, recálculo (pipeline ÚNICO
  * transacional fatos→relógios→valores→lifecycle, via recalcularApuracao),
  * fechamento FINAL (gate de comprovação/responsabilidade/confirmação) e
- * reabertura. tracking_return_date nunca é apagado. Upload nunca recalcula.
- * Multi-contêiner: cada minuta é de um contêiner; o recálculo atinge só o
- * contêiner afetado.
+ * reabertura. tracking_return_date nunca é apagado.
+ *
+ * Produção P1 (reabertura controlada — correção de minuta e encerramento):
+ *  - a minuta é registrada pelo analista e ACEITA/DIVERGENTE/INCONSISTENTE
+ *    por verificação técnica AUTOMÁTICA (`minutaTecnica.ts`); não existe mais
+ *    validação por MANAGER/ADMIN (`validarMinuta` removido) nem minuta
+ *    gravando data em `effective_return_date` — a devolução oficial é a do
+ *    tracking (a efetiva legada só é limpa quando sua minuta é substituída);
+ *  - o encerramento é AUTOMÁTICO (`avaliarEncerramentoAutomatico`): quando
+ *    todas as condições reais estão satisfeitas o processo vira FINAL sem
+ *    ação humana. `finalizarProcesso` fica como acionamento administrativo
+ *    (MANAGER/ADMIN, idempotente) da MESMA avaliação — nunca etapa
+ *    obrigatória, nunca um atalho para contornar gate;
+ *  - os gates de FINAL vivem num único lugar (`gateEncerramentoComClient`).
  *
  * FINAL protegido em profundidade (item 4): guard de aplicação (o orquestrador é
  * NO-OP em processo FINAL) + guard de banco (migration 0017). No fechamento os
@@ -81,12 +91,45 @@ export interface ClosingConfig {
   hoje: CivilDate;
 }
 
+/** Resultado da avaliação automática de encerramento (nunca lança para domínio previsível). */
+export type ResultadoEncerramentoAutomatico =
+  | { resultado: 'finalizado' }
+  | { resultado: 'ja_final' }
+  | { resultado: 'bloqueado'; motivo: string; containerId: string | null }
+  | { resultado: 'processo_nao_encontrado' }
+  | { resultado: 'avaliacao_adiada' };
+
 type Falha = { ok: false; motivo: string };
 
 interface Ator {
   usuarioId: string;
   papel: PapelRbac;
 }
+
+/**
+ * Pendências que bloqueiam o encerramento (automático e administrativo) do
+ * contêiner enquanto abertas — Produção P1, "sem pendência bloqueante": sem
+ * gestor no caminho, o gate precisa recusar o que o próprio sistema marcou
+ * como fato do relógio ainda em dúvida (achado da revisão adversarial):
+ *  - `retorno_vazio_antes_descarga` (D15-B R08/31.5): devolução reportada
+ *    antes da descarga;
+ *  - `cronologia_retorno_antes_gate_out` (R40): uma devolução do tracking foi
+ *    rejeitada por cronologia — a devolução vigente está em dúvida;
+ *  - `conflito_mesma_fonte` (R37): a mesma fonte, no mesmo instante, deu dois
+ *    valores — o selecionado é o primeiro, nunca revisado;
+ *  - `fallback_manual_superado` (R07): uma fonte real contradiz o Free Time
+ *    manual, mantido "até decisão humana".
+ * Todas estão no catálogo de resolução do analista (`pendenciaCatalogo.ts`:
+ * ANALYST/MANAGER/ADMIN, motivo obrigatório) e a resolução dispara a
+ * reavaliação do encerramento — nenhuma trava o processo sem saída. Fora da
+ * lista, deliberadamente: Gate Out rejeitado por cronologia (não é devolução
+ * nem entra no relógio), `free_time_ausente` (Free Time ausente já deixa a
+ * apuração INDETERMINADA, que bloqueia) e `ft_divergencias` (informativo, sem
+ * rota de resolução nesta entrega — bloquear seria travar sem saída).
+ */
+export const TIPOS_PENDENCIA_BLOQUEIAM_ENCERRAMENTO: readonly string[] = [
+  'retorno_vazio_antes_descarga', 'cronologia_retorno_antes_gate_out', 'conflito_mesma_fonte', 'fallback_manual_superado',
+];
 
 export class ClosingService {
   private minutas: MinutaRepository;
@@ -118,246 +161,255 @@ export class ClosingService {
     return rows.length ? { usuarioId: rows[0].usuario_id, papel: rows[0].papel as PapelRbac } : null;
   }
 
-  private async containerInfo(containerId: string) {
-    const { rows } = await this.pool.query(
-      `SELECT c.id, c.numero, c.discharge_date, c.gate_out_date, c.tracking_return_date,
-              c.effective_return_date, c.processo_id, c.effective_return_minuta_id, p.apuracao_status
-         FROM containers c JOIN processos p ON p.id = c.processo_id
-        WHERE c.id = $1`,
-      [containerId],
-    );
-    return rows[0] ?? null;
-  }
-
-  /** Upload/anexo de minuta (Cliente/Analista). Nasce RECEBIDA; NÃO altera datas/valores. Sem RBAC de Gestor (ação de captura, não de decisão). */
-  async registrarMinuta(input: {
-    containerId: string; numeroInformado: string | null; dataInformada: CivilDate | null;
-    evidenciaRef?: string | null; recebidaPor?: string | null;
-  }): Promise<Minuta> {
-    const m = await this.minutas.criarRecebida(input);
-    const ci = await this.containerInfo(input.containerId);
-    await this.eventos.registrar({
-      processoId: ci?.processo_id ?? null, containerId: input.containerId,
-      tipoEvento: 'MINUTA_RECEBIDA', origem: 'humano', atorUsuarioId: input.recebidaPor ?? null,
-      evidenciaRef: input.evidenciaRef ?? null, payload: { minutaId: m.id },
-    });
-    return m;
+  /**
+   * Registro de minuta (Produção P1 — correção de minuta). Delega ao fluxo
+   * ÚNICO `registrarMinutaTecnica`: o analista (qualquer papel interno, por
+   * membership REAL) registra a minuta com o documento; a verificação técnica
+   * automática decide o estado na mesma transação. Não existe validação por
+   * MANAGER/ADMIN — o antigo `validarMinuta` foi removido (ver
+   * docs/demurrage-producao-p1-correcao-minuta-encerramento.md §3).
+   *
+   * Depois do COMMIT do registro, avalia o encerramento automático do
+   * processo (transação própria). Uma falha inesperada nessa segunda etapa
+   * nunca desfaz o registro já persistido: o resultado diz
+   * `avaliacao_adiada` e a varredura periódica reavalia.
+   */
+  async registrarMinuta(input: Omit<RegistrarMinutaTecnicaInput, 'hoje'> & { config: ClosingConfig }): Promise<
+    | (Extract<ResultadoRegistroMinutaTecnica, { ok: true }> & { encerramento: ResultadoEncerramentoAutomatico })
+    | Extract<ResultadoRegistroMinutaTecnica, { ok: false }>
+  > {
+    const { config, ...resto } = input;
+    const r = await registrarMinutaTecnica(this.pool, { ...resto, hoje: config.hoje });
+    if (!r.ok) return r;
+    const encerramento = await this.avaliarEncerramentoAutomaticoSeguro({ processoId: r.processoId, config });
+    return { ...r, encerramento };
   }
 
   /**
-   * Validação (MANAGER/ADMIN, resolvido por membership real — Fase D15-A).
-   * Transação ÚNICA: lê minuta+contêiner com lock, trava o processo
-   * (lock consultivo), resolve o ator, revalida coerência (regra 1) e, só
-   * então, grava. Qualquer falha no meio desfaz tudo (nenhum estado parcial).
-   *
-   * Divergência documental (ADENDO): a comparação usa a DATA INFORMADA no
-   * conteúdo da minuta (nunca a data de recebimento/upload). Quando
-   * data_informada != tracking_return_date, a minuta NÃO é aceita
-   * automaticamente só por ser cronologicamente possível: a divergência é
-   * registrada, as duas fontes são preservadas e o effective_return_date só é
-   * alterado após revisão EXPLÍCITA do MANAGER/ADMIN (`aceitarDivergencia: true`).
-   *
-   * FINAL + minuta diverge da data congelada (31.14): as DUAS evidências
-   * (tracking e minuta) são registradas num evento `FATO_MATERIAL_POS_FINAL`
-   * ANTES de devolver `exige_reabertura` — nunca mais um retorno mudo. A
-   * projeção FINAL nunca é mutada aqui; só a reabertura autorizada reabilita.
+   * Gate de encerramento, por contêiner (Blueprint 20.1/21.9 + decisão 8 +
+   * clarificações A e item 6; Produção P1 — aceite técnico da minuta).
+   * Precondição: lock consultivo do processo detido e contêineres travados.
+   *  - devolvido (tracking — ou devolução efetiva LEGADA) senão bloqueia;
+   *  - pendência aberta que põe em dúvida um fato do relógio bloqueia
+   *    (`TIPOS_PENDENCIA_BLOQUEIAM_ENCERRAMENTO`; todas resolvíveis pelo
+   *    analista, com motivo — nunca exigem gestor);
+   *  - INDETERMINADA bloqueia (não dá para afirmar zero com segurança);
+   *  - minuta vigente do fluxo técnico DIVERGENTE/INCONSISTENTE/aguardando
+   *    bloqueia o contêiner (com ou sem demurrage — há pendência aberta);
+   *  - ZERO_CONFIRMADO conclui SEM minuta, tarifa, responsabilidade ou gestor;
+   *  - DEMURRAGE_CONFIRMADA exige: responsabilidade decidida (≠ EM_ANALISE);
+   *    minuta ACEITA tecnicamente contra a devolução ATUAL do tracking (ou,
+   *    em contêiner só com minutas LEGADAS, a comprovação legada v1.3); e cada
+   *    relógio em demurrage com valor ATIVO ESTIMATED|CONFIRMED.
    */
-  async validarMinuta(input: {
-    minutaId: string; membershipId: string; config: ClosingConfig;
-    /** Revisão explícita do MANAGER/ADMIN aceitando a divergência tracking × minuta. */
-    aceitarDivergencia?: boolean;
-    /** SÓ TESTE — ver nota de cabeçalho do arquivo. */
-    _testeFalhaEntreValidacaoERecalculo?: () => void | Promise<void>;
-  }): Promise<
-    | { ok: true; resultado: 'validada'; dataValidada: CivilDate; divergente: boolean }
-    | { ok: true; resultado: 'rejeitada'; motivo: string }
-    | { ok: true; resultado: 'divergencia_pendente'; dataInformada: CivilDate; trackingReturnDate: CivilDate | null }
-    | { ok: true; resultado: 'ja_validada'; dataValidada: CivilDate; divergente: boolean }
-    | { ok: true; resultado: 'ja_rejeitada'; motivo: string }
-    | Falha
-  > {
+  private async gateEncerramentoComClient(
+    client: PoolClient, conts: Array<{ id: string; effective_return_date: CivilDate | null; tracking_return_date: CivilDate | null }>, config: ClosingConfig,
+  ): Promise<{ ok: true } | { ok: false; motivo: string; containerId: string }> {
+    const lifecycle = new LifecycleRepository(client as unknown as Pool);
+    const minutas = new MinutaRepository(client as unknown as Pool);
+    const valores = new ValorApuradoRepository(client as unknown as Pool);
+    const bloqueio = (motivo: string, containerId: string) => ({ ok: false as const, motivo, containerId });
+
+    for (const c of conts) {
+      // Pendência que ainda espera revisão humana de um fato do relógio:
+      // bloqueio EXPLÍCITO e nomeado (`<tipo>_pendente`), na ordem de gravidade
+      // da lista (D15-B R08/31.5 — Empty Return antes da descarga — primeiro).
+      const { rows: pendBloqueantes } = await client.query(
+        `SELECT DISTINCT tipo FROM demurrage_pendencias WHERE container_id = $1 AND tipo = ANY($2::text[]) AND estado = 'aberta'`,
+        [c.id, TIPOS_PENDENCIA_BLOQUEIAM_ENCERRAMENTO],
+      );
+      const pendBloqueante = TIPOS_PENDENCIA_BLOQUEIAM_ENCERRAMENTO.find((t) => pendBloqueantes.some((p) => p.tipo === t));
+      if (pendBloqueante) return bloqueio(`${pendBloqueante}_pendente`, c.id);
+
+      const { facts, responsabilidade } = await lifecycle.gateFechamento(c.id, config);
+      if (facts.apuracaoDemurrageStatus === 'INDETERMINADA') return bloqueio('apuracao_indeterminada', c.id);
+
+      const vigente = await minutas.vigenteTecnica(c.id);
+      let comprovado = false;
+      if (vigente) {
+        if (vigente.estado === 'DIVERGENTE') return bloqueio('divergencia_pendente', c.id);
+        if (vigente.estado === 'INCONSISTENTE') return bloqueio('minuta_inconsistente', c.id);
+        if (vigente.estado !== 'ACEITA' || vigente.dataTrackingComparada !== c.tracking_return_date) {
+          // RECEBIDA (aguardando) ou ACEITA contra uma devolução que mudou depois.
+          // A reavaliação roda antes, na mesma transação e sob o mesmo lock; isto
+          // é defesa em profundidade — nunca se fecha sobre avaliação velha.
+          return bloqueio('minuta_aguardando_avaliacao', c.id);
+        }
+        comprovado = true;
+      } else {
+        // Só minutas LEGADAS (ou nenhuma): semântica de comprovação v1.3 preservada.
+        const dataFinalEvidencia: CivilDate | null = c.effective_return_date ?? c.tracking_return_date ?? null;
+        const legado = await minutas.comprovacaoLegada(c.id, dataFinalEvidencia);
+        if (legado.divergenciaPendente) return bloqueio('divergencia_pendente', c.id);
+        comprovado = legado.validadaCorrespondente;
+      }
+
+      if (facts.apuracaoDemurrageStatus === 'ZERO_CONFIRMADO') continue; // sem demurrage: nada mais é exigido.
+
+      // DEMURRAGE_CONFIRMADA a partir daqui.
+      if (responsabilidade === 'EM_ANALISE') return bloqueio('responsabilidade_em_analise', c.id);
+      if (!comprovado) return bloqueio('comprovacao_pendente', c.id);
+      const ativos = await valores.ativosDoContainer(c.id);
+      const confirmado = (tipo: 'cliente' | 'rocket'): boolean =>
+        ativos.some((v) => v.relogioTipo === tipo && (v.confirmationStatus === 'ESTIMATED' || v.confirmationStatus === 'CONFIRMED'));
+      const relogioEmDemurrage = (clock: { status: string; diasDemurrage: number }) => clock.status === 'OK' && clock.diasDemurrage >= 1;
+      if (relogioEmDemurrage(facts.clienteClock) && !confirmado('cliente')) return bloqueio('valor_cliente_nao_confirmado', c.id);
+      if (relogioEmDemurrage(facts.rocketClock) && !confirmado('rocket')) return bloqueio('valor_rocket_nao_confirmado', c.id);
+    }
+    return { ok: true };
+  }
+
+  /**
+   * Núcleo ÚNICO da transição para FINAL — usado pelo encerramento
+   * AUTOMÁTICO (`ator` null) e pelo acionamento administrativo
+   * (`finalizarProcesso`). Uma única transação, sob lock consultivo do
+   * processo; `apuracao_status` relido com `FOR UPDATE` DEPOIS do lock; a
+   * transição só ocorre `WHERE apuracao_status = 'OPEN'`. Duas avaliações
+   * concorrentes nunca produzem dois `fechamentos`: a segunda, depois de
+   * esperar o lock, relê FINAL e devolve `ja_final` sem escrever nada.
+   *
+   * Antes do gate, NA MESMA transação e sob o mesmo lock, as minutas
+   * vigentes são reavaliadas contra os fatos atuais (e a devolução efetiva
+   * legada de minuta substituída é limpa) — `reavaliarMinutasComClient`. O
+   * gate nunca decide sobre uma avaliação feita antes de um fato novo.
+   *
+   * Bloqueado: tudo o que a avaliação de ENCERRAMENTO projetou (recálculo) é
+   * desfeito (savepoint); a reavaliação técnica das minutas, que é anterior
+   * ao savepoint, persiste. No caminho automático o resultado (motivo +
+   * contêiner) é registrado em `processos.encerramento_*` (informativo;
+   * rotação justa da varredura); no administrativo nada do encerramento é
+   * escrito (semântica congelada).
+   *
+   * `respeitarReabertura` (varredura): processo com reabertura aberta não é
+   * re-encerrado — conferido AQUI, sob o lock, e não só na seleção de
+   * candidatos (um processo reaberto entre a seleção e a avaliação nunca é
+   * re-encerrado pela varredura).
+   */
+  private async encerrarSeElegivel(input: {
+    processoId: string;
+    /** null = encerramento automático (sistema). */
+    membershipId: string | null;
+    justificativa: string | null;
+    config: ClosingConfig;
+    respeitarReabertura?: boolean;
+    _testeFalhaDuranteFinalizacao?: () => void | Promise<void>;
+    _testeAguardarAntesDoCommit?: () => void | Promise<void>;
+  }): Promise<{ ok: true } | { ok: false; motivo: string; containerId?: string }> {
+    const automatico = input.membershipId === null;
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      await lockProcesso(client, input.processoId);
 
-      // Passo 1 — identidade do processo pela minuta, SEM lock de linha
-      // mutável (só para descobrir em qual processo adquirir o lock).
-      const { rows: idRows } = await client.query(
-        `SELECT m.container_id, c.processo_id FROM minutas m JOIN containers c ON c.id = m.container_id WHERE m.id = $1`,
-        [input.minutaId],
+      const { rows: prows } = await client.query(
+        `SELECT organization_id, apuracao_status FROM processos WHERE id = $1 FOR UPDATE`,
+        [input.processoId],
       );
-      if (!idRows.length) { await client.query('ROLLBACK'); return { ok: false, motivo: 'minuta_nao_encontrada' }; }
-      const processoIdEsperado: string = idRows[0].processo_id;
-      const containerIdEsperado: string = idRows[0].container_id;
+      if (!prows.length) { await client.query('ROLLBACK'); return { ok: false, motivo: 'processo_nao_encontrado' }; }
+      const proc = prows[0];
 
-      // Passo 2 — lock consultivo do processo, ANTES de qualquer linha mutável.
-      await lockProcesso(client, processoIdEsperado);
-
-      // Passo 3 — relê e trava o PROCESSO.
-      const { rows: procRows } = await client.query(`SELECT id FROM processos WHERE id = $1 FOR UPDATE`, [processoIdEsperado]);
-      if (!procRows.length) { await client.query('ROLLBACK'); return { ok: false, motivo: 'container_nao_encontrado' }; }
-
-      // Passo 4 — relê e trava o CONTÊINER.
-      const { rows: cirows } = await client.query(
-        `SELECT c.id, c.organization_id, c.numero, c.discharge_date, c.gate_out_date, c.tracking_return_date,
-                c.effective_return_date, c.processo_id, c.effective_return_minuta_id, p.apuracao_status
-           FROM containers c JOIN processos p ON p.id = c.processo_id
-          WHERE c.id = $1 FOR UPDATE OF c`,
-        [containerIdEsperado],
-      );
-      if (!cirows.length) { await client.query('ROLLBACK'); return { ok: false, motivo: 'container_nao_encontrado' }; }
-      const ci = cirows[0];
-
-      // Passo 4b — relê e trava a MINUTA; confirma que ainda pertence ao
-      // contêiner/processo esperado (defesa — ver achado #2).
-      const { rows: mrows } = await client.query(`SELECT * FROM minutas WHERE id = $1 FOR UPDATE`, [input.minutaId]);
-      if (!mrows.length) { await client.query('ROLLBACK'); return { ok: false, motivo: 'minuta_nao_encontrada' }; }
-      const mRow = mrows[0];
-      if (mRow.container_id !== containerIdEsperado || ci.processo_id !== processoIdEsperado) {
-        await client.query('ROLLBACK');
-        return { ok: false, motivo: 'minuta_nao_encontrada' };
+      let ator: Ator | null = null;
+      if (!automatico) {
+        ator = await this.resolverAtor(client, proc.organization_id, input.membershipId!);
+        if (!ator || !ehGestor(ator.papel)) { await client.query('ROLLBACK'); return { ok: false, motivo: 'apenas_manager_admin' }; }
       }
-      const m = {
-        id: mRow.id, containerId: mRow.container_id, estado: mRow.estado_minuta,
-        numeroInformado: mRow.numero_informado, dataInformada: mRow.data_informada,
-        divergenteDoTracking: mRow.divergente_do_tracking,
+
+      if (proc.apuracao_status === 'FINAL') { await client.query('ROLLBACK'); return { ok: false, motivo: 'ja_final' }; }
+
+      if (input.respeitarReabertura) {
+        const { rows: reab } = await client.query(
+          `SELECT 1 FROM reaberturas WHERE processo_id = $1 AND estado IN ('SOLICITADA', 'AUTORIZADA', 'RECALCULADA') LIMIT 1`,
+          [input.processoId],
+        );
+        if (reab.length) { await client.query('ROLLBACK'); return { ok: false, motivo: 'reabertura_em_andamento' }; }
+      }
+
+      // Reavaliação técnica das minutas sob o lock (persiste mesmo bloqueado).
+      await reavaliarMinutasComClient(
+        client, { processoId: input.processoId, organizationId: proc.organization_id, apuracaoStatus: 'OPEN' }, input.config.hoje,
+      );
+
+      const { rows: conts } = await client.query(
+        `SELECT id, effective_return_date, tracking_return_date,
+                (effective_return_date IS NOT NULL OR tracking_return_date IS NOT NULL) AS devolvido
+           FROM containers WHERE processo_id = $1 ORDER BY id FOR UPDATE`,
+        [input.processoId],
+      );
+
+      // Tudo o que a avaliação projeta fica depois deste ponto — um bloqueio
+      // volta aqui, preservando os locks já adquiridos.
+      await client.query('SAVEPOINT avaliacao_encerramento');
+      const bloquear = async (motivo: string, containerId?: string) => {
+        await client.query('ROLLBACK TO SAVEPOINT avaliacao_encerramento');
+        if (!automatico) { await client.query('COMMIT'); return { ok: false as const, motivo }; }
+        await client.query(
+          `UPDATE processos SET encerramento_avaliado_em = now(), encerramento_bloqueio = $2, encerramento_bloqueio_container_id = $3 WHERE id = $1`,
+          [input.processoId, motivo, containerId ?? null],
+        );
+        await client.query('COMMIT');
+        return { ok: false as const, motivo, ...(containerId ? { containerId } : {}) };
       };
 
-      // Fase D15-A v1.2 (corretiva, achado #2 da auditoria de Entrega 2 v1.2):
-      // guard DEFINITIVO de já-processada, DENTRO do próprio serviço — logo
-      // depois do lock consultivo (passo 2) e da releitura travada da minuta
-      // (passo 4b), ANTES de qualquer outro gate. A v1.1 só tinha essa guarda
-      // na rota HTTP (pré-leitura sob `comLockPorChave`); um chamador direto
-      // do serviço — outro processo, um job futuro, outra rota, uma chamada
-      // de teste — reprocessava uma minuta já VALIDADA/REJEITADA e duplicava
-      // `closing_events`/recálculo. Agora QUALQUER chamador, com ou sem lock
-      // de rota, recebe um resultado típado IDEMPOTENTE: nenhum evento é
-      // registrado, nenhum recálculo roda, nenhuma linha é escrita.
-      if (m.estado === 'VALIDADA') {
-        await client.query('ROLLBACK');
-        return { ok: true, resultado: 'ja_validada', dataValidada: mRow.data_validada, divergente: mRow.divergente_do_tracking };
-      }
-      if (m.estado === 'REJEITADA') {
-        await client.query('ROLLBACK');
-        return { ok: true, resultado: 'ja_rejeitada', motivo: mRow.motivo_rejeicao };
-      }
-      if (m.estado !== 'RECEBIDA') {
-        // Defesa em profundidade: a CHECK da migration 0016 já restringe
-        // `estado_minuta` a RECEBIDA/VALIDADA/REJEITADA — este ramo nunca é
-        // alcançável em produção, mas devolve uma falha típica FECHADA em vez
-        // de deixar o fluxo seguir sobre um estado desconhecido.
-        await client.query('ROLLBACK');
-        return { ok: false, motivo: 'minuta_estado_nao_suportado' };
+      if (conts.length === 0) return bloquear('sem_conteineres');
+      const naoDevolvido = conts.find((c) => !c.devolvido);
+      if (naoDevolvido) return bloquear('conteiner_nao_devolvido', naoDevolvido.id);
+      // O encerramento AUTOMÁTICO só conclui sobre a devolução OFICIAL (tracking).
+      // Uma devolução efetiva LEGADA (data de minuta aprovada no fluxo antigo)
+      // ausente do tracking ou diferente dele mantém a semântica legada: só o
+      // acionamento administrativo (humano, como antes) a encerra. Achado da
+      // revisão adversarial — o sistema nunca congela sozinho uma data que veio
+      // de minuta.
+      if (automatico) {
+        const legada = conts.find((c) => c.effective_return_date !== null && c.effective_return_date !== c.tracking_return_date);
+        if (legada) return bloquear('devolucao_efetiva_legada', legada.id);
       }
 
-      const ator = await this.resolverAtor(client, ci.organization_id, input.membershipId);
-      if (!ator || !ehGestor(ator.papel)) { await client.query('ROLLBACK'); return { ok: false, motivo: 'apenas_manager_admin' }; }
-
-      const minutas = new MinutaRepository(client as unknown as Pool);
-      const eventos = new ClosingEventRepository(client as unknown as Pool);
-
-      const r = validarCoerencia({
-        numeroInformado: m.numeroInformado, numeroContainer: ci.numero,
-        dataInformada: m.dataInformada, dischargeDate: ci.discharge_date,
-        gateOutDate: ci.gate_out_date, hoje: input.config.hoje,
-      });
-
-      if (!r.valida) {
-        await minutas.marcarRejeitada(m.id, r.motivo, ator.usuarioId);
-        await eventos.registrar({
-          processoId: ci.processo_id, containerId: m.containerId, tipoEvento: 'MINUTA_REJEITADA',
-          origem: 'humano', atorUsuarioId: ator.usuarioId, payload: { minutaId: m.id, motivo: r.motivo },
-        });
-        await client.query('COMMIT');
-        return { ok: true, resultado: 'rejeitada', motivo: r.motivo };
+      // Projeta a apuração corrente de cada contêiner (relógios + valores + lifecycle)
+      // ANTES do gate, NA MESMA transação: o que for congelado no FINAL é
+      // exatamente o estado atual — sem janela entre a projeção e a decisão.
+      for (const c of conts) {
+        await recalcularApuracaoContainerComClient(client, c.id, { dataReferencia: input.config.hoje });
       }
 
-      const divergente = ci.tracking_return_date != null && r.dataValidada !== ci.tracking_return_date;
+      const gate = await this.gateEncerramentoComClient(client, conts, input.config);
+      if (!gate.ok) return bloquear(gate.motivo, gate.containerId);
 
-      // Apuração FINAL (Cap. 20.1 / 31.14): uma minuta que NÃO altera a data de
-      // devolução em força apenas encerra a pendência DOCUMENTAL (sem recálculo,
-      // sem reabertura). Uma que ALTERARIA o resultado exige reabertura autorizada
-      // — e, a partir de D15-A, registra as DUAS evidências antes de devolver.
-      if (ci.apuracao_status === 'FINAL') {
-        // A prova de "apenas confirma" é a DATA FINAL CONGELADA (relógios), não
-        // o tracking_return_date atual (que um tracking posterior pode ter movido).
-        const congelada: CivilDate | null = (
-          await client.query(`SELECT data_final_apuracao FROM relogios WHERE container_id = $1 AND tipo = 'cliente'`, [m.containerId])
-        ).rows[0]?.data_final_apuracao ?? ci.effective_return_date ?? ci.tracking_return_date ?? null;
-        if (r.dataValidada !== congelada) {
-          await registrarFatoMaterialPosFinal(client, {
-            processoId: ci.processo_id, containerId: m.containerId, campo: 'minutaDivergente',
-            valorAnterior: congelada, valorNovo: r.dataValidada, origem: 'humano', atorUsuarioId: ator.usuarioId,
-            extra: { minutaId: m.id, trackingReturnDate: ci.tracking_return_date, dataCongelada: congelada },
-          });
-          await client.query('COMMIT');
-          return { ok: false, motivo: 'exige_reabertura' };
-        }
-        await minutas.marcarValidada(m.id, r.dataValidada, divergente, ator.usuarioId);
-        if (input._testeFalhaEntreValidacaoERecalculo) await input._testeFalhaEntreValidacaoERecalculo();
-        await client.query(
-          `UPDATE containers SET effective_return_date = $2, effective_return_minuta_id = $3 WHERE id = $1`,
-          [m.containerId, r.dataValidada, m.id],
-        );
-        await eventos.registrar({
-          processoId: ci.processo_id, containerId: m.containerId, tipoEvento: 'MINUTA_VALIDADA',
-          origem: 'humano', atorUsuarioId: ator.usuarioId,
-          payload: { minutaId: m.id, dataValidada: r.dataValidada, documentalApenas: true },
-        });
-        // Só re-deriva o documentaryStatus do contêiner (cache-only: relógios/valores
-        // da apuração FINAL permanecem congelados; nada é recalculado).
-        await new LifecycleRepository(client as unknown as Pool).derivarContainerEConsolidar(m.containerId, ci.processo_id, input.config);
-        await client.query('COMMIT');
-        return { ok: true, resultado: 'validada', dataValidada: r.dataValidada, divergente };
-      }
+      if (input._testeFalhaDuranteFinalizacao) await input._testeFalhaDuranteFinalizacao();
 
-      // ADENDO: divergência (data_informada != tracking) NÃO é aceita automaticamente.
-      // Registra a divergência, PRESERVA as duas fontes (não altera effective_return_date)
-      // e exige revisão explícita do MANAGER/ADMIN (`aceitarDivergencia: true`) antes de alterar.
-      if (divergente && input.aceitarDivergencia !== true) {
-        if (!m.divergenteDoTracking) {
-          await client.query(`UPDATE minutas SET divergente_do_tracking = true, atualizado_em = now() WHERE id = $1`, [m.id]);
-          await eventos.registrar({
-            processoId: ci.processo_id, containerId: m.containerId, tipoEvento: 'DIVERGENCIA_TRACKING_MINUTA',
-            origem: 'automatico', payload: { tracking: ci.tracking_return_date, minuta: r.dataValidada },
-          });
-        }
-        await client.query('COMMIT');
-        return { ok: true, resultado: 'divergencia_pendente', dataInformada: r.dataValidada, trackingReturnDate: ci.tracking_return_date };
-      }
-      // Divergência já registrada num passo anterior? Se não, e estamos aceitando agora, registra.
-      if (divergente && !m.divergenteDoTracking) {
-        await eventos.registrar({
-          processoId: ci.processo_id, containerId: m.containerId, tipoEvento: 'DIVERGENCIA_TRACKING_MINUTA',
-          origem: 'automatico', payload: { tracking: ci.tracking_return_date, minuta: r.dataValidada },
-        });
-      }
-
-      // Encadeia lineage se já havia uma minuta efetiva diferente (nova supersede a anterior).
-      if (ci.effective_return_minuta_id && ci.effective_return_minuta_id !== m.id) {
-        await client.query(`UPDATE minutas SET supersedes_id = $2 WHERE id = $1`, [m.id, ci.effective_return_minuta_id]);
-      }
-      await minutas.marcarValidada(m.id, r.dataValidada, divergente, ator.usuarioId);
-      if (input._testeFalhaEntreValidacaoERecalculo) await input._testeFalhaEntreValidacaoERecalculo();
-      // effective_return_date derivado da minuta validada; tracking_return_date preservado.
-      await client.query(
-        `UPDATE containers SET effective_return_date = $2, effective_return_minuta_id = $3 WHERE id = $1`,
-        [m.containerId, r.dataValidada, m.id],
+      // Transição atômica: valores ATIVOS OPEN → FINAL (processo ainda OPEN, guard
+      // permite) e SÓ ENTÃO processo FINAL, na MESMA transação de todo o gate acima.
+      const valores = new ValorApuradoRepository(client as unknown as Pool);
+      for (const c of conts) await valores.finalizarAtivos(client, c.id);
+      const upd = await client.query(
+        `UPDATE processos SET apuracao_status = 'FINAL', fechado_em = now(), fechado_por = $2,
+                encerramento_avaliado_em = now(), encerramento_bloqueio = NULL, encerramento_bloqueio_container_id = NULL
+          WHERE id = $1 AND apuracao_status = 'OPEN'`,
+        [input.processoId, ator?.usuarioId ?? null],
       );
-      await eventos.registrar({
-        processoId: ci.processo_id, containerId: m.containerId, tipoEvento: 'MINUTA_VALIDADA',
-        origem: 'humano', atorUsuarioId: ator.usuarioId, payload: { minutaId: m.id, dataValidada: r.dataValidada },
+      if (upd.rowCount === 0) {
+        // O lock consultivo já deveria ter impedido isto — defesa em profundidade
+        // contra qualquer caminho que mude apuracao_status fora deste lock.
+        throw new Error('encerrarSeElegivel: apuracao_status mudou sob o lock consultivo (corrida inesperada)');
+      }
+      const justificativa = automatico ? (input.justificativa ?? 'encerramento_automatico') : (input.justificativa ?? null);
+      await client.query(
+        `INSERT INTO fechamentos (processo_id, realizado_por, justificativa, origem) VALUES ($1, $2, $3, $4)`,
+        [input.processoId, ator?.usuarioId ?? null, justificativa, automatico ? 'automatico' : 'humano'],
+      );
+      const reab = await new ReaberturaRepository(client as unknown as Pool).abertaDoProcesso(input.processoId);
+      await new ClosingEventRepository(client as unknown as Pool).registrar({
+        processoId: input.processoId, tipoEvento: reab ? 'REFECHAMENTO' : 'FECHAMENTO_FINAL',
+        origem: automatico ? 'automatico' : 'humano', atorUsuarioId: ator?.usuarioId ?? null,
+        payload: { justificativa, modo: automatico ? 'automatico' : 'administrativo' },
       });
-      // Pipeline ÚNICO e transacional (fatos → relógios → valores → lifecycle), NA
-      // MESMA transação da validação (Fase D15-A — atomicidade ponta a ponta).
-      await recalcularApuracaoContainerComClient(client, m.containerId, { dataReferencia: input.config.hoje });
-      await eventos.registrar({
-        processoId: ci.processo_id, containerId: m.containerId, tipoEvento: 'RECALCULO', origem: 'automatico', payload: {},
-      });
+      if (reab) await new ReaberturaRepository(client as unknown as Pool).marcarEstado(reab.id, 'REFECHADA');
+
+      if (input._testeAguardarAntesDoCommit) await input._testeAguardarAntesDoCommit();
+
       await client.query('COMMIT');
-      return { ok: true, resultado: 'validada', dataValidada: r.dataValidada, divergente };
+      return { ok: true };
     } catch (erro) {
-      await client.query('ROLLBACK');
+      await client.query('ROLLBACK').catch(() => undefined);
       throw erro;
     } finally {
       client.release();
@@ -365,24 +417,80 @@ export class ClosingService {
   }
 
   /**
-   * Fechamento FINAL (MANAGER/ADMIN, resolvido por membership real). Gate
-   * (Blueprint 20.1/21.9 + decisão 8 + clarificações A e item 6), por contêiner:
-   *  - devolvido (effective/tracking return date) senão bloqueia;
-   *  - INDETERMINADA bloqueia (não dá para afirmar zero com segurança);
-   *  - ZERO_CONFIRMADO fecha SEM tarifa e SEM minuta (sem demurrage, sem comprovação);
-   *  - DEMURRAGE_CONFIRMADA exige: responsabilidade != EM_ANALISE; minuta VALIDADA
-   *    do contêiner (comprovação, clarificação A); e cada relógio em demurrage com
-   *    valor ATIVO confirmado ESTIMATED|CONFIRMED (UNAVAILABLE/ESTIMATED_PROVISIONAL
-   *    bloqueiam — item 6).
-   *
-   * Fase D15-A: TUDO — recálculo de projeção, releitura dos gates, transição
-   * de valores OPEN→FINAL e UPDATE do processo — roda numa ÚNICA transação,
-   * sob lock consultivo do processo. `apuracao_status` é relido com `FOR
-   * UPDATE` DEPOIS do lock (nunca confia em leitura anterior ao lock); a
-   * transição só ocorre `WHERE apuracao_status = 'OPEN'` — defesa em
-   * profundidade mesmo com o lock já serializando. Duas chamadas concorrentes
-   * nunca produzem dois `fechamentos`: a segunda, depois de esperar o lock,
-   * relê `apuracao_status = 'FINAL'` e devolve `ja_final` sem escrever nada.
+   * Encerramento AUTOMÁTICO (Produção P1). Reavalia as minutas vigentes
+   * contra os fatos atuais e tenta a transição para FINAL pelo MESMO gate do
+   * acionamento administrativo — tudo numa transação, sob o lock do processo
+   * (o resultado da verificação técnica persiste mesmo que o encerramento
+   * siga bloqueado). Ninguém precisa "finalizar": quando todas as condições
+   * reais estão satisfeitas, o processo vira FINAL sozinho. Idempotente.
+   */
+  async avaliarEncerramentoAutomatico(input: {
+    processoId: string; config: ClosingConfig;
+    /** Varredura: não re-encerra processo com reabertura aberta (conferido sob o lock). */
+    respeitarReabertura?: boolean;
+    _testeAguardarAntesDoCommit?: () => void | Promise<void>;
+  }): Promise<ResultadoEncerramentoAutomatico> {
+    const r = await this.encerrarSeElegivel({
+      processoId: input.processoId, membershipId: null, justificativa: null, config: input.config,
+      respeitarReabertura: input.respeitarReabertura,
+      _testeAguardarAntesDoCommit: input._testeAguardarAntesDoCommit,
+    });
+    if (r.ok) return { resultado: 'finalizado' };
+    if (r.motivo === 'ja_final') return { resultado: 'ja_final' };
+    if (r.motivo === 'processo_nao_encontrado') return { resultado: 'processo_nao_encontrado' };
+    return { resultado: 'bloqueado', motivo: r.motivo, containerId: r.containerId ?? null };
+  }
+
+  /**
+   * Igual a `avaliarEncerramentoAutomatico`, mas uma falha inesperada vira
+   * `avaliacao_adiada` (a varredura reavalia) — para chamadores cuja escrita
+   * principal já comitou. A falha é registrada no processo
+   * (`encerramento_bloqueio = 'falha_avaliacao'`, `encerramento_avaliado_em`
+   * atualizado): sem isso, um processo que falha sempre ficaria eternamente
+   * no topo da ordem da varredura e, com falhas suficientes, monopolizaria o
+   * limite do tick (achado da revisão adversarial).
+   */
+  async avaliarEncerramentoAutomaticoSeguro(input: { processoId: string; config: ClosingConfig; respeitarReabertura?: boolean }): Promise<ResultadoEncerramentoAutomatico> {
+    try {
+      return await this.avaliarEncerramentoAutomatico(input);
+    } catch (erro) {
+      // eslint-disable-next-line no-console
+      console.error('[demurrage-encerramento] avaliação adiada (a varredura reavalia):', String((erro as any)?.code ?? 'erro'));
+      await this.registrarFalhaDeAvaliacao(input.processoId).catch(() => undefined);
+      return { resultado: 'avaliacao_adiada' };
+    }
+  }
+
+  /** Registra (informativo) que a última avaliação automática falhou — mesmo protocolo de lock; só em processo OPEN. */
+  private async registrarFalhaDeAvaliacao(processoId: string): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await lockProcesso(client, processoId);
+      await client.query(
+        `UPDATE processos SET encerramento_avaliado_em = now(), encerramento_bloqueio = 'falha_avaliacao', encerramento_bloqueio_container_id = NULL
+          WHERE id = $1 AND apuracao_status = 'OPEN'`,
+        [processoId],
+      );
+      await client.query('COMMIT');
+    } catch (erro) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw erro;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Acionamento ADMINISTRATIVO do encerramento (MANAGER/ADMIN, membership
+   * real). Não é mais etapa operacional obrigatória — o encerramento é
+   * automático; esta operação só antecipa a MESMA avaliação (mesmos gates,
+   * nenhum contornado), é idempotente (`ja_final`) e fica restrita a
+   * gestor. Mantida por compatibilidade do contrato da Entrega 2 e para
+   * antecipar a varredura quando necessário (ver relatório, §5).
+   * RBAC é conferido antes de abrir a transação e de novo, sob lock, ANTES
+   * da reavaliação das minutas (um ANALYST não dispara escrita nenhuma por
+   * aqui).
    */
   async finalizarProcesso(input: {
     processoId: string; membershipId: string; justificativa?: string | null; config: ClosingConfig;
@@ -398,115 +506,17 @@ export class ClosingService {
      */
     _testeAguardarAntesDoCommit?: () => void | Promise<void>;
   }): Promise<{ ok: true } | Falha> {
-    const client = await this.pool.connect();
-    try {
-      await client.query('BEGIN');
-      await lockProcesso(client, input.processoId);
+    const { rows } = await this.pool.query(`SELECT organization_id FROM processos WHERE id = $1`, [input.processoId]);
+    if (!rows.length) return { ok: false, motivo: 'processo_nao_encontrado' };
+    const atorPrevio = await this.resolverAtor(this.pool, rows[0].organization_id, input.membershipId);
+    if (!atorPrevio || !ehGestor(atorPrevio.papel)) return { ok: false, motivo: 'apenas_manager_admin' };
 
-      const { rows: prows } = await client.query(
-        `SELECT organization_id, apuracao_status FROM processos WHERE id = $1 FOR UPDATE`,
-        [input.processoId],
-      );
-      if (!prows.length) { await client.query('ROLLBACK'); return { ok: false, motivo: 'processo_nao_encontrado' }; }
-      const proc = prows[0];
-
-      const ator = await this.resolverAtor(client, proc.organization_id, input.membershipId);
-      if (!ator || !ehGestor(ator.papel)) { await client.query('ROLLBACK'); return { ok: false, motivo: 'apenas_manager_admin' }; }
-
-      if (proc.apuracao_status === 'FINAL') { await client.query('ROLLBACK'); return { ok: false, motivo: 'ja_final' }; }
-
-      const { rows: conts } = await client.query(
-        `SELECT id, effective_return_date, tracking_return_date,
-                (effective_return_date IS NOT NULL OR tracking_return_date IS NOT NULL) AS devolvido
-           FROM containers WHERE processo_id = $1 ORDER BY id FOR UPDATE`,
-        [input.processoId],
-      );
-      if (conts.length === 0) { await client.query('ROLLBACK'); return { ok: false, motivo: 'sem_conteineres' }; }
-      if (conts.some((c) => !c.devolvido)) { await client.query('ROLLBACK'); return { ok: false, motivo: 'conteiner_nao_devolvido' }; }
-
-      // Projeta a apuração corrente de cada contêiner (relógios + valores + lifecycle)
-      // ANTES do gate, NA MESMA transação: o gate consome os relógios/valores
-      // persistidos (v1.2), então o que for congelado no FINAL é exatamente o
-      // estado atual — sem janela entre a projeção e a decisão de fechar.
-      for (const c of conts) {
-        await recalcularApuracaoContainerComClient(client, c.id, { dataReferencia: input.config.hoje });
-      }
-
-      const lifecycle = new LifecycleRepository(client as unknown as Pool);
-      const minutas = new MinutaRepository(client as unknown as Pool);
-      const valores = new ValorApuradoRepository(client as unknown as Pool);
-
-      for (const c of conts) {
-        // D15-B (R08/31.5) — Empty Return reportado ANTES da descarga: bloqueio
-        // EXPLÍCITO e nomeado, distinto do bloqueio indireto genérico via
-        // INDETERMINADA (abaixo) — a pendência já existe e é visível à gestão
-        // (ver `ContainerRepository.applyObservationComClient`/`abrirPendenciaCronologia`).
-        const { rows: pendRetornoVazio } = await client.query(
-          `SELECT id FROM demurrage_pendencias WHERE container_id = $1 AND tipo = 'retorno_vazio_antes_descarga' AND estado = 'aberta'`,
-          [c.id],
-        );
-        if (pendRetornoVazio.length) { await client.query('ROLLBACK'); return { ok: false, motivo: 'retorno_vazio_antes_descarga_pendente' }; }
-
-        const { facts, responsabilidade } = await lifecycle.gateFechamento(c.id, input.config);
-        if (facts.apuracaoDemurrageStatus === 'INDETERMINADA') { await client.query('ROLLBACK'); return { ok: false, motivo: 'apuracao_indeterminada' }; }
-        const dataFinalEvidencia: CivilDate | null = c.effective_return_date ?? c.tracking_return_date ?? null;
-        const comprov = await minutas.comprovacao(c.id, dataFinalEvidencia);
-        if (facts.apuracaoDemurrageStatus === 'ZERO_CONFIRMADO') {
-          // Zero confirmado fecha SEM minuta; mas uma divergência documental JÁ
-          // CONHECIDA (minuta RECEBIDA divergente aguardando decisão do Gestor) bloqueia
-          // até ser resolvida/rejeitada (v1.4). Ausência de minuta NUNCA bloqueia.
-          if (comprov.divergenciaPendente) { await client.query('ROLLBACK'); return { ok: false, motivo: 'divergencia_pendente' }; }
-          continue;
-        }
-        // DEMURRAGE_CONFIRMADA a partir daqui.
-        if (responsabilidade === 'EM_ANALISE') { await client.query('ROLLBACK'); return { ok: false, motivo: 'responsabilidade_em_analise' }; }
-        // Comprovação (v1.3): minuta VALIDADA correspondente à evidência efetiva do
-        // fechamento E sem divergência de data ainda pendente de revisão.
-        if (comprov.divergenciaPendente) { await client.query('ROLLBACK'); return { ok: false, motivo: 'divergencia_pendente' }; }
-        if (!comprov.validadaCorrespondente) { await client.query('ROLLBACK'); return { ok: false, motivo: 'comprovacao_pendente' }; }
-        const ativos = await valores.ativosDoContainer(c.id);
-        const confirmado = (tipo: 'cliente' | 'rocket'): boolean =>
-          ativos.some((v) => v.relogioTipo === tipo && (v.confirmationStatus === 'ESTIMATED' || v.confirmationStatus === 'CONFIRMED'));
-        const relogioEmDemurrage = (clock: { status: string; diasDemurrage: number }) => clock.status === 'OK' && clock.diasDemurrage >= 1;
-        if (relogioEmDemurrage(facts.clienteClock) && !confirmado('cliente')) { await client.query('ROLLBACK'); return { ok: false, motivo: 'valor_cliente_nao_confirmado' }; }
-        if (relogioEmDemurrage(facts.rocketClock) && !confirmado('rocket')) { await client.query('ROLLBACK'); return { ok: false, motivo: 'valor_rocket_nao_confirmado' }; }
-      }
-
-      if (input._testeFalhaDuranteFinalizacao) await input._testeFalhaDuranteFinalizacao();
-
-      // Transição atômica: valores ATIVOS OPEN → FINAL (processo ainda OPEN, guard
-      // permite) e SÓ ENTÃO processo FINAL, na MESMA transação de todo o gate acima.
-      for (const c of conts) await valores.finalizarAtivos(client, c.id);
-      const upd = await client.query(
-        `UPDATE processos SET apuracao_status = 'FINAL', fechado_em = now(), fechado_por = $2 WHERE id = $1 AND apuracao_status = 'OPEN'`,
-        [input.processoId, ator.usuarioId],
-      );
-      if (upd.rowCount === 0) {
-        // O lock consultivo já deveria ter impedido isto — defesa em profundidade
-        // contra qualquer caminho que mude apuracao_status fora deste lock.
-        throw new Error('finalizarProcesso: apuracao_status mudou sob o lock consultivo (corrida inesperada)');
-      }
-      await client.query(
-        `INSERT INTO fechamentos (processo_id, realizado_por, justificativa) VALUES ($1, $2, $3)`,
-        [input.processoId, ator.usuarioId, input.justificativa ?? null],
-      );
-      const reab = await new ReaberturaRepository(client as unknown as Pool).abertaDoProcesso(input.processoId);
-      await new ClosingEventRepository(client as unknown as Pool).registrar({
-        processoId: input.processoId, tipoEvento: reab ? 'REFECHAMENTO' : 'FECHAMENTO_FINAL',
-        origem: 'humano', atorUsuarioId: ator.usuarioId, payload: { justificativa: input.justificativa ?? null },
-      });
-      if (reab) await new ReaberturaRepository(client as unknown as Pool).marcarEstado(reab.id, 'REFECHADA');
-
-      if (input._testeAguardarAntesDoCommit) await input._testeAguardarAntesDoCommit();
-
-      await client.query('COMMIT');
-      return { ok: true };
-    } catch (erro) {
-      await client.query('ROLLBACK');
-      throw erro;
-    } finally {
-      client.release();
-    }
+    const r = await this.encerrarSeElegivel({
+      processoId: input.processoId, membershipId: input.membershipId, justificativa: input.justificativa ?? null, config: input.config,
+      _testeFalhaDuranteFinalizacao: input._testeFalhaDuranteFinalizacao,
+      _testeAguardarAntesDoCommit: input._testeAguardarAntesDoCommit,
+    });
+    return r.ok ? r : { ok: false, motivo: r.motivo };
   }
 
   /**
@@ -617,8 +627,13 @@ export class ClosingService {
 
       if (input._testeFalhaDuranteReabertura) await input._testeFalhaDuranteReabertura();
 
+      // Produção P1: a leitura do encerramento automático (`processos.encerramento_*`)
+      // passa a dizer por que o processo reaberto não fecha sozinho pela varredura —
+      // nunca "avaliado, sem bloqueio" com a data do fechamento anterior.
       await client.query(
-        `UPDATE processos SET apuracao_status = 'OPEN', fechado_em = NULL, fechado_por = NULL WHERE id = $1`,
+        `UPDATE processos SET apuracao_status = 'OPEN', fechado_em = NULL, fechado_por = NULL,
+                encerramento_avaliado_em = now(), encerramento_bloqueio = 'reabertura_em_andamento', encerramento_bloqueio_container_id = NULL
+          WHERE id = $1`,
         [processoId],
       );
       const eventos = new ClosingEventRepository(client as unknown as Pool);
@@ -627,6 +642,11 @@ export class ClosingService {
         payload: { reaberturaId: input.reaberturaId },
       });
       await eventos.registrar({ processoId, tipoEvento: 'REABERTURA', origem: 'humano', atorUsuarioId: ator.usuarioId, payload: {} });
+      // Produção P1: processo agora OPEN — a devolução efetiva LEGADA cuja minuta
+      // foi substituída enquanto ele estava FINAL perde a base AQUI (e as minutas
+      // vigentes são reavaliadas), para que o recálculo da reabertura já use a
+      // devolução oficial do tracking. Mesmo lock, mesma transação.
+      await reavaliarMinutasComClient(client, { processoId, organizationId: proc.organization_id, apuracaoStatus: 'OPEN' }, input.config.hoje);
       // Processo agora OPEN: o pipeline recomputa relógios + valores + lifecycle,
       // NA MESMA transação. Se o input não mudou (mesmo input_hash), a
       // idempotência preserva a versão anterior (clarificação C); se mudou, nasce

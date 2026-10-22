@@ -512,7 +512,7 @@ test('D16 v1.1 #12: migration 0039 aplica num banco novo e num banco já em 0038
       await pool.query(`INSERT INTO tracking_schedule_claims (tracking_target_id, janela, status, tentativas, claimed_por, claimed_em, concluido_em) VALUES ($1,'2026-09-16','done',1,'legado',now(),now())`, [t2.id]);
 
       const r39 = await runMigrations(pool);
-      assert.deepEqual(r39.applied, [M0039, '0040_handoff_demurrage.sql', '0041_handoff_vinculo_processo.sql', '0042_acoes_idempotencia.sql', '0043_acoes_minuta_idempotencia_atomica.sql', '0044_acoes_minuta_idempotencia_tenant_e_chave.sql', '0045_leitura_operacional_indices.sql', '0046_leitura_operacional_pendencias_por_processo.sql', '0047_handoff_controle_capacidade.sql'], 'aplica a 0039 (e a 0040/0041/0042/0043/0044/0045, aditivas, que já existem à frente)');
+      assert.deepEqual(r39.applied, [M0039, '0040_handoff_demurrage.sql', '0041_handoff_vinculo_processo.sql', '0042_acoes_idempotencia.sql', '0043_acoes_minuta_idempotencia_atomica.sql', '0044_acoes_minuta_idempotencia_tenant_e_chave.sql', '0045_leitura_operacional_indices.sql', '0046_leitura_operacional_pendencias_por_processo.sql', '0047_handoff_controle_capacidade.sql', '0048_minuta_aceite_tecnico_encerramento_automatico.sql'], 'aplica a 0039 (e a 0040/0041/0042/0043/0044/0045, aditivas, que já existem à frente)');
       assert.equal(await colunaClaimTokenExiste(pool), true);
       assert.equal(await constraintTokenExiste(pool), true);
 
