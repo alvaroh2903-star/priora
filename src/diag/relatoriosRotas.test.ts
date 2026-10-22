@@ -33,9 +33,15 @@ import { performance } from 'perf_hooks';
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'priora-diag-'));
 const SALT = 'salt-dedicado-de-teste-0123456789abcdef';
+const ORG = 'org-sintetica-0001';
+const OPERADOR = 'operador-sintetico-01';
+const CAIXA = 'caixa.sintetica@empresa.test';
 Object.assign(process.env, {
   PRIORA_DIAG_RELATORIOS: 'on',
   PRIORA_DIAG_SALT: SALT,
+  PRIORA_DIAG_ORG: ORG,
+  PRIORA_DIAG_OPERADOR: OPERADOR,
+  PRIORA_DIAG_CONTA: CAIXA,
   DATA_DIR: dataDir,
   GEMINI_API_KEY: 'chave-falsa-de-teste',
   SESSION_SECRET: 'segredo-de-sessao-de-teste-0123456789abcdef',
@@ -78,6 +84,7 @@ msal.getMsalClient = () => ({
   },
 });
 require('../auth/microsoftAccount').getActiveHomeAccountId = () => HOME;
+require('../auth/microsoftAccount').getActiveAccount = () => ({ homeAccountId: HOME, username: CAIXA, connectedAt: '' });
 
 /** Dígito verificador ISO 6346 (para contêineres sintéticos válidos). */
 function conteiner(prefixo: string, serie: number): string {
@@ -209,8 +216,15 @@ definirSaidaDiag((r) => registros.push(JSON.parse(JSON.stringify(r))));
 const app = express();
 app.use('/api/diag', diagLimiteCorpo);
 app.use(express.json());
+/** Operador da sessão do teste (o selecionado, salvo quando o teste troca). */
+let operadorDaSessao = OPERADOR;
 app.use((req, _res, next) => {
-  (req as any).session = { homeAccountId: HOME, destroy: (cb?: () => void) => cb && cb() };
+  (req as any).session = {
+    homeAccountId: HOME,
+    prioraOrgId: ORG,
+    prioraUserId: operadorDaSessao,
+    destroy: (cb?: () => void) => cb && cb(),
+  };
   next();
 });
 app.use('/api/diag', diagRouter);
@@ -255,7 +269,11 @@ async function ate(cond: () => boolean, limiteRealMs = 30_000): Promise<void> {
 const daRota = (rota: string) => registros.filter((r) => r.rota === rota);
 const graphIniciadas = (r: any, tipo: string) => r?.chamadas?.graph?.[tipo]?.iniciadas || 0;
 
-/** Roda a rota DESLIGADA e depois LIGADA; devolve corpos e chamadas de cada uma. */
+/**
+ * Roda a rota DESLIGADA, depois LIGADA para uma sessão NÃO selecionada (mesma
+ * empresa e caixa, outro operador) e por fim LIGADA para a selecionada;
+ * devolve corpos e chamadas de cada uma.
+ */
 async function desligadoELigado(caminho: string) {
   delete process.env.PRIORA_DIAG_RELATORIOS;
   zerarContadores();
@@ -265,16 +283,33 @@ async function desligadoELigado(caminho: string) {
   process.env.PRIORA_DIAG_RELATORIOS = 'on';
   registros.length = 0;
   zerarContadores();
+  operadorDaSessao = 'operador-sintetico-02';
+  const naoSelecionada = await pedir('GET', caminho, { 'X-Priora-Op': 'opsintetica01', 'X-Priora-Attempt': 'attsintetica1' });
+  await dormir(40_000);
+  operadorDaSessao = OPERADOR;
+  const chamadasNaoSelecionada = { ...conta };
+  const registrosNaoSelecionada = registros.length;
+  zerarContadores();
   const com = await pedir('GET', caminho, { 'X-Priora-Op': 'opsintetica01', 'X-Priora-Attempt': 'attsintetica1' });
   await dormir(40_000);
   const chamadasCom = { ...conta };
-  return { sem, com, chamadasSem, chamadasCom };
+  return { sem, com, chamadasSem, chamadasCom, naoSelecionada, chamadasNaoSelecionada, registrosNaoSelecionada };
+}
+
+/** Sessão não selecionada com o diagnóstico ligado = desligado: mesma resposta, mesmas chamadas, nada coletado. */
+function comoDesligado(r: Awaited<ReturnType<typeof desligadoELigado>>): void {
+  assert.equal(r.naoSelecionada.corpo, r.sem.corpo);
+  assert.deepEqual(r.chamadasNaoSelecionada, r.chamadasSem);
+  assert.equal(r.naoSelecionada.headers['x-priora-diag'], undefined);
+  assert.equal(r.registrosNaoSelecionada, 0);
 }
 
 /* ---------- 4. Testes ---------- */
 
 test('couriers: mesma resposta e mesmas chamadas com e sem diagnóstico; telemetria bate com as chamadas', async () => {
-  const { sem, com, chamadasSem, chamadasCom } = await desligadoELigado('/api/couriers');
+  const execucoes = await desligadoELigado('/api/couriers');
+  const { sem, com, chamadasSem, chamadasCom } = execucoes;
+  comoDesligado(execucoes);
   assert.equal(sem.status, 200);
   assert.equal(com.status, 200);
   assert.equal(com.corpo, sem.corpo, 'o diagnóstico não pode mudar a resposta');
@@ -310,13 +345,15 @@ test('couriers: mesma resposta e mesmas chamadas com e sem diagnóstico; telemet
   assert.equal(req.chamadas.ia, null, '/api/couriers não chama IA');
   assert.ok(req.ms.resposta >= 20_000, String(req.ms.resposta));
   const tudo = JSON.stringify(registros);
-  for (const proibido of ['sigiloso', 'exemplo.test', 'token-sintetico', HOME, 'IM21', 'MSCU', 'msg-', 'conv-', 'item-1', 'arq-1', SALT]) {
+  for (const proibido of ['sigiloso', 'exemplo.test', 'token-sintetico', HOME, 'IM21', 'MSCU', 'msg-', 'conv-', 'item-1', 'arq-1', SALT, ORG, OPERADOR, CAIXA, 'empresa.test']) {
     assert.ok(!tudo.includes(proibido), `vazou: ${proibido}`);
   }
 });
 
 test('demurrage: mesma resposta e mesmas chamadas; tarefa, chamada inicial, nova tentativa e pendência contadas uma vez cada', async () => {
-  const { sem, com, chamadasSem, chamadasCom } = await desligadoELigado('/api/demurrage');
+  const execucoes = await desligadoELigado('/api/demurrage');
+  const { sem, com, chamadasSem, chamadasCom } = execucoes;
+  comoDesligado(execucoes);
   assert.equal(com.status, 200);
   assert.equal(com.corpo, sem.corpo, 'o diagnóstico não pode mudar a resposta');
   assert.deepEqual(chamadasCom, chamadasSem, 'o diagnóstico não pode mudar chamadas ao Graph nem à IA');

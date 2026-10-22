@@ -12,9 +12,18 @@ import { z } from 'zod/v4';
  * o que as rotas devolvem: cada observador devolve uma promessa que termina
  * exatamente como a original, e qualquer falha interna da telemetria é engolida.
  *
- * Liga com PRIORA_DIAG_RELATORIOS=on E um PRIORA_DIAG_SALT dedicado (≥ 32
- * caracteres, diferente do SESSION_SECRET). Sem salt válido o diagnóstico fica
- * DESLIGADO e uma linha de configuração (sem valores) é registrada uma vez.
+ * Liga com PRIORA_DIAG_RELATORIOS=on, um PRIORA_DIAG_SALT dedicado (≥ 32
+ * caracteres, diferente do SESSION_SECRET) e a SELEÇÃO de quem é coletado:
+ * PRIORA_DIAG_ORG (empresa Priora), PRIORA_DIAG_OPERADOR (usuário Priora) e
+ * PRIORA_DIAG_CONTA (conta Microsoft conectada). Sem salt ou seleção válidos o
+ * diagnóstico fica DESLIGADO e uma linha de configuração (só o código do erro,
+ * sem valores) é registrada uma vez.
+ *
+ * Só a sessão selecionada é rastreada e só ela pode enviar eventos. A
+ * identidade vem da sessão gravada pelo servidor no login Priora e da conta
+ * Microsoft conectada no servidor; headers do navegador nunca a definem. Para
+ * as demais sessões (inclusive as que usam a mesma caixa), tudo se comporta
+ * como desligado: sem header, sem rastro, sem linha.
  *
  * Níveis contados SEPARADAMENTE (nunca somados entre si):
  *   - tentativa HTTP (att, do navegador) → requisição no servidor (rid);
@@ -71,28 +80,55 @@ export const LIMITES_DIAG = {
  * Configuração
  * ------------------------------------------------------------------ */
 
-export type ErroConfigDiag = 'salt_ausente' | 'salt_curto' | 'salt_igual_session_secret';
+export type ErroConfigDiag =
+  | 'salt_ausente'
+  | 'salt_curto'
+  | 'salt_igual_session_secret'
+  | 'selecao_incompleta'
+  | 'selecao_invalida';
 
 export interface EstadoDiag {
   ativo: boolean;
   erro: ErroConfigDiag | null;
 }
 
-function lerConfig(): EstadoDiag & { chave: string | null } {
+/** Quem é coletado: empresa Priora, usuário Priora (operador) e conta Microsoft conectada. */
+interface Selecao {
+  org: string;
+  operador: string;
+  conta: string;
+}
+
+type ConfigDiag = EstadoDiag & { chave: string | null; selecao: Selecao | null };
+
+const ID_SELECAO = /^[A-Za-z0-9-]{8,64}$/;
+const CONTA_SELECAO = /^[^\s@]{1,64}@[^\s@]{1,255}$/;
+
+function lerSelecao(): Selecao | 'selecao_incompleta' | 'selecao_invalida' {
+  const org = (process.env.PRIORA_DIAG_ORG || '').trim();
+  const operador = (process.env.PRIORA_DIAG_OPERADOR || '').trim();
+  const conta = (process.env.PRIORA_DIAG_CONTA || '').trim().toLowerCase();
+  if (!org || !operador || !conta) return 'selecao_incompleta';
+  if (!ID_SELECAO.test(org) || !ID_SELECAO.test(operador) || !CONTA_SELECAO.test(conta)) return 'selecao_invalida';
+  return { org, operador, conta };
+}
+
+function lerConfig(): ConfigDiag {
+  const desligado = (erro: ErroConfigDiag | null): ConfigDiag => ({ ativo: false, erro, chave: null, selecao: null });
   const pedido = (process.env.PRIORA_DIAG_RELATORIOS || '').trim().toLowerCase() === 'on';
-  if (!pedido) return { ativo: false, erro: null, chave: null };
+  if (!pedido) return desligado(null);
   const salt = process.env.PRIORA_DIAG_SALT || '';
-  if (!salt.trim()) return { ativo: false, erro: 'salt_ausente', chave: null };
-  if (salt.length < LIMITES_DIAG.saltMinimo) return { ativo: false, erro: 'salt_curto', chave: null };
-  if (process.env.SESSION_SECRET && salt === process.env.SESSION_SECRET) {
-    return { ativo: false, erro: 'salt_igual_session_secret', chave: null };
-  }
-  return { ativo: true, erro: null, chave: salt };
+  if (!salt.trim()) return desligado('salt_ausente');
+  if (salt.length < LIMITES_DIAG.saltMinimo) return desligado('salt_curto');
+  if (process.env.SESSION_SECRET && salt === process.env.SESSION_SECRET) return desligado('salt_igual_session_secret');
+  const selecao = lerSelecao();
+  if (typeof selecao === 'string') return desligado(selecao);
+  return { ativo: true, erro: null, chave: salt, selecao };
 }
 
 let erroConfigRegistrado: ErroConfigDiag | null = null;
 
-function config(): EstadoDiag & { chave: string | null } {
+function config(): ConfigDiag {
   const c = lerConfig();
   if (c.erro !== erroConfigRegistrado) {
     erroConfigRegistrado = c.erro;
@@ -198,7 +234,7 @@ const CODIGO_ERRO = /^[A-Za-z_]{2,40}$/;
 export interface Identidade {
   acc: string;
   org: string | null;
-  /** De onde veio a organização: empresa Priora (sessão) ou tenant Microsoft. */
+  /** De onde veio a organização. Com a seleção, sempre a empresa Priora da sessão. */
   orgFonte: 'priora' | 'tenant' | null;
 }
 
@@ -207,24 +243,39 @@ function pseudonimo(chave: string, tipo: string, valor: string): string {
 }
 
 /**
- * Pseudônimos da conta conectada e da organização a partir da SESSÃO. Não
- * autentica nada: quem chama já verificou a sessão (requireAuth ou a rota do
- * diagnóstico). null se o diagnóstico estiver desligado ou não houver conta.
+ * Conta Microsoft conectada no servidor. Lida na hora da chamada: este módulo
+ * é importado pelo Graph e pela IA, e o módulo da conta importa os stores.
+ */
+function contaConectada(): { homeAccountId: string; username: string } | null {
+  try {
+    const m = require('../auth/microsoftAccount') as typeof import('../auth/microsoftAccount');
+    return m.getActiveAccount();
+  } catch {
+    return null;
+  }
+}
+
+const textoDe = (v: unknown): string => (typeof v === 'string' ? v : '');
+
+/**
+ * Pseudônimos da conta e da organização SE a sessão for a selecionada; null
+ * em qualquer outro caso (desligado, sem login Priora, outro operador, outra
+ * empresa, outra conta conectada). Tudo vem do servidor: a sessão gravada no
+ * login Priora e a conta Microsoft conectada. Não autentica: quem chama ainda
+ * passa pelo requireAuth ou pela verificação da rota do diagnóstico.
  */
 export function identidadeDaSessao(req: Request): Identidade | null {
-  const { chave } = config();
-  if (!chave) return null;
+  const { chave, selecao } = config();
+  if (!chave || !selecao) return null;
   const s = (req as unknown as { session?: Record<string, unknown> }).session;
-  const home = typeof s?.homeAccountId === 'string' ? s.homeAccountId : '';
-  if (!home) return null;
-  const prioraOrg = typeof s?.prioraOrgId === 'string' ? s.prioraOrgId : '';
-  // homeAccountId do MSAL = "<objectId>.<tenantId>".
-  const tid = home.includes('.') ? home.slice(home.lastIndexOf('.') + 1) : '';
-  return {
-    acc: pseudonimo(chave, 'acc', home),
-    org: prioraOrg ? pseudonimo(chave, 'org', prioraOrg) : tid ? pseudonimo(chave, 'tenant', tid) : null,
-    orgFonte: prioraOrg ? 'priora' : tid ? 'tenant' : null,
-  };
+  const home = textoDe(s?.homeAccountId);
+  const operador = textoDe(s?.prioraUserId);
+  const org = textoDe(s?.prioraOrgId);
+  if (!home || operador !== selecao.operador || org !== selecao.org) return null;
+  const conectada = contaConectada();
+  if (!conectada || conectada.homeAccountId !== home) return null;
+  if (textoDe(conectada.username).trim().toLowerCase() !== selecao.conta) return null;
+  return { acc: pseudonimo(chave, 'acc', home), org: pseudonimo(chave, 'org', org), orgFonte: 'priora' };
 }
 
 /** Escopo de correlação e de limites: organização + conta. */
@@ -446,7 +497,9 @@ export function timersDoDiagnostico(): number {
 
 function iniciarProvisorio(rota: RotaDiag, req: Request): Rastro | null {
   falhaTeste?.('iniciar');
+  // Sessão não selecionada (ou sem login): nenhum rastro.
   const ident = identidadeDaSessao(req);
+  if (!ident) return null;
   const op = idDoHeader(req, 'X-Priora-Op');
   const att = idDoHeader(req, 'X-Priora-Attempt');
   return {
@@ -454,9 +507,9 @@ function iniciarProvisorio(rota: RotaDiag, req: Request): Rastro | null {
     rota,
     op,
     att,
-    // Sem sessão a requisição não passa do requireAuth e o rastro é descartado.
-    ident: ident || { acc: '-', org: null, orgFonte: null },
-    escopo: ident ? escopoDe(ident) : '-',
+    // Ainda provisório: só vale depois do requireAuth (autenticar).
+    ident,
+    escopo: escopoDe(ident),
     t0: agora(),
     inicio: new Date().toISOString(),
     uptimeS: Math.round(process.uptime() * 10) / 10,
@@ -490,7 +543,7 @@ function varrerVencidos(): void {
 /** Chamado logo DEPOIS do requireAuth: só aqui o rastro passa a valer. */
 function autenticar(r: Rastro, res: Response): void {
   falhaTeste?.('autenticar');
-  if (r.autenticado || r.escopo === '-') return;
+  if (r.autenticado) return;
   varrerVencidos();
   if (ativosTodos.size >= LIMITES_DIAG.rastrosAtivosMax) {
     contarDescarte('rastros_ativos_max');
@@ -991,7 +1044,8 @@ export interface ResultadoEnvio {
 }
 
 /**
- * Registra eventos do navegador de uma sessão JÁ VERIFICADA (conta ativa).
+ * Registra eventos do navegador de uma sessão JÁ VERIFICADA (conta ativa) e
+ * selecionada (a identidade só existe para ela; ver identidadeDaSessao).
  * Campos fora da lista são descartados; limites por envio, por minuto e por
  * operação. op/att do navegador só servem para correlação dentro do escopo.
  */

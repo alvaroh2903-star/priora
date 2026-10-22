@@ -10,6 +10,7 @@ import fs from 'fs';
 import http from 'http';
 import os from 'os';
 import path from 'path';
+import zlib from 'zlib';
 import { AddressInfo } from 'net';
 import { performance } from 'perf_hooks';
 
@@ -30,7 +31,10 @@ const { diagRouter, diagLimiteCorpo } = require('../routes/diagRoutes') as typeo
 
 let ativa: string | null = 'objeto-a.tenant-x';
 const emCache = new Set<string>(['objeto-a.tenant-x', 'objeto-b.tenant-y']);
+/** Caixa conectada no servidor (conta Microsoft ativa). */
+const CAIXA = 'caixa.monitorada@empresa.test';
 contaAtiva.getActiveHomeAccountId = () => ativa;
+contaAtiva.getActiveAccount = () => (ativa ? { homeAccountId: ativa, username: CAIXA, connectedAt: '' } : null);
 msal.getMsalClient = () => ({
   getTokenCache: () => ({ getAccountByHomeId: async (h: string) => (emCache.has(h) ? { homeAccountId: h } : null) }),
 });
@@ -38,11 +42,21 @@ msal.getMsalClient = () => ({
 const registros: Array<Record<string, any>> = [];
 D.definirSaidaDiag((r) => registros.push(JSON.parse(JSON.stringify(r))));
 
+/** Seleção: empresa, operador (usuário Priora) e conta conectada. */
+const ORG_SEL = 'org-selecionada-01';
+const OPERADOR_SEL = 'operador-selecionado-01';
+const OPERADOR_OUTRO = 'operador-outro-0002';
 const esperar = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-const ligar = () => Object.assign(process.env, { PRIORA_DIAG_RELATORIOS: 'on', PRIORA_DIAG_SALT: SALT });
+const ligar = () =>
+  Object.assign(process.env, {
+    PRIORA_DIAG_RELATORIOS: 'on',
+    PRIORA_DIAG_SALT: SALT,
+    PRIORA_DIAG_ORG: ORG_SEL,
+    PRIORA_DIAG_OPERADOR: OPERADOR_SEL,
+    PRIORA_DIAG_CONTA: CAIXA,
+  });
 const desligar = () => {
-  delete process.env.PRIORA_DIAG_RELATORIOS;
-  delete process.env.PRIORA_DIAG_SALT;
+  for (const k of ['RELATORIOS', 'SALT', 'ORG', 'OPERADOR', 'CONTA']) delete process.env[`PRIORA_DIAG_${k}`];
 };
 
 /** Mesmo padrão do withTimeout das rotas. */
@@ -94,11 +108,18 @@ async function extrair(falhaPrimeiro: boolean, lento: boolean): Promise<object> 
 const app = express();
 app.use('/api/diag', diagLimiteCorpo);
 app.use(express.json());
+// Rota de negócio fictícia, depois do parser global: mostra que ele não mudou.
+app.post('/api/negocio', (req, res) => {
+  res.json({ lista: Array.isArray(req.body), bytes: Buffer.byteLength(JSON.stringify(req.body)) });
+});
+// SÓ NESTE TESTE: os headers x-teste-* fazem o papel do armazenamento de
+// sessão do servidor (o que o login gravou). Não são headers do navegador.
 app.use((req, _res, next) => {
   const conta = req.get('x-teste-conta');
   const s: Record<string, unknown> = {};
   if (conta) s.homeAccountId = conta;
   if (req.get('x-teste-org')) s.prioraOrgId = req.get('x-teste-org');
+  if (req.get('x-teste-operador')) s.prioraUserId = req.get('x-teste-operador');
   (req as any).session = s;
   next();
 });
@@ -154,7 +175,7 @@ after(() => {
 type Resp = { status: number; headers: http.IncomingHttpHeaders; corpo: string };
 function pedir(
   caminho: string,
-  opts: { headers?: Record<string, string>; metodo?: string; corpo?: unknown; cru?: string; semTamanho?: boolean; abortarEm?: number } = {},
+  opts: { headers?: Record<string, string>; metodo?: string; corpo?: unknown; cru?: string | Buffer; semTamanho?: boolean; abortarEm?: number } = {},
 ): Promise<Resp | 'abortado'> {
   return pronto.then(
     () =>
@@ -192,8 +213,12 @@ async function ate(cond: () => boolean, limite = 4000): Promise<void> {
     await esperar(10);
   }
 }
-const contaA = { 'x-teste-conta': 'objeto-a.tenant-x' };
+/** Sessão SELECIONADA: empresa, operador e a conta conectada. */
+const contaA = { 'x-teste-conta': 'objeto-a.tenant-x', 'x-teste-org': ORG_SEL, 'x-teste-operador': OPERADOR_SEL };
+/** Outra sessão na MESMA empresa e na MESMA caixa conectada, de outro operador. */
+const outroOperador = { ...contaA, 'x-teste-operador': OPERADOR_OUTRO };
 const doTipo = (t: string) => registros.filter((r) => r.diag === t);
+const ev = (i: number, op = 'op0123456789') => ({ e: 'tentativa', op, att: `att${String(i).padStart(9, '0')}`, url: '/api/couriers', n: 1, limiteMs: 40000, ms: 40000, desfecho: 'timeout' });
 
 beforeEach(async () => {
   // Espera o trabalho tardio de testes anteriores terminar (o amostrador só
@@ -229,6 +254,28 @@ test('configuração: sem salt dedicado o diagnóstico fica desligado e o erro s
   assert.equal(doTipo('relatorios.req').length, 0);
   ligar();
   assert.deepEqual(D.estadoDiag(), { ativo: true, erro: null });
+});
+
+test('configuração: sem seleção completa e válida o diagnóstico fica desligado; o log não traz os valores', async () => {
+  ligar();
+  registros.length = 0;
+  delete process.env.PRIORA_DIAG_OPERADOR;
+  assert.deepEqual(D.estadoDiag(), { ativo: false, erro: 'selecao_incompleta' });
+  process.env.PRIORA_DIAG_OPERADOR = 'x';
+  assert.deepEqual(D.estadoDiag(), { ativo: false, erro: 'selecao_invalida' });
+  process.env.PRIORA_DIAG_OPERADOR = OPERADOR_SEL;
+  process.env.PRIORA_DIAG_CONTA = 'sem-arroba';
+  assert.deepEqual(D.estadoDiag(), { ativo: false, erro: 'selecao_invalida' });
+  // Desligado por configuração: a sessão que seria a selecionada também não é coletada.
+  const r = await resp('/api/couriers', { headers: contaA });
+  assert.equal(r.headers['x-priora-diag'], undefined);
+  ligar();
+  assert.deepEqual(D.estadoDiag(), { ativo: true, erro: null });
+  await esperar(400);
+  assert.deepEqual(doTipo('relatorios.config').map((x) => x.erro), ['selecao_incompleta', 'selecao_invalida']);
+  assert.equal(doTipo('relatorios.req').length, 0);
+  const tudo = JSON.stringify(registros);
+  for (const valor of [ORG_SEL, OPERADOR_SEL, CAIXA, 'sem-arroba', SALT]) assert.ok(!tudo.includes(valor), `valor no log: ${valor}`);
 });
 
 /* ---------------- desligado ---------------- */
@@ -312,13 +359,14 @@ test('ligado: níveis separados — tarefas, chamadas Graph, chamadas de IA (ini
 
 test('privacidade: sem conteúdo, token, endereço ou ID de conta em claro', async () => {
   const tudo = JSON.stringify(registros);
-  for (const proibido of ['sigiloso', 'exemplo.test', 'objeto-a', 'tenant-x', 'texto do anexo', 'IM2550', SALT]) {
+  const proibidos = ['sigiloso', 'exemplo.test', 'objeto-a', 'tenant-x', 'texto do anexo', 'IM2550', SALT, ORG_SEL, OPERADOR_SEL, CAIXA, 'empresa.test'];
+  for (const proibido of proibidos) {
     assert.ok(!tudo.includes(proibido), `vazou: ${proibido}`);
   }
   const req = doTipo('relatorios.req')[0];
   assert.match(req.acc, /^[0-9a-f]{16}$/);
   assert.match(req.org, /^[0-9a-f]{16}$/);
-  assert.equal(req.orgFonte, 'tenant');
+  assert.equal(req.orgFonte, 'priora');
 });
 
 test('IDs do navegador malformados são descartados (correlação não confiável)', async () => {
@@ -342,35 +390,97 @@ test('desconexão do cliente: registra quando caiu e quanto trabalho seguiu depo
   await ate(() => doTipo('relatorios.tardio').length === 1);
 });
 
-test('isolamento: concorrência contada por organização + conta', async () => {
+test('isolamento: duas sessões na mesma empresa e na mesma caixa — só o operador selecionado é coletado', async () => {
   ligar();
   registros.length = 0;
-  ativa = 'objeto-a.tenant-x';
-  await Promise.all([
-    pedir('/api/couriers', { headers: { ...contaA, 'x-teste-espera': '150' } }),
-    esperar(40).then(() => pedir('/api/couriers', { headers: contaA })),
-    // Mesma conta Microsoft em OUTRA organização Priora: escopo separado.
-    esperar(40).then(() => pedir('/api/couriers', { headers: { ...contaA, 'x-teste-org': 'org-123' } })),
+  feitas.graph = feitas.ia = 0;
+  const [sel, outra, outraEmpresa] = await Promise.all([
+    resp('/api/couriers', { headers: { ...contaA, 'x-teste-espera': '150' } }),
+    // Mesma empresa, mesma conta Microsoft conectada, OUTRO operador.
+    esperar(40).then(() => resp('/api/couriers', { headers: outroOperador })),
+    // Mesmo operador e caixa, mas a sessão está em OUTRA empresa Priora.
+    esperar(40).then(() => resp('/api/couriers', { headers: { ...contaA, 'x-teste-org': 'org-outra-empresa' } })),
   ]);
-  await ate(() => doTipo('relatorios.tardio').length === 3);
-  const reqs = doTipo('relatorios.req');
-  const porEscopo = new Map<string, Array<Record<string, any>>>();
-  for (const x of reqs) porEscopo.set(`${x.org}|${x.acc}`, [...(porEscopo.get(`${x.org}|${x.acc}`) || []), x]);
-  assert.equal(porEscopo.size, 2);
-  const a = [...porEscopo.values()].find((l) => l.length === 2)!;
-  const b = [...porEscopo.values()].find((l) => l.length === 1)![0];
-  assert.ok(a.some((x) => x.concorrencia.noInicio.couriers === 1));
-  assert.ok(a.some((x) => x.concorrencia.iniciadasDurante === 1));
-  assert.deepEqual(b.concorrencia.noInicio, { couriers: 0, demurrage: 0, soTardio: 0 });
-  assert.equal(b.concorrencia.iniciadasDurante, 0);
-  assert.equal(b.orgFonte, 'priora');
-  assert.equal(b.acc, a[0].acc);
-  assert.notEqual(b.org, a[0].org);
+  await ate(() => doTipo('relatorios.tardio').length === 1);
+  await esperar(800);
+  // Não selecionadas: nenhum sinal de ativação e nenhuma linha.
+  assert.equal(sel.headers['x-priora-diag'], 'on');
+  assert.equal(outra.headers['x-priora-diag'], undefined);
+  assert.equal(outraEmpresa.headers['x-priora-diag'], undefined);
+  assert.equal(doTipo('relatorios.req').length, 1);
+  assert.equal(doTipo('relatorios.tardio').length, 1);
+  // A requisição selecionada não conta as outras sessões como concorrência.
+  const req = doTipo('relatorios.req')[0];
+  assert.deepEqual(req.concorrencia.noInicio, { couriers: 0, demurrage: 0, soTardio: 0 });
+  assert.equal(req.concorrencia.iniciadasDurante, 0);
+  // As três responderam igual: só a coleta muda, não o negócio.
+  assert.equal(outra.corpo, sel.corpo);
+  assert.equal(outraEmpresa.corpo, sel.corpo);
+  // Envio de eventos pela sessão não selecionada: mesma resposta de "desligado", nada registrado.
+  const post = await resp('/api/diag/relatorios', { metodo: 'POST', corpo: [ev(1)], headers: outroOperador });
+  assert.deepEqual([post.status, post.headers['x-priora-diag']], [204, 'off']);
+  assert.equal(doTipo('relatorios.cliente').length, 0);
+});
+
+test('isolamento: outra conta Microsoft conectada no servidor encerra a coleta da sessão selecionada', async () => {
+  ligar();
+  registros.length = 0;
+  // A caixa conectada no servidor passou a ser outra (troca de conta).
+  const original = contaAtiva.getActiveAccount;
+  contaAtiva.getActiveAccount = () => ({ homeAccountId: 'objeto-a.tenant-x', username: 'outra.caixa@empresa.test', connectedAt: '' });
+  try {
+    const r = await resp('/api/couriers', { headers: contaA });
+    assert.equal(r.status, 200);
+    assert.equal(r.headers['x-priora-diag'], undefined);
+    const post = await resp('/api/diag/relatorios', { metodo: 'POST', corpo: [ev(1)], headers: contaA });
+    assert.deepEqual([post.status, post.headers['x-priora-diag']], [204, 'off']);
+    await esperar(800);
+    assert.equal(registros.length, 0);
+  } finally {
+    contaAtiva.getActiveAccount = original;
+  }
+});
+
+test('identidade forjada pelo navegador é ignorada: headers e corpo não selecionam nem trocam a identidade', async () => {
+  ligar();
+  registros.length = 0;
+  // 1) A sessão selecionada abre uma operação; guardamos os IDs de correlação dela.
+  const selHeaders = { 'X-Priora-Op': 'opselecionada1', 'X-Priora-Attempt': 'attselecionad1' };
+  await resp('/api/couriers', { headers: { ...contaA, ...selHeaders } });
+  await ate(() => doTipo('relatorios.tardio').length === 1);
+  const pseudonimos = { acc: doTipo('relatorios.req')[0].acc, org: doTipo('relatorios.req')[0].org };
+  registros.length = 0;
+  // 2) Outra sessão da mesma caixa reaproveita esses IDs e tenta se passar pela selecionada.
+  const forjados = {
+    ...outroOperador,
+    ...selHeaders,
+    'X-Priora-Operador': OPERADOR_SEL,
+    'X-Priora-Org': ORG_SEL,
+    'X-Priora-Conta': CAIXA,
+  };
+  const r = await resp('/api/couriers', { headers: forjados });
+  assert.equal(r.headers['x-priora-diag'], undefined);
+  const post = await resp('/api/diag/relatorios', {
+    metodo: 'POST',
+    corpo: [{ ...ev(1, 'opselecionada1'), acc: pseudonimos.acc, org: pseudonimos.org, operador: OPERADOR_SEL }],
+    headers: forjados,
+  });
+  assert.deepEqual([post.status, post.headers['x-priora-diag']], [204, 'off']);
+  await esperar(800);
+  assert.equal(registros.length, 0, 'sessão não selecionada gerou registro');
+  // 3) Na sessão selecionada, campos de identidade no corpo não substituem os da sessão.
+  const ok = await resp('/api/diag/relatorios', {
+    metodo: 'POST',
+    corpo: [{ ...ev(2, 'opselecionada1'), acc: 'ffffffffffffffff', org: 'eeeeeeeeeeeeeeee', operador: OPERADOR_OUTRO }],
+    headers: contaA,
+  });
+  assert.equal(ok.status, 204);
+  const cli = doTipo('relatorios.cliente');
+  assert.equal(cli.length, 1);
+  assert.deepEqual([cli[0].acc, cli[0].org, cli[0].operador], [pseudonimos.acc, pseudonimos.org, undefined]);
 });
 
 /* ---------------- rota de envio (POST /api/diag/relatorios) ---------------- */
-
-const ev = (i: number, op = 'op0123456789') => ({ e: 'tentativa', op, att: `att${String(i).padStart(9, '0')}`, url: '/api/couriers', n: 1, limiteMs: 40000, ms: 40000, desfecho: 'timeout' });
 
 test('envio: só da sessão autenticada da conta ATIVA; recusa sem registrar e nunca responde 401', async () => {
   ligar();
@@ -403,15 +513,51 @@ test('envio: só da sessão autenticada da conta ATIVA; recusa sem registrar e n
   assert.match(cli[0].acc, /^[0-9a-f]{16}$/);
 });
 
-test('envio: corpo limitado antes do parser (413 acima de 16 KB, 411 sem Content-Length)', async () => {
+test('envio: limite de 16 KB sobre o corpo lido — grande, sem tamanho, comprimido, não JSON e malformado recusados; válido aceito', async () => {
   ligar();
   registros.length = 0;
-  const grande = JSON.stringify([{ e: 'op', op: 'abcdef012345', lixo: 'x'.repeat(D.LIMITES_DIAG.bytesPorEnvio) }]);
-  const r1 = await resp('/api/diag/relatorios', { metodo: 'POST', cru: grande, headers: contaA });
-  assert.equal(r1.status, 413);
-  const r2 = await resp('/api/diag/relatorios', { metodo: 'POST', corpo: [ev(1)], semTamanho: true, headers: contaA });
-  assert.equal(r2.status, 411);
-  assert.equal(registros.length, 0);
+  const limite = D.LIMITES_DIAG.bytesPorEnvio;
+  const post = (cru: string | Buffer, headers: Record<string, string> = {}) =>
+    resp('/api/diag/relatorios', { metodo: 'POST', cru, headers: { ...contaA, ...headers } });
+  // Corpo comum acima do limite: recusado sem ser lido.
+  const grande = JSON.stringify([{ e: 'op', op: 'abcdef012345', lixo: 'x'.repeat(limite) }]);
+  assert.equal((await post(grande)).status, 413);
+  // Sem Content-Length.
+  const semTamanho = await resp('/api/diag/relatorios', { metodo: 'POST', corpo: [ev(1)], semTamanho: true, headers: contaA });
+  assert.equal(semTamanho.status, 411);
+  // Comprimido: pequeno no fio, acima de 16 KB depois de expandido.
+  const expandido = JSON.stringify(Array.from({ length: 400 }, (_, i) => ev(i)));
+  assert.ok(Buffer.byteLength(expandido) > limite);
+  const compressores: Array<[string, (b: Buffer) => Buffer]> = [
+    ['gzip', zlib.gzipSync],
+    ['deflate', zlib.deflateSync],
+    ['br', zlib.brotliCompressSync],
+  ];
+  for (const [codificacao, comprimir] of compressores) {
+    const fio = comprimir(Buffer.from(expandido));
+    assert.ok(fio.length < limite, `${codificacao}: ${fio.length} bytes no fio`);
+    assert.equal((await post(fio, { 'content-encoding': codificacao })).status, 415, codificacao);
+  }
+  // Comprimido pequeno também é recusado (o navegador nunca comprime).
+  assert.equal((await post(zlib.gzipSync(Buffer.from(JSON.stringify([ev(1)]))), { 'content-encoding': 'gzip' })).status, 415);
+  // Não JSON e JSON malformado.
+  assert.equal((await post(JSON.stringify([ev(1)]), { 'content-type': 'text/plain' })).status, 415);
+  assert.equal((await post('[{"e":')).status, 400);
+  assert.equal(registros.length, 0, 'envio recusado gerou registro');
+  // Envio válido (20 eventos, abaixo do limite): aceito e registrado.
+  const valido = await resp('/api/diag/relatorios', { metodo: 'POST', corpo: Array.from({ length: 20 }, (_, i) => ev(i)), headers: contaA });
+  assert.deepEqual([valido.status, valido.headers['x-priora-diag']], [204, 'on']);
+  assert.equal(doTipo('relatorios.cliente').length, 20);
+});
+
+test('rotas de negócio: o parser global continua igual (corpo comprimido e acima de 16 KB seguem aceitos)', async () => {
+  const corpo = JSON.stringify(Array.from({ length: 400 }, (_, i) => ev(i)));
+  assert.ok(Buffer.byteLength(corpo) > D.LIMITES_DIAG.bytesPorEnvio);
+  const esperado = { lista: true, bytes: Buffer.byteLength(corpo) };
+  const comum = await resp('/api/negocio', { metodo: 'POST', cru: corpo });
+  assert.deepEqual([comum.status, JSON.parse(comum.corpo)], [200, esperado]);
+  const gz = await resp('/api/negocio', { metodo: 'POST', cru: zlib.gzipSync(Buffer.from(corpo)), headers: { 'content-encoding': 'gzip' } });
+  assert.deepEqual([gz.status, JSON.parse(gz.corpo)], [200, esperado]);
 });
 
 test('envio: no máximo 20 eventos por envio; excedente descartado e resumido', async () => {
@@ -452,18 +598,19 @@ test('envio: teto por operação (60 eventos por organização+conta+op)', async
 test('cota de linhas do processo (600/min) e um único resumo de descartes por minuto', async () => {
   ligar();
   registros.length = 0;
-  // 35 contas × 20 eventos = 700 linhas pedidas.
-  for (let i = 0; i < 35; i++) {
-    const conta = `objeto-${i}.tenant-x`;
-    ativa = conta;
-    emCache.add(conta);
-    await resp('/api/diag/relatorios', { metodo: 'POST', corpo: Array.from({ length: 20 }, (_, j) => ev(j, `op${String(i).padStart(9, '0')}`)), headers: { 'x-teste-conta': conta } });
+  // Só a sessão selecionada gera linhas: 3 lotes × 100 requisições = 300 "req" + 300 "tardio".
+  for (let lote = 0; lote < 3; lote++) {
+    await Promise.all(Array.from({ length: 100 }, () => resp('/api/couriers', { headers: contaA })));
+    await ate(() => D.timersDoDiagnostico() === 0, 20_000);
   }
-  assert.equal(doTipo('relatorios.cliente').length, D.LIMITES_DIAG.linhasPorMinutoProcesso);
+  assert.deepEqual([doTipo('relatorios.req').length, doTipo('relatorios.tardio').length], [300, 300]);
+  // Cota atingida: os 20 eventos seguintes são descartados e só contados.
+  await resp('/api/diag/relatorios', { metodo: 'POST', corpo: Array.from({ length: 20 }, (_, j) => ev(j)), headers: contaA });
+  assert.equal(doTipo('relatorios.cliente').length, 0);
   D.__descarregarDescartesParaTeste();
   const desc = doTipo('relatorios.descartes');
   assert.equal(desc.length, 1);
-  assert.equal(desc[0].cota_linhas_processo, 100);
+  assert.equal(desc[0].cota_linhas_processo, 20);
 });
 
 /* ---------------- falhas da telemetria ---------------- */
@@ -554,7 +701,7 @@ test('rastro vencido (10 min) é liberado e encerrado sem vazar memória', async
     const r2 = express.Router();
     r2.use(D.diagRelatorios('demurrage'));
     r2.use((req, _res, next) => {
-      (req as any).session = { homeAccountId: 'objeto-a.tenant-x' };
+      (req as any).session = { homeAccountId: 'objeto-a.tenant-x', prioraOrgId: ORG_SEL, prioraUserId: OPERADOR_SEL };
       next();
     });
     r2.use(D.diagAutenticado);
@@ -565,7 +712,7 @@ test('rastro vencido (10 min) é liberado e encerrado sem vazar memória', async
       setTimeout(() => res.json({ ok: true }), 30);
     });
     app2.use((req, _res, next) => {
-      (req as any).session = { homeAccountId: 'objeto-a.tenant-x' };
+      (req as any).session = { homeAccountId: 'objeto-a.tenant-x', prioraOrgId: ORG_SEL, prioraUserId: OPERADOR_SEL };
       next();
     });
     app2.use('/x', r2);
@@ -635,7 +782,7 @@ test('overhead dos observadores por chamada', async (t) => {
   const app2 = express();
   const r2 = express.Router();
   r2.use((req, _res, next) => {
-    (req as any).session = { homeAccountId: 'objeto-a.tenant-x' };
+    (req as any).session = { homeAccountId: 'objeto-a.tenant-x', prioraOrgId: ORG_SEL, prioraUserId: OPERADOR_SEL };
     next();
   });
   r2.use(D.diagRelatorios('couriers'));

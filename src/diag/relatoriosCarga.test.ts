@@ -27,8 +27,14 @@ import { monitorEventLoopDelay } from 'perf_hooks';
 const ATIVO = process.env.DIAG_CARGA === '1';
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'priora-diag-carga-'));
 const SALT = 'salt-dedicado-de-teste-0123456789abcdef';
+const ORG = 'org-sintetica-0001';
+const OPERADOR = 'operador-sintetico-01';
+const CAIXA = 'caixa.sintetica@empresa.test';
 Object.assign(process.env, {
   PRIORA_DIAG_SALT: SALT,
+  PRIORA_DIAG_ORG: ORG,
+  PRIORA_DIAG_OPERADOR: OPERADOR,
+  PRIORA_DIAG_CONTA: CAIXA,
   DATA_DIR: dataDir,
   GEMINI_API_KEY: 'chave-falsa-de-teste',
   SESSION_SECRET: 'segredo-de-sessao-de-teste-0123456789abcdef',
@@ -56,6 +62,7 @@ require('../auth/msalClient').getMsalClient = () => ({
   acquireTokenSilent: async () => ({ accessToken: 'token-sintetico' }),
 });
 require('../auth/microsoftAccount').getActiveHomeAccountId = () => HOME;
+require('../auth/microsoftAccount').getActiveAccount = () => ({ homeAccountId: HOME, username: CAIXA, connectedAt: '' });
 
 // Caixa sintética: 60 mensagens, 30 com anexo (1 e-mail encaminhado cada).
 const caixa = Array.from({ length: 60 }, (_, i) => ({
@@ -116,7 +123,7 @@ D.definirSaidaDiag((r) => {
 let histogramaPorRequisicao = false;
 const app = express();
 app.use((req, res, next) => {
-  (req as any).session = { homeAccountId: HOME };
+  (req as any).session = { homeAccountId: HOME, prioraOrgId: ORG, prioraUserId: OPERADOR };
   if (histogramaPorRequisicao) {
     // Emulação do desenho v1: um histograma (timer de 20 ms) por requisição.
     const h = monitorEventLoopDelay({ resolution: 20 });
