@@ -56,12 +56,14 @@ const NEGA_DEPOIS = new Set(['not', 'never', 'cannot', 'não', 'nao', 'nunca', '
 const RESTRITIVOS = new Set(['only', 'just', 'merely', 'solely', 'simply', 'só', 'apenas', 'somente', 'unicamente']);
 /**
  * "no" também é "em + o" em português ("conforme informado no telex"): só vale
- * como negação no início da oração ou depois destas palavras ("there is no telex",
- * "with no telex").
+ * como negação no início da oração, logo depois de dois-pontos ("Status: no
+ * telex release") ou depois destas palavras ("there is no telex", "with no
+ * telex", "please no telex").
  */
 const ANTES_DE_NO = new Set([
   'is', 'are', 'was', 'were', 'be', 'been', 'there', 'have', 'has', 'had', 'with',
   'will', 'need', 'needs', 'needed', 'require', 'requires', 'required', 'and', 'or',
+  'please', ':',
 ]);
 
 const AUXILIARES = [
@@ -91,6 +93,16 @@ const MAX_NEUTRAS = 3;
 
 function palavras(s: string): string[] {
   return s.toLowerCase().replace(/[’`´]/g, "'").match(/[\p{L}\p{N}]+(?:'[\p{L}]+)?/gu) || [];
+}
+
+/**
+ * Palavras ANTES da menção, mantendo ":" como item. Os dois-pontos não são
+ * fronteira de oração ("Telex release: not approved" segue negado), mas marcam
+ * o lugar de "no" num rótulo ("Status: no telex release"). Um ":" entre o
+ * negador e a menção interrompe a leitura, como qualquer palavra não neutra.
+ */
+function palavrasAntes(s: string): string[] {
+  return s.toLowerCase().replace(/[’`´]/g, "'").match(/[\p{L}\p{N}]+(?:'[\p{L}]+)?|:/gu) || [];
 }
 
 const ehNegador = (w: string, conjunto: Set<string>): boolean => conjunto.has(w) || w.endsWith("n't");
@@ -139,7 +151,7 @@ function telexAfirmado(t: string): boolean {
   for (const m of t.matchAll(RE_TELEX)) {
     const inicio = m.index ?? 0;
     const negada =
-      negadaAntes(palavras(oracaoAntes(t, inicio)), NEUTRAS_ANTES_TELEX) ||
+      negadaAntes(palavrasAntes(oracaoAntes(t, inicio)), NEUTRAS_ANTES_TELEX) ||
       negadaDepois(palavras(oracaoDepois(t, inicio + m[0].length)));
     if (!negada) return true;
   }
@@ -166,7 +178,7 @@ function envioAfirmado(t: string): boolean {
       const doDestinatario = palavras(segmentos[segmentos.length - 1]);
       const negadoNoTrecho = doDestinatario.some((_, k) => negadorEfetivo(doDestinatario, k, NEGA_DEPOIS));
       const mesmaOracao = segmentos.length === 1;
-      const negadoAntes = mesmaOracao && negadaAntes(palavras(oracaoAntes(t, inicioVerbo)), NEUTRAS_ANTES_ENVIO);
+      const negadoAntes = mesmaOracao && negadaAntes(palavrasAntes(oracaoAntes(t, inicioVerbo)), NEUTRAS_ANTES_ENVIO);
       if (!negadoNoTrecho && !negadoAntes) return true;
     }
   }

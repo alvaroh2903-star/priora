@@ -51,6 +51,31 @@ test('ASS-010: "OHBL sent to consignee, not to the agent." → importador contin
   assert.equal(importador('OHBL sent to consignee, not to the agent.'), true);
 });
 
+/* ---------------- regressão da revisão: "no" em pedido e em rótulo ---------------- */
+
+test('ASS-010 (regressão): "no" depois de "please" ou de dois-pontos é negação', () => {
+  for (const t of ['Please no telex release.', 'Status: no telex release.', 'Confirmed: no telex release.', 'Note: no telex.']) {
+    assert.equal(legada(t).telex, true, `fixture inválida (antes já era falso): ${t}`);
+    assert.equal(telex(t), false, t);
+  }
+});
+
+test('ASS-010 (regressão): "no" como contração em português e "no" de outra oração seguem afirmativos', () => {
+  for (const t of [
+    'Conforme informado no telex release, o HBL foi liberado.',
+    'Consta no telex release o HBL IM2101.',
+    'No problem, telex released.',
+  ]) {
+    assert.equal(telex(t), true, t);
+  }
+});
+
+test('ASS-010 (regressão): os dois-pontos não viram fronteira de oração', () => {
+  assert.equal(telex('Telex release: not approved.'), false);
+  assert.equal(telex('HBL was not printed: telex release instead.'), true);
+  assert.equal(importador('Status: OHBL not sent to consignee.'), false);
+});
+
 /* ---------------- negação de telex ---------------- */
 
 test('ASS-010: telex explicitamente negado na própria oração não é evidência (inglês e português)', () => {
@@ -226,6 +251,12 @@ test('caracterização (limitação conhecida): negação separada por vírgula 
   // A vírgula é fronteira de oração de propósito ("Telex release, not original HBL").
   assert.equal(telex('Telex release, not approved.'), true);
   assert.equal(telex('Telex release — not approved.'), true);
+});
+
+test('caracterização (limitação conhecida): logo após dois-pontos, "no" é lido como negação também em português', () => {
+  // Ambiguidade residual: em rótulo ("Atenção: no telex…") não há como distinguir
+  // a contração "em + o" do "no" inglês sem outro contexto.
+  assert.equal(telex('Atenção: no telex release consta o HBL.'), false);
 });
 
 test('caracterização (limitação conhecida): shipper e "cnee" não são reconhecidos como destinatário (como antes)', () => {

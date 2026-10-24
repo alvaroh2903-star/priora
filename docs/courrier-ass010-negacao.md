@@ -30,8 +30,13 @@ evidência afirmativa:
   not required." continua telex.
 - Até 3 palavras neutras (artigos, auxiliares) podem separar o negador da menção.
 - "not only", "não só" e "apenas" não são negação.
-- "no" só vale como negação no início da oração ou depois de palavras como "is",
-  "there" ou "with". Em português, "no" é "em + o" ("informado no telex").
+- "no" só vale como negação no início da oração, logo depois de dois-pontos
+  ("Status: no telex release", "Confirmed: no telex release") ou depois de palavras
+  como "is", "there", "with" ou "please" ("Please no telex release"). Em português,
+  "no" é "em + o" ("informado no telex", "consta no telex"), e nesses casos não
+  nega.
+- Os dois-pontos não são fronteira de oração: "Telex release: not approved" continua
+  negado.
 - `no`, `without` e `sem` não negam quando aparecem depois da menção ou entre o
   verbo e o destinatário ("no later than", "sent without delay to…").
 
@@ -65,10 +70,13 @@ rotulados como **caracterização de limitação conhecida**, e não como confor
    escrita.
 8. **A análise da IA** (`hblResolution` da Clara, ao expandir um card) continua
    podendo indicar telex pelo próprio texto.
+9. **Ambiguidade residual de "no" depois de dois-pontos:** num rótulo em
+   português ("Atenção: no telex release consta…"), "no" é lido como negação.
+   Não há como distingui-lo da contração sem outro contexto.
 
 ## Testes
 
-`npm run courier-docs:selftest` (22 casos, isolado):
+`npm run courier-docs:selftest` (26 casos, isolado):
 
 - `docResolution.test.ts`: os casos aprovados, negações em inglês e português,
   afirmativos preservados, "HBL to cnee", Wave e destino inalterados, equivalência
