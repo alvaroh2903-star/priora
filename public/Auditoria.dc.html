@@ -337,7 +337,7 @@ class Component extends DCLogic {
     var self=this; this.setState({ procStatus:'loading' });
     fetch('/api/auditoria/processos',{credentials:'same-origin'})
       .then(function(r){ return r.json().catch(function(){return null;}).then(function(j){ if(!r.ok) throw new Error((j&&j.error)||('HTTP '+r.status)); return j; }); })
-      .then(function(d){ var ps=(d&&d.processos)||[]; self.setState({ processos:ps, procStatus:'done', selected:(self.state.selected||(ps[0]&&ps[0].processo)||null) }); if(cb)cb(ps); })
+      .then(function(d){ var ps=(d&&d.processos)||[]; self.setState({ processos:ps, procStatus:'done', selected:(self.state.selected||(ps[0]&&ps[0].processo)||null) }); var av=self.avisoLeitura(d,'Lista incompleta'); if(cb)cb(ps, d); else if(av) self.toast(av,true); })
       .catch(function(e){ self.setState({ procStatus:'error' }); self.toast('Não foi possível importar: '+String(e&&e.message||e)); });
   }
 
@@ -346,7 +346,9 @@ class Component extends DCLogic {
   statusKey(r){ if(r==='Consistente')return 'ok'; if(r==='Divergência')return 'crit'; if(r==='Validação Humana')return 'manual'; if(r==='Informativo')return 'info'; return 'na'; }
   anchorId(field){ return 'anchor-'+String(field).replace(/[^a-zA-Z0-9]/g,'_'); }
 
-  onImport(){ if(this.state.procStatus==='loading')return; var self=this; this.toast('Importando do Outlook…',true); this.loadProcessos(function(ps){ self.toast('Importação concluída — '+ps.length+' processos encontrados.'); }); }
+  // O3.4: leitura incompleta da caixa é sempre avisada (nunca vira ausência).
+  avisoLeitura(d, onde){ var li=d&&d.leituraIncompleta; if(!li) return ''; return onde+': '+li.naoLidos+' de '+li.total+' leitura(s) do Outlook não puderam ser feitas agora — nada foi concluído sobre o que não foi lido. Tente de novo em instantes.'; }
+  onImport(){ if(this.state.procStatus==='loading')return; var self=this; this.toast('Importando do Outlook…',true); this.loadProcessos(function(ps, d){ var av=self.avisoLeitura(d,'Importação incompleta'); self.toast(av || ('Importação concluída — '+ps.length+' processos encontrados.'), !!av); }); }
 
   firstPlaybookKey(d){ var pbs=(d&&d.resultado&&d.resultado.playbooksExecutados)||[]; if(pbs.indexOf('Pré-Alerta')>=0)return 'prealerta'; if(pbs.indexOf('CE Mercante')>=0)return 'cemaster'; return 'prealerta'; }
   docFiles(d){ var da=(d&&d.docsAuditados)||[]; return [da[0]||'MBL.pdf', da[1]||'HBL.pdf']; }
@@ -358,7 +360,7 @@ class Component extends DCLogic {
       .then(function(r){ return r.json().catch(function(){return null;}).then(function(j){ if(!r.ok) throw new Error((j&&j.error)||('HTTP '+r.status)); return j; }); })
       .then(function(d){ var files=self.docFiles(d);
         self.setState({ auditData:d, running:false, screen:'mesa', ran:true, playbook:self.firstPlaybookKey(d), openGroup:null, openEv:null, mbl:files[0], hbl:files[1], page:1 });
-        var n=(d.resultado&&d.resultado.resumo&&d.resultado.resumo.total)||0; self.toast('Mesa de auditoria pronta — '+n+' verificações.'); })
+        var n=(d.resultado&&d.resultado.resumo&&d.resultado.resumo.total)||0; var av=self.avisoLeitura(d,'Mesa parcial'); self.toast(av || ('Mesa de auditoria pronta — '+n+' verificações.'), !!av); })
       .catch(function(e){ self.setState({ running:false }); self.toast('Falha na auditoria: '+String(e&&e.message||e)); });
   }
   reprocessar(){
@@ -366,7 +368,7 @@ class Component extends DCLogic {
     this.setState({ running:true }); this.toast('Reprocessando…',true);
     fetch('/api/auditoria/'+encodeURIComponent(code)+'/auditoria?refresh=1',{credentials:'same-origin'})
       .then(function(r){ return r.json().catch(function(){return null;}).then(function(j){ if(!r.ok) throw new Error((j&&j.error)||('HTTP '+r.status)); return j; }); })
-      .then(function(d){ self.setState({ auditData:d, running:false, ran:true }); var n=(d.resultado&&d.resultado.resumo&&d.resultado.resumo.total)||0; self.toast('Auditoria reprocessada — '+n+' verificações.'); })
+      .then(function(d){ self.setState({ auditData:d, running:false, ran:true }); var n=(d.resultado&&d.resultado.resumo&&d.resultado.resumo.total)||0; var av=self.avisoLeitura(d,'Reprocessamento parcial'); self.toast(av || ('Auditoria reprocessada — '+n+' verificações.'), !!av); })
       .catch(function(e){ self.setState({ running:false }); self.toast('Falha: '+String(e&&e.message||e)); });
   }
 

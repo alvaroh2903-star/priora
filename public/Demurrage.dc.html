@@ -250,7 +250,14 @@ class Component extends DCLogic {
         const open={};
         const first = resp && resp.sections && resp.sections.custo && resp.sections.custo[0];
         if (first) open[first.id]=true;
+        // O3.4: leitura incompleta sem nenhum card não pode virar "nenhuma demurrage" — vira aviso.
+        const li = resp && resp.leituraIncompleta;
+        const sec = (resp && resp.sections) || {};
+        const vazio = !((sec.custo||[]).length + (sec.risco||[]).length + (sec.pend||[]).length);
+        const aviso = li ? (li.naoLidos+' de '+li.total+' e-mails com anexo não puderam ser lidos agora — os valores podem estar incompletos. Atualize em instantes.') : '';
+        if (li && vazio) { self.setState({ loading:false, error:'Leitura incompleta da caixa: '+aviso }); return; }
         self.setState({ resp:resp, loading:false, open:open });
+        if (aviso) self.setState({ toastOn:true, toastMsg:'Leitura incompleta: '+aviso });
         if (self._pendingFocus){ const id=self._pendingFocus; self._pendingFocus=null; setTimeout(function(){ self.focusProc(id); }, 120); }
       })
       .catch(function(err){ self.setState({ loading:false, error:String(err&&err.message||err) }); });

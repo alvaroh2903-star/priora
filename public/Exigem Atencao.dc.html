@@ -199,7 +199,9 @@ class Component extends DCLogic {
     // Couriers (fonte garantida — mesma da aba Couriers). O risco é calculado no front.
     this.fetchJson('/api/couriers', 25000).then(function(d){
       if(!self._alive) return;
-      if(d) self.setState({ resp:d, status:'done' });
+      // O3.4: com leitura incompleta, nenhuma pendência é afirmada a partir dela.
+      if(d && d.leituraIncompleta) self.setState({ status:'error:Leitura incompleta da caixa do Outlook: '+d.leituraIncompleta.naoLidos+' de '+d.leituraIncompleta.total+' e-mails não puderam ser lidos agora — nada é concluído sobre eles. Tente novamente em instantes.' });
+      else if(d) self.setState({ resp:d, status:'done' });
       else self.setState({ status:'error:Não foi possível carregar os couriers (tempo esgotado).' });
     });
     // Demurrage: OPCIONAL. Se o módulo estiver fora/lento, a tela funciona sem
@@ -212,7 +214,7 @@ class Component extends DCLogic {
     var self=this;
     this.fetchJson('/api/demurrage', 15000).then(function(d){
       if(!self._alive) return;
-      if(d){ self.setState({ dem:d, demStatus:'done' }); return; } // chegou (mesmo aiEnabled:false)
+      if(d && !d.leituraIncompleta){ self.setState({ dem:d, demStatus:'done' }); return; } // chegou (mesmo aiEnabled:false); incompleta = indisponível agora (O3.4)
       self.setState({ dem:null, demStatus:'done' });               // indisponível agora
       if(attempt < 3) setTimeout(function(){ if(self._alive) self.loadDemurrage(attempt+1); }, 20000);
     });

@@ -145,12 +145,13 @@ test('G-02 só metadados na listagem e só os itemAttachment são abertos: nenhu
   }
 });
 
-test('G-03 falhas seguem a regra de antes: listagem ou leitura do anexo com erro → [] (best-effort)', async () => {
+test('G-03 falha de leitura é explícita (O3.4): listagem ou leitura do anexo com erro REJEITA, não vira [] ("sem encaminhado")', async () => {
   const g = grafoFalso(FIXTURA, { falhas: new Set(['M2', 'M1/i2']) });
   try {
-    assert.deepEqual(await getItemAttachmentTexts('token-sintetico', 'M2'), []);
-    assert.deepEqual(await textosComoAntes('token-sintetico', 'M2'), [], 'antes: a mesma falha também dava []');
-    assert.deepEqual(await getItemAttachmentTexts('token-sintetico', 'M1'), []);
+    await assert.rejects(getItemAttachmentTexts('token-sintetico', 'M2'));
+    assert.deepEqual(await textosComoAntes('token-sintetico', 'M2'), [], 'antes: a mesma falha dava [] e se confundia com "sem encaminhado"');
+    await assert.rejects(getItemAttachmentTexts('token-sintetico', 'M1'));
+    assert.deepEqual(await getItemAttachmentTexts('token-sintetico', 'M4'), [], 'leitura concluída sem encaminhado continua []');
   } finally {
     g.restaurar();
   }

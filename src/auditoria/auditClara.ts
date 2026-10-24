@@ -23,8 +23,13 @@ const ClaraSchema = z.object({
   proximoPasso: z.string(),
 });
 
+/** O3.4: documentos cuja ausência NÃO pode ser afirmada — a leitura deles falhou agora e será refeita. */
+export interface OpcoesResumoClara {
+  documentosNaoLidos?: string[];
+}
+
 /** Resumo determinístico — usado como fallback e como base factual. */
-function resumoDeterministico(r: ResultadoAuditoria): ResumoClara {
+function resumoDeterministico(r: ResultadoAuditoria, naoLidos: string[] = []): ResumoClara {
   const { resumo, documentosAusentes, evidencias } = r;
   const linhas: string[] = [];
   linhas.push(
@@ -40,11 +45,18 @@ function resumoDeterministico(r: ResultadoAuditoria): ResumoClara {
       `Documentos ausentes: ${documentosAusentes.join(', ')} — a auditoria permanece parcial.`,
     );
   }
+  if (naoLidos.length) {
+    linhas.push(
+      `Não foi possível ler agora: ${naoLidos.join(', ')} — nada é concluído sobre ${naoLidos.length === 1 ? 'esse documento' : 'esses documentos'} até a nova leitura.`,
+    );
+  }
   let proximoPasso: string;
   if (resumo.divergencias > 0)
     proximoPasso = 'Solicitar correção ao agente para as divergências antes de emitir o CE.';
   else if (resumo.validacoesHumanas > 0)
     proximoPasso = 'Confirmar manualmente os campos de validação humana (frete/THC).';
+  else if (naoLidos.length > 0)
+    proximoPasso = `Reprocessar a auditoria em instantes para ler ${naoLidos.join(', ')}.`;
   else if (documentosAusentes.length > 0)
     proximoPasso = 'Anexar os documentos ausentes para completar a auditoria.';
   else proximoPasso = 'Confirmar a auditoria — nenhuma inconsistência nos campos avaliados.';
@@ -60,14 +72,48 @@ Regras (obrigatórias):
 - Seja breve. "linhas": 2 a 4 frases curtas respondendo: o que foi encontrado, o que exige atenção, o que depende do analista. "proximoPasso": uma frase com a ação recomendada.
 - Priorize divergências e validações humanas; não liste tudo.`;
 
-export async function resumirAuditoria(r: ResultadoAuditoria): Promise<ResumoClara> {
-  const base = resumoDeterministico(r);
+/** Acrescentada ao prompt SÓ quando há documento não lido (sem isso, o prompt é o de sempre). */
+const REGRA_NAO_LIDOS = `
+- Os documentos em "documentosNaoLidos" NÃO estão ausentes: a leitura deles falhou agora e será refeita. Não diga que estão ausentes, não peça que sejam anexados e não conclua nada que dependa deles; informe apenas que não puderam ser lidos agora.`;
+
+/** Menção a cada documento (sem confundir "Master BL" com "CE Master"). */
+function mencao(documento: string): RegExp {
+  switch (documento) {
+    case 'Master BL': return /(?<!ce\s)\b(master\s*bl|mbl|master)\b/i;
+    case 'House BL': return /(?<!ce\s)\b(house\s*bl|hbl|house)\b/i;
+    case 'CE Master': return /\bce\s*master\b/i;
+    case 'CE House': return /\bce\s*house\b/i;
+    default: return new RegExp(documento.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+  }
+}
+const AFIRMA_AUSENCIA = /ausent|faltan|falta\b|anex(ar|e|ado)|n[ãa]o\s+(foi|foram)\s+(enviad|recebid|anexad)|inexist|n[ãa]o\s+consta/i;
+const AFIRMA_CONCLUSAO = /nenhuma\s+inconsist|sem\s+pend[êe]nc|conclu[íi]da\s+sem|tudo\s+(certo|em\s+ordem)|auditoria\s+(est[áa]\s+)?complet/i;
+
+function dependeDosNaoLidos(texto: string, naoLidos: string[]): boolean {
+  if (AFIRMA_CONCLUSAO.test(texto)) return true;
+  if (!AFIRMA_AUSENCIA.test(texto)) return false;
+  return naoLidos.some((d) => mencao(d).test(texto)) || /documentos?\s+ausentes/i.test(texto);
+}
+
+/**
+ * V7: da resposta da IA, remove SÓ o que conclui a partir de um documento não lido (ausência dele, ou "sem
+ * pendências" com evidência faltando). Análises independentes — p.ex. divergências entre documentos lidos — ficam.
+ */
+export function filtrarConclusoesSobreNaoLidos(linhas: string[], naoLidos: string[]): string[] {
+  if (!naoLidos.length) return linhas;
+  return linhas.filter((l) => !dependeDosNaoLidos(l, naoLidos));
+}
+
+export async function resumirAuditoria(r: ResultadoAuditoria, opcoes: OpcoesResumoClara = {}): Promise<ResumoClara> {
+  const naoLidos = opcoes.documentosNaoLidos ?? [];
+  const base = resumoDeterministico(r, naoLidos);
   if (!isAiConfigured()) return base;
   try {
     const contexto = {
       status: r.status,
       resumo: r.resumo,
       documentosAusentes: r.documentosAusentes,
+      ...(naoLidos.length ? { documentosNaoLidos: naoLidos } : {}),
       evidencias: r.evidencias
         .filter((e) => e.resultado === 'Divergência' || e.resultado === 'Validação Humana')
         .map((e) => ({
@@ -81,12 +127,20 @@ export async function resumirAuditoria(r: ResultadoAuditoria): Promise<ResumoCla
     };
     const ai = await generateStructured(
       ClaraSchema,
-      SYSTEM_PROMPT,
+      naoLidos.length ? SYSTEM_PROMPT + REGRA_NAO_LIDOS : SYSTEM_PROMPT,
       `Resultado da auditoria (JSON):\n${JSON.stringify(contexto)}`,
     );
-    const linhas = (ai.linhas || []).filter(Boolean);
+    let linhas = (ai.linhas || []).filter(Boolean);
+    let proximoPasso = ai.proximoPasso || base.proximoPasso;
+    if (naoLidos.length) {
+      // Guarda determinística: a IA pode desobedecer o prompt; nenhuma conclusão sobre o que não foi lido passa.
+      linhas = filtrarConclusoesSobreNaoLidos(linhas, naoLidos);
+      const aviso = base.linhas.find((l) => l.startsWith('Não foi possível ler agora'));
+      if (aviso && !linhas.some((l) => /n[ãa]o\s+foi\s+poss[íi]vel\s+ler/i.test(l))) linhas.push(aviso);
+      if (dependeDosNaoLidos(proximoPasso, naoLidos)) proximoPasso = base.proximoPasso;
+    }
     if (linhas.length === 0) return base;
-    return { linhas, proximoPasso: ai.proximoPasso || base.proximoPasso, fonte: 'ia' };
+    return { linhas, proximoPasso, fonte: 'ia' };
   } catch {
     return base;
   }

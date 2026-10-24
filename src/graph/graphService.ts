@@ -1,10 +1,17 @@
-import { Client } from '@microsoft/microsoft-graph-client';
+import { Client, CustomAuthenticationProvider, MiddlewareFactory } from '@microsoft/microsoft-graph-client';
+import { EtapaLimitadora, identidadeDaCaixa } from './limitadorGraph';
 
-/** Cria um cliente do Microsoft Graph autenticado com um access token. */
+/**
+ * Cria um cliente do Microsoft Graph autenticado com um access token. É a cadeia padrão do SDK (a mesma de
+ * `Client.init`: autenticação, novas tentativas, redirecionamento, telemetria) com o limitador por caixa logo antes do
+ * envio HTTP (O3.4): todo pedido — e toda nova tentativa — respeita o limite de pedidos simultâneos da caixa.
+ */
 export function getGraphClient(accessToken: string): Client {
-  return Client.init({
-    authProvider: (done) => done(null, accessToken),
-  });
+  const cadeia = MiddlewareFactory.getDefaultMiddlewareChain(
+    new CustomAuthenticationProvider((done) => done(null, accessToken)),
+  );
+  cadeia.splice(cadeia.length - 1, 0, new EtapaLimitadora(identidadeDaCaixa(accessToken)));
+  return Client.initWithMiddleware({ middleware: cadeia });
 }
 
 export interface ListMessagesOptions {
@@ -146,45 +153,44 @@ export async function listRecentSummaries(
  * Lê o CONTEÚDO de e-mails encaminhados como ANEXO (itemAttachment). O Graph
  * devolve o e-mail aninhado quando pedimos o $expand do item — sem isso, o texto
  * do encaminhado fica invisível. Devolve os textos (assunto + corpo) de cada
- * e-mail anexado. Defensivo: qualquer falha retorna [] (não quebra a listagem).
+ * e-mail anexado. Uma falha de leitura REJEITA (antes virava [] e se confundia com
+ * "sem encaminhado"); as rotas a contam como leitura incompleta.
  */
 export async function getItemAttachmentTexts(
   accessToken: string,
   messageId: string,
 ): Promise<string[]> {
-  try {
-    const client = getGraphClient(accessToken);
-    // Só METADADOS na listagem. Sem $select o Graph devolve o contentBytes (o
-    // arquivo inteiro em base64) de TODO anexo — os PDFs de cada e-mail, que aqui
-    // eram jogados fora. Couriers e Demurrage chamam isto para até 25 e-mails ao
-    // abrir o painel: em 21/10 isso estourou os 512 MB do Render várias vezes, e
-    // cada reinício deslogava todo mundo. O @odata.type vem junto por ser uma
-    // coleção polimórfica (mesmo recurso do getForwardedFileAttachments do ramo
-    // de produção, de onde vem esta versão: commit 8e055b0).
-    const lista: any = await client
-      .api(`/me/messages/${messageId}/attachments`)
-      .select('id,name,contentType,size,isInline')
+  // Três resultados distintos (O3.4): textos lidos; [] = leitura concluída sem e-mail encaminhado (ausência
+  // confirmada); REJEITA quando a leitura falhou — quem chama conta a falha e não a trata como ausência.
+  const client = getGraphClient(accessToken);
+  // Só METADADOS na listagem. Sem $select o Graph devolve o contentBytes (o
+  // arquivo inteiro em base64) de TODO anexo — os PDFs de cada e-mail, que aqui
+  // eram jogados fora. Couriers e Demurrage chamam isto para até 25 e-mails ao
+  // abrir o painel: em 21/10 isso estourou os 512 MB do Render várias vezes, e
+  // cada reinício deslogava todo mundo. O @odata.type vem junto por ser uma
+  // coleção polimórfica (mesmo recurso do getForwardedFileAttachments do ramo
+  // de produção, de onde vem esta versão: commit 8e055b0).
+  const lista: any = await client
+    .api(`/me/messages/${messageId}/attachments`)
+    .select('id,name,contentType,size,isInline')
+    .get();
+  const itemAtts = ((lista?.value as any[]) || []).filter(
+    (a) => a['@odata.type'] === '#microsoft.graph.itemAttachment',
+  );
+  const texts: string[] = [];
+  // Só os e-mails encaminhados COMO anexo são abertos (costuma ser 0 ou 1).
+  for (const ia of itemAtts) {
+    const full: any = await client
+      .api(`/me/messages/${messageId}/attachments/${ia.id}`)
+      .header('Prefer', 'outlook.body-content-type="text"')
+      .expand('microsoft.graph.itemAttachment/item')
       .get();
-    const itemAtts = ((lista?.value as any[]) || []).filter(
-      (a) => a['@odata.type'] === '#microsoft.graph.itemAttachment',
-    );
-    const texts: string[] = [];
-    // Só os e-mails encaminhados COMO anexo são abertos (costuma ser 0 ou 1).
-    for (const ia of itemAtts) {
-      const full: any = await client
-        .api(`/me/messages/${messageId}/attachments/${ia.id}`)
-        .header('Prefer', 'outlook.body-content-type="text"')
-        .expand('microsoft.graph.itemAttachment/item')
-        .get();
-      const it = full?.item;
-      if (!it) continue;
-      const joined = `${it.subject || ''}\n${it.body?.content || it.bodyPreview || ''}`.trim();
-      if (joined) texts.push(joined);
-    }
-    return texts;
-  } catch {
-    return [];
+    const it = full?.item;
+    if (!it) continue;
+    const joined = `${it.subject || ''}\n${it.body?.content || it.bodyPreview || ''}`.trim();
+    if (joined) texts.push(joined);
   }
+  return texts;
 }
 
 export interface ConversationMessage {

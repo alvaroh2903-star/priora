@@ -10,6 +10,7 @@ import { createHash } from 'crypto';
 import { z } from 'zod/v4';
 import { generateStructuredFromDocument } from '../ai/geminiClient';
 import { getAttachmentContent } from '../graph/graphService';
+import { MotivoFalhaLeitura, motivoDaFalha } from '../graph/integridadeLeitura';
 import { DocumentoExtraido, DocTipo, ContainerExtraido } from './playbooks';
 
 const ContainerSchema = z.object({
@@ -97,7 +98,15 @@ function docIlegivel(nome: string, tipo: DocTipo): DocumentoExtraido {
 }
 
 /** O documento extraído e o hash dos bytes que foram lidos (o mesmo arquivo em e-mails diferentes tem o mesmo hash). */
-export type DocumentoLido = DocumentoExtraido & { arquivoSha256?: string | null };
+export type DocumentoLido = DocumentoExtraido & {
+  arquivoSha256?: string | null;
+  /**
+   * O3.4: a LEITURA falhou (download recusado, tempo esgotado, IA indisponível…) — o documento não foi lido, o que é
+   * diferente de ilegível (conteúdo lido e não aproveitável). Ausente quando a leitura terminou.
+   */
+  falhaDeLeitura?: true;
+  motivoFalha?: MotivoFalhaLeitura;
+};
 
 /**
  * Consulta feita DEPOIS de obter os bytes e ANTES do OCR: se já existe a extração
@@ -164,7 +173,8 @@ export async function extrairDocumento(
       legivel: ai.legivel !== false,
       arquivoSha256,
     };
-  } catch {
-    return docIlegivel(nome, tipo);
+  } catch (e) {
+    // Não lido ≠ ilegível (O3.4): a falha é marcada, nunca vira conclusão sobre o documento.
+    return { ...docIlegivel(nome, tipo), falhaDeLeitura: true, motivoFalha: motivoDaFalha(e) };
   }
 }

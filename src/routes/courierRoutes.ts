@@ -1,5 +1,6 @@
 import { RequestHandler, Router } from 'express';
 import { mapLimit } from '../browser/carriers/concurrency';
+import { ContadorDeLeitura, ehIndisponibilidadeDeLeitura, responderLeituraIndisponivel } from '../graph/integridadeLeitura';
 import { requireAuth, AuthedRequest } from '../middleware/requireAuth';
 import { exigirEscritaLegadaNoOutlook } from '../middleware/escritaLegadaOutlook';
 import { GatilhosLiberacao, gatilhosLiberacaoPadrao } from '../liberacao/aplicacao';
@@ -385,15 +386,23 @@ async function buildCourierView(accessToken: string, g: GraphCourier = GRAPH_PAD
     // ela (nunca penduramos o request inteiro por causa de um anexo).
     const withAtt = messages.filter((m) => m.hasAttachments).slice(0, 25);
     const attMap = new Map<string, string>();
+    // Leitura que falhou (limite do Outlook, tempo esgotado…) é CONTADA, nunca tratada como "sem encaminhado" (O3.4).
+    const leitura = new ContadorDeLeitura();
     // No máximo 5 e-mails por vez (antes: os 25 juntos).
     await mapLimit(withAtt, 5, async (m) => {
-      const texts = await withTimeout(
-        g.getItemAttachmentTexts(accessToken, m.id),
-        8000,
-        'itemAttachment',
-      ).catch(() => [] as string[]);
-      if (texts.length) attMap.set(m.id, texts.join('\n\n'));
+      try {
+        const texts = await withTimeout(
+          g.getItemAttachmentTexts(accessToken, m.id),
+          8000,
+          'itemAttachment',
+        );
+        leitura.concluida();
+        if (texts.length) attMap.set(m.id, texts.join('\n\n'));
+      } catch (err) {
+        leitura.falhou(err);
+      }
     });
+    const leituraIncompleta = leitura.resumo();
 
     // Texto completo por e-mail: assunto + corpo inteiro + e-mails anexados.
     const fullTextOf = (m: LogisticsSummary): string =>
@@ -768,11 +777,13 @@ async function buildCourierView(accessToken: string, g: GraphCourier = GRAPH_PAD
       couriersAll,
       // Estados confirmados (JSON legado + durável) — internos, só para /stats.
       estadosConfirmados: estados,
+      // Com leitura incompleta, nenhum "sem courier" é afirmado: o courier pode estar num e-mail não lido.
       processosSemCourier: Array.from(processosSemCourier.values()).sort((a, b) =>
         a.data < b.data ? 1 : -1,
-      ),
+      ).map((p) => (leituraIncompleta ? { ...p, aConfirmar: true as const } : p)),
       atividades,
       concluidos,
+      ...(leituraIncompleta ? { leituraIncompleta } : {}),
     };
 }
 
@@ -1102,6 +1113,7 @@ export function criarCourierRouter(deps: CourierRouterDeps = {}): Router {
       void estadosConfirmados;
       res.json(payload);
     } catch (err) {
+      if (ehIndisponibilidadeDeLeitura(err)) return responderLeituraIndisponivel(res, err);
       next(err);
     }
   });
@@ -1113,8 +1125,12 @@ export function criarCourierRouter(deps: CourierRouterDeps = {}): Router {
   router.get('/stats', async (req: AuthedRequest, res, next) => {
     try {
       const view = await buildCourierView(req.accessToken!, g, await opcoesDaVisao(req));
-      res.json(computeCourierStats(view.couriersAll, view.concluidos, view.estadosConfirmados));
+      res.json({
+        ...computeCourierStats(view.couriersAll, view.concluidos, view.estadosConfirmados),
+        ...(view.leituraIncompleta ? { leituraIncompleta: view.leituraIncompleta } : {}),
+      });
     } catch (err) {
+      if (ehIndisponibilidadeDeLeitura(err)) return responderLeituraIndisponivel(res, err);
       next(err);
     }
   });
@@ -1152,15 +1168,28 @@ export function criarCourierRouter(deps: CourierRouterDeps = {}): Router {
           new Set([req.params.conversationId, ...extraIds]),
         ).slice(0, 6);
 
+        const leitura = new ContadorDeLeitura();
+        let principalNaoLida = false;
         const perThread = await Promise.all(
-          convIds.map((cid) =>
+          convIds.map((cid, i) =>
             withTimeout(
               g.getConversationFull(req.accessToken!, cid, { top: 50 }),
               15000,
               'getConversationFull',
-            ).catch(() => []),
+            ).then(
+              (msgs) => { leitura.concluida(); return msgs; },
+              (err) => { leitura.falhou(err); if (i === 0) principalNaoLida = true; return []; },
+            ),
           ),
         );
+        // A conversa pedida não pôde ser lida: não dá para afirmar que ela não existe (O3.4).
+        if (principalNaoLida) {
+          return res.status(503).json({
+            error: 'Não foi possível ler esta conversa no Outlook agora. Tente novamente em instantes.',
+            motivo: 'LEITURA_INCOMPLETA',
+            leituraIncompleta: leitura.resumo(),
+          });
+        }
         // Mescla e deduplica por id de mensagem; ordena cronologicamente.
         const byId = new Map<string, (typeof perThread)[number][number]>();
         for (const thread of perThread)
@@ -1179,11 +1208,17 @@ export function criarCourierRouter(deps: CourierRouterDeps = {}): Router {
           messages.filter((m) => m.hasAttachments),
           5,
           async (m) => {
-            const texts = await withTimeout(
-              g.getItemAttachmentTexts(req.accessToken!, m.id),
-              8000,
-              'itemAttachment',
-            ).catch(() => [] as string[]);
+            let texts: string[] = [];
+            try {
+              texts = await withTimeout(
+                g.getItemAttachmentTexts(req.accessToken!, m.id),
+                8000,
+                'itemAttachment',
+              );
+              leitura.concluida();
+            } catch (err) {
+              leitura.falhou(err);
+            }
             if (texts.length) {
               const extra =
                 '\n\n--- E-mail encaminhado (anexo) ---\n' + texts.join('\n\n');
@@ -1215,12 +1250,14 @@ export function criarCourierRouter(deps: CourierRouterDeps = {}): Router {
             })]));
           }
         }
+        const leituraIncompleta = leitura.resumo();
         res.json({
           ...analysis,
           expectativa: derivarExpectativa(analysis),
           processosDetalhe: mapProcessDocs(messages),
           processosClara,
           ...(linhasClara ? { linhasClara } : {}),
+          ...(leituraIncompleta ? { leituraIncompleta } : {}),
         });
       } catch (err) {
         next(err);

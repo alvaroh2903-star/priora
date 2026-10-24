@@ -491,10 +491,12 @@ class Component extends DCLogic {
 
   load(){
     var self=this;
+    // O3.4: erro da API NUNCA vira lista sem itens; a tela diz que a caixa não pôde ser lida.
+    var VAZIO=function(erro){ return { couriers:[], processosSemCourier:[], atividades:[], erroLeitura:erro }; };
     fetch('/api/couriers', { credentials:'same-origin' })
-      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(r){ return r.json().catch(function(){ return null; }).then(function(j){ return r.ok && j ? j : VAZIO((j && j.error) || ('HTTP '+r.status)); }); })
       .then(function(d){
-        var resp=d || { couriers:[], processosSemCourier:[], atividades:[] };
+        var resp=d;
         self.setState({ resp:resp });
         // PREFETCH: consulta TODOS os trackings em paralelo assim que a lista
         // chega — 1 consulta por tracking único (cada card JÁ é um tracking;
@@ -503,7 +505,7 @@ class Component extends DCLogic {
         // O servidor ainda cacheia por alguns minutos (evita repetição).
         self.prefetchTrackings(resp.couriers);
       })
-      .catch(function(){ self.setState({ resp:{ couriers:[], processosSemCourier:[], atividades:[] } }); });
+      .catch(function(){ self.setState({ resp:VAZIO('Não foi possível ler a caixa do Outlook agora.') }); });
   }
 
   fmt(iso){ try{ var d=new Date(iso); if(isNaN(d)) return '—'; return d.toLocaleDateString('pt-BR'); }catch(e){ return '—'; } }
@@ -919,6 +921,8 @@ class Component extends DCLogic {
     // ---- estado da análise da Clara ----
     row.aLoading=(stt==='loading'); row.aError=(stt.indexOf('error')===0);
     row.aErrorMsg=row.aError?('Não consegui analisar: '+stt.slice(6)):'';
+    // O3.4: análise feita com parte das conversas/e-mails sem leitura — avisada, nunca silenciosa.
+    if (!row.aError && a && a.leituraIncompleta){ row.aError=true; row.aErrorMsg='Análise parcial: '+a.leituraIncompleta.naoLidos+' leitura(s) do Outlook não puderam ser feitas agora — o que não foi lido não entrou na análise.'; }
 
     // Resolução do HBL/MBL. Combina o que a Clara leu (a.hblResolution) com a
     // detecção DETERMINÍSTICA do backend (courier.docResolution) — assim o motivo
@@ -1123,6 +1127,9 @@ class Component extends DCLogic {
     var couriers=(resp && resp.couriers)||[];
     var sem=(resp && resp.processosSemCourier)||[];
     var ativ=(resp && resp.atividades)||[];
+    // O3.4: leitura indisponível (erro) ou incompleta — nada de ausência afirmada.
+    var erroLeitura=(resp && resp.erroLeitura)||null;
+    var incompleta=(resp && resp.leituraIncompleta)||null;
 
     var rows=couriers.map(function(c){ return self.buildRow(c); });
 
@@ -1153,9 +1160,16 @@ class Component extends DCLogic {
       });
       if (!atencao.length){ semAtencao=true; atTitulo='Tudo em ordem'; atICon='#1F9D6B'; atCalmMsg='Nenhuma pendência crítica. Todos os couriers têm processo vinculado.'; }
     }
+    if (erroLeitura){
+      claraIntro='Não consegui ler a caixa do Outlook agora ('+erroLeitura+'). Nada foi concluído sobre os couriers — tente novamente em instantes.';
+      atencao=[]; semAtencao=true; atTitulo='Leitura indisponível'; atICon='#B9760A'; atCalmMsg='Sem conclusões até a caixa poder ser lida.';
+    } else if (incompleta){
+      claraIntro+=' Atenção: '+incompleta.naoLidos+' de '+incompleta.total+' e-mails com anexo não puderam ser lidos agora — a lista pode estar incompleta e os "processos sem courier" ficam a confirmar.';
+      if (semAtencao){ atTitulo='Leitura incompleta'; atICon='#B9760A'; atCalmMsg='Não é possível afirmar que está tudo em ordem: parte dos e-mails não pôde ser lida agora.'; }
+    }
 
     // Processos sem courier
-    var semCourier=sem.map(function(s){ return { codigo:s.codigo, agente:s.agente, data:self.fmt(s.data),
+    var semCourier=sem.map(function(s){ return { codigo:s.codigo, agente:(s.aConfirmar ? 'A confirmar (leitura incompleta) · ' : '')+s.agente, data:self.fmt(s.data),
       onOpen:function(){ if(window.PrioraBus) window.PrioraBus.focus('processos', s.codigo); } }; });
 
     // Atividades
@@ -1165,10 +1179,10 @@ class Component extends DCLogic {
     var atividades=ativ.map(function(a){ var ic=ICON[a.tipo]||ICON.email; return { label:a.label, sub:a.sub, time:self.fmt(a.time), bg:ic.bg, color:ic.color, icon:ic.icon }; });
 
     return {
-      loadingView:loading, emptyView:(!loading && !couriers.length), listReady:(!loading && couriers.length>0),
+      loadingView:loading, emptyView:(!loading && !couriers.length && !erroLeitura && !incompleta), listReady:(!loading && couriers.length>0),
       rows:rows, kpis:kpis,
       claraSub:claraSub, claraIntro:claraIntro, atencao:atencao, semAtencao:semAtencao, atCalmMsg:atCalmMsg, atTitulo:atTitulo, atICon:atICon,
-      semCourier:semCourier, semCount:String(sem.length), temSemCourier:(semCourier.length>0), nenhumSemCourier:(!loading && semCourier.length===0),
+      semCourier:semCourier, semCount:String(sem.length), temSemCourier:(semCourier.length>0), nenhumSemCourier:(!loading && semCourier.length===0 && !erroLeitura && !incompleta),
       atividades:atividades, temAtividades:(atividades.length>0), semAtividades:(!loading && atividades.length===0),
       onManualTrack:function(){ var el=document.getElementById('trkq'); var sel=document.getElementById('trkcarrier'); var num=((el&&el.value)||'').replace(/[^A-Za-z0-9]/g,''); var carrier=(sel&&sel.value)||'dhl'; if(!num) return; self.setState({ manualNumber:num }); self.doTrack(num, carrier); },
       manual:self.trackView(self.state.manualNumber),

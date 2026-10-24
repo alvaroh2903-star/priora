@@ -8,6 +8,10 @@ import {
   getFullMessage,
 } from '../graph/graphService';
 import { config } from '../config';
+import { mapLimit } from '../browser/carriers/concurrency';
+import {
+  ContadorDeLeitura, LeituraIncompleta, ehIndisponibilidadeDeLeitura, responderLeituraIndisponivel, somarLeituras,
+} from '../graph/integridadeLeitura';
 import { isAiConfigured } from '../ai/geminiClient';
 import { DocumentoLido, extrairDocumento } from '../auditoria/docExtractor';
 import { executarAuditoria, DocumentoExtraido, DocTipo } from '../auditoria/playbooks';
@@ -179,7 +183,7 @@ function chaveDoAnexo(d: Pick<DocRef, 'emailId' | 'attachmentId'>): string {
 /** Constrói a central de processos a partir do Outlook (sem OCR). Reutilizada. */
 async function buildProcessos(
   accessToken: string, g: GraphAuditoria = GRAPH_PADRAO,
-): Promise<{ processos: ProcessoAuditoria[]; source: string }> {
+): Promise<{ processos: ProcessoAuditoria[]; source: string; leituraIncompleta?: LeituraIncompleta }> {
   let messages = await withTimeout(
     g.searchLogisticsMessages(accessToken, { keywords: config.logisticsKeywords, top: 60 }),
     20000,
@@ -228,9 +232,13 @@ async function buildProcessos(
   };
 
   const comAnexo = messages.filter((m) => m.hasAttachments).slice(0, 30);
-  const fulls = await Promise.all(
-    comAnexo.map((m) =>
-      withTimeout(g.getFullMessage(accessToken, m.id), 9000, 'getFull').catch(() => null),
+  // No máximo 4 por vez — o limite da caixa (antes: os 30 de uma vez, e o Outlook recusava a maioria). Mensagem que
+  // não pôde ser lida é CONTADA: os processos dela podem faltar na lista, e isso é informado (O3.4).
+  const leitura = new ContadorDeLeitura();
+  const fulls = await mapLimit(comAnexo, 4, (m) =>
+    withTimeout(g.getFullMessage(accessToken, m.id), 9000, 'getFull').then(
+      (full) => { leitura.concluida(); return full; },
+      (err) => { leitura.falhou(err); return null; },
     ),
   );
 
@@ -330,7 +338,8 @@ async function buildProcessos(
   });
 
   processos.sort((a, b) => (a.data < b.data ? 1 : -1));
-  return { processos, source };
+  const leituraIncompleta = leitura.resumo();
+  return { processos, source, ...(leituraIncompleta ? { leituraIncompleta } : {}) };
 }
 
 /* ------------------------------------------------------------------ *
@@ -518,8 +527,12 @@ export function criarAuditoriaRouter(deps: AuditoriaRouterDeps = {}): Router {
     return out;
   }
 
-  /** Clara só para um resultado de Playbook ainda não resumido (resumo é função do resultado). */
-  async function resumirUmaVez(escopo: string, resultado: ReturnType<typeof executarAuditoria>): Promise<ResumoClara> {
+  /**
+   * Clara só para um resultado de Playbook ainda não resumido (resumo é função do resultado). Com documento não lido,
+   * o resumo não é guardado: a próxima abertura relê e resume de novo (O3.4).
+   */
+  async function resumirUmaVez(escopo: string, resultado: ReturnType<typeof executarAuditoria>, documentosNaoLidos: string[] = []): Promise<ResumoClara> {
+    if (documentosNaoLidos.length) return resumir(resultado, { documentosNaoLidos });
     const chave = `${escopo}|${createHash('sha256').update(JSON.stringify(resultado)).digest('hex')}`;
     const pronto = resumos.get(chave);
     if (pronto) return pronto;
@@ -555,7 +568,7 @@ export function criarAuditoriaRouter(deps: AuditoriaRouterDeps = {}): Router {
   /** GET /api/auditoria/processos — central de processos (sem OCR). */
   router.get('/processos', async (req: AuthedRequest, res, next) => {
     try {
-      const { processos, source } = await buildProcessos(req.accessToken!, g);
+      const { processos, source, leituraIncompleta } = await buildProcessos(req.accessToken!, g);
       // Não vaza refs internas de anexo para o cliente.
       const publicos = processos.map((p) => ({
         processo: p.processo,
@@ -574,8 +587,10 @@ export function criarAuditoriaRouter(deps: AuditoriaRouterDeps = {}): Router {
         processos: publicos,
         totalDocumentos: publicos.reduce((s, p) => s + p.qtdDocs, 0),
         prontos: publicos.filter((p) => p.auditorias.length > 0).length,
+        ...(leituraIncompleta ? { leituraIncompleta } : {}),
       });
     } catch (err) {
+      if (ehIndisponibilidadeDeLeitura(err)) return responderLeituraIndisponivel(res, err);
       next(err);
     }
   });
@@ -588,9 +603,17 @@ export function criarAuditoriaRouter(deps: AuditoriaRouterDeps = {}): Router {
         });
       }
       const alvoBase = processBase(String(req.params.processo || '').toUpperCase());
-      const { processos } = await buildProcessos(req.accessToken!, g);
+      const { processos, leituraIncompleta: leituraDaLista } = await buildProcessos(req.accessToken!, g);
       const proc = processos.find((p) => processBase(p.processo) === alvoBase);
       if (!proc) {
+        // Leitura da caixa incompleta: não dá para afirmar que o processo não existe (O3.4).
+        if (leituraDaLista) {
+          return res.status(503).json({
+            error: 'A leitura da caixa foi interrompida: não é possível confirmar se o processo existe. Tente novamente em instantes.',
+            motivo: 'LEITURA_INCOMPLETA',
+            leituraIncompleta: leituraDaLista,
+          });
+        }
         return res.status(404).json({ error: 'Processo não encontrado na caixa do Courier.' });
       }
 
@@ -627,7 +650,8 @@ export function criarAuditoriaRouter(deps: AuditoriaRouterDeps = {}): Router {
       const refresh = String(req.query.refresh || '') === '1';
       const cacheKey = `${escopo}|${alvoBase}`;
       const cached = auditCache.get(cacheKey);
-      if (!refresh && cached && cached.sig === sig) {
+      // Lista da caixa incompleta: o guardado não vale como atual (um e-mail não lido pode trazer documento novo) — O3.4.
+      if (!refresh && !leituraDaLista && cached && cached.sig === sig) {
         // Cache: OCR zero vezes. A extração em cache pode ser reenviada à
         // persistência idempotente (recupera falha anterior do banco).
         submeterPersistencia(req, cached.extracoes, versoesDoMbl, escopo);
@@ -643,7 +667,14 @@ export function criarAuditoriaRouter(deps: AuditoriaRouterDeps = {}): Router {
         resultado: null,
         clara: null,
       });
+      const documentosIndisponiveis = (leituraIncompleta: LeituraIncompleta | undefined) => res.status(503).json({
+        error: 'Não foi possível ler os documentos deste processo agora. Tente novamente em instantes.',
+        motivo: 'LEITURA_INCOMPLETA',
+        leituraIncompleta,
+      });
       if (candidatos.length === 0) {
+        // Sem documento visível, mas com e-mails não lidos: "sem documentos" não pode ser afirmado.
+        if (leituraDaLista) return documentosIndisponiveis(leituraDaLista);
         return res.json(semDocsPayload());
       }
 
@@ -673,6 +704,11 @@ export function criarAuditoriaRouter(deps: AuditoriaRouterDeps = {}): Router {
         candidatos.map((d) => lerAnexo(req, escopo, d, ehAuditavel(d.tipo) ? d.tipo : 'OUTRO', { refresh })),
       );
       const extraidos: DocumentoExtraido[] = leituras.map((l, i) => l?.doc ?? vazio(candidatos[i].nome, ehAuditavel(candidatos[i].tipo) ? candidatos[i].tipo as DocTipo : 'OUTRO'));
+      // Leitura que falhou (timeout do extrator → null; ou marcada pelo extrator) — não lido ≠ ilegível (O3.4).
+      const naoLido = (i: number) => !leituras[i] || !!leituras[i]!.doc.falhaDeLeitura;
+      const leituraDocs = new ContadorDeLeitura();
+      leituras.forEach((l, i) => (naoLido(i) ? leituraDocs.falhouPor(l?.doc.motivoFalha ?? 'FALHA') : leituraDocs.concluida()));
+      const naoLidos = candidatos.filter((_, i) => naoLido(i));
 
       // Reclassifica pelo CONTEÚDO os anexos cujo NOME não deu um tipo auditável.
       for (const d of extraidos) {
@@ -694,14 +730,29 @@ export function criarAuditoriaRouter(deps: AuditoriaRouterDeps = {}): Router {
         if (escolhido) paraAuditar.push(escolhido);
       }
       if (paraAuditar.length === 0) {
+        if (naoLidos.length || leituraDaLista) return documentosIndisponiveis(somarLeituras(leituraDaLista, leituraDocs.resumo()));
         return res.json(semDocsPayload());
       }
 
       const resultado = executarAuditoria(paraAuditar);
-      const clara = await resumirUmaVez(escopo, resultado);
+      // Documento não lido NUNCA é ausente (V6). Um tipo deixa de ser afirmado ausente se o documento dele não foi lido,
+      // se um anexo genérico (que poderia ser dele, reclassificado pelo conteúdo) não foi lido, ou se a própria lista
+      // da caixa ficou incompleta. As regras dos Playbooks não mudam: só o que é AFIRMADO a partir do resultado.
+      const semConfirmacao = new Set<string>();
+      for (const d of naoLidos) {
+        if (ehAuditavel(d.tipo)) semConfirmacao.add(TIPO_LABEL[d.tipo]);
+        else TIPOS_AUDITAVEIS.forEach((t) => semConfirmacao.add(TIPO_LABEL[t]));
+      }
+      if (leituraDaLista) TIPOS_AUDITAVEIS.forEach((t) => semConfirmacao.add(TIPO_LABEL[t]));
+      const documentosNaoLidos = resultado.documentosAusentes.filter((d) => semConfirmacao.has(d));
+      const resultadoExibido = documentosNaoLidos.length
+        ? { ...resultado, documentosAusentes: resultado.documentosAusentes.filter((d) => !semConfirmacao.has(d)), documentosNaoLidos }
+        : resultado;
+      const clara = await resumirUmaVez(escopo, resultadoExibido, documentosNaoLidos);
 
       // Cliente: primeiro que a extração conseguir ler (best-effort).
       const cliente = extraidos.map((d) => d.cliente).find(Boolean) || proc.cliente || null;
+      const leituraIncompleta = somarLeituras(leituraDaLista, leituraDocs.resumo());
 
       const payload = {
         processo: proc.processo,
@@ -709,14 +760,18 @@ export function criarAuditoriaRouter(deps: AuditoriaRouterDeps = {}): Router {
         semDocumentos: false,
         qtdDocs: proc.qtdDocs,
         docsAuditados: paraAuditar.map((d) => TIPO_LABEL[d.tipo]),
-        ilegiveis: extraidos.filter((d) => !d.legivel).map((d) => d.nome),
-        resultado,
+        ilegiveis: extraidos.filter((d, i) => !d.legivel && !naoLido(i)).map((d) => d.nome),
+        resultado: resultadoExibido,
         clara,
         data: proc.data,
+        ...(naoLidos.length ? { naoLidos: naoLidos.map((d) => d.nome) } : {}),
+        ...(leituraIncompleta ? { leituraIncompleta } : {}),
       };
-      auditCache.set(cacheKey, { sig, at: Date.now(), payload, extracoes });
+      // Falha transitória não vira resultado guardado: com qualquer leitura incompleta, a próxima abertura relê.
+      if (!leituraIncompleta) auditCache.set(cacheKey, { sig, at: Date.now(), payload, extracoes });
       res.json(payload);
     } catch (err) {
+      if (ehIndisponibilidadeDeLeitura(err)) return responderLeituraIndisponivel(res, err);
       next(err);
     }
   });
@@ -734,9 +789,17 @@ export function criarAuditoriaRouter(deps: AuditoriaRouterDeps = {}): Router {
         });
       }
       const alvoBase = processBase(String(req.params.processo || '').toUpperCase());
-      const { processos } = await buildProcessos(req.accessToken!, g);
+      const { processos, leituraIncompleta: leituraDaLista } = await buildProcessos(req.accessToken!, g);
       const proc = processos.find((p) => processBase(p.processo) === alvoBase);
       if (!proc) {
+        // Leitura da caixa incompleta: não dá para afirmar que o processo não existe (O3.4).
+        if (leituraDaLista) {
+          return res.status(503).json({
+            error: 'A leitura da caixa foi interrompida: não é possível confirmar se o processo existe. Tente novamente em instantes.',
+            motivo: 'LEITURA_INCOMPLETA',
+            leituraIncompleta: leituraDaLista,
+          });
+        }
         return res.status(404).json({ error: 'Processo não encontrado na caixa do Courier.' });
       }
 
@@ -752,25 +815,41 @@ export function criarAuditoriaRouter(deps: AuditoriaRouterDeps = {}): Router {
       const candidatos = [...bls, ...genericos].slice(0, 8); // permite multi-House
 
       if (candidatos.length === 0) {
+        if (leituraDaLista) {
+          return res.status(503).json({
+            error: 'Não foi possível ler os documentos deste processo agora. Tente novamente em instantes.',
+            motivo: 'LEITURA_INCOMPLETA',
+            leituraIncompleta: leituraDaLista,
+          });
+        }
         return res.json({ processo: proc.processo, cliente: proc.cliente, semDocumentos: true, resultado: null });
       }
 
       const sig = candidatos.map((d) => `${d.tipo}:${d.nome}`).sort().join('|');
       const refresh = String(req.query.refresh || '') === '1';
       const cached = preAlertaCache.get(alvoBase);
-      if (!refresh && cached && cached.sig === sig) {
+      if (!refresh && !leituraDaLista && cached && cached.sig === sig) {
         return res.json(cached.payload);
       }
 
-      // OCR + reclassificação (nome concreto MBL/HBL prevalece; senão, conteúdo).
+      // OCR + reclassificação (nome concreto MBL/HBL prevalece; senão, conteúdo). Leitura que falhou é contada e
+      // informada (O3.4); as regras do PB-001 não mudam.
+      const leituraDocs = new ContadorDeLeitura();
+      const naoLidos: string[] = [];
       const extraidos = await Promise.all(
         candidatos.map(async (d) => {
           const hint: TipoDoc = d.tipo === 'HBL' ? 'HBL' : 'MBL';
-          const { doc, tipoDetectado } = await withTimeout(
+          const { doc, tipoDetectado, falhaDeLeitura } = await withTimeout(
             extrairPA(req.accessToken!, d.emailId, d.attachmentId, d.nome, hint),
             40000,
             'ocr',
-          ).catch(() => ({ doc: docIlegivelPreAlerta(d.nome, hint), tipoDetectado: null }));
+          ).catch(() => ({ doc: docIlegivelPreAlerta(d.nome, hint), tipoDetectado: null, falhaDeLeitura: true as const }));
+          if (falhaDeLeitura) {
+            leituraDocs.falhouPor('FALHA');
+            naoLidos.push(d.nome);
+          } else {
+            leituraDocs.concluida();
+          }
           let tipoFinal: TipoDoc | null = null;
           if (d.tipo === 'MBL' || d.tipo === 'HBL') tipoFinal = d.tipo;
           else if (tipoDetectado === 'MBL' || tipoDetectado === 'HBL') tipoFinal = tipoDetectado;
@@ -779,6 +858,14 @@ export function criarAuditoriaRouter(deps: AuditoriaRouterDeps = {}): Router {
       );
       const docs = extraidos.filter((d): d is DocPreAlerta => d !== null);
 
+      const leituraIncompleta = somarLeituras(leituraDaLista, leituraDocs.resumo());
+      if (!docs.length && naoLidos.length) {
+        return res.status(503).json({
+          error: 'Não foi possível ler os documentos deste processo agora. Tente novamente em instantes.',
+          motivo: 'LEITURA_INCOMPLETA',
+          leituraIncompleta,
+        });
+      }
       const op = montarOperacao(proc.processo, docs);
       const resultado = executarPreAlerta(op);
 
@@ -787,15 +874,19 @@ export function criarAuditoriaRouter(deps: AuditoriaRouterDeps = {}): Router {
         cliente: proc.cliente,
         master: op.master ? op.master.nome : null,
         houses: op.houses.map((h) => h.nome),
-        ilegiveis: docs.filter((d) => !d.legivel).map((d) => d.nome),
+        ilegiveis: docs.filter((d) => !d.legivel && !naoLidos.includes(d.nome)).map((d) => d.nome),
         resultado: resultado.resultado,
         familias: resultado.familias,
         evidencias: resultado.evidencias,
         data: proc.data,
+        ...(naoLidos.length ? { naoLidos } : {}),
+        ...(leituraIncompleta ? { leituraIncompleta } : {}),
       };
-      preAlertaCache.set(alvoBase, { sig, payload });
+      // Falha transitória não vira resultado guardado.
+      if (!leituraIncompleta) preAlertaCache.set(alvoBase, { sig, payload });
       res.json(payload);
     } catch (err) {
+      if (ehIndisponibilidadeDeLeitura(err)) return responderLeituraIndisponivel(res, err);
       next(err);
     }
   });

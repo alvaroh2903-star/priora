@@ -5,6 +5,7 @@ import { ActiveAccount, getActiveAccount } from '../auth/activeAccount';
 import { AcessoDaPessoa, MotivoSemAcesso, resolverAcessoDaPessoa } from '../auth/pessoa';
 import { getPool } from '../demurrage-engine/db/pool';
 import { config } from '../config';
+import { registrarCaixaDoToken } from '../graph/limitadorGraph';
 
 /** Request com o access token do Graph anexado pelo middleware. */
 export interface AuthedRequest extends Request {
@@ -23,6 +24,7 @@ export async function tokenGraphDaCaixa(homeAccountId: string): Promise<string |
   const account = await msalClient.getTokenCache().getAccountByHomeId(homeAccountId);
   if (!account) return null;
   const result = await msalClient.acquireTokenSilent({ account, scopes: config.graphScopes });
+  registrarCaixaDoToken(result.accessToken, homeAccountId);
   return result.accessToken;
 }
 

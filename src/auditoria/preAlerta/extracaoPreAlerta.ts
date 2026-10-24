@@ -5,7 +5,8 @@
  * antigo — captura os campos que a engine nova usa (peso líquido, volumes,
  * portos, descrição no nível do conhecimento) e devolve DIRETO o modelo
  * `DocPreAlerta`. Não toca no docExtractor/playbooks.ts (caminho antigo intacto).
- * Defensivo: qualquer falha vira documento ilegível (6.3 / degradar com elegância).
+ * Defensivo: qualquer falha vira documento ilegível (6.3 / degradar com elegância), marcado `falhaDeLeitura` para a
+ * rota não o tratar como lido (O3.4).
  */
 import { z } from 'zod/v4';
 import { generateStructuredFromDocument } from '../../ai/geminiClient';
@@ -128,7 +129,7 @@ export function montarOperacao(processo: string, docs: DocPreAlerta[]): Operacao
 /**
  * Extrai um documento (Graph → bytes → Gemini visão → DocPreAlerta). Devolve
  * também o tipo detectado pelo conteúdo (para a rota reclassificar MBL×HBL).
- * Defensivo: qualquer falha → documento ilegível.
+ * Defensivo: qualquer falha → documento ilegível com `falhaDeLeitura` (não lido ≠ ilegível; O3.4).
  */
 export async function extrairDocPreAlerta(
   accessToken: string,
@@ -136,7 +137,7 @@ export async function extrairDocPreAlerta(
   attachmentId: string,
   nome: string,
   tipo: TipoDoc,
-): Promise<{ doc: DocPreAlerta; tipoDetectado: Extracao['tipoDetectado'] | null }> {
+): Promise<{ doc: DocPreAlerta; tipoDetectado: Extracao['tipoDetectado'] | null; falhaDeLeitura?: true }> {
   try {
     const content = await getAttachmentContent(accessToken, messageId, attachmentId);
     if (!content) return { doc: docIlegivelPreAlerta(nome, tipo), tipoDetectado: null };
@@ -151,6 +152,7 @@ export async function extrairDocPreAlerta(
     );
     return { doc: mapExtracaoParaDoc(ai, nome, tipo), tipoDetectado: ai.tipoDetectado ?? null };
   } catch {
-    return { doc: docIlegivelPreAlerta(nome, tipo), tipoDetectado: null };
+    // Não lido ≠ ilegível (O3.4): a rota conta a falha; as regras do PB-001 não mudam.
+    return { doc: docIlegivelPreAlerta(nome, tipo), tipoDetectado: null, falhaDeLeitura: true };
   }
 }

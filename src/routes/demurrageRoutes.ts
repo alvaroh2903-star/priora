@@ -1,5 +1,6 @@
 import { NextFunction, RequestHandler, Response, Router } from 'express';
 import { mapLimit } from '../browser/carriers/concurrency';
+import { ContadorDeLeitura, ehIndisponibilidadeDeLeitura, responderLeituraIndisponivel } from '../graph/integridadeLeitura';
 import { requireAuth, AuthedRequest } from '../middleware/requireAuth';
 import { exigirEscritaLegadaNoOutlook } from '../middleware/escritaLegadaOutlook';
 import {
@@ -209,15 +210,23 @@ async function montarAbaDemurrage(req: AuthedRequest, res: Response, next: NextF
     // E-mails encaminhados como anexo: puxa o texto do anexo (best-effort).
     const withAtt = messages.filter((m) => m.hasAttachments).slice(0, 25);
     const attMap = new Map<string, string>();
+    // Leitura que falhou é CONTADA, nunca tratada como "sem encaminhado" (O3.4).
+    const leitura = new ContadorDeLeitura();
     // No máximo 5 e-mails por vez (antes: os 25 juntos).
     await mapLimit(withAtt, 5, async (m) => {
-      const texts = await withTimeout(
-        getItemAttachmentTexts(req.accessToken!, m.id),
-        8000,
-        'itemAttachment',
-      ).catch(() => [] as string[]);
-      if (texts.length) attMap.set(m.id, texts.join('\n\n'));
+      try {
+        const texts = await withTimeout(
+          getItemAttachmentTexts(req.accessToken!, m.id),
+          8000,
+          'itemAttachment',
+        );
+        leitura.concluida();
+        if (texts.length) attMap.set(m.id, texts.join('\n\n'));
+      } catch (err) {
+        leitura.falhou(err);
+      }
     });
+    const leituraIncompleta = leitura.resumo();
 
     const fullTextOf = (m: LogisticsSummary): string =>
       [m.bodyPreview || '', m.body?.content || '', attMap.get(m.id) || '']
@@ -465,8 +474,10 @@ async function montarAbaDemurrage(req: AuthedRequest, res: Response, next: NextF
       maiorRisco,
       sections: { custo, risco, pend },
       atividades,
+      ...(leituraIncompleta ? { leituraIncompleta } : {}),
     });
   } catch (err) {
+    if (ehIndisponibilidadeDeLeitura(err)) return responderLeituraIndisponivel(res, err);
     next(err);
   }
 }

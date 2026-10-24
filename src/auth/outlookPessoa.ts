@@ -3,6 +3,7 @@ import { Pool } from 'pg';
 import { ChavesCache, ErroChaveCache, cifrarCache, decifrarCache } from './cacheCrypto';
 import { opcoesMsalIdentidade } from './msalClient';
 import { AcessoDaPessoa } from './pessoa';
+import { registrarCaixaDoToken } from '../graph/limitadorGraph';
 
 /**
  * S4 — Outlook do PRÓPRIO Analista (autenticação delegada, decisão 4.3).
@@ -187,6 +188,7 @@ export async function tokenDoOutlookDaPessoa(deps: DepsOutlookDaPessoa, acesso: 
     if (!account) return { tipo: 'INDISPONIVEL', motivo: 'RECONEXAO_NECESSARIA' };
     const r = await cliente.acquireTokenSilent({ account, scopes: ['Mail.ReadWrite'] });
     if (!r?.accessToken) return { tipo: 'INDISPONIVEL', motivo: 'RECONEXAO_NECESSARIA' };
+    registrarCaixaDoToken(r.accessToken, conexao.homeAccountId);
     return {
       tipo: 'DISPONIVEL', accessToken: r.accessToken, contaMicrosoft: conexao.homeAccountId,
       envioPelaPrioraPermitido: conexao.escopos.map(escopoCurto).includes(ESCOPO_ENVIO_PELA_PRIORA),

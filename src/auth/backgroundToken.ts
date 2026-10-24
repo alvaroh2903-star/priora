@@ -2,6 +2,7 @@ import { getMsalClient } from './msalClient';
 import { getActiveAccount, recarregarContaAtiva } from './activeAccount';
 import { config, isAzureConfigured } from '../config';
 import { estadoCacheMsal } from './tokenCacheDuravel';
+import { registrarCaixaDoToken } from '../graph/limitadorGraph';
 
 /**
  * Access token do Microsoft Graph para uso em BACKGROUND (sem requisição HTTP /
@@ -23,6 +24,7 @@ export async function acquireGraphTokenForActiveAccount(): Promise<string | null
     const account = await msal.getTokenCache().getAccountByHomeId(active.homeAccountId);
     if (!account) return null;
     const result = await msal.acquireTokenSilent({ account, scopes: config.graphScopes });
+    if (result.accessToken) registrarCaixaDoToken(result.accessToken, active.homeAccountId);
     return result.accessToken ?? null;
   } catch {
     return null;
@@ -52,6 +54,7 @@ export async function obterTokenGraphParaCaixa(homeAccountId: string): Promise<{
     const account = await msal.getTokenCache().getAccountByHomeId(homeAccountId);
     if (!account) return { indisponivel: 'sessao_expirada' };
     const result = await msal.acquireTokenSilent({ account, scopes: config.graphScopes });
+    if (result?.accessToken) registrarCaixaDoToken(result.accessToken, homeAccountId);
     return result?.accessToken ? { token: result.accessToken } : { indisponivel: 'renovacao_falhou' };
   } catch {
     return { indisponivel: 'renovacao_falhou' };
