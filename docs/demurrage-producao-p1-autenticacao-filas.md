@@ -303,7 +303,23 @@ Nenhum teste foi pulado/desativado; nenhuma asserção financeira, de máquina d
 
 ### 14.3 Validação sequencial (worktree limpo)
 
-<!-- PREENCHER: totais do worktree limpo -->
+Worktree limpo (`git worktree add --detach … cc98c9a`), `npm ci`, banco PostgreSQL 16 novo, um passo de cada vez, na ordem pedida:
+
+| # | Passo | Resultado |
+|---|---|---|
+| 01 | Testes novos (`autenticacaoFilasP1`, `filasPessoaisLeituraP1`, `acoesPessoaisP1`, `membershipDesativadoP1`) | **77/77** |
+| 02 | Testes existentes de autenticação/sessão/autorização (`leituraAutorizacao`, `tokenCacheDuravel`, `capturaPreAlerta`, `shippingInstructions`, `multiTenant`) | **93/93** |
+| 03 | Entrega 1 — handoff + controle de capacidade (`handoffProducaoP1`, `V11`, `VinculoConcorrenciaV13`, `VinculoTransacaoV12`, `handoffCapacidade`) | **87/87** |
+| 04 | Entrega 2 — ações (`demurrageAcoesEntrega2`, `V11`, `V12`, `acoesSemLogicaDeNegocio`) | **70/70** |
+| 05 | Entrega 3 — leituras operacionais (`leituraOperacionalEntrega3`, `V11`, `V11Unidade`) | **47/47** |
+| 06 | D12 — read-model (`demurrageV2Routes`, `leituraContrato`, `leituraD12V12`, `leituraDetalhe`, `leituraFila`, `leituraFilaV11`, `leituraFiltros`, `leituraTimeline`, `leituraTimelineV11`) | **65/65** |
+| 07 | Suíte completa da Demurrage Engine (`npm run test:demurrage-engine`) | **1290/1290** |
+| 08 | V1 (`npm run test`) | **25/25** |
+| 09 | D13 UI (`npm run test:demurrage-ui`) | **66/66** |
+| 10 | `npx tsc --noEmit` | exit 0, nenhuma saída |
+| 11 | `npm run build` | exit 0 |
+
+`git status --porcelain` vazio antes e depois (só `dist/` e `node_modules/` ignorados). Nenhum teste pulado, cancelado ou `todo`.
 
 ## 15. Revisões adversariais
 
