@@ -4,7 +4,7 @@ Documentação para a revisão de código. Este diretório não contém código.
 
 | Documento | Conteúdo |
 |---|---|
-| [`Proposta_Integracao_Medicao.md`](Proposta_Integracao_Medicao.md) | **Para aprovação:** revisão a integrar, sequência mínima de medição, tetos, paradas, desativação e rollback |
+| [`Proposta_Integracao_Medicao.md`](Proposta_Integracao_Medicao.md) | **Não aprovada (24/10): não executar.** Proposta de integração e medição mantida como registro, com as correções de 24/10 |
 | [`Pacote_Revisao_Stage0_v2.md`](Pacote_Revisao_Stage0_v2.md) | Pacote de revisão do Stage 0 v2, com a seção 12. A abertura avisa que o `ddb831e` substitui as descrições do limite de corpo e do escopo da coleta |
 | [`../diagnostico-relatorios-stage0.md`](../diagnostico-relatorios-stage0.md) | Procedimento: ativação, limites, auth/isolamento, medição real (não executada) e rollback |
 | [`Priora_Diagnostico_Courrier_Rev3.md`](Priora_Diagnostico_Courrier_Rev3.md) | Relatório completo do diagnóstico, revisão 3, com a nota sobre achados desatualizados |

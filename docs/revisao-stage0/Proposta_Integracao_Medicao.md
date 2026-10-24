@@ -1,5 +1,18 @@
 # Proposta de integração e medição — Stage 0 (para aprovação)
 
+> **Situação em 24/10/2026: NÃO APROVADA. Não executar.** A integração e a janela
+> abaixo foram recusadas por serem desproporcionais para uma medição inicial: três
+> reinícios, possível perda de sessão, `autoSync` em segundo plano e possivelmente
+> centenas de chamadas de IA. O Stage 0 está encerrado e a instrumentação continua
+> **desligada** no branch de revisão. Este texto fica só como registro, com as
+> correções de 24/10:
+>
+> - 52 chamadas Graph é uma estimativa condicional, não um teto;
+> - parar não cancela chamadas já despachadas;
+> - esperar 10 min não confirma conclusão, e o mecanismo de expiração está descrito;
+> - `autoSync` e boot do painel ficam separados da medição isolada;
+> - os limites superiores não são uso típico.
+
 22/10/2026 · **proposta**: nada foi integrado, publicado, ativado nem medido. A etapa
 de instrumentação está encerrada; esta proposta não acrescenta telemetria.
 
@@ -71,6 +84,14 @@ Consequências:
 - Uma carga **só da Relatórios** exige abrir `/Relatorios.dc.html` direto.
 - Todo login dispara um boot do painel.
 
+**Três categorias que nunca se somam nem se misturam:**
+
+| Categoria | O que é | Coletada? | Pode ser lida como medição isolada da Relatórios? |
+|---|---|---|---|
+| Carga isolada | `/Relatorios.dc.html` aberta direto | sim | **sim**, desde que não haja sobreposição com as categorias abaixo |
+| Boot do painel por login | os módulos que o painel monta depois de um login ou recarga | sim, se a sessão for a selecionada; os pedidos de outros módulos aparecem como `origem: "outra"` | **não**: é reportado à parte |
+| Volta do `autoSync` | trabalho de fundo depois de cada boot do processo | **não** (fora do rastreio) | **não**. Se coincidir com uma carga isolada, essa carga passa a "não isolada" |
+
 ## 4. Sequência mínima
 
 ### Pré-condições
@@ -96,7 +117,7 @@ Consequências:
 | 1 | **Linha de base** (detalhes abaixo). | desligado | — |
 | 2 | **Ativação:** um único save com as 5 variáveis. Início da janela (T0). | ligado | R2 |
 | 3 | **Carga L1** (detalhes abaixo). | ligado | — |
-| 4 | **Repetição controlada L2:** na mesma aba, abrir ou recarregar `/Relatorios.dc.html` (isolada nas duas variantes). Esperar o fechamento. | ligado | — |
+| 4 | **Repetição controlada L2:** na mesma aba, abrir ou recarregar `/Relatorios.dc.html` (isolada nas duas variantes, se nenhuma volta do `autoSync` coincidir). Esperar a conclusão confirmada (seção 7). | ligado | — |
 | 5 | **Encerramento:** 60 s sem atividade (para sair o resumo de descartes, se houver); fechar a aba; exportar os logs (seção 7); um único save removendo as 5 variáveis. Fim da janela. | desligado | R3 |
 
 **Passo 1 — Linha de base.**
@@ -119,11 +140,13 @@ Consequências:
 
 - **Variante A** (sessão sobrevive): recarregar `/Relatorios.dc.html`. Carga isolada.
 - **Variante B** (sessão perdida): o operador entra de novo (Priora; Microsoft se
-  for pedido, com a **mesma** caixa) e cai no painel. O boot do painel é a L1: a
-  Relatórios carrega junto com os outros módulos, e os `/api/couriers` e
-  `/api/demurrage` deles também são coletados, como `origem: "outra"`.
-- Esperar o **fechamento**: cada `relatorios.req` com pendência tem o seu
-  `relatorios.tardio`, ou passaram 10 min desde o início da carga.
+  for pedido, com a **mesma** caixa) e cai no painel. Esse boot do painel **não é
+  uma carga isolada** e é reportado à parte (seção 3). Nesta variante, a única carga
+  isolada é a L2.
+- Esperar a **conclusão confirmada** (seção 7): cada `relatorios.req` com pendência
+  precisa do seu `relatorios.tardio` com `encerradoPorTempo: false`. Se isso não
+  acontecer em 10 min, a carga fica com **trace incompleto**. Passar o tempo não
+  confirma nada.
 
 **Prazos:**
 
@@ -145,8 +168,14 @@ Consequências:
 | `/api/processes`, `/api/auditoria/processos` | 1 busca + 0–1 caixa de entrada | 0 | 1 |
 
 **I** é o número de e-mails encaminhados como anexo nas ≤ 25 mensagens (1 `GET`
-cada). **O código não limita I.** Para o planejamento, assume-se ≤ 1 por mensagem,
-o que dá **≤ 52 chamadas Graph por execução**. Execução acima disso é parada (seção 6).
+cada). **O código não limita I.**
+
+- **52 chamadas Graph por execução é uma estimativa condicional, não um teto.** Vale
+  só se cada mensagem tiver no máximo 1 e-mail encaminhado (I ≤ 25). Uma execução
+  pode passar de 52.
+- Todos os números de Graph abaixo herdam essa condição.
+- Nenhum número desta seção é uso típico: são **limites superiores** tirados do
+  código. O uso típico nunca foi medido.
 
 **Tentativas do navegador:**
 
@@ -156,10 +185,10 @@ o que dá **≤ 52 chamadas Graph por execução**. Execução acima disso é pa
 
 **Por carga:**
 
-| Carga | Execuções (máx.) | Graph máx. | IA máx. | Típico, sem timeouts |
+| Carga | Execuções (máx.) | Graph (estimativa condicional) | IA (limite superior) | Sem nenhuma nova tentativa do navegador (1 execução por chamada de módulo); também é limite superior, não uso típico |
 |---|---|---|---|---|
-| **L** — `/Relatorios.dc.html` | 3 couriers + 4 demurrage | **364** | **112** | ≤ 104 Graph, ≤ 28 IA |
-| **P** — boot do painel | 5 couriers + 9 demurrage + processes + auditoria | **732** | **252** | ≤ 316 Graph, ≤ 84 IA |
+| **L** — `/Relatorios.dc.html` | 3 couriers + 4 demurrage | **364** | **112** | Graph ≤ 104, IA ≤ 28 |
+| **P** — boot do painel | 5 couriers + 9 demurrage + processes + auditoria | **732** | **252** | Graph ≤ 316, IA ≤ 84 |
 
 O boot do painel faz ainda a pré-busca de rastreio do Courier: 1 `/api/tracking/:n`
 por rastreio FedEx/DHL da lista, com cache. A DHL pelo site usa o navegador
@@ -178,7 +207,13 @@ a atividade de outros usuários e o novo login de rotina depois do R3.
 ## 6. Condições de parada
 
 Ao acontecer qualquer item abaixo, **parar e desativar na hora**, sem fazer a
-próxima carga:
+próxima carga.
+
+**Parar não cancela chamadas já despachadas.** Nem o timeout do navegador, nem o
+`withTimeout` do servidor, nem a desativação ou o reinício cancelam o que já saiu
+para o Graph, o Gemini, o FedEx/DHL ou o navegador remoto. O provedor pode concluir,
+e cobrar, chamadas enviadas antes da parada. Parar só impede que **novas** chamadas
+comecem: sem próxima carga e, depois do reinício, sem trabalho pendente no processo.
 
 1. **Privacidade:** linha de diagnóstico com campo fora da lista documentada, ou com
    endereço, assunto, ID, token ou valor da seleção.
@@ -194,8 +229,9 @@ próxima carga:
    - Gemini `429 RESOURCE_EXHAUSTED` (cota);
    - 5 ou mais `503` do Gemini numa carga;
    - 5 ou mais `429` do Graph numa carga.
-7. **Tetos:** chamadas observadas (soma de `req` + `tardio`) acima do teto da carga
-   (seção 5), ou execução com mais de 52 chamadas Graph.
+7. **Estimativas excedidas:** chamadas observadas (soma de `req` + `tardio`) acima
+   do limite da carga (seção 5), ou execução com mais de 52 chamadas Graph. Isso
+   indica que a condição I ≤ 25 não valeu.
 8. **Comportamento:**
    - Relatórios ou painel diferentes da linha de base (erro novo, tela de login
      inesperada);
@@ -205,16 +241,31 @@ próxima carga:
 
 ## 7. Trabalho não concluído, exportação e análise
 
-**Trabalho não concluído:**
+**Trabalho não concluído e expiração do rastro** **[código, `relatoriosDiag.ts`]:**
 
 - O timeout do navegador e o `withTimeout` do servidor **não cancelam** chamadas.
-  Por isso há uma espera de fechamento depois de cada carga.
-- O encerramento forçado de rastro (10 min) só roda quando chega uma nova
-  requisição coletada. Rastros abertos depois da L2 **não** recebem linha
-  `relatorios.tardio`, e o reinício R3 os descarta.
-- Esses casos contam como **trace incompleto**, nunca como "terminou". O R3 também
-  interrompe chamadas em curso; o que já foi enviado ao Graph ou ao Gemini pode
-  ter sido processado e cobrado.
+- Uma requisição é **concluída** só quando todas as tarefas e chamadas pendentes
+  terminam:
+  - se não havia pendência na resposta, o `relatorios.req` já traz
+    `pendentesAoResponder` zerado;
+  - se havia, sai **um** `relatorios.tardio` com `encerradoPorTempo: false`.
+- **Expiração:** cada rastro tem um limite de 10 min (`rastroMaxMs`) desde o início
+  da requisição. A varredura dos vencidos (`varrerVencidos`) **não tem timer**: só
+  roda quando a próxima requisição **selecionada** passa pelo `requireAuth`.
+  - Vencido varrido com resposta já enviada: sai um `relatorios.tardio` com
+    `encerradoPorTempo: true` e `pendentesNaoConcluidos`. Isso diz que o trabalho
+    **não** terminou no prazo; o rastro só é liberado.
+  - Vencido sem resposta enviada: só libera a memória. Se a resposta sair depois,
+    vem o `relatorios.req`, mas nunca um `relatorios.tardio`.
+  - Sem nova requisição selecionada, nenhum vencido é varrido. O reinício descarta
+    tudo, sem linha.
+- **10 min de espera não equivalem a conclusão.** A espera só limita quanto tempo se
+  aguarda pela linha de conclusão.
+- Contam como **trace incompleto**, nunca como "terminou":
+  - requisição com pendência e sem `relatorios.tardio`;
+  - `relatorios.tardio` com `encerradoPorTempo: true`.
+- O reinício R3 também interrompe o processo, mas não cancela o que já foi
+  despachado aos provedores (seção 6).
 
 **Regras de leitura:**
 
@@ -282,7 +333,7 @@ próxima carga:
 - O custo monetário: só tokens informados pelo provedor.
 - A frequência em produção: uma janela, um operador, duas cargas.
 
-## Aprovações pedidas
+## Aprovações que tinham sido pedidas (recusadas em 24/10/2026)
 
 1. A integração por fast-forward da Linha A até o SHA informado na entrega
    (publicação com o diagnóstico desligado).

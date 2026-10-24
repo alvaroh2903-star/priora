@@ -189,11 +189,10 @@ iguais: a resposta, as chamadas ao Graph e à IA e o comportamento da tela.
 
 ## Procedimento de medição real (exige decisão e autorização separadas)
 
-Nada disto foi executado. A proposta concreta para a primeira janela, pendente de
-aprovação, está em
-[`revisao-stage0/Proposta_Integracao_Medicao.md`](revisao-stage0/Proposta_Integracao_Medicao.md):
-sequência mínima, janela de até 30 min, tetos de chamadas e paradas. Ela prevalece
-sobre os passos genéricos abaixo.
+Nada disto foi executado. A proposta concreta de 22/10
+([`revisao-stage0/Proposta_Integracao_Medicao.md`](revisao-stage0/Proposta_Integracao_Medicao.md))
+**não foi aprovada** em 24/10: não integrar nem medir. O Stage 0 está encerrado, com
+a instrumentação desligada. Os passos abaixo ficam só como referência.
 
 Abrir o painel (`Priora.dc.html`) pré-monta **todas** as abas, e os logins
 redirecionam para ele. Para uma carga só da Relatórios, abrir `/Relatorios.dc.html`
