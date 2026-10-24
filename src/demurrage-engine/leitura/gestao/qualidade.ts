@@ -3,6 +3,7 @@ import { CivilDate, toOrdinal } from '../../temporal/civilDate';
 import { hojeOperacional } from '../../time/operationalDate';
 import { avaliarCadencia, CadenciaInput } from '../../scheduler/cadencePolicy';
 import { ErroLeitura } from '../contrato';
+import { EscopoAplicado, escopoEquipeOrganizacao, filtroEscopoPorProcesso } from '../escopoFila';
 
 /**
  * Fase D14 (Gate G6) — Grupo E: qualidade de dados e tracking (Cap. 30.5).
@@ -33,6 +34,12 @@ import { ErroLeitura } from '../contrato';
  * calculam "desde sempre" — ficam agrupados em `historico` com
  * `periodoAplicado: false` e valores `null`. As métricas VIVAS (G-E5 a G-E9)
  * nunca dependem de período e são sempre calculadas.
+ *
+ * Produção P1 (filas pessoais): o ESCOPO (`escopoFila.ts`) entra como UM
+ * predicado SQL de responsável do processo em toda métrica — dentro do
+ * `EXISTS` de vínculo com a organização nas tabelas globais de tracking (o
+ * semi-join continua impedindo fan-out) e direto nas demais; G-E7/G-E8 usam o
+ * MESMO predicado que a composição de `drilldown.ts`. Sem escopo = organização.
  */
 
 export interface PeriodoFiltro {
@@ -115,11 +122,12 @@ function condicaoPeriodo(campo: string, periodo: { inicio: CivilDate; fim: Civil
  * vez por organização autorizada, preservando ao mesmo tempo o isolamento
  * (uma organização sem nenhum contêiner vinculado ao target nunca a vê).
  */
-async function metricasDeFetches(pool: Pool, organizationId: string, periodo: { inicio: CivilDate; fim: CivilDate } | null) {
+async function metricasDeFetches(pool: Pool, organizationId: string, periodo: { inicio: CivilDate; fim: CivilDate } | null, escopo: EscopoAplicado) {
   // D14 v1.1 #1 — sem período, a métrica histórica nem roda: nunca calcula
   // "desde sempre" só para descartar o resultado depois.
   if (!periodo) return null;
   const params: unknown[] = [organizationId];
+  const escopoSql = filtroEscopoPorProcesso(escopo, 'c.processo_id', params);
   const condPeriodo = condicaoPeriodo('f.iniciado_em::date', periodo, params);
   const [{ rows: totais }, { rows: porArmador }] = await Promise.all([
     pool.query(
@@ -128,7 +136,7 @@ async function metricasDeFetches(pool: Pool, organizationId: string, periodo: { 
         WHERE EXISTS (
                 SELECT 1 FROM container_tracking_targets ctt
                  JOIN containers c ON c.id = ctt.container_id
-                WHERE ctt.tracking_target_id = f.tracking_target_id AND c.organization_id = $1
+                WHERE ctt.tracking_target_id = f.tracking_target_id AND c.organization_id = $1${escopoSql}
               )${condPeriodo}`,
       params,
     ),
@@ -138,7 +146,7 @@ async function metricasDeFetches(pool: Pool, organizationId: string, periodo: { 
         WHERE EXISTS (
                 SELECT 1 FROM container_tracking_targets ctt
                  JOIN containers c ON c.id = ctt.container_id
-                WHERE ctt.tracking_target_id = f.tracking_target_id AND c.organization_id = $1
+                WHERE ctt.tracking_target_id = f.tracking_target_id AND c.organization_id = $1${escopoSql}
               )${condPeriodo}
         GROUP BY f.carrier`,
       params,
@@ -148,7 +156,9 @@ async function metricasDeFetches(pool: Pool, organizationId: string, periodo: { 
 }
 
 /** Mesma técnica de `EXISTS` (D14 v1.1 #4): um incidente compartilhado por dois contêineres da mesma organização conta uma vez. */
-async function conectoresComFalhaAberta(pool: Pool, organizationId: string): Promise<number> {
+async function conectoresComFalhaAberta(pool: Pool, organizationId: string, escopo: EscopoAplicado): Promise<number> {
+  const params: unknown[] = [organizationId];
+  const escopoSql = filtroEscopoPorProcesso(escopo, 'c.processo_id', params);
   const { rows } = await pool.query(
     `SELECT count(DISTINCT ti.tracking_target_id)::int AS n
        FROM tracking_incidents ti
@@ -156,14 +166,16 @@ async function conectoresComFalhaAberta(pool: Pool, organizationId: string): Pro
         AND EXISTS (
               SELECT 1 FROM container_tracking_targets ctt
                JOIN containers c ON c.id = ctt.container_id
-              WHERE ctt.tracking_target_id = ti.tracking_target_id AND c.organization_id = $1
+              WHERE ctt.tracking_target_id = ti.tracking_target_id AND c.organization_id = $1${escopoSql}
             )`,
-    [organizationId],
+    params,
   );
   return Number(rows[0].n);
 }
 
-async function freeTimePorFonte(pool: Pool, organizationId: string) {
+async function freeTimePorFonte(pool: Pool, organizationId: string, escopo: EscopoAplicado) {
+  const params: unknown[] = [organizationId];
+  const escopoSql = filtroEscopoPorProcesso(escopo, 'c.processo_id', params);
   const { rows } = await pool.query(
     `SELECT
         count(*) FILTER (WHERE foh.fonte = 'manual_fallback')::int AS house_manual,
@@ -173,8 +185,8 @@ async function freeTimePorFonte(pool: Pool, organizationId: string) {
        FROM containers c
        LEFT JOIN field_observations foh ON foh.id = c.house_free_time_observation_id
        LEFT JOIN field_observations fom ON fom.id = c.master_free_time_observation_id
-      WHERE c.organization_id = $1`,
-    [organizationId],
+      WHERE c.organization_id = $1${escopoSql}`,
+    params,
   );
   return rows[0];
 }
@@ -186,24 +198,28 @@ async function freeTimePorFonte(pool: Pool, organizationId: string) {
  * NULL no esquema; a predicate ainda exclui null explicitamente: um null
  * hipotético NUNCA vira um "processo" contado.
  */
-async function tiposNaoReconhecidos(pool: Pool, organizationId: string): Promise<number> {
+async function tiposNaoReconhecidos(pool: Pool, organizationId: string, escopo: EscopoAplicado): Promise<number> {
+  const params: unknown[] = [organizationId];
+  const escopoSql = filtroEscopoPorProcesso(escopo, 'demurrage_pendencias.processo_id', params);
   const { rows } = await pool.query(
     `SELECT count(DISTINCT processo_id)::int AS n FROM demurrage_pendencias
       WHERE organization_id = $1 AND estado = 'aberta' AND tipo IN ('tipo_ausente', 'tipo_nao_reconhecido')
-        AND processo_id IS NOT NULL`,
-    [organizationId],
+        AND processo_id IS NOT NULL${escopoSql}`,
+    params,
   );
   return Number(rows[0].n);
 }
 
 /** G-E8 (D14 v1.2 #3) — grão CONTÊINER: `count(DISTINCT container_id)`; vários lados/motores UNAVAILABLE do mesmo contêiner contam UMA vez. Mesma predicate de `drilldown.ts` (G-E8). */
-async function tabelasIndisponiveis(pool: Pool, organizationId: string): Promise<number> {
+async function tabelasIndisponiveis(pool: Pool, organizationId: string, escopo: EscopoAplicado): Promise<number> {
+  const params: unknown[] = [organizationId];
+  const escopoSql = filtroEscopoPorProcesso(escopo, 'c.processo_id', params);
   const { rows } = await pool.query(
     `SELECT count(DISTINCT va.container_id)::int AS n
        FROM valores_apurados va
        JOIN containers c ON c.id = va.container_id
-      WHERE c.organization_id = $1 AND va.calculation_status IN ('OPEN', 'FINAL') AND va.confirmation_status = 'UNAVAILABLE'`,
-    [organizationId],
+      WHERE c.organization_id = $1 AND va.calculation_status IN ('OPEN', 'FINAL') AND va.confirmation_status = 'UNAVAILABLE'${escopoSql}`,
+    params,
   );
   return Number(rows[0].n);
 }
@@ -219,7 +235,9 @@ async function tabelasIndisponiveis(pool: Pool, organizationId: string): Promise
  * `processo_id` DISTINTOS num `Set`, nunca contêineres: dois contêineres
  * suspensos do MESMO processo contam UMA VEZ.
  */
-async function processosSuspensosAgora(pool: Pool, organizationId: string, hoje: CivilDate): Promise<number> {
+async function processosSuspensosAgora(pool: Pool, organizationId: string, hoje: CivilDate, escopo: EscopoAplicado): Promise<number> {
+  const params: unknown[] = [organizationId];
+  const escopoSql = filtroEscopoPorProcesso(escopo, 'c.processo_id', params);
   const { rows } = await pool.query(
     `SELECT c.processo_id, c.discharge_date, c.effective_return_date, c.tracking_return_date,
             rh.ultimo_dia_livre AS house_lfd, rh.dias_demurrage AS house_dias,
@@ -227,8 +245,8 @@ async function processosSuspensosAgora(pool: Pool, organizationId: string, hoje:
        FROM containers c
        LEFT JOIN relogios rh ON rh.container_id = c.id AND rh.tipo = 'cliente'
        LEFT JOIN relogios rm ON rm.container_id = c.id AND rm.tipo = 'rocket'
-      WHERE c.organization_id = $1`,
-    [organizationId],
+      WHERE c.organization_id = $1${escopoSql}`,
+    params,
   );
   const processosSuspensos = new Set<string>();
   for (const r of rows) {
@@ -247,18 +265,18 @@ async function processosSuspensosAgora(pool: Pool, organizationId: string, hoje:
 }
 
 export async function montarGestaoQualidade(
-  pool: Pool, organizationId: string, periodoEntrada?: PeriodoFiltro, hoje?: CivilDate,
+  pool: Pool, organizationId: string, periodoEntrada?: PeriodoFiltro, hoje?: CivilDate, escopo: EscopoAplicado = escopoEquipeOrganizacao(),
 ): Promise<GestaoQualidadeV1> {
   const h = hoje ?? hojeOperacional();
   const periodo = validarPeriodoOpcional(periodoEntrada);
 
   const [fetches, falhasAbertas, freeTime, naoReconhecidos, indisponiveis, suspensos] = await Promise.all([
-    metricasDeFetches(pool, organizationId, periodo),
-    conectoresComFalhaAberta(pool, organizationId),
-    freeTimePorFonte(pool, organizationId),
-    tiposNaoReconhecidos(pool, organizationId),
-    tabelasIndisponiveis(pool, organizationId),
-    processosSuspensosAgora(pool, organizationId, h),
+    metricasDeFetches(pool, organizationId, periodo, escopo),
+    conectoresComFalhaAberta(pool, organizationId, escopo),
+    freeTimePorFonte(pool, organizationId, escopo),
+    tiposNaoReconhecidos(pool, organizationId, escopo),
+    tabelasIndisponiveis(pool, organizationId, escopo),
+    processosSuspensosAgora(pool, organizationId, h, escopo),
   ]);
 
   return {

@@ -215,8 +215,9 @@ export async function solicitarAtualizacaoManual(input: {
   membershipId: string;
   agora?: Date;
 }): Promise<AtualizacaoManualResultado> {
+  // Produção P1 (identidade operacional): membership desativado não tem autoridade.
   const { rows: autor } = await input.pool.query(
-    `SELECT papel FROM organization_memberships WHERE id = $1 AND organization_id = $2`,
+    `SELECT papel FROM organization_memberships WHERE id = $1 AND organization_id = $2 AND desativado_em IS NULL`,
     [input.membershipId, input.organizationId],
   );
   const papel: PapelRbac | null = autor[0]?.papel ?? null;

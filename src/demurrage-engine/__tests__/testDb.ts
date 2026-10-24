@@ -47,7 +47,29 @@ export async function truncateAll(pool: Pool): Promise<void> {
       snapshots, field_observations,
       containers, processos, condicoes_comerciais, clientes,
       container_type_mappings, armadores,
+      sessoes_humanas, processo_atribuicoes, membership_eventos, usuario_eventos,
       organization_memberships, usuarios, organizations
     RESTART IDENTITY CASCADE;
   `);
+}
+
+/**
+ * Produção P1 (filas pessoais) — atribui o responsável operacional de um
+ * processo nos testes (UPDATE direto da coluna, como o seed do handoff faria).
+ * Ações PESSOAIS (minuta, pendência, fallback manual, solicitar reabertura) e
+ * leituras de detalhe de um ANALYST exigem que ele seja o responsável; os
+ * testes anteriores à entrega, que usavam um ANALYST num processo sem
+ * responsável para exercitar OUTRA regra, passam a atribuí-lo antes — a regra
+ * verificada por eles não muda.
+ */
+export async function atribuirResponsavelDeTeste(pool: Pool, processoId: string, membershipId: string | null): Promise<void> {
+  await pool.query(`UPDATE processos SET responsavel_operacional_membership_id = $2 WHERE id = $1`, [processoId, membershipId]);
+}
+
+/** Mesmo, a partir de um contêiner (atribui o processo do contêiner). */
+export async function atribuirResponsavelDoContainerDeTeste(pool: Pool, containerId: string, membershipId: string | null): Promise<void> {
+  await pool.query(
+    `UPDATE processos SET responsavel_operacional_membership_id = $2 WHERE id = (SELECT processo_id FROM containers WHERE id = $1)`,
+    [containerId, membershipId],
+  );
 }

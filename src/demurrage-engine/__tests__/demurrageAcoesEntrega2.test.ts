@@ -5,7 +5,8 @@ import { AddressInfo } from 'node:net';
 import { randomUUID } from 'crypto';
 import { Pool } from 'pg';
 import { runMigrations } from '../db/migrate';
-import { testPool, testDatabaseUrl, truncateAll } from './testDb';
+// Produção P1 (filas pessoais): helpers de atribuição do responsável — ações pessoais de ANALYST exigem o processo atribuído.
+import { testPool, testDatabaseUrl, truncateAll, atribuirResponsavelDeTeste, atribuirResponsavelDoContainerDeTeste } from './testDb';
 import { OrganizationRepository } from '../persistence/organizationRepository';
 import { UsuarioRepository } from '../persistence/usuarioRepository';
 import { OrganizationMembershipRepository } from '../persistence/organizationMembershipRepository';
@@ -263,6 +264,11 @@ test('Entrega 2 #8/#9: fallback manual governado aplica House e Master Free Time
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const { containerId: c1 } = await processoMinimo(pool, org.id, 'IM-E2-8', 'ECQD');
     const { containerId: c2 } = await processoMinimo(pool, org.id, 'IM-E2-9', 'ECQE');
+    // Produção P1 (filas pessoais): fallback manual é ação PESSOAL — o ANALYST passa a ser o
+    // responsável dos dois processos (sem responsável, nenhum ANALYST age); a regra verificada não muda.
+    const membershipAnalista = await membershipIdPorHome(pool, home);
+    await atribuirResponsavelDoContainerDeTeste(pool, c1, membershipAnalista);
+    await atribuirResponsavelDoContainerDeTeste(pool, c2, membershipAnalista);
 
     const rHouse = await post(app.base, `/containers/${c1}/fallback-manual`, { campo: 'house', valorDias: 12, observadoEm: T, evidenciaRef: 'evid://house', justificativa: 'Confirmado por e-mail do armador.' }, home);
     assert.equal(rHouse.status, 200);
@@ -314,6 +320,8 @@ test('Entrega 2 #12: fallback manual grava o AUTOR real (membership da sessão) 
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const membershipReal = await membershipIdPorHome(pool, home);
     const { containerId } = await processoMinimo(pool, org.id, 'IM-E2-12', 'ECQH');
+    // Produção P1 (filas pessoais): fallback manual é ação PESSOAL — o ANALYST da sessão é o responsável.
+    await atribuirResponsavelDoContainerDeTeste(pool, containerId, membershipReal);
 
     const membershipFalso = randomUUID();
     const res = await post(app.base, `/containers/${containerId}/fallback-manual`, {
@@ -414,6 +422,8 @@ test('Entrega 2 #16: registro de minuta usa o caminho oficial (ClosingService.re
     const org = await criarOrg(pool, 'e2-16');
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const { containerId, numero } = await processoComRelogios(pool, org.id, 'IM-E2-16', 'ECQL');
+    // Produção P1 (filas pessoais): registrar minuta é ação PESSOAL — o ANALYST é o responsável do processo.
+    await atribuirResponsavelDoContainerDeTeste(pool, containerId, await membershipIdPorHome(pool, home));
 
     const semChave = await post(app.base, `/containers/${containerId}/minutas`, { documento: DOC_E2, numeroInformado: numero, dataInformada: '2026-09-10' }, home);
     assert.equal(semChave.status, 400);
@@ -453,6 +463,8 @@ test('Entrega 2 #17/#18 (reescrito na correção P1): divergência preserva as D
     const homeAnalyst = await usuarioInterno(pool, org.id, 'ANALYST');
     const homeManager = await usuarioInterno(pool, org.id, 'MANAGER');
     const { containerId, numero } = await processoComRelogios(pool, org.id, 'IM-E2-1718', 'ECQM');
+    // Produção P1 (filas pessoais): registrar minuta é ação PESSOAL — o ANALYST é o responsável do processo.
+    await atribuirResponsavelDoContainerDeTeste(pool, containerId, await membershipIdPorHome(pool, homeAnalyst));
 
     // Minuta com data DIFERENTE do tracking_return_date (2026-09-10) -> divergência.
     const chave = randomUUID();
@@ -544,6 +556,8 @@ test('Entrega 2 #21: solicitação de reabertura sucede pela rota', { skip: !url
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const homeManager = await usuarioInterno(pool, org.id, 'MANAGER');
     const { processoId } = await processoFinalizavelSemCusto(pool, org.id, 'IM-E2-21', 'ECQU');
+    // Produção P1 (filas pessoais): solicitar reabertura é ação PESSOAL — o ANALYST é o responsável do processo.
+    await atribuirResponsavelDeTeste(pool, processoId, await membershipIdPorHome(pool, home));
     await new ClosingService(pool).finalizarProcesso({ processoId, membershipId: await membershipIdPorHome(pool, homeManager), config: { hoje: '2026-10-01' } });
 
     const res = await post(app.base, `/processos/${processoId}/reabertura/solicitar`, { justificativa: 'Corrigir free time.' }, home);
@@ -562,6 +576,8 @@ test('Entrega 2 #22/#27: duas solicitações de reabertura CONCORRENTES para o M
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const homeManager = await usuarioInterno(pool, org.id, 'MANAGER');
     const { processoId } = await processoFinalizavelSemCusto(pool, org.id, 'IM-E2-22', 'ECQV');
+    // Produção P1 (filas pessoais): solicitar reabertura é ação PESSOAL — o ANALYST é o responsável do processo.
+    await atribuirResponsavelDeTeste(pool, processoId, await membershipIdPorHome(pool, home));
     await new ClosingService(pool).finalizarProcesso({ processoId, membershipId: await membershipIdPorHome(pool, homeManager), config: { hoje: '2026-10-01' } });
 
     const chamar = () => post(app.base, `/processos/${processoId}/reabertura/solicitar`, { justificativa: 'Corrigir free time.' }, home);
@@ -583,6 +599,9 @@ test('Entrega 2 #23: autorização de reabertura exige MANAGER/ADMIN; ANALYST é
     const homeAnalyst = await usuarioInterno(pool, org.id, 'ANALYST');
     const homeManager = await usuarioInterno(pool, org.id, 'MANAGER');
     const { processoId } = await processoFinalizavelSemCusto(pool, org.id, 'IM-E2-23', 'ECQW');
+    // Produção P1 (filas pessoais): solicitar reabertura é ação PESSOAL — o ANALYST é o responsável do
+    // processo (a AUTORIZAÇÃO continua organizacional: ANALYST → 403 mesmo sendo o responsável).
+    await atribuirResponsavelDeTeste(pool, processoId, await membershipIdPorHome(pool, homeAnalyst));
     await new ClosingService(pool).finalizarProcesso({ processoId, membershipId: await membershipIdPorHome(pool, homeManager), config: { hoje: '2026-10-01' } });
     const sol = await post(app.base, `/processos/${processoId}/reabertura/solicitar`, { justificativa: 'Corrigir.' }, homeAnalyst);
     const { reaberturaId } = await sol.json();
@@ -612,6 +631,8 @@ test('Entrega 2 #24: resolução típada de pendência funciona para um tipo sup
     const org = await criarOrg(pool, 'e2-24');
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const { processoId } = await processoMinimoComArmador(pool, org.id, 'IM-E2-24', 'ECQN');
+    // Produção P1 (filas pessoais): resolver pendência manual é ação PESSOAL — o ANALYST é o responsável do processo.
+    await atribuirResponsavelDeTeste(pool, processoId, await membershipIdPorHome(pool, home));
     const { rows } = await pool.query(
       `INSERT INTO demurrage_pendencias (organization_id, processo_id, tipo, contexto) VALUES ($1, $2, 'armador_ausente', '{}') RETURNING id`,
       [org.id, processoId],
@@ -665,6 +686,8 @@ test('Entrega 2 #26: duas requisições concorrentes com a MESMA Idempotency-Key
     const org = await criarOrg(pool, 'e2-26');
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const { containerId, numero } = await processoComRelogios(pool, org.id, 'IM-E2-26', 'ECQP');
+    // Produção P1 (filas pessoais): registrar minuta é ação PESSOAL — o ANALYST é o responsável do processo.
+    await atribuirResponsavelDoContainerDeTeste(pool, containerId, await membershipIdPorHome(pool, home));
     const chave = randomUUID();
     const chamar = () => fetch(`${app.base}/containers/${containerId}/minutas`, {
       method: 'POST', headers: { 'content-type': 'application/json', 'x-test-home-account-id': home, 'idempotency-key': chave },
@@ -721,6 +744,9 @@ test('Entrega 2 #29: erro inesperado devolve só a resposta genérica — nenhum
     const org = await criarOrg(pool, 'e2-29');
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const { containerId } = await processoMinimo(pool, org.id, 'IM-E2-29', 'ECQR');
+    // Produção P1 (filas pessoais): fallback manual é ação PESSOAL — o ANALYST é o responsável,
+    // para que a requisição chegue ao INSERT onde a falha é injetada (antes da injeção).
+    await atribuirResponsavelDoContainerDeTeste(pool, containerId, await membershipIdPorHome(pool, home));
     const marcador = `MARCADOR-SEGREDO-${randomUUID()}`;
 
     // `registrarProcessoDemurrage` abre sua PRÓPRIA transação via `pool.connect()`

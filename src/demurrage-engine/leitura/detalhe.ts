@@ -31,6 +31,12 @@ import {
  * O detalhe de processo deriva TODOS os seus contêineres em LOTE (D12 v1.2):
  * uma única passada por `derivarEmLote` e pelas consultas em lote abaixo —
  * nunca uma consulta por contêiner (eliminado o N+1 da v1.1).
+ *
+ * Produção P1 (filas pessoais): `responsavelExigido` (o membership da sessão
+ * ANALYST — `escopoFila.responsavelExigidoNaLeitura`) entra no PRÓPRIO WHERE
+ * da consulta de entrada: processo/contêiner não atribuído a ele devolve
+ * `null`, o MESMO 404 de inexistente/outra organização (nunca um 403, que o
+ * frontend congelado transforma em bloqueio do módulo inteiro).
  */
 
 async function ultimaObservacaoPorCampo(
@@ -390,15 +396,19 @@ function montarDetalheContainerDeDados(
   };
 }
 
-export async function buscarDetalheContainer(pool: Pool, organizationId: string, containerId: string, hoje?: CivilDate): Promise<ContainerDetalheV1 | null> {
+export async function buscarDetalheContainer(
+  pool: Pool, organizationId: string, containerId: string, hoje?: CivilDate, responsavelExigido: string | null = null,
+): Promise<ContainerDetalheV1 | null> {
   const h = hoje ?? hojeOperacional();
+  const params: unknown[] = [containerId, organizationId];
+  if (responsavelExigido) params.push(responsavelExigido);
   const { rows: cr } = await pool.query(
     `SELECT c.*, p.condicao_comercial_id, cc.termo_tipo
        FROM containers c
        LEFT JOIN processos p ON p.id = c.processo_id
        LEFT JOIN condicoes_comerciais cc ON cc.id = p.condicao_comercial_id
-      WHERE c.id = $1 AND c.organization_id = $2`,
-    [containerId, organizationId],
+      WHERE c.id = $1 AND c.organization_id = $2${responsavelExigido ? ' AND p.responsavel_operacional_membership_id = $3' : ''}`,
+    params,
   );
   if (!cr.length) return null;
   const row = cr[0];
@@ -413,17 +423,22 @@ export async function buscarDetalheContainer(pool: Pool, organizationId: string,
   return montarDetalheContainerDeDados(row, pacote, dados, h);
 }
 
-export async function buscarDetalheProcesso(pool: Pool, organizationId: string, processoId: string, hoje?: CivilDate): Promise<ProcessoDetalheV1 | null> {
+export async function buscarDetalheProcesso(
+  pool: Pool, organizationId: string, processoId: string, hoje?: CivilDate, responsavelExigido: string | null = null,
+): Promise<ProcessoDetalheV1 | null> {
   const h = hoje ?? hojeOperacional();
+  const params: unknown[] = [processoId, organizationId];
+  if (responsavelExigido) params.push(responsavelExigido);
   const { rows: pr } = await pool.query(
-    `SELECT p.*, cli.nome AS cliente_nome, arm.codigo_interno AS armador_codigo, arm.nome AS armador_nome, resp_u.nome AS responsavel_nome
+    `SELECT p.*, cli.nome AS cliente_nome, arm.codigo_interno AS armador_codigo, arm.nome AS armador_nome, resp_u.nome AS responsavel_nome,
+            (resp_m.desativado_em IS NULL) AS responsavel_ativo
        FROM processos p
        LEFT JOIN clientes cli ON cli.id = p.cliente_id
        LEFT JOIN armadores arm ON arm.id = p.armador_id
        LEFT JOIN organization_memberships resp_m ON resp_m.id = p.responsavel_operacional_membership_id
        LEFT JOIN usuarios resp_u ON resp_u.id = resp_m.usuario_id
-      WHERE p.id = $1 AND p.organization_id = $2`,
-    [processoId, organizationId],
+      WHERE p.id = $1 AND p.organization_id = $2${responsavelExigido ? ' AND p.responsavel_operacional_membership_id = $3' : ''}`,
+    params,
   );
   if (!pr.length) return null;
   const p = pr[0];
@@ -540,7 +555,8 @@ export async function buscarDetalheProcesso(pool: Pool, organizationId: string, 
     house: p.hbl,
     mbl: p.mbl,
     armador: p.armador_id ? { id: p.armador_id, codigo: p.armador_codigo ?? '', nome: p.armador_nome ?? '' } : null,
-    responsavelOperacional: p.responsavel_operacional_membership_id ? { membershipId: p.responsavel_operacional_membership_id, nome: p.responsavel_nome ?? '' } : null,
+    responsavelOperacional: p.responsavel_operacional_membership_id
+      ? { membershipId: p.responsavel_operacional_membership_id, nome: p.responsavel_nome ?? '', ativo: p.responsavel_ativo === true } : null,
     apuracaoStatus: p.apuracao_status,
     fechadoEm: isoTimestamp(p.fechado_em),
     estadoMaisRelevante: rotularEstado(consolidado ? consolidado.estadoMaisRelevante : null),

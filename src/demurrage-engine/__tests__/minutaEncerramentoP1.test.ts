@@ -8,7 +8,8 @@ import { AddressInfo } from 'node:net';
 import { createHash, randomUUID } from 'crypto';
 import { Pool } from 'pg';
 import { runMigrations } from '../db/migrate';
-import { testPool, testDatabaseUrl, truncateAll } from './testDb';
+// Produção P1 (filas pessoais): helper de atribuição do responsável (ações e leituras pessoais do ANALYST).
+import { testPool, testDatabaseUrl, truncateAll, atribuirResponsavelDeTeste } from './testDb';
 import { OrganizationRepository } from '../persistence/organizationRepository';
 import { UsuarioRepository } from '../persistence/usuarioRepository';
 import { OrganizationMembershipRepository } from '../persistence/organizationMembershipRepository';
@@ -255,6 +256,8 @@ test('P1 #3/#4: ANALISTA registra a minuta coerente → ACEITA por verificação
     const c = await cenario(pool, { numeroProcesso: 'IM-P1-03', comDemurrage: true });
     await devolverPeloTracking(pool, c, { [c.containers[0].numero]: '2026-09-10' });
     const analista = await membro(pool, c.orgId, 'ANALYST');
+    // Produção P1 (filas pessoais): registrar minuta é ação pessoal — o ANALYST é o responsável do processo.
+    await atribuirResponsavelDeTeste(pool, c.processoId, analista.membershipId);
     const cliente = await membro(pool, c.orgId, 'CLIENT');
 
     // CLIENT nunca registra (barreira G6) — e nada é escrito.
@@ -303,6 +306,8 @@ test('P1 #8: quando o último gate é liberado (decisão de responsabilidade pel
     const c = await cenario(pool, { numeroProcesso: 'IM-P1-08', comDemurrage: true, n: 2 });
     const [a, b] = c.containers;
     const analista = await membro(pool, c.orgId, 'ANALYST');
+    // Produção P1 (filas pessoais): registrar minuta é ação pessoal — o ANALYST é o responsável do processo.
+    await atribuirResponsavelDeTeste(pool, c.processoId, analista.membershipId);
     const gestor = await membro(pool, c.orgId, 'MANAGER');
 
     await devolverPeloTracking(pool, c, { [a.numero]: '2026-09-10', [b.numero]: null });
@@ -343,6 +348,8 @@ test('P1 regra 1: minuta registrada ANTES do tracking não fabrica devolução �
     await setup(pool);
     const c = await cenario(pool, { numeroProcesso: 'IM-P1-R1', comDemurrage: false });
     const analista = await membro(pool, c.orgId, 'ANALYST');
+    // Produção P1 (filas pessoais): registrar minuta é ação pessoal — o ANALYST é o responsável do processo.
+    await atribuirResponsavelDeTeste(pool, c.processoId, analista.membershipId);
     const r = await new ClosingService(pool).registrarMinuta({
       containerId: c.containers[0].id, membershipId: analista.membershipId, numeroInformado: c.containers[0].numero,
       dataInformada: '2026-09-10', documento: doc('r1'), config: cfg,
@@ -378,6 +385,8 @@ test('P1 #5/#6: divergência abre pendência e bloqueia; inconsistência idem; a
     await devolverPeloTracking(pool, c, { [x.numero]: '2026-09-10' });
     await confirmarResponsabilidadeClienteIntegral(pool, { containerId: x.id, hoje: HOJE });
     const analista = await membro(pool, c.orgId, 'ANALYST');
+    // Produção P1 (filas pessoais): minuta e leitura da fila são pessoais — o ANALYST é o responsável do processo.
+    await atribuirResponsavelDeTeste(pool, c.processoId, analista.membershipId);
 
     // #5 — DIVERGENTE: coerente, mas a data difere da devolução oficial.
     let resp = await post(app.base, `/a/containers/${x.id}/minutas`, corpoMinuta(x.numero, '2026-09-12', 'div'), analista.home, 'p1-05-div');
@@ -394,10 +403,12 @@ test('P1 #5/#6: divergência abre pendência e bloqueia; inconsistência idem; a
     const linha = (await pool.query(`SELECT tracking_return_date, effective_return_date FROM containers WHERE id = $1`, [x.id])).rows[0];
     assert.deepEqual(linha, { tracking_return_date: '2026-09-10', effective_return_date: null }, 'o tracking continua oficial');
 
-    // A pendência é uma ação do analista, na fila da EQUIPE.
+    // A pendência é uma ação do analista responsável, na fila PESSOAL dele.
+    // Produção P1 (filas pessoais): o ANALYST não lê mais a fila da equipe — o
+    // escopo padrão (e único) dele é MINHA_FILA; a constante 'fila_da_equipe' deixou de existir.
     const lista = await (await get(app.base, '/v2/minutas', analista.home)).json();
     assert.equal(lista.contrato, 'demurrage.leitura.minutas.v2');
-    assert.equal(lista.escopo, 'fila_da_equipe');
+    assert.equal(lista.escopo, 'MINHA_FILA');
     assert.equal(lista.itens.length, 1);
     assert.equal(lista.itens[0].acaoNecessaria, 'registrar_minuta_substituta');
     assert.ok(!('podeValidar' in lista.itens[0]), 'não existe mais "pode validar"');
@@ -452,6 +463,8 @@ test('P1 #7: segunda minuta (inclusive em processo FINAL e sobre VALIDADA legada
     await devolverPeloTracking(pool, c, { [x.numero]: '2026-09-10' });
     assert.equal((await statusProcesso(pool, c.processoId)).apuracao_status, 'FINAL');
     const analista = await membro(pool, c.orgId, 'ANALYST');
+    // Produção P1 (filas pessoais): registrar minuta é ação pessoal — o ANALYST é o responsável do processo.
+    await atribuirResponsavelDeTeste(pool, c.processoId, analista.membershipId);
 
     // Legado: uma VALIDADA do fluxo antigo, como o baseline deixava.
     const legada = await new MinutaRepository(pool).criarRecebida({ containerId: x.id, numeroInformado: x.numero, dataInformada: '2026-09-10' });
@@ -498,6 +511,8 @@ test('P1 #9: um único contêiner bloqueado (minuta divergente) impede o encerra
     const [a, b] = c.containers;
     await devolverPeloTracking(pool, c, { [a.numero]: '2026-09-10', [b.numero]: '2026-09-10' });
     const analista = await membro(pool, c.orgId, 'ANALYST');
+    // Produção P1 (filas pessoais): registrar minuta é ação pessoal — o ANALYST é o responsável do processo.
+    await atribuirResponsavelDeTeste(pool, c.processoId, analista.membershipId);
     const svc = new ClosingService(pool);
     for (const x of [a, b]) await confirmarResponsabilidadeClienteIntegral(pool, { containerId: x.id, hoje: HOJE });
     const ra = await svc.registrarMinuta({ containerId: a.id, membershipId: analista.membershipId, numeroInformado: a.numero, dataInformada: '2026-09-10', documento: doc('9a'), config: cfg });
@@ -548,6 +563,8 @@ test('P1 #10: concorrência — avaliações simultâneas nunca fecham duas veze
     const d = await cenario(pool, { orgId: c.orgId, numeroProcesso: 'IM-P1-10B', comDemurrage: true });
     await devolverPeloTracking(pool, d, { [d.containers[0].numero]: '2026-09-10' });
     const analista = await membro(pool, c.orgId, 'ANALYST');
+    // Produção P1 (filas pessoais): registrar minuta é ação pessoal — o ANALYST é o responsável do processo.
+    await atribuirResponsavelDeTeste(pool, d.processoId, analista.membershipId);
     const regs = await Promise.all([1, 2, 3, 4].map((i) => registrarMinutaTecnica(pool, {
       containerId: d.containers[0].id, membershipId: analista.membershipId, numeroInformado: d.containers[0].numero,
       dataInformada: i % 2 ? '2026-09-10' : '2026-09-11', documento: doc(`c${i}`), hoje: HOJE,
@@ -583,6 +600,8 @@ test('P1 #11: repetição idempotente (mesma Idempotency-Key, mesmo corpo) devol
     const x = c.containers[0];
     await devolverPeloTracking(pool, c, { [x.numero]: '2026-09-10' });
     const analista = await membro(pool, c.orgId, 'ANALYST');
+    // Produção P1 (filas pessoais): registrar minuta é ação pessoal — o ANALYST é o responsável do processo.
+    await atribuirResponsavelDeTeste(pool, c.processoId, analista.membershipId);
     const corpo = corpoMinuta(x.numero, '2026-09-12', 'idem');
 
     const r1 = await post(app.base, `/a/containers/${x.id}/minutas`, corpo, analista.home, 'p1-11');
@@ -626,6 +645,9 @@ test('P1 #12/#13/#14: FINAL sai da fila padrão e dos contadores; filtro explíc
     const finais: Cenario[] = [];
     for (const n of ['IM-P1-12A', 'IM-P1-12B']) {
       const c = await cenario(pool, { orgId: org, numeroProcesso: n, comDemurrage: true });
+      // Produção P1 (filas pessoais): o ANALYST só registra minuta e só lê (fila/detalhe/filtros)
+      // processos atribuídos a ele — todos os processos do cenário são dele.
+      await atribuirResponsavelDeTeste(pool, c.processoId, leitor.membershipId);
       await devolverPeloTracking(pool, c, { [c.containers[0].numero]: '2026-09-10' });
       await confirmarResponsabilidadeClienteIntegral(pool, { containerId: c.containers[0].id, hoje: HOJE });
       await new ClosingService(pool).registrarMinuta({
@@ -636,12 +658,16 @@ test('P1 #12/#13/#14: FINAL sai da fila padrão e dos contadores; filtro explíc
       finais.push(c);
     }
     const aberto = await cenario(pool, { orgId: org, numeroProcesso: 'IM-P1-12C', comDemurrage: true });
+    // Produção P1 (filas pessoais): o OPEN também é do ANALYST leitor (fila pessoal).
+    await atribuirResponsavelDeTeste(pool, aberto.processoId, leitor.membershipId);
     await devolverPeloTracking(pool, aberto, { [aberto.containers[0].numero]: '2026-09-10' });
 
     // #12 — fila padrão (mesmo incluindo silenciosos): só o OPEN.
     for (const q of ['', '?incluirSilenciosos=true']) {
       const fila = await (await get(app.base, `/v2/processos${q}`, leitor.home)).json();
-      assert.equal(fila.escopo, 'fila_da_equipe');
+      // Produção P1 (filas pessoais): o escopo padrão (e único) do ANALYST é MINHA_FILA;
+      // a constante 'fila_da_equipe' deixou de existir.
+      assert.equal(fila.escopo, 'MINHA_FILA');
       assert.equal(fila.apuracaoStatus, 'OPEN');
       assert.deepEqual(fila.itens.map((i: any) => i.processo.id), [aberto.processoId]);
       assert.equal(fila.total, 1);
@@ -699,6 +725,9 @@ test('P1 #15: ANALYST não ganha poder de gestor — finalizar/autorizar reabert
     const x = c.containers[0];
     await devolverPeloTracking(pool, c, { [x.numero]: '2026-09-10' });
     const analista = await membro(pool, c.orgId, 'ANALYST');
+    // Produção P1 (filas pessoais): registrar minuta e solicitar reabertura são ações pessoais — o
+    // ANALYST é o responsável do processo (e mesmo assim não finaliza nem autoriza reabertura).
+    await atribuirResponsavelDeTeste(pool, c.processoId, analista.membershipId);
     const gestor = await membro(pool, c.orgId, 'MANAGER');
     const legada = await new MinutaRepository(pool).criarRecebida({ containerId: x.id, numeroInformado: x.numero, dataInformada: '2026-09-10' });
 
@@ -761,6 +790,8 @@ test('P1 #16: outra organização nunca lê nem altera documento, minuta ou proc
     const xa = a.containers[0];
     await devolverPeloTracking(pool, a, { [xa.numero]: '2026-09-10' });
     const analistaA = await membro(pool, a.orgId, 'ANALYST');
+    // Produção P1 (filas pessoais): registrar minuta e ler o documento são pessoais — o ANALYST A é o responsável.
+    await atribuirResponsavelDeTeste(pool, a.processoId, analistaA.membershipId);
     const ra = await post(app.base, `/a/containers/${xa.id}/minutas`, corpoMinuta(xa.numero, '2026-09-12', '16a'), analistaA.home, 'p1-16-a');
     const minutaA = (await ra.json()).minutaId;
 
@@ -809,6 +840,8 @@ test('P1 #17: falha ao gravar o documento desfaz TUDO — nenhuma minuta, substi
     const x = c.containers[0];
     await devolverPeloTracking(pool, c, { [x.numero]: '2026-09-10' });
     const analista = await membro(pool, c.orgId, 'ANALYST');
+    // Produção P1 (filas pessoais): registrar minuta é ação pessoal — o ANALYST é o responsável do processo.
+    await atribuirResponsavelDeTeste(pool, c.processoId, analista.membershipId);
     const svc = new ClosingService(pool);
     const primeira = await svc.registrarMinuta({ containerId: x.id, membershipId: analista.membershipId, numeroInformado: x.numero, dataInformada: '2026-09-12', documento: doc('17a'), config: cfg });
     assert.ok(primeira.ok && primeira.minuta.estado === 'DIVERGENTE');
@@ -878,6 +911,8 @@ test('P1 #18: registros LEGADOS (RECEBIDA/VALIDADA/REJEITADA do fluxo antigo) co
     const recDiv = await repo.criarRecebida({ containerId: b.id, numeroInformado: b.numero, dataInformada: '2026-09-15' });
     await pool.query(`UPDATE minutas SET divergente_do_tracking = true WHERE id = $1`, [recDiv.id]);
     const leitor = await membro(pool, c.orgId, 'ANALYST');
+    // Produção P1 (filas pessoais): detalhe, listas, timeline e minuta do ANALYST são pessoais — ele é o responsável.
+    await atribuirResponsavelDeTeste(pool, c.processoId, leitor.membershipId);
 
     // Legível: detalhe, lista por estado legado e lista padrão (RECEBIDA legada exige ação).
     const det = await (await get(app.base, `/v2/containers/${a.id}`, leitor.home)).json();
@@ -930,7 +965,8 @@ test('P1 #18b: migration 0048 é ADITIVA — aplica sobre um banco na 0047 com d
     const antes = (await pool.query(`SELECT id, estado_minuta, data_validada FROM minutas ORDER BY id`)).rows;
 
     const up = await runMigrations(pool);
-    assert.deepEqual(up.applied, ['0048_minuta_aceite_tecnico_encerramento_automatico.sql']);
+    // Produção P1 (filas pessoais): a 0049 (sessões/identidade/atribuição, aditiva) vem junto num upgrade a partir da 0047.
+    assert.deepEqual(up.applied, ['0048_minuta_aceite_tecnico_encerramento_automatico.sql', '0049_sessoes_identidade_atribuicao.sql']);
     const depois = (await pool.query(`SELECT id, estado_minuta, data_validada, regra_avaliacao, substituida_por_id FROM minutas ORDER BY id`)).rows;
     assert.deepEqual(depois.map((m: any) => ({ id: m.id, estado_minuta: m.estado_minuta, data_validada: m.data_validada })), antes, 'nenhuma linha legada reescrita');
     assert.ok(depois.every((m: any) => m.regra_avaliacao === null && m.substituida_por_id === null));
@@ -986,6 +1022,8 @@ test('P1 revisão #1: devolução efetiva LEGADA de minuta substituída em proce
 
     // Analista registra a minuta igual ao tracking com o processo FINAL: fato material, exige reabertura.
     const analista = await membro(pool, c.orgId, 'ANALYST');
+    // Produção P1 (filas pessoais): registrar minuta é ação pessoal — o ANALYST é o responsável do processo.
+    await atribuirResponsavelDeTeste(pool, c.processoId, analista.membershipId);
     const r = await new ClosingService(pool).registrarMinuta({
       containerId: x.id, membershipId: analista.membershipId, numeroInformado: x.numero, dataInformada: '2026-09-10', documento: doc('r1'), config: cfg,
     });
@@ -1016,6 +1054,8 @@ test('P1 revisão #3: o encerramento reavalia a minuta NA MESMA transação — 
     const c = await cenario(pool, { numeroProcesso: 'IM-P1-R3A', comDemurrage: false });
     const x = c.containers[0];
     const analista = await membro(pool, c.orgId, 'ANALYST');
+    // Produção P1 (filas pessoais): registrar minuta é ação pessoal — o ANALYST é o responsável do processo.
+    await atribuirResponsavelDeTeste(pool, c.processoId, analista.membershipId);
     const svc = new ClosingService(pool);
     const r = await registrarMinutaTecnica(pool, {
       containerId: x.id, membershipId: analista.membershipId, numeroInformado: x.numero, dataInformada: '2026-09-10', documento: doc('r3a'), hoje: HOJE,
@@ -1036,8 +1076,11 @@ test('P1 revisão #3: o encerramento reavalia a minuta NA MESMA transação — 
 
     // (b) FINAL: fatos "mudados" depois do FINAL nunca reabrem a avaliação da minuta por fora da reabertura.
     const { c: cf, x: xf } = await finalSemDemurrage(pool, 'IM-P1-R3B');
+    // Produção P1 (filas pessoais): registrar minuta é ação pessoal — o ANALYST é o responsável do processo.
+    const analistaF = await membro(pool, cf.orgId, 'ANALYST');
+    await atribuirResponsavelDeTeste(pool, cf.processoId, analistaF.membershipId);
     const rf = await registrarMinutaTecnica(pool, {
-      containerId: xf.id, membershipId: (await membro(pool, cf.orgId, 'ANALYST')).membershipId, numeroInformado: xf.numero, dataInformada: '2026-09-10', documento: doc('r3b'), hoje: HOJE,
+      containerId: xf.id, membershipId: analistaF.membershipId, numeroInformado: xf.numero, dataInformada: '2026-09-10', documento: doc('r3b'), hoje: HOJE,
     });
     assert.ok(rf.ok && rf.minuta.estado === 'ACEITA');
     await pool.query(`UPDATE containers SET gate_out_date = '2026-09-11' WHERE id = $1`, [xf.id]);
@@ -1099,6 +1142,8 @@ test('P1 revisão #6: réplica idempotente reproduz exigeReabertura e substituid
     await setup(pool);
     const { c, x } = await finalSemDemurrage(pool, 'IM-P1-R6');
     const analista = await membro(pool, c.orgId, 'ANALYST');
+    // Produção P1 (filas pessoais): registrar minuta é ação pessoal — o ANALYST é o responsável do processo.
+    await atribuirResponsavelDeTeste(pool, c.processoId, analista.membershipId);
     const r1 = await post(app.base, `/a/containers/${x.id}/minutas`, corpoMinuta(x.numero, '2026-09-10', 'r6a'), analista.home, 'p1-r6-a');
     const b1 = await r1.json();
     assert.equal(b1.exigeReabertura, false);
@@ -1132,6 +1177,8 @@ test('P1 revisão #7: minuta que segue DIVERGENTE com o tracking em outra data t
     const [a, b] = c.containers;
     await devolverPeloTracking(pool, c, { [a.numero]: '2026-09-10', [b.numero]: null });
     const analista = await membro(pool, c.orgId, 'ANALYST');
+    // Produção P1 (filas pessoais): registrar minuta é ação pessoal — o ANALYST é o responsável do processo.
+    await atribuirResponsavelDeTeste(pool, c.processoId, analista.membershipId);
     const r = await registrarMinutaTecnica(pool, {
       containerId: a.id, membershipId: analista.membershipId, numeroInformado: a.numero, dataInformada: '2026-09-12', documento: doc('r7'), hoje: HOJE,
     });
@@ -1163,6 +1210,9 @@ test('P1 revisão #8: /minutas padrão é trabalho de processo OPEN — RECEBIDA
     const aberto = await cenario(pool, { orgId: c.orgId, numeroProcesso: 'IM-P1-R8B', comDemurrage: false });
     const pendente = await repo.criarRecebida({ containerId: aberto.containers[0].id, numeroInformado: aberto.containers[0].numero, dataInformada: '2026-09-10' });
     const leitor = await membro(pool, c.orgId, 'ANALYST');
+    // Produção P1 (filas pessoais): /minutas do ANALYST é a fila pessoal — os dois processos são dele.
+    await atribuirResponsavelDeTeste(pool, c.processoId, leitor.membershipId);
+    await atribuirResponsavelDeTeste(pool, aberto.processoId, leitor.membershipId);
 
     const padrao = await (await get(app.base, `/v2/minutas`, leitor.home)).json();
     assert.deepEqual(padrao.itens.map((i: any) => [i.minutaId, i.acaoNecessaria]), [[pendente.id, 'registrar_minuta_substituta']]);
@@ -1185,6 +1235,8 @@ test('P1 revisão #9: registros concorrentes no mesmo processo nunca travam o po
     await setup(pool);
     const c = await cenario(pool, { numeroProcesso: 'IM-P1-R9', comDemurrage: false, n: 2 });
     const analista = await membro(pool, c.orgId, 'ANALYST');
+    // Produção P1 (filas pessoais): registrar minuta é ação pessoal — o ANALYST é o responsável do processo.
+    await atribuirResponsavelDeTeste(pool, c.processoId, analista.membershipId);
     const registros = c.containers.flatMap((x, i) => [0, 1].map((k) => registrarMinutaTecnica(pequeno, {
       containerId: x.id, membershipId: analista.membershipId, numeroInformado: x.numero, dataInformada: '2026-09-10',
       documento: doc(`r9-${i}-${k}`), hoje: HOJE,
@@ -1209,6 +1261,8 @@ test('P1 revisão #10: filtro explícito FINAL encontra o encerrado SEM demurrag
     await setup(pool);
     const { c } = await finalSemDemurrage(pool, 'IM-P1-R10');
     const leitor = await membro(pool, c.orgId, 'ANALYST');
+    // Produção P1 (filas pessoais): lista e /filtros do ANALYST são da fila pessoal — o processo é dele.
+    await atribuirResponsavelDeTeste(pool, c.processoId, leitor.membershipId);
     const filtrosFinal = await (await get(app.base, `/v2/filtros?apuracaoStatus=FINAL`, leitor.home)).json();
     assert.deepEqual(filtrosFinal.apuracao, { abertos: 0, finalizados: 1 });
     for (const q of ['apuracaoStatus=FINAL', 'apuracaoStatus=FINAL&busca=IM-P1-R10', 'apuracaoStatus=TODOS']) {
@@ -1250,6 +1304,8 @@ test('P1 revisão #2: pendência que põe em dúvida um fato do relógio (confli
 
     // O analista revisa (motivo obrigatório) — sem gestor — e a resolução dispara o encerramento.
     const analista = await membro(pool, c.orgId, 'ANALYST');
+    // Produção P1 (filas pessoais): resolver pendência manual é ação pessoal — o ANALYST é o responsável do processo.
+    await atribuirResponsavelDeTeste(pool, c.processoId, analista.membershipId);
     const r = await post(app.base, `/a/pendencias/${pend[0].id}/resolver`, {
       familia: 'demurrage_pendencia', acao: 'resolver', tipo: 'conflito_mesma_fonte', motivo: 'Documento House revisado: 20 dias é o valor correto.',
     }, analista.home);
@@ -1321,6 +1377,8 @@ test('P1 revisão #13: pendência de minuta nunca oferece podeResolver (a rota d
     const [a] = c.containers;
     await devolverPeloTracking(pool, c, { [a.numero]: '2026-09-10' });
     const analista = await membro(pool, c.orgId, 'ANALYST');
+    // Produção P1 (filas pessoais): minuta, pendências do processo e resolução são pessoais — o ANALYST é o responsável.
+    await atribuirResponsavelDeTeste(pool, c.processoId, analista.membershipId);
     const r = await post(app.base, `/a/containers/${a.id}/minutas`, corpoMinuta(a.numero, '2026-09-12', 'r13'), analista.home, 'p1-r13');
     assert.equal((await r.json()).estado, 'DIVERGENTE');
     const lista = await (await get(app.base, `/v2/processos/${c.processoId}/pendencias`, analista.home)).json();
@@ -1341,6 +1399,8 @@ test('P1 revisão #14: indicador gerencial G-A9 ("aguardando tratamento") e sua 
     const org = (await new OrganizationRepository(pool).create('Rocket', 'rk-ga9')).id;
     const analista = await membro(pool, org, 'ANALYST');
     const fechado = await cenario(pool, { orgId: org, numeroProcesso: 'IM-P1-R14A', comDemurrage: true });
+    // Produção P1 (filas pessoais): registrar minuta é ação pessoal — o ANALYST é o responsável do processo.
+    await atribuirResponsavelDeTeste(pool, fechado.processoId, analista.membershipId);
     await devolverPeloTracking(pool, fechado, { [fechado.containers[0].numero]: '2026-09-10' });
     await confirmarResponsabilidadeClienteIntegral(pool, { containerId: fechado.containers[0].id, hoje: HOJE });
     await new ClosingService(pool).registrarMinuta({
@@ -1407,6 +1467,8 @@ test('P1 revisão #16: o fallback manual de Free Time pela rota libera o último
     assert.equal(st.encerramento_bloqueio, 'apuracao_indeterminada');
 
     const analista = await membro(pool, orgId, 'ANALYST');
+    // Produção P1 (filas pessoais): o fallback manual (autor D10) é ação pessoal — o ANALYST é o responsável do processo.
+    await atribuirResponsavelDeTeste(pool, c.processoId, analista.membershipId);
     const r = await post(app.base, `/a/containers/${c.containers[0].id}/fallback-manual`, {
       campo: 'house', valorDias: 20, observadoEm: T, evidenciaRef: 'evid://house-r16', justificativa: 'Confirmado por e-mail do cliente.',
     }, analista.home);

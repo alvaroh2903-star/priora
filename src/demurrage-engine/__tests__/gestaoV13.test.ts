@@ -325,7 +325,13 @@ test('D14 v1.3 #2 — filtros (status/processo/contêiner) e isolamento: recurso
 
     const doOutro = await listarDecisoesResponsabilidade(pool, org.id, { processoId: b1.processoId });
     const inexistente = await listarDecisoesResponsabilidade(pool, org.id, { processoId: '11111111-1111-4111-8111-111111111111' });
-    assert.deepEqual(doOutro, inexistente, 'processo de outra organização: resposta idêntica à de um id inexistente (nada vaza)');
+    // Produção P1 (filas pessoais): a resposta passou a ecoar os filtros ativos (`filtros.processo`) — o eco é o
+    // id que o PRÓPRIO chamador enviou (não um dado da outra organização), então difere por construção; todo o
+    // resto da resposta continua idêntico, e o eco é conferido explicitamente.
+    assert.equal(doOutro.filtros.processo, b1.processoId);
+    assert.equal(inexistente.filtros.processo, '11111111-1111-4111-8111-111111111111');
+    const semEcoDoProcesso = (r: typeof doOutro) => ({ ...r, filtros: { ...r.filtros, processo: '<eco>' } });
+    assert.deepEqual(semEcoDoProcesso(doOutro), semEcoDoProcesso(inexistente), 'processo de outra organização: resposta idêntica à de um id inexistente (nada vaza)');
     assert.deepEqual((await listarDecisoesResponsabilidade(pool, org.id, { containerId: b1.containerId })).itens, []);
     const todas = await listarDecisoesResponsabilidade(pool, org.id);
     assert.ok(todas.itens.every((i) => i.processoId !== b1.processoId), 'nenhuma decisão da outra organização no resultado');

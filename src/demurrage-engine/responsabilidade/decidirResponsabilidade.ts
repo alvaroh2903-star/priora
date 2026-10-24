@@ -98,8 +98,13 @@ export async function decidirResponsabilidade(
 
     if (c.apuracao_status === 'FINAL') throw new ErroResponsabilidade('EXIGE_REABERTURA', { processoId: c.processo_id });
 
+    // Ação ORGANIZACIONAL por natureza (decisão financeira Rocket × Cliente):
+    // só MANAGER/ADMIN, em qualquer processo da organização — nunca depende
+    // do responsável do processo. Produção P1: o autor precisa estar ATIVO
+    // (`desativado_em IS NULL`); o `FOR SHARE` segura a desativação até o COMMIT.
     const { rows: mr } = await client.query(
-      `SELECT id, usuario_id, papel FROM organization_memberships WHERE id = $1 AND organization_id = $2 FOR SHARE`,
+      `SELECT id, usuario_id, papel FROM organization_memberships
+        WHERE id = $1 AND organization_id = $2 AND desativado_em IS NULL FOR SHARE`,
       [input.autorMembershipId, input.organizationId],
     );
     if (!mr.length || (mr[0].papel !== 'MANAGER' && mr[0].papel !== 'ADMIN')) {

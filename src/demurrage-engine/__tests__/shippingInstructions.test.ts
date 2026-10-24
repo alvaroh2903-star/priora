@@ -753,15 +753,17 @@ test('Migration 0025: banco que já executou a 0024 ORIGINAL recebe só a 0025, 
     await assert.rejects(pool.query(`UPDATE ft_divergencia_entregas SET status = 'PROCESSING' WHERE id = $1`, [e.id]), /ft_divergencia_entregas_claim/);
     await pool.query(`UPDATE ft_divergencia_entregas SET status = 'PROCESSING', claim_token = gen_random_uuid(), expira_em = now() + interval '1 hour' WHERE id = $1`, [e.id]);
     await assert.rejects(pool.query(`UPDATE recalculo_outbox SET worker_id = NULL WHERE estado = 'PROCESSING'`), /recalculo_outbox_claim/);
-    // A funcionalidade opera normalmente sobre o banco migrado.
-    const sent = await processarAvisosDivergenciaPendentes({ pool, workerId: 'w', transport: { async enviar() { return { ok: true }; } } });
-    assert.equal(sent.enviadas, 1, 'a entrega PENDING restante é enviada');
     // 0026 sobre o banco já migrado até a 0025: intenção antiga vira Master.
     // `until` limita à própria 0026 — este teste é sobre o degrau 0024→0025→0026;
     // migrations aditivas posteriores (captura de pré-alerta) são passo aparte.
     assert.deepEqual((await runMigrations(pool, { until: '0026_shipping_instructions_house_master.sql' })).applied, ['0026_shipping_instructions_house_master.sql']);
     assert.equal((await pool.query(`SELECT campo FROM si_intencoes`)).rows[0].campo, 'masterFreeTimeDays');
     assert.equal((await runMigrations(pool, { until: '0026_shipping_instructions_house_master.sql' })).applied.length, 0, 'idempotente');
+    // A funcionalidade opera normalmente sobre o banco migrado até a ÚLTIMA migration (o serviço
+    // atual lê colunas posteriores à 0025 — ex.: `organization_memberships.desativado_em`, 0049).
+    await runMigrations(pool);
+    const sent = await processarAvisosDivergenciaPendentes({ pool, workerId: 'w', transport: { async enviar() { return { ok: true }; } } });
+    assert.equal(sent.enviadas, 1, 'a entrega PENDING restante é enviada');
   } finally { await pool.end(); }
 });
 

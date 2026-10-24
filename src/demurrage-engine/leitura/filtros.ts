@@ -2,9 +2,11 @@ import { Pool } from 'pg';
 import { ESTADOS_OPERACIONAIS, EstadoOperacional, ORDEM_BALDE, PrioridadeBalde } from '../lifecycle/types';
 import { CivilDate } from '../temporal/civilDate';
 import {
-  CampoPeriodo, CONTRATO_LEITURA_V1, ESCOPO_FILA_DA_EQUIPE, ErroLeitura, FiltroFila, FiltrosDisponiveisV1, SituacaoApuracaoFiltro, filtroFilaVazio,
+  CampoPeriodo, ComMetaEscopo, CONTRATO_LEITURA_V1, ErroLeitura, FiltroFila, FiltrosDisponiveisV1, SituacaoApuracaoFiltro, filtroFilaVazio,
 } from './contrato';
 import { contarEstadosEBaldes } from './filaOperacional';
+import { AutorizacaoInterna } from './autorizacao';
+import { EscopoAplicado, ehGestorDaSessao, escopoEquipeOrganizacao, filtrosDoEscopo, sufixoEscopo } from './escopoFila';
 
 /**
  * Fase D12 (Gate G5, v1.2 item 5) — normalização dos filtros da query string
@@ -25,6 +27,14 @@ import { contarEstadosEBaldes } from './filaOperacional';
  * `FINAL`, `TODOS`) seleciona explicitamente a situação da apuração na fila
  * e em `/filtros` — opções e contagens da visão ativa nunca incluem processo
  * FINAL; `apuracao.{abertos,finalizados}` dá os dois totais separados.
+ *
+ * Produção P1 (filas pessoais): as QUATRO leituras de dados de `/filtros`
+ * (clientes, armadores, contagens por estado/balde e `apuracao`) aplicam o
+ * MESMO predicado SQL de escopo da fila — um ANALYST nunca vê clientes,
+ * armadores ou contagens da equipe. `responsaveis` é por PAPEL, não por
+ * escopo: MANAGER/ADMIN recebem todo membership interno ATIVO da organização
+ * (inclusive quem ainda não tem processo — é a lista de quem pode ser
+ * atribuído); ANALYST recebe só a si mesmo. Desativado nunca aparece.
  */
 
 const RE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -147,53 +157,74 @@ export function normalizarFiltrosFila(query: Record<string, unknown>): FiltroFil
   return f;
 }
 
+/** Sessão que pediu `/filtros` — decide a lista de `responsaveis` (por papel). Ausente = visão de gestor (chamador interno). */
+export type SessaoFiltros = Pick<AutorizacaoInterna, 'papel' | 'membershipId'>;
+
+export interface OpcoesFiltrosInput {
+  /** Escopo resolvido pela rota (`resolverEscopo`); ausente = EQUIPE inteira (chamador interno). */
+  escopo?: EscopoAplicado;
+  sessao?: SessaoFiltros;
+}
+
 /**
- * `GET /filtros` (seção 6, v1.2 item 5): opções em uso na organização +
- * contagens por estado/balde com a derivação ATUAL (`contarEstadosEBaldes`,
- * mesmas funções congeladas da fila) — nunca `GROUP BY` sobre coluna
- * persistida. Aditivo: o resumo futuro da D13 lê as contagens já prontas
- * daqui, sem precisar chamar a fila uma vez por balde.
+ * `GET /filtros` (seção 6, v1.2 item 5): opções em uso no ESCOPO + contagens
+ * por estado/balde com a derivação ATUAL (`contarEstadosEBaldes`, mesmas
+ * funções congeladas e mesmo predicado de escopo da fila) — nunca `GROUP BY`
+ * sobre coluna persistida. Aditivo: o resumo futuro da D13 lê as contagens
+ * já prontas daqui, sem precisar chamar a fila uma vez por balde.
  */
 export async function buscarOpcoesFiltros(
-  pool: Pool, organizationId: string, hoje?: CivilDate, apuracaoStatus: SituacaoApuracaoFiltro = 'OPEN',
-): Promise<FiltrosDisponiveisV1> {
+  pool: Pool, organizationId: string, hoje?: CivilDate, apuracaoStatus: SituacaoApuracaoFiltro = 'OPEN', opcoes: OpcoesFiltrosInput = {},
+): Promise<ComMetaEscopo<FiltrosDisponiveisV1>> {
+  const escopo = opcoes.escopo ?? escopoEquipeOrganizacao();
   // Mesma seleção de situação da fila: `$2` NULL = TODOS.
   const situacao = apuracaoStatus === 'TODOS' ? null : apuracaoStatus;
+
+  const paramsOpcao: unknown[] = [organizationId, situacao];
+  const escopoOpcao = sufixoEscopo(escopo, 'p.responsavel_operacional_membership_id', paramsOpcao);
+  const paramsApuracao: unknown[] = [organizationId];
+  const escopoApuracao = sufixoEscopo(escopo, 'p.responsavel_operacional_membership_id', paramsApuracao);
+
+  const gestor = !opcoes.sessao || ehGestorDaSessao(opcoes.sessao);
+  const paramsResponsaveis: unknown[] = [organizationId];
+  if (!gestor) paramsResponsaveis.push(opcoes.sessao!.membershipId);
+
   const [responsaveis, clientes, armadores, contagens, porSituacao] = await Promise.all([
     pool.query(
-      `SELECT DISTINCT m.id AS membership_id, u.nome
-         FROM processos p
-         JOIN organization_memberships m ON m.id = p.responsavel_operacional_membership_id
+      `SELECT m.id AS membership_id, u.nome, m.papel
+         FROM organization_memberships m
          JOIN usuarios u ON u.id = m.usuario_id
-        WHERE p.organization_id = $1 AND ($2::text IS NULL OR p.apuracao_status = $2)
-        ORDER BY u.nome`,
-      [organizationId, situacao],
+        WHERE m.organization_id = $1 AND m.papel IN ('ANALYST', 'MANAGER', 'ADMIN') AND m.desativado_em IS NULL${gestor ? '' : ' AND m.id = $2'}
+        ORDER BY u.nome, m.id`,
+      paramsResponsaveis,
     ),
     pool.query(
       `SELECT DISTINCT c.id, c.nome FROM processos p JOIN clientes c ON c.id = p.cliente_id
-        WHERE p.organization_id = $1 AND ($2::text IS NULL OR p.apuracao_status = $2) ORDER BY c.nome`,
-      [organizationId, situacao],
+        WHERE p.organization_id = $1 AND ($2::text IS NULL OR p.apuracao_status = $2)${escopoOpcao} ORDER BY c.nome`,
+      paramsOpcao,
     ),
     pool.query(
       `SELECT DISTINCT a.id, a.codigo_interno, a.nome FROM processos p JOIN armadores a ON a.id = p.armador_id
-        WHERE p.organization_id = $1 AND ($2::text IS NULL OR p.apuracao_status = $2) ORDER BY a.nome`,
-      [organizationId, situacao],
+        WHERE p.organization_id = $1 AND ($2::text IS NULL OR p.apuracao_status = $2)${escopoOpcao} ORDER BY a.nome`,
+      paramsOpcao,
     ),
-    contarEstadosEBaldes(pool, organizationId, hoje, apuracaoStatus),
+    contarEstadosEBaldes(pool, organizationId, hoje, apuracaoStatus, escopo),
     pool.query(
-      `SELECT count(*) FILTER (WHERE apuracao_status = 'OPEN')::int AS abertos,
-              count(*) FILTER (WHERE apuracao_status = 'FINAL')::int AS finalizados
-         FROM processos WHERE organization_id = $1`,
-      [organizationId],
+      `SELECT count(*) FILTER (WHERE p.apuracao_status = 'OPEN')::int AS abertos,
+              count(*) FILTER (WHERE p.apuracao_status = 'FINAL')::int AS finalizados
+         FROM processos p WHERE p.organization_id = $1${escopoApuracao}`,
+      paramsApuracao,
     ),
   ]);
 
   return {
     contrato: CONTRATO_LEITURA_V1,
-    escopo: ESCOPO_FILA_DA_EQUIPE,
+    escopo: escopo.escopo,
+    membershipResolvido: escopo.membershipResolvido,
+    filtros: { ...filtrosDoEscopo(escopo), apuracaoStatus },
     apuracaoStatus,
     apuracao: { abertos: porSituacao.rows[0].abertos, finalizados: porSituacao.rows[0].finalizados },
-    responsaveis: responsaveis.rows.map((r) => ({ membershipId: r.membership_id, nome: r.nome })),
+    responsaveis: responsaveis.rows.map((r) => ({ membershipId: r.membership_id, nome: r.nome, papel: r.papel })),
     clientes: clientes.rows.map((r) => ({ id: r.id, nome: r.nome })),
     armadores: armadores.rows.map((r) => ({ id: r.id, codigo: r.codigo_interno, nome: r.nome })),
     estados: contagens.estados,

@@ -22,7 +22,10 @@ export type FieldObservationSource =
   | 'master_bl'
   | 'headcargo'
   | 'outro'
-  | 'shipping_instructions';
+  | 'shipping_instructions'
+  // Produção P1 (filas pessoais): atribuição do responsável por MANAGER/ADMIN
+  // (`responsavel/atribuirResponsavel.ts`) — só para esse campo do processo.
+  | 'atribuicao_interna';
 
 /**
  * Ordem de prioridade para decidir qual observação vira a "selecionada"
@@ -45,6 +48,9 @@ export const FIELD_OBSERVATION_SOURCE_PRIORITY: Record<FieldObservationSource, n
   manual_fallback: 70,
   email_heuristic: 50,
   outro: 10,
+  // Acima de tudo: a decisão interna de um gestor nunca é desfeita por uma
+  // observação de integração (o handoff só usa `outro`).
+  atribuicao_interna: 1000,
 };
 
 export interface Organization {

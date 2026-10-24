@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Pool } from 'pg';
 import { runMigrations } from '../db/migrate';
-import { testPool, testDatabaseUrl, truncateAll } from './testDb';
+import { testPool, testDatabaseUrl, truncateAll, atribuirResponsavelDeTeste } from './testDb';
 import { OrganizationRepository } from '../persistence/organizationRepository';
 import { ProcessoRepository } from '../persistence/processoRepository';
 import { ContainerRepository } from '../persistence/containerRepository';
@@ -438,6 +438,10 @@ test('D15-A v1.1 #2 (reescrito na correção de minuta P1): registro de minuta c
     const svc = new ClosingService(pool);
     const gestorId = await novoGestor(pool, base.orgId);
     const analistaId = await novoMembro(pool, base.orgId, 'ANALYST');
+    // Produção P1 (filas pessoais): registrar minuta é ação PESSOAL — o ANALYST
+    // só registra no processo atribuído a ele; atribuí-lo ANTES da corrida
+    // mantém o ANALYST como ator e a regra testada (sem deadlock) intacta.
+    await atribuirResponsavelDeTeste(pool, base.processoId, analistaId);
 
     const [rv, rf] = await Promise.all([
       svc.registrarMinuta({

@@ -25,8 +25,20 @@ export async function registrarMinutaDeTeste(
 ) {
   let membershipId = p.membershipId;
   if (!membershipId) {
-    const { rows } = await pool.query(`SELECT organization_id FROM containers WHERE id = $1`, [p.containerId]);
-    membershipId = await novoMembro(pool, rows[0].organization_id, 'ANALYST');
+    // Produção P1 (filas pessoais): registrar minuta é ação PESSOAL — o
+    // ANALYST precisa ser o responsável do processo. Sem responsável, o
+    // analista criado aqui passa a sê-lo; com responsável, é ele quem registra.
+    const { rows } = await pool.query(
+      `SELECT c.organization_id, c.processo_id, p.responsavel_operacional_membership_id AS responsavel
+         FROM containers c JOIN processos p ON p.id = c.processo_id WHERE c.id = $1`,
+      [p.containerId],
+    );
+    const responsavel: string | null = rows[0].responsavel ?? null;
+    const ator = responsavel ?? await novoMembro(pool, rows[0].organization_id, 'ANALYST');
+    if (!responsavel) {
+      await pool.query(`UPDATE processos SET responsavel_operacional_membership_id = $2 WHERE id = $1`, [rows[0].processo_id, ator]);
+    }
+    membershipId = ator;
   }
   const r = await new ClosingService(pool).registrarMinuta({
     containerId: p.containerId, membershipId, numeroInformado: p.numero, dataInformada: p.data,

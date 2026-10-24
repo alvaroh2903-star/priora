@@ -441,13 +441,24 @@ export interface BuscarTimelineInput {
   processoId: string;
   limite?: number;
   cursor?: string | null;
+  /**
+   * Produção P1 (filas pessoais) — membership da sessão ANALYST: o processo
+   * precisa estar atribuído a ele, senão `null` (o MESMO 404 de
+   * inexistente/outra organização). Ausente/null = MANAGER/ADMIN.
+   */
+  responsavelExigido?: string | null;
 }
 
 const MAX_LIMITE = 200;
 const LIMITE_PADRAO = 100;
 
 export async function buscarTimelineProcesso(pool: Pool, input: BuscarTimelineInput): Promise<TimelineRespostaV1 | null> {
-  const { rows: pr } = await pool.query(`SELECT id FROM processos WHERE id = $1 AND organization_id = $2`, [input.processoId, input.organizationId]);
+  const paramsProcesso: unknown[] = [input.processoId, input.organizationId];
+  if (input.responsavelExigido) paramsProcesso.push(input.responsavelExigido);
+  const { rows: pr } = await pool.query(
+    `SELECT id FROM processos WHERE id = $1 AND organization_id = $2${input.responsavelExigido ? ' AND responsavel_operacional_membership_id = $3' : ''}`,
+    paramsProcesso,
+  );
   if (!pr.length) return null;
   const cursor = input.cursor ? decodificarCursor(input.cursor, input.organizationId, input.processoId) : null;
 

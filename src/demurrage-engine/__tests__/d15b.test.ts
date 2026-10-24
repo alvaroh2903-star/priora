@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Pool } from 'pg';
 import { runMigrations } from '../db/migrate';
-import { testPool, testDatabaseUrl, truncateAll } from './testDb';
+import { testPool, testDatabaseUrl, truncateAll, atribuirResponsavelDeTeste } from './testDb';
 import { OrganizationRepository } from '../persistence/organizationRepository';
 import { UsuarioRepository } from '../persistence/usuarioRepository';
 import { OrganizationMembershipRepository } from '../persistence/organizationMembershipRepository';
@@ -452,6 +452,10 @@ test('D15-B R56: tipo_selecao_sem_observacao (backfill legado, órfã permanente
       await client.query('COMMIT');
     } catch (e) { await client.query('ROLLBACK'); throw e; } finally { client.release(); }
 
+    // Produção P1 (filas pessoais): resolver pendência manual é ação PESSOAL —
+    // o ANALYST que resolve tem de ser o responsável do processo (o cenário o
+    // atribuía a `mResp`); a regra verificada aqui (R56) não muda.
+    await atribuirResponsavelDeTeste(pool, s.processoId, s.mAnalyst);
     const ok = await resolverPendenciaManual(pool, { pendenciaId: pendId, organizationId: s.orgId, autorMembershipId: s.mAnalyst, motivo: 'tipo confirmado manualmente contra o catálogo ISO' });
     assert.equal(ok.resolvida, true);
     const row = (await pool.query(`SELECT estado, resolvido_por, resolvido_motivo FROM demurrage_pendencias WHERE id = $1`, [pendId])).rows[0];

@@ -21,6 +21,13 @@ import { Pool } from 'pg';
  * um membership rebaixado a CLIENT nunca recebe (a entrega fica parada, sem
  * envio, e volta a ser elegível só se o papel de gestor for restituído).
  *
+ * Produção P1 (migration 0049) — membership DESATIVADO segue a MESMA régua:
+ * a entrega enfileirada antes da desativação nunca é reivindicada (fica
+ * PENDING até uma reativação) e a leitura de detalhe que monta o e-mail
+ * revalida papel e estado (devolve a posse a PENDING, sem enviar, se o
+ * destinatário deixou de ser gestor ATIVO entre o claim e o envio). O papel
+ * ou o estado do AUTOR não importa aqui (só o nome dele vai no aviso).
+ *
  * D15-C (R57) — a RECUPERAÇÃO de um PROCESSING vencido nunca é condicionada a
  * `tentativas < max`: a tentativa que crashou já foi contada no claim
  * original. Sem isso, uma entrega reivindicada na ÚLTIMA tentativa permitida
@@ -93,7 +100,7 @@ export async function processarAvisosFallbackManualPendentes(input: ProcessarAvi
             JOIN organization_memberships m ON m.id = av.destinatario_membership_id
            WHERE ((av.status IN ('PENDING', 'FAILED') AND av.tentativas < $3) OR (av.status = 'PROCESSING' AND av.expira_em < now()))
              AND NOT (av.id = ANY($4::uuid[]))
-             AND m.papel::text = ANY($5::text[])
+             AND m.papel::text = ANY($5::text[]) AND m.desativado_em IS NULL
            ORDER BY av.criado_em, av.id
            FOR UPDATE OF av SKIP LOCKED
            LIMIT 1)
@@ -105,6 +112,9 @@ export async function processarAvisosFallbackManualPendentes(input: ProcessarAvi
     out.reivindicadas++;
     processadas.push(claim.id);
 
+    // Detalhe do envio — mesmo filtro do claim (gestor ATIVO), defesa em
+    // profundidade contra a janela entre o claim e o envio. Sem linha: a posse
+    // volta a PENDING sem contar desfecho (nunca lança, nunca marca enviada).
     const { rows } = await input.pool.query(
       `SELECT a.id, a.organization_id, a.justificativa_id, a.destinatario_membership_id,
               j.justificativa, fo.campo, fo.valor, fo.evidencia_ref, fo.observado_em,
@@ -116,13 +126,25 @@ export async function processarAvisosFallbackManualPendentes(input: ProcessarAvi
          JOIN containers c ON c.id = fo.entidade_id
          JOIN processos p ON p.id = c.processo_id
          JOIN organization_memberships md ON md.id = a.destinatario_membership_id
+          AND md.papel::text = ANY($2::text[]) AND md.desativado_em IS NULL
          JOIN usuarios ud ON ud.id = md.usuario_id
          JOIN organization_memberships ma ON ma.id = j.autor_membership_id
          JOIN usuarios ua ON ua.id = ma.usuario_id
         WHERE a.id = $1`,
-      [claim.id],
+      [claim.id, PAPEIS_DESTINATARIO],
     );
     const a = rows[0];
+    if (!a) {
+      // Devolve também a tentativa consumida pelo claim: a entrega não foi tentada
+      // (destinatário inelegível no envio) e não pode ficar presa no limite de tentativas.
+      await input.pool.query(
+        `UPDATE demurrage_fallback_manual_avisos SET status = 'PENDING', tentativas = GREATEST(tentativas - 1, 0),
+                claim_token = NULL, worker_id = NULL, expira_em = NULL, atualizado_em = now()
+          WHERE id = $1 AND status = 'PROCESSING' AND claim_token = $2`,
+        [claim.id, claim.claim_token],
+      );
+      continue;
+    }
 
     // 2) ENVIO fora de qualquer transação.
     let r: ResultadoEnvioAvisoFallback;
@@ -157,7 +179,7 @@ export async function processarAvisosFallbackManualPendentes(input: ProcessarAvi
     if (r.ok) out.enviadas++; else out.falhadas++;
   }
   const { rows: cont } = await input.pool.query(
-    `SELECT count(*) FILTER (WHERE av.status <> 'SENT' AND av.tentativas < $1 AND m.papel::text = ANY($2::text[]))::int AS restantes,
+    `SELECT count(*) FILTER (WHERE av.status <> 'SENT' AND av.tentativas < $1 AND m.papel::text = ANY($2::text[]) AND m.desativado_em IS NULL)::int AS restantes,
             count(*) FILTER (WHERE av.status = 'FAILED' AND av.tentativas >= $1)::int AS esgotadas
        FROM demurrage_fallback_manual_avisos av
        JOIN organization_memberships m ON m.id = av.destinatario_membership_id

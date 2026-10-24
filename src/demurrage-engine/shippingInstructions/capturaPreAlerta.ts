@@ -131,11 +131,17 @@ export class ErroCaptura extends Error {
   }
 }
 
-/** Exportado para as rotas: checagem de pertencimento (a leitura de status exige ao menos membro, qualquer papel). */
+/**
+ * Exportado para as rotas: checagem de pertencimento (a leitura de status
+ * exige ao menos membro, qualquer papel INTERNO). Produção P1 (migration
+ * 0049): só membership interno ATIVO conta — desativado ou CLIENT devolvem
+ * `null` (nenhum acesso interno); as checagens de ADMIN herdam a regra.
+ */
 export async function membro(pool: Pool, homeAccountId: string, organizationId: string): Promise<{ membershipId: string; papel: string } | null> {
   const { rows } = await pool.query(
     `SELECT m.id, m.papel FROM usuarios u JOIN organization_memberships m ON m.usuario_id = u.id
-      WHERE u.home_account_id = $1 AND m.organization_id = $2`,
+      WHERE u.home_account_id = $1 AND m.organization_id = $2
+        AND m.papel IN ('ANALYST', 'MANAGER', 'ADMIN') AND m.desativado_em IS NULL`,
     [homeAccountId, organizationId],
   );
   return rows[0] ? { membershipId: rows[0].id, papel: rows[0].papel } : null;

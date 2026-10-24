@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Pool } from 'pg';
 import { runMigrations } from '../db/migrate';
-import { testPool, testDatabaseUrl, truncateAll } from './testDb';
+import { testPool, testDatabaseUrl, truncateAll, atribuirResponsavelDeTeste } from './testDb';
 import { OrganizationRepository } from '../persistence/organizationRepository';
 import { UsuarioRepository } from '../persistence/usuarioRepository';
 import { OrganizationMembershipRepository } from '../persistence/organizationMembershipRepository';
@@ -73,6 +73,17 @@ async function registroComPosCommitFalho(pool: Pool, orgId: string, prefixo = 'T
 
 /** Fallback manual registrado (gera avisos PENDING para os gestores). */
 async function registroComFallback(pool: Pool, orgId: string, autorId: string, prefixo = 'TKAV') {
+  // Produção P1 (filas pessoais): o fallback manual é ação PESSOAL — o ANALYST
+  // autor tem de ser o responsável PERSISTIDO do processo (conferido sob o lock
+  // do processo, antes de qualquer escrita; nunca o que a própria entrada
+  // gravaria). O processo nasce aqui com a MESMA linha mínima do passo 3 do
+  // registro, já atribuído ao autor; o registro o reencontra pelo número e
+  // segue idêntico (Free Time, governança, avisos aos gestores, outbox).
+  const { rows: proc } = await pool.query(
+    `INSERT INTO processos (organization_id, numero_processo, cliente_id) VALUES ($1, $2, NULL) RETURNING id`,
+    [orgId, `IM-${prefixo}`],
+  );
+  await atribuirResponsavelDeTeste(pool, proc[0].id, autorId);
   return registrarProcessoDemurrage(contratoRegistro({
     organizationId: orgId, numeroProcesso: `IM-${prefixo}`, containers: [containerContrato(numeroContainer(prefixo, 1))],
     houseFreeTimeDays: o(11, 'manual_fallback', T, 'ligacao-0918.eml', { justificativa: 'cliente confirmou por telefone', autorMembershipId: autorId }),

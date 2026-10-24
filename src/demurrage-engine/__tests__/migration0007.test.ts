@@ -143,7 +143,12 @@ test('0007 — organization_id imutável nas tabelas de tenant', { skip: !url },
       'demurrage_handoff_capacidade_organizacoes', 'demurrage_handoff_capacidade_credenciais',
       // Produção P1 (correção de minuta): `documentos` (Fase 8) passa a carregar
       // organization_id para a referência auditável do documento da minuta — migration 0048.
-      'documentos'];
+      'documentos',
+      // Produção P1 (autenticação/filas pessoais): trilha de memberships e de
+      // atribuição do responsável — migration 0049. `sessoes_humanas` e
+      // `usuario_eventos` não entram: não têm organization_id (a organização
+      // ativa é dado da sessão; identidade é global), de propósito.
+      'membership_eventos', 'processo_atribuicoes'];
     const { rows } = await pool.query(`
       SELECT c.table_name,
              EXISTS (SELECT 1 FROM pg_trigger tg

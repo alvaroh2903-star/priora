@@ -141,7 +141,8 @@ export interface ReprocessarSIDeps {
  * Reprocessamento MANUAL da Shipping Instructions pelo mesmo serviço
  * idempotente da ingestão. Versão já concluída não é relida; versão PENDENTE ou
  * FAILED é reprocessada. Autorização: o usuário da sessão (home_account_id) deve
- * ser membro não-CLIENT da organização informada. A rota GET de análise acima
+ * ser membro não-CLIENT e ATIVO (Produção P1, migration 0049 — desativado =
+ * sem permissão) da organização informada. A rota GET de análise acima
  * permanece somente leitura.
  */
 export function criarHandlerReprocessarSI(deps: ReprocessarSIDeps = {}): RequestHandler {
@@ -162,7 +163,7 @@ export function criarHandlerReprocessarSI(deps: ReprocessarSIDeps = {}): Request
       const { rows } = await pool.query(
         `SELECT u.id AS usuario_id, m.papel FROM usuarios u
            JOIN organization_memberships m ON m.usuario_id = u.id
-          WHERE u.home_account_id = $1 AND m.organization_id = $2`,
+          WHERE u.home_account_id = $1 AND m.organization_id = $2 AND m.desativado_em IS NULL`,
         [homeAccountId, organizationId],
       );
       const m = rows[0];

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'crypto';
 import { Pool } from 'pg';
 import { runMigrations } from '../db/migrate';
-import { testPool, testDatabaseUrl, truncateAll } from './testDb';
+import { testPool, testDatabaseUrl, truncateAll, atribuirResponsavelDeTeste } from './testDb';
 import { OrganizationRepository } from '../persistence/organizationRepository';
 import { ProcessoRepository } from '../persistence/processoRepository';
 import { ContainerRepository } from '../persistence/containerRepository';
@@ -93,6 +93,11 @@ async function novoProcesso(pool: Pool, numero = 'IM-CLS') {
   // Produção P1: a minuta é registrada pelo ANALISTA, nunca validada por gestor.
   const gestorId = await novoGestor(pool, org.id);
   const analistaId = await novoMembro(pool, org.id, 'ANALYST');
+  // Produção P1 (filas pessoais): registrar minuta e solicitar reabertura são
+  // ações PESSOAIS — o ANALYST só age no processo atribuído a ele. O analista
+  // que registra nestes cenários passa a ser o responsável do processo; as
+  // regras verificadas (aceite técnico, FINAL, RBAC de gestor) não mudam.
+  await atribuirResponsavelDeTeste(pool, processo.id, analistaId);
   return { orgId: org.id, processoId: processo.id, gestorId, analistaId };
 }
 async function setupBanco(pool: Pool) { await runMigrations(pool); await truncateAll(pool); }

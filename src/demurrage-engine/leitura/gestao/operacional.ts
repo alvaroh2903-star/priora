@@ -2,6 +2,7 @@ import { Pool } from 'pg';
 import { CivilDate } from '../../temporal/civilDate';
 import { hojeOperacional } from '../../time/operationalDate';
 import { isoTimestamp } from '../contrato';
+import { EscopoAplicado, escopoEquipeOrganizacao, sufixoEscopo } from '../escopoFila';
 
 /**
  * Fase D14 (Gate G3) — indicadores operacionais vivos (Cap. 30.1) sobre
@@ -25,6 +26,12 @@ import { isoTimestamp } from '../contrato';
  * nenhuma) — por isso as dimensões `estado_container` (G-A2/G-A3) e
  * `estado_processo` (G-A9, hoje sozinho na própria dimensão) foram
  * separadas. `mutuamenteExclusivoCom` nunca mais cruza grão.
+ *
+ * Produção P1 (filas pessoais) — ESCOPO (`escopoFila.ts`) como UM predicado
+ * SQL de processo nas duas consultas, o MESMO que `drilldown.ts` aplica à
+ * composição de cada indicador (resumo e composição reconciliam por escopo).
+ * Sem escopo (ou EQUIPE sem responsável) as consultas são idênticas às de
+ * antes. ANALYST: sempre MINHA_FILA (resolvido na rota).
  */
 
 export type Dimensao = 'estado_container' | 'estado_processo' | 'balde' | 'populacional' | 'independente' | 'fechamento';
@@ -80,7 +87,7 @@ export interface FiltrosOperacional {
 const JANELA_FRESCOR_HORAS = 36;
 
 export async function montarGestaoOperacional(
-  pool: Pool, organizationId: string, filtros: FiltrosOperacional = {}, hoje?: CivilDate,
+  pool: Pool, organizationId: string, filtros: FiltrosOperacional = {}, hoje?: CivilDate, escopo: EscopoAplicado = escopoEquipeOrganizacao(),
 ): Promise<GestaoOperacionalV1> {
   const h = hoje ?? hojeOperacional();
   const params: unknown[] = [organizationId];
@@ -92,6 +99,11 @@ export async function montarGestaoOperacional(
     params.push(filtros.responsavelMembershipId);
     condicoesProcesso.push(`p.responsavel_operacional_membership_id = $${params.length}`);
   }
+  // Produção P1: o escopo é mais uma condição de PROCESSO (pode não empilhar parâmetro — SEM_RESPONSAVEL).
+  const escopoSql = sufixoEscopo(escopo, 'p.responsavel_operacional_membership_id', params);
+  if (escopoSql) condicoesProcesso.push(escopoSql.slice(' AND '.length));
+  // Quantos parâmetros as condições de processo empilharam (o prefixo comum às duas consultas).
+  const nParamsProcesso = params.length;
   if (filtros.containerTypeId) { params.push(filtros.containerTypeId); condicoesContainer.push(`c.container_type_id = $${params.length}`); }
   const sufixoProcesso = condicoesProcesso.length ? ` AND ${condicoesProcesso.join(' AND ')}` : '';
   const sufixoContainer = condicoesContainer.length ? ` AND ${condicoesContainer.join(' AND ')}` : '';
@@ -99,7 +111,7 @@ export async function montarGestaoOperacional(
   // Params da consulta 2 (grão PROCESSO): o mesmo prefixo de `condicoesProcesso`
   // da consulta 1, MAIS o `containerTypeId` de novo (índice próprio — a consulta
   // 2 não compartilha array de params com a 1).
-  const paramsProcesso: unknown[] = params.slice(0, 1 + condicoesProcesso.length);
+  const paramsProcesso: unknown[] = params.slice(0, nParamsProcesso);
   // D14 v1.1 #6 — `tipoEquipamento` nos indicadores de grão PROCESSO: EXISTS
   // (semi-join, nunca um JOIN que faria o processo contar uma vez POR
   // contêiner que bate o filtro — um processo com 3 contêineres do tipo

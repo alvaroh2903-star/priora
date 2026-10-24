@@ -18,6 +18,11 @@ import { Pool, PoolClient } from 'pg';
  * PENDING indefinidamente (nunca "enviada" silenciosamente, nunca consome
  * tentativa) até o papel ser restituído. Um membership REMOVIDO produz o
  * mesmo efeito pelo mesmo motivo (o JOIN não casa) — nunca lança exceção.
+ *
+ * Produção P1 (migration 0049) — membership DESATIVADO (`desativado_em` não
+ * nulo) segue a MESMA régua do papel: não ganha entrega nova (fan-out só de
+ * gestores ATIVOS) e a entrega enfileirada antes da desativação nunca é
+ * reivindicada nem lida para envio — fica PENDING até uma reativação.
  */
 const PAPEIS_GESTOR = ['MANAGER', 'ADMIN'];
 
@@ -25,7 +30,7 @@ export async function enfileirarAvisoPendenciaComClient(db: PoolClient, organiza
   const { rowCount } = await db.query(
     `INSERT INTO demurrage_pendencia_avisos (organization_id, pendencia_id, destinatario_membership_id)
      SELECT $1, $2, m.id FROM organization_memberships m
-      WHERE m.organization_id = $1 AND m.papel::text = ANY($3::text[])
+      WHERE m.organization_id = $1 AND m.papel::text = ANY($3::text[]) AND m.desativado_em IS NULL
      ON CONFLICT (pendencia_id, destinatario_membership_id) DO NOTHING`,
     [organizationId, pendenciaId, PAPEIS_GESTOR],
   );
@@ -102,8 +107,8 @@ export async function processarAvisosPendenciaPendentes(input: ProcessarAvisosPe
   const processadas: string[] = [];
   for (let i = 0; i < limite; i++) {
     // 1) CLAIM persistente de exatamente uma entrega — só se o destinatário é
-    // gestor (MANAGER/ADMIN) AGORA; nunca o papel do momento em que a
-    // entrega nasceu.
+    // gestor (MANAGER/ADMIN) ATIVO AGORA; nunca o papel/estado do momento em
+    // que a entrega nasceu.
     const { rows: claims } = await input.pool.query(
       `UPDATE demurrage_pendencia_avisos a
           SET status = 'PROCESSING', claim_token = gen_random_uuid(), worker_id = $1,
@@ -113,7 +118,7 @@ export async function processarAvisosPendenciaPendentes(input: ProcessarAvisosPe
             JOIN organization_memberships m ON m.id = av.destinatario_membership_id
            WHERE ((av.status IN ('PENDING', 'FAILED') AND av.tentativas < $3) OR (av.status = 'PROCESSING' AND av.expira_em < now()))
              AND NOT (av.id = ANY($4::uuid[]))
-             AND m.papel::text = ANY($5::text[])
+             AND m.papel::text = ANY($5::text[]) AND m.desativado_em IS NULL
            ORDER BY av.criado_em, av.id
            FOR UPDATE OF av SKIP LOCKED
            LIMIT 1)
@@ -126,8 +131,9 @@ export async function processarAvisosPendenciaPendentes(input: ProcessarAvisosPe
     processadas.push(claim.id);
 
     // 2) LEITURA de detalhe, imediatamente antes do envio — mesmo filtro de
-    // papel (defesa em profundidade). Ausência de linha (papel mudou nesta
-    // janela estreita, ou o membership foi removido) nunca lança: a posse é
+    // papel e de membership ATIVO (defesa em profundidade). Ausência de linha
+    // (papel mudou ou o membership foi desativado nesta janela estreita, ou o
+    // membership foi removido) nunca lança: a posse é
     // devolvida a PENDING e a entrega segue para reavaliação em tick futuro.
     const { rows } = await input.pool.query(
       `SELECT a.id, a.organization_id, a.pendencia_id, p.tipo, p.contexto, p.processo_id, p.container_id,
@@ -136,15 +142,18 @@ export async function processarAvisosPendenciaPendentes(input: ProcessarAvisosPe
          JOIN demurrage_pendencias p ON p.id = a.pendencia_id
          LEFT JOIN containers c ON c.id = p.container_id
          LEFT JOIN processos pr ON pr.id = p.processo_id
-         JOIN organization_memberships m ON m.id = a.destinatario_membership_id AND m.papel::text = ANY($2::text[])
+         JOIN organization_memberships m ON m.id = a.destinatario_membership_id AND m.papel::text = ANY($2::text[]) AND m.desativado_em IS NULL
          JOIN usuarios u ON u.id = m.usuario_id
         WHERE a.id = $1`,
       [claim.id, PAPEIS_GESTOR],
     );
     const a = rows[0];
     if (!a) {
+      // Devolve também a tentativa consumida pelo claim: a entrega não foi tentada
+      // (destinatário inelegível no envio) e não pode ficar presa no limite de tentativas.
       await input.pool.query(
-        `UPDATE demurrage_pendencia_avisos SET status = 'PENDING', claim_token = NULL, worker_id = NULL, expira_em = NULL, atualizado_em = now()
+        `UPDATE demurrage_pendencia_avisos SET status = 'PENDING', tentativas = GREATEST(tentativas - 1, 0),
+                claim_token = NULL, worker_id = NULL, expira_em = NULL, atualizado_em = now()
           WHERE id = $1 AND status = 'PROCESSING' AND claim_token = $2`,
         [claim.id, claim.claim_token],
       );
@@ -176,7 +185,7 @@ export async function processarAvisosPendenciaPendentes(input: ProcessarAvisosPe
     if (r.ok) out.enviadas++; else out.falhadas++;
   }
   const { rows: cont } = await input.pool.query(
-    `SELECT count(*) FILTER (WHERE av.status <> 'SENT' AND av.tentativas < $1 AND m.papel::text = ANY($2::text[]))::int AS restantes,
+    `SELECT count(*) FILTER (WHERE av.status <> 'SENT' AND av.tentativas < $1 AND m.papel::text = ANY($2::text[]) AND m.desativado_em IS NULL)::int AS restantes,
             count(*) FILTER (WHERE av.status = 'FAILED' AND av.tentativas >= $1)::int AS esgotadas
        FROM demurrage_pendencia_avisos av
        JOIN organization_memberships m ON m.id = av.destinatario_membership_id

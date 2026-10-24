@@ -2,6 +2,12 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+/** Inteiro positivo do ambiente, ou o padrão (nunca NaN/zero). */
+function inteiroPositivoOuPadrao(valor: string | undefined, padrao: number): number {
+  const n = Number.parseInt((valor ?? '').trim(), 10);
+  return Number.isFinite(n) && n > 0 ? n : padrao;
+}
+
 export const config = {
   port: parseInt(process.env.PORT || '3000', 10),
   isProduction: process.env.NODE_ENV === 'production',
@@ -13,8 +19,11 @@ export const config = {
    */
   dataDir: (process.env.DATA_DIR || '.data').trim(),
   /** Quanto tempo o cookie de login dura no navegador (padrão: 30 dias). */
-  sessionMaxAgeMs:
-    parseInt(process.env.SESSION_MAX_AGE_DAYS || '30', 10) * 24 * 60 * 60 * 1000,
+  // Produção P1 (autenticação): vida ABSOLUTA da sessão humana desde o login
+  // (padrão 7 dias) e OCIOSIDADE máxima entre requisições (padrão 12 h) —
+  // ambas aplicadas no servidor (store PostgreSQL), não só no cookie.
+  sessionMaxAgeMs: inteiroPositivoOuPadrao(process.env.SESSION_MAX_AGE_DAYS, 7) * 24 * 60 * 60 * 1000,
+  sessionIdleMs: inteiroPositivoOuPadrao(process.env.SESSION_IDLE_HOURS, 12) * 60 * 60 * 1000,
   azure: {
     // Opcionais: sem eles o servidor sobe normalmente e serve a página; o login
     // com a Microsoft é que fica indisponível até serem preenchidos no .env.

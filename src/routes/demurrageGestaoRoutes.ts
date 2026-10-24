@@ -1,6 +1,6 @@
 import { NextFunction, Request, RequestHandler, Response, Router } from 'express';
 import { Pool } from 'pg';
-import { requireAuth } from '../middleware/requireAuth';
+import { requireSessao } from '../auth/sessaoHumana';
 import { getPool } from '../demurrage-engine/db/pool';
 import { autorizarInterno, AutorizedRequest, criarAutorizarInterno, PapelInterno, tratarErroLeitura } from '../demurrage-engine/leitura/autorizacao';
 import { ErroLeitura } from '../demurrage-engine/leitura/contrato';
@@ -10,6 +10,7 @@ import { listarDecisoesResponsabilidade, montarGestaoResponsabilidade } from '..
 import { montarGestaoEficiencia, PeriodoObrigatorio } from '../demurrage-engine/leitura/gestao/eficiencia';
 import { montarGestaoQualidade, PeriodoFiltro } from '../demurrage-engine/leitura/gestao/qualidade';
 import { buscarComposicaoIndicador } from '../demurrage-engine/leitura/gestao/drilldown';
+import { EscopoAplicado, filtrosDoEscopo, resolverEscopo } from '../demurrage-engine/leitura/escopoFila';
 
 /**
  * Fase D14 (Gates G5/G6) — rotas de Gestão e Indicadores, SOMENTE LEITURA.
@@ -34,6 +35,19 @@ import { buscarComposicaoIndicador } from '../demurrage-engine/leitura/gestao/dr
  * a história inteira. `/qualidade` aceita um período OPCIONAL (as métricas
  * vivas do Grupo E nunca dependem dele), mas valida a MESMA invariante
  * quando qualquer uma das duas datas vem informada (as duas ou nenhuma).
+ *
+ * Produção P1 (filas pessoais) — opção (a) da revisão de produto (F6): TODA
+ * rota de Gestão aceita `escopo` (e `responsavel`) e os resolve como a fila
+ * (`resolverEscopo`: ANALYST só MINHA_FILA — padrão; `EQUIPE`/`SEM_RESPONSAVEL`
+ * → `403 escopo_nao_permitido`; `responsavel` ≠ ele → `400 valor_invalido`.
+ * MANAGER/ADMIN: padrão EQUIPE, os três escopos, `responsavel` só membership
+ * interno ATIVO da organização, senão `400 valor_invalido`). O escopo vira UM
+ * predicado SQL aplicado em todo resumo E em toda composição/detalhe — os
+ * dois reconciliam dentro do escopo; MANAGER/ADMIN no padrão (EQUIPE sem
+ * responsável) recebem exatamente as consultas organizacionais de antes.
+ * `cliente`/`armador`/`tipoEquipamento` são validados como UUID (antes um
+ * valor malformado chegava ao PostgreSQL e virava 500). Toda resposta informa
+ * `escopo`, `membershipResolvido` e `filtros`; as paginadas, `temProxima`.
  */
 
 export const RESTRITO_MANAGER_ADMIN = { acessoRestrito: true } as const;
@@ -48,13 +62,46 @@ export interface DemurrageGestaoRoutesDeps {
   autorizarInternoMiddleware?: RequestHandler;
 }
 
+const RE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function uuidDaQuery(query: Request['query'], campo: string): string | undefined {
+  const valor = query[campo];
+  if (valor === undefined) return undefined;
+  if (typeof valor !== 'string' || !RE_UUID.test(valor)) throw new ErroLeitura(400, 'valor_invalido', { campo });
+  return valor;
+}
+
+/**
+ * Filtros operacionais (Grupo A). `responsavel` NÃO é mais filtro aqui: é parte
+ * do ESCOPO (`resolverEscopo`), validado contra a sessão e a organização.
+ */
 function filtrosOperacionalDaQuery(query: Request['query']): FiltrosOperacional {
   const f: FiltrosOperacional = {};
-  if (typeof query.cliente === 'string') f.clienteId = query.cliente;
-  if (typeof query.armador === 'string') f.armadorId = query.armador;
-  if (typeof query.responsavel === 'string') f.responsavelMembershipId = query.responsavel;
-  if (typeof query.tipoEquipamento === 'string') f.containerTypeId = query.tipoEquipamento;
+  const cliente = uuidDaQuery(query, 'cliente');
+  const armador = uuidDaQuery(query, 'armador');
+  const tipoEquipamento = uuidDaQuery(query, 'tipoEquipamento');
+  if (cliente) f.clienteId = cliente;
+  if (armador) f.armadorId = armador;
+  if (tipoEquipamento) f.containerTypeId = tipoEquipamento;
   return f;
+}
+
+/** `responsavel` da query: ausente → null; presente → uma única string UUID (o resto é `400 valor_invalido`). */
+function responsavelDaQuery(query: Request['query']): string | null {
+  return uuidDaQuery(query, 'responsavel') ?? null;
+}
+
+/** Meta do escopo em toda resposta de Gestão. */
+function metaEscopo(e: EscopoAplicado, extras: Record<string, string | number | boolean | null> = {}) {
+  return { escopo: e.escopo, membershipResolvido: e.membershipResolvido, filtros: { ...filtrosDoEscopo(e), ...extras } };
+}
+
+function extrasOperacionais(f: FiltrosOperacional): Record<string, string> {
+  const extras: Record<string, string> = {};
+  if (f.clienteId) extras.cliente = f.clienteId;
+  if (f.armadorId) extras.armador = f.armadorId;
+  if (f.containerTypeId) extras.tipoEquipamento = f.containerTypeId;
+  return extras;
 }
 
 const RE_DATA = /^\d{4}-\d{2}-\d{2}$/;
@@ -103,36 +150,43 @@ export function criarDemurrageGestaoRouter(deps: DemurrageGestaoRoutesDeps = {})
   const router = Router();
   const pool = () => (deps.pool ?? getPool)();
 
-  router.use(deps.requireAuthMiddleware ?? requireAuth);
+  router.use(deps.requireAuthMiddleware ?? requireSessao);
   router.use(deps.autorizarInternoMiddleware ?? (deps.pool ? criarAutorizarInterno({ pool: deps.pool }) : autorizarInterno));
+
+  /** Escopo da requisição, resolvido pelo papel da SESSÃO (nunca por dado do cliente que prove identidade). */
+  const escopoDaRequisicao = (req: AutorizedRequest): Promise<EscopoAplicado> =>
+    resolverEscopo(pool(), req.autorizacao!, req.query as Record<string, unknown>, responsavelDaQuery(req.query));
 
   /** GET /operacional — Grupo A (Cap. 30.1), dimensões independentes + frescor (G3). */
   router.get('/operacional', async (req: AutorizedRequest, res: Response, next: NextFunction) => {
     try {
       const filtros = filtrosOperacionalDaQuery(req.query);
-      const resposta = await montarGestaoOperacional(pool(), req.autorizacao!.organizationId, filtros);
-      res.json(resposta);
+      const escopo = await escopoDaRequisicao(req);
+      const resposta = await montarGestaoOperacional(pool(), req.autorizacao!.organizationId, filtros, undefined, escopo);
+      res.json({ ...resposta, ...metaEscopo(escopo, extrasOperacionais(filtros)) });
     } catch (err) { tratarErroLeitura(err, res, next); }
   });
 
   /** GET /financeiro — Grupo B (Cap. 30.2). `diferencaPotencial` restrito a MANAGER/ADMIN (G5). */
   router.get('/financeiro', async (req: AutorizedRequest, res: Response, next: NextFunction) => {
     try {
-      const resposta = await montarGestaoFinanceiro(pool(), req.autorizacao!.organizationId);
+      const escopo = await escopoDaRequisicao(req);
+      const resposta = await montarGestaoFinanceiro(pool(), req.autorizacao!.organizationId, undefined, escopo);
       const papel = req.autorizacao!.papel;
       if (!podeVerDiferencaPotencial(papel)) {
-        res.json({ ...resposta, diferencaPotencial: RESTRITO_MANAGER_ADMIN });
+        res.json({ ...resposta, diferencaPotencial: RESTRITO_MANAGER_ADMIN, ...metaEscopo(escopo) });
         return;
       }
-      res.json(resposta);
+      res.json({ ...resposta, ...metaEscopo(escopo) });
     } catch (err) { tratarErroLeitura(err, res, next); }
   });
 
   /** GET /responsabilidade — Grupo C (Cap. 30.3): RESUMO limitado (D14 v1.3 — o detalhe é paginado em /responsabilidade/decisoes). Leitura aberta a ANALYST (decisão); decidir continua exclusivo de MANAGER/ADMIN (D11, autor_papel). */
   router.get('/responsabilidade', async (req: AutorizedRequest, res: Response, next: NextFunction) => {
     try {
-      const resposta = await montarGestaoResponsabilidade(pool(), req.autorizacao!.organizationId);
-      res.json(resposta);
+      const escopo = await escopoDaRequisicao(req);
+      const resposta = await montarGestaoResponsabilidade(pool(), req.autorizacao!.organizationId, escopo);
+      res.json({ ...resposta, ...metaEscopo(escopo) });
     } catch (err) { tratarErroLeitura(err, res, next); }
   });
 
@@ -144,8 +198,9 @@ export function criarDemurrageGestaoRouter(deps: DemurrageGestaoRoutesDeps = {})
     try {
       const { limite, cursor } = paginacaoDaQuery(req.query);
       const q = req.query;
+      const escopo = await escopoDaRequisicao(req);
       const resposta = await listarDecisoesResponsabilidade(pool(), req.autorizacao!.organizationId, {
-        limite, cursor,
+        limite, cursor, escopo,
         status: typeof q.status === 'string' ? q.status : undefined,
         processoId: typeof q.processo === 'string' ? q.processo : undefined,
         containerId: typeof q.container === 'string' ? q.container : undefined,
@@ -158,8 +213,9 @@ export function criarDemurrageGestaoRouter(deps: DemurrageGestaoRoutesDeps = {})
   router.get('/eficiencia', async (req: AutorizedRequest, res: Response, next: NextFunction) => {
     try {
       const periodo = periodoObrigatorioDaQuery(req.query);
-      const resposta = await montarGestaoEficiencia(pool(), req.autorizacao!.organizationId, periodo);
-      res.json(resposta);
+      const escopo = await escopoDaRequisicao(req);
+      const resposta = await montarGestaoEficiencia(pool(), req.autorizacao!.organizationId, periodo, undefined, escopo);
+      res.json({ ...resposta, ...metaEscopo(escopo, { periodoInicio: periodo.inicio, periodoFim: periodo.fim }) });
     } catch (err) { tratarErroLeitura(err, res, next); }
   });
 
@@ -167,8 +223,9 @@ export function criarDemurrageGestaoRouter(deps: DemurrageGestaoRoutesDeps = {})
   router.get('/qualidade', async (req: AutorizedRequest, res: Response, next: NextFunction) => {
     try {
       const periodo = periodoOpcionalDaQuery(req.query);
-      const resposta = await montarGestaoQualidade(pool(), req.autorizacao!.organizationId, periodo);
-      res.json(resposta);
+      const escopo = await escopoDaRequisicao(req);
+      const resposta = await montarGestaoQualidade(pool(), req.autorizacao!.organizationId, periodo, undefined, escopo);
+      res.json({ ...resposta, ...metaEscopo(escopo, periodo.inicio && periodo.fim ? { periodoInicio: periodo.inicio, periodoFim: periodo.fim } : {}) });
     } catch (err) { tratarErroLeitura(err, res, next); }
   });
 
@@ -178,7 +235,8 @@ export function criarDemurrageGestaoRouter(deps: DemurrageGestaoRoutesDeps = {})
       const { limite, cursor } = paginacaoDaQuery(req.query);
       const periodo = periodoOpcionalDaQuery(req.query);
       const filtros = filtrosOperacionalDaQuery(req.query);
-      const resposta = await buscarComposicaoIndicador(pool(), req.autorizacao!.organizationId, req.params.indicadorId, { limite, cursor, periodo, filtros });
+      const escopo = await escopoDaRequisicao(req);
+      const resposta = await buscarComposicaoIndicador(pool(), req.autorizacao!.organizationId, req.params.indicadorId, { limite, cursor, periodo, filtros, escopo });
       res.json(resposta);
     } catch (err) { tratarErroLeitura(err, res, next); }
   });

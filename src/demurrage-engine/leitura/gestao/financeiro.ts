@@ -6,6 +6,7 @@ import {
 } from '../contrato';
 import { centavosExatos, formatarCentavos } from '../moedaExata';
 import { buscarEnvelopesSelecionadosDaOrganizacao, EnvelopesContainer } from './selecaoFinanceira';
+import { EscopoAplicado, escopoEquipeOrganizacao, filtroEscopoPorProcesso } from '../escopoFila';
 
 /**
  * Fase D14 (Gate G2) — agregação financeira exata de organização e
@@ -14,6 +15,10 @@ import { buscarEnvelopesSelecionadosDaOrganizacao, EnvelopesContainer } from './
  * centavos `bigint`, nunca `Number`/`+`, nunca mistura moeda, nunca converte
  * pendente/indisponível em zero — nada disso é reescrito aqui, só chamado com
  * uma lista maior de envelopes.
+ *
+ * Produção P1 (filas pessoais): o ESCOPO (`escopoFila.ts`) restringe, com o
+ * MESMO predicado SQL de responsável do processo, os contêineres da seleção
+ * financeira e as decisões somadas em G-B2/G-B3. Sem escopo = organização.
  */
 
 export type QualidadeDiferenca = 'confirmado' | 'estimado' | 'provisorio';
@@ -152,15 +157,17 @@ export interface ResponsabilidadeSoma {
  * `valores_apurados` (são fontes diferentes — Cap. 26 vs. Cap. 24).
  */
 export async function somarResponsabilidadePorLado(
-  pool: Pool, organizationId: string, lado: 'valor_cliente' | 'valor_rocket',
+  pool: Pool, organizationId: string, lado: 'valor_cliente' | 'valor_rocket', escopo: EscopoAplicado = escopoEquipeOrganizacao(),
 ): Promise<ResponsabilidadeSoma> {
   const coluna = lado === 'valor_cliente' ? 'd.valor_cliente' : 'd.valor_rocket';
+  const params: unknown[] = [organizationId];
+  const escopoSql = filtroEscopoPorProcesso(escopo, 'd.processo_id', params);
   const { rows } = await pool.query(
     `SELECT d.moeda, ${coluna} AS valor, d.valor_status
        FROM responsabilidade_decisoes d
       WHERE d.organization_id = $1
-        AND NOT EXISTS (SELECT 1 FROM responsabilidade_decisoes d2 WHERE d2.substitui_decisao_id = d.id)`,
-    [organizationId],
+        AND NOT EXISTS (SELECT 1 FROM responsabilidade_decisoes d2 WHERE d2.substitui_decisao_id = d.id)${escopoSql}`,
+    params,
   );
   const porMoeda = new Map<string, bigint[]>();
   let naoCalculadas = 0;
@@ -190,16 +197,18 @@ export interface GestaoFinanceiroV1 {
   diferencaPotencial: DiferencaPotencialOrganizacao;
 }
 
-export async function montarGestaoFinanceiro(pool: Pool, organizationId: string, hoje?: CivilDate): Promise<GestaoFinanceiroV1> {
+export async function montarGestaoFinanceiro(
+  pool: Pool, organizationId: string, hoje?: CivilDate, escopo: EscopoAplicado = escopoEquipeOrganizacao(),
+): Promise<GestaoFinanceiroV1> {
   const h = hoje ?? hojeOperacional();
-  const envelopes = await buscarEnvelopesSelecionadosDaOrganizacao(pool, organizationId, h);
+  const envelopes = await buscarEnvelopesSelecionadosDaOrganizacao(pool, organizationId, h, { escopo });
 
   const valorBrutoCliente = agregarLado(envelopes.map((e) => e.cliente));
   const exposicaoRocket = agregarLado(envelopes.map((e) => e.rocket));
 
   const [valorAtribuidoCliente, valorAtribuidoRocket] = await Promise.all([
-    somarResponsabilidadePorLado(pool, organizationId, 'valor_cliente'),
-    somarResponsabilidadePorLado(pool, organizationId, 'valor_rocket'),
+    somarResponsabilidadePorLado(pool, organizationId, 'valor_cliente', escopo),
+    somarResponsabilidadePorLado(pool, organizationId, 'valor_rocket', escopo),
   ]);
 
   const diferencas = envelopes.map((e) => calcularDiferencaPotencial(e, h));

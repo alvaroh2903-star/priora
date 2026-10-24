@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Pool } from 'pg';
 import { runMigrations } from '../db/migrate';
-import { testPool, testDatabaseUrl, truncateAll } from './testDb';
+import { testPool, testDatabaseUrl, truncateAll, atribuirResponsavelDeTeste } from './testDb';
 import { OrganizationRepository } from '../persistence/organizationRepository';
 import { UsuarioRepository } from '../persistence/usuarioRepository';
 import { OrganizationMembershipRepository } from '../persistence/organizationMembershipRepository';
@@ -355,6 +355,15 @@ test('v1.1 §2: positivo — manual_fallback completo (justificativa + autor) pr
   try {
     const org = await setup(pool);
     const { membershipId: autorId, usuarioId: autorUsuarioId } = await novoMembership(pool, org.id, 'Ana Analista', 'ana@rocket.example');
+    // Produção P1 (filas pessoais): o fallback manual é ação PESSOAL — o ANALYST
+    // autor tem de ser o responsável PERSISTIDO do processo (conferido sob o
+    // lock do processo, antes de qualquer escrita). O processo nasce com a
+    // MESMA linha mínima do passo 3 do registro, já atribuído a ele; o registro
+    // o reencontra pelo número e segue idêntico (Free Time e governança).
+    const { rows: proc } = await pool.query(
+      `INSERT INTO processos (organization_id, numero_processo, cliente_id) VALUES ($1, 'IM-POS-MANUAL', NULL) RETURNING id`, [org.id],
+    );
+    await atribuirResponsavelDeTeste(pool, proc[0].id, autorId);
     const numero = numeroContainer('POSF', 1);
     const r = await registrarProcessoDemurrage(contratoRegistro({
       organizationId: org.id, numeroProcesso: 'IM-POS-MANUAL',

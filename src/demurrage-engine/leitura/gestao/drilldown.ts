@@ -1,8 +1,9 @@
 import { createHash } from 'crypto';
 import { Pool } from 'pg';
 import { CivilDate } from '../../temporal/civilDate';
-import { ErroLeitura } from '../contrato';
+import { ErroLeitura, FiltrosAtivos, MetaEscopoCompleta } from '../contrato';
 import { codificarCursorAssinado, decodificarCursorAssinado } from '../cursorAssinado';
+import { EscopoAplicado, escopoEquipeOrganizacao, filtroEscopoPorProcesso, filtrosDoEscopo, paresEscopo, sufixoEscopo } from '../escopoFila';
 import { FiltrosOperacional } from './operacional';
 import { PeriodoObrigatorio, validarPeriodoObrigatorio } from './eficiencia';
 import { buscarDescritorIndicador } from './indicadorRegistry';
@@ -42,9 +43,16 @@ import { buscarDescritorIndicador } from './indicadorRegistry';
  *     divergência nesses campos (organização, indicador, período, filtros,
  *     ou a versão de ordenação em `VERSAO_CURSOR_COMPOSICAO`) invalida o
  *     cursor.
+ *
+ * Produção P1 (filas pessoais) — ESCOPO em TODA composição (não só no Grupo
+ * A, que é o único com `aceitaFiltrosOperacionais`): o MESMO predicado SQL de
+ * responsável do processo que os resumos (`operacional.ts`,
+ * `responsabilidade.ts`, `eficiencia.ts`, `qualidade.ts`) aplicam — composição
+ * e indicador reconciliam dentro do escopo. O escopo CALCULADO entra no hash
+ * do cursor (`.v3`). Sem escopo = organização inteira (consultas idênticas).
  */
 
-export const VERSAO_CURSOR_COMPOSICAO = 'd14.gestao.composicao.v2';
+export const VERSAO_CURSOR_COMPOSICAO = 'd14.gestao.composicao.v3';
 const LIMITE_PADRAO = 50;
 const MAX_LIMITE = 200;
 
@@ -56,7 +64,7 @@ export interface LinhaComposicao {
   numeroContainer?: string;
 }
 
-export interface ComposicaoIndicadorV1 {
+export interface ComposicaoIndicadorV1 extends MetaEscopoCompleta {
   contrato: 'demurrage.gestao.composicao.v1';
   indicadorId: string;
   /** D14 v1.1 #8 — `false` quando o indicador é real mas não tem lista de composição (médias, percentuais, agregados monetários). */
@@ -66,6 +74,8 @@ export interface ComposicaoIndicadorV1 {
   total: number | null;
   itens: LinhaComposicao[];
   cursor: string | null;
+  /** Produção P1 — há próxima página (equivale a `cursor !== null`). */
+  temProxima: boolean;
 }
 
 export interface ComposicaoOpts {
@@ -75,10 +85,12 @@ export interface ComposicaoOpts {
   periodo?: { inicio?: CivilDate; fim?: CivilDate };
   /** Só usado quando o indicador registrado tem `aceitaFiltrosOperacionais: true` (hoje, todo o Grupo A). */
   filtros?: FiltrosOperacional;
+  /** Produção P1 — escopo resolvido pela rota; vale para TODO indicador. Ausente = organização inteira. */
+  escopo?: EscopoAplicado;
 }
 
 /** Hash curto e determinístico do período/filtros efetivamente aplicados — liga o cursor a ELES (D14 v1.1 #9). Não precisa ser criptográfico: a assinatura HMAC do cursor já cobre integridade; isto só precisa ser estável e sensível a qualquer mudança. */
-function hashContexto(periodo: PeriodoObrigatorio | null, filtros: FiltrosOperacional): string {
+function hashContexto(periodo: PeriodoObrigatorio | null, filtros: FiltrosOperacional, escopo: EscopoAplicado): string {
   const canonico = JSON.stringify({
     periodoInicio: periodo?.inicio ?? null,
     periodoFim: periodo?.fim ?? null,
@@ -86,6 +98,8 @@ function hashContexto(periodo: PeriodoObrigatorio | null, filtros: FiltrosOperac
     armadorId: filtros.armadorId ?? null,
     responsavelMembershipId: filtros.responsavelMembershipId ?? null,
     containerTypeId: filtros.containerTypeId ?? null,
+    // Produção P1: escopo CALCULADO pelo servidor (nunca o do cursor).
+    escopo: paresEscopo(escopo),
   });
   return createHash('sha256').update(canonico).digest('base64url').slice(0, 16);
 }
@@ -113,10 +127,14 @@ interface SpecIndicador { grao: 'container' | 'processo'; baseSql: string; param
 /** A MESMA predicate usada para contar o indicador nos módulos de leitura. */
 function specDoIndicador(
   organizationId: string, indicadorId: string,
-  ctx: { periodo: PeriodoObrigatorio | null; filtros: FiltrosOperacional },
+  ctx: { periodo: PeriodoObrigatorio | null; filtros: FiltrosOperacional; escopo: EscopoAplicado },
 ): SpecIndicador {
-  const filtroProcesso = (params: unknown[]) => condicoesFiltrosOperacionais('processo', params, ctx.filtros);
-  const filtroContainer = (params: unknown[]) => condicoesFiltrosOperacionais('container', params, ctx.filtros);
+  // Produção P1: escopo + filtros operacionais (estes só chegam não vazios para o Grupo A).
+  const escopoProc = (params: unknown[]) => sufixoEscopo(ctx.escopo, 'p.responsavel_operacional_membership_id', params);
+  const filtroProcesso = (params: unknown[]) => condicoesFiltrosOperacionais('processo', params, ctx.filtros) + escopoProc(params);
+  const filtroContainer = (params: unknown[]) => condicoesFiltrosOperacionais('container', params, ctx.filtros) + escopoProc(params);
+  /** Mesmo escopo para consultas que só têm o `processo_id` (decisões, pendências, valores). */
+  const escopoPorProcesso = (params: unknown[], processoIdExpr: string) => filtroEscopoPorProcesso(ctx.escopo, processoIdExpr, params);
 
   switch (indicadorId) {
     case 'G-A1': {
@@ -177,32 +195,38 @@ function specDoIndicador(
         'G-C-CONFIRMADA_ROCKET': 'CONFIRMADA_ROCKET', 'G-C-CONFIRMADA_CLIENTE': 'CONFIRMADA_CLIENTE',
         'G-C-DIVIDIDA': 'DIVIDIDA', 'G-C-NAO_APLICAVEL': 'NAO_APLICAVEL',
       }[indicadorId];
+      const params: unknown[] = [organizationId, status];
+      const e = escopoPorProcesso(params, 'd.processo_id');
       return {
-        grao: 'container', params: [organizationId, status],
+        grao: 'container', params,
         baseSql: `SELECT d.container_id AS id_ord FROM responsabilidade_decisoes d
           WHERE d.organization_id = $1 AND d.status = $2
-            AND NOT EXISTS (SELECT 1 FROM responsabilidade_decisoes d2 WHERE d2.substitui_decisao_id = d.id)`,
+            AND NOT EXISTS (SELECT 1 FROM responsabilidade_decisoes d2 WHERE d2.substitui_decisao_id = d.id)${e}`,
       };
     }
     case 'G-D-TOTAL-FINAL': {
       const periodo = ctx.periodo!;
+      const params: unknown[] = [organizationId, periodo.inicio, periodo.fim];
+      const e = escopoProc(params);
       return {
-        grao: 'container', params: [organizationId, periodo.inicio, periodo.fim],
+        grao: 'container', params,
         baseSql: `SELECT c.id AS id_ord FROM containers c JOIN processos p ON p.id = c.processo_id
-          WHERE c.organization_id = $1 AND p.apuracao_status = 'FINAL' AND p.fechado_em::date >= $2 AND p.fechado_em::date <= $3`,
+          WHERE c.organization_id = $1 AND p.apuracao_status = 'FINAL' AND p.fechado_em::date >= $2 AND p.fechado_em::date <= $3${e}`,
       };
     }
     case 'G-D-SEM-RESPONSABILIDADE': {
       // D14 v1.3 — "sem decisão" significa NENHUMA decisão vigente, de qualquer status (NAO_APLICAVEL é uma decisão válida: tem indicador próprio).
       const periodo = ctx.periodo!;
+      const params: unknown[] = [organizationId, periodo.inicio, periodo.fim];
+      const e = escopoProc(params);
       return {
-        grao: 'container', params: [organizationId, periodo.inicio, periodo.fim],
+        grao: 'container', params,
         baseSql: `SELECT c.id AS id_ord FROM containers c JOIN processos p ON p.id = c.processo_id
           WHERE c.organization_id = $1 AND p.apuracao_status = 'FINAL' AND p.fechado_em::date >= $2 AND p.fechado_em::date <= $3
             AND NOT EXISTS (
               SELECT 1 FROM responsabilidade_decisoes d WHERE d.container_id = c.id
                 AND NOT EXISTS (SELECT 1 FROM responsabilidade_decisoes d2 WHERE d2.substitui_decisao_id = d.id)
-            )`,
+            )${e}`,
       };
     }
     case 'G-D-RESP-CONFIRMADA-ROCKET':
@@ -214,31 +238,37 @@ function specDoIndicador(
         'G-D-RESP-CONFIRMADA-ROCKET': 'CONFIRMADA_ROCKET', 'G-D-RESP-CONFIRMADA-CLIENTE': 'CONFIRMADA_CLIENTE',
         'G-D-RESP-DIVIDIDA': 'DIVIDIDA', 'G-D-RESP-NAO-APLICAVEL': 'NAO_APLICAVEL',
       }[indicadorId];
+      const params: unknown[] = [organizationId, periodo.inicio, periodo.fim, status];
+      const e = escopoProc(params);
       return {
-        grao: 'container', params: [organizationId, periodo.inicio, periodo.fim, status],
+        grao: 'container', params,
         baseSql: `SELECT c.id AS id_ord FROM containers c
            JOIN processos p ON p.id = c.processo_id
            JOIN responsabilidade_decisoes d ON d.container_id = c.id
           WHERE c.organization_id = $1 AND p.apuracao_status = 'FINAL' AND p.fechado_em::date >= $2 AND p.fechado_em::date <= $3
             AND d.status = $4
-            AND NOT EXISTS (SELECT 1 FROM responsabilidade_decisoes d2 WHERE d2.substitui_decisao_id = d.id)`,
+            AND NOT EXISTS (SELECT 1 FROM responsabilidade_decisoes d2 WHERE d2.substitui_decisao_id = d.id)${e}`,
       };
     }
     case 'G-E7': {
       // D14 v1.2 #2 — mesma predicate de `qualidade.ts:tiposNaoReconhecidos` (grão processo, DISTINCT, null excluído).
+      const params: unknown[] = [organizationId];
+      const e = escopoPorProcesso(params, 'dp.processo_id');
       return {
-        grao: 'processo', params: [organizationId],
+        grao: 'processo', params,
         baseSql: `SELECT DISTINCT dp.processo_id AS id_ord FROM demurrage_pendencias dp
           WHERE dp.organization_id = $1 AND dp.estado = 'aberta' AND dp.tipo IN ('tipo_ausente', 'tipo_nao_reconhecido')
-            AND dp.processo_id IS NOT NULL`,
+            AND dp.processo_id IS NOT NULL${e}`,
       };
     }
     case 'G-E8': {
       // D14 v1.2 #3 — mesma predicate de `qualidade.ts:tabelasIndisponiveis` (grão contêiner, DISTINCT).
+      const params: unknown[] = [organizationId];
+      const e = escopoPorProcesso(params, 'c.processo_id');
       return {
-        grao: 'container', params: [organizationId],
+        grao: 'container', params,
         baseSql: `SELECT DISTINCT va.container_id AS id_ord FROM valores_apurados va JOIN containers c ON c.id = va.container_id
-          WHERE c.organization_id = $1 AND va.calculation_status IN ('OPEN', 'FINAL') AND va.confirmation_status = 'UNAVAILABLE'`,
+          WHERE c.organization_id = $1 AND va.calculation_status IN ('OPEN', 'FINAL') AND va.confirmation_status = 'UNAVAILABLE'${e}`,
       };
     }
     default:
@@ -297,19 +327,34 @@ async function buscarLinhasExibicao(pool: Pool, grao: 'container' | 'processo', 
   });
 }
 
+/** `filtros` da resposta: escopo + o que efetivamente entrou na predicate (nomes da query string). */
+function filtrosAtivosComposicao(escopo: EscopoAplicado, periodo: PeriodoObrigatorio | null, filtros: FiltrosOperacional): FiltrosAtivos {
+  const ativos: FiltrosAtivos = { ...filtrosDoEscopo(escopo) };
+  if (periodo) { ativos.periodoInicio = periodo.inicio; ativos.periodoFim = periodo.fim; }
+  if (filtros.clienteId) ativos.cliente = filtros.clienteId;
+  if (filtros.armadorId) ativos.armador = filtros.armadorId;
+  if (filtros.containerTypeId) ativos.tipoEquipamento = filtros.containerTypeId;
+  return ativos;
+}
+
 export async function buscarComposicaoIndicador(pool: Pool, organizationId: string, indicadorId: string, opts: ComposicaoOpts = {}): Promise<ComposicaoIndicadorV1> {
   const descritor = buscarDescritorIndicador(indicadorId);
   if (!descritor) throw new ErroLeitura(404, 'nao_encontrado', { campo: 'indicadorId' });
+  const escopo = opts.escopo ?? escopoEquipeOrganizacao();
+  const meta = { escopo: escopo.escopo, membershipResolvido: escopo.membershipResolvido };
 
   if (!descritor.drilldownDisponivel) {
-    return { contrato: 'demurrage.gestao.composicao.v1', indicadorId, drilldownDisponivel: false, motivo: descritor.estrategiaComposicao, total: null, itens: [], cursor: null };
+    return {
+      contrato: 'demurrage.gestao.composicao.v1', ...meta, filtros: filtrosAtivosComposicao(escopo, null, {}),
+      indicadorId, drilldownDisponivel: false, motivo: descritor.estrategiaComposicao, total: null, itens: [], cursor: null, temProxima: false,
+    };
   }
 
   const periodo = descritor.requerPeriodo ? validarPeriodoObrigatorio(opts.periodo as any) : null;
   const filtros = descritor.aceitaFiltrosOperacionais ? (opts.filtros ?? {}) : {};
   const limite = Math.min(opts.limite ?? LIMITE_PADRAO, MAX_LIMITE);
 
-  const filtroHash = hashContexto(periodo, filtros);
+  const filtroHash = hashContexto(periodo, filtros, escopo);
   let lastId: string | null = null;
   if (opts.cursor) {
     const payload = decodificarCursorAssinado(opts.cursor);
@@ -325,7 +370,7 @@ export async function buscarComposicaoIndicador(pool: Pool, organizationId: stri
     lastId = payload.lastId;
   }
 
-  const spec = specDoIndicador(organizationId, indicadorId, { periodo, filtros });
+  const spec = specDoIndicador(organizationId, indicadorId, { periodo, filtros, escopo });
   const { total, pageIds, proximoId } = await paginarSql(pool, spec.baseSql, spec.params, limite, lastId);
 
   const itens = await buscarLinhasExibicao(pool, spec.grao, pageIds);
@@ -333,5 +378,8 @@ export async function buscarComposicaoIndicador(pool: Pool, organizationId: stri
     ? codificarCursorAssinado({ v: VERSAO_CURSOR_COMPOSICAO, organizationId, indicadorId, filtroHash, lastId: proximoId })
     : null;
 
-  return { contrato: 'demurrage.gestao.composicao.v1', indicadorId, drilldownDisponivel: true, total, itens, cursor };
+  return {
+    contrato: 'demurrage.gestao.composicao.v1', ...meta, filtros: filtrosAtivosComposicao(escopo, periodo, filtros),
+    indicadorId, drilldownDisponivel: true, total, itens, cursor, temProxima: cursor !== null,
+  };
 }

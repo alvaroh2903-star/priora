@@ -308,8 +308,9 @@ export class VesselCallRepository {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      // Produção P1 (identidade operacional): membership desativado não resolve.
       const { rows: autor } = await client.query(
-        `SELECT papel FROM organization_memberships WHERE id = $1 AND organization_id = $2 FOR SHARE`,
+        `SELECT papel FROM organization_memberships WHERE id = $1 AND organization_id = $2 AND desativado_em IS NULL FOR SHARE`,
         [input.autorMembershipId, input.organizationId],
       );
       if (!autor.length || !PAPEIS_RESOLUCAO_PENDENCIA.includes(autor[0].papel)) {

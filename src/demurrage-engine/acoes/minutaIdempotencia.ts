@@ -108,7 +108,7 @@ export type ResultadoRegistroMinutaIdempotente =
    * antiga é REJEITADA; o chamador precisa de uma chave NOVA.
    */
   | { ok: false; motivo: 'idempotency_key_legado_sem_hash' }
-  | { ok: false; motivo: 'container_nao_encontrado' | 'ator_nao_autorizado' | 'documento_obrigatorio' | 'documento_invalido'; campo?: string };
+  | { ok: false; motivo: 'container_nao_encontrado' | 'ator_nao_autorizado' | 'ator_nao_responsavel' | 'documento_obrigatorio' | 'documento_invalido'; campo?: string };
 
 async function existeChaveLegado0042(pool: Pool, organizationId: string, rota: string, chave: string): Promise<boolean> {
   const { rows } = await pool.query(

@@ -123,7 +123,8 @@ test('D10 gate1: organizationId ausente/inválido é rejeitado', () => {
 
 test('D10 gate1: nenhuma rota/endpoint chama o serviço de registro — só código de aplicação', () => {
   // Varredura estática: nenhum arquivo de rotas/entrada HTTP referencia o serviço.
-  const alvos = ['src/routes', 'src/index.ts', 'public'];
+  // Produção P1 (autenticação): a montagem HTTP saiu de `index.ts` para `app.ts`.
+  const alvos = ['src/routes', 'src/index.ts', 'src/app.ts', 'public'];
   const raiz = join(__dirname, '..', '..', '..');
   const varrer = (rel: string): string[] => {
     const abs = join(raiz, rel);

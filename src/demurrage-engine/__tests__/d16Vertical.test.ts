@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Pool } from 'pg';
 import { runMigrations } from '../db/migrate';
-import { testPool, testDatabaseUrl, truncateAll } from './testDb';
+import { testPool, testDatabaseUrl, truncateAll, atribuirResponsavelDeTeste } from './testDb';
 import { OrganizationRepository } from '../persistence/organizationRepository';
 import { UsuarioRepository } from '../persistence/usuarioRepository';
 import { OrganizationMembershipRepository } from '../persistence/organizationMembershipRepository';
@@ -50,12 +50,27 @@ import {
  *     e os seeds oficiais;
  *   - outbox/avisos: o tick real `executarTickDemurrage`.
  *
- * Nenhum INSERT/UPDATE direto em tabela de negócio. As únicas consultas SQL
- * diretas são LEITURAS (SELECT) para asserção. A única escrita fora de um
- * serviço de alto nível é a observação estruturada de POD (`podDescarga`) nos
- * cenários #19/#20, gravada pelo writer oficial do ledger append-only
- * (`FieldObservationRepository.insert`) — o contrato de registro não carrega
- * POD e nenhum serviço de produção grava esse campo hoje (ver nota nos testes).
+ * Nenhum INSERT/UPDATE direto em tabela de negócio nos fluxos verificados.
+ * As únicas consultas SQL diretas de asserção são LEITURAS (SELECT). Há DUAS
+ * exceções de escrita fora de um serviço de alto nível, ambas de SETUP:
+ *  1. a observação estruturada de POD (`podDescarga`) nos cenários #19/#20,
+ *     gravada pelo writer oficial do ledger append-only
+ *     (`FieldObservationRepository.insert`) — o contrato de registro não
+ *     carrega POD e nenhum serviço de produção grava esse campo hoje (ver nota
+ *     nos testes);
+ *  2. Produção P1 (filas pessoais): a atribuição do RESPONSÁVEL operacional
+ *     do processo, exigida pela regra de ação pessoal da Produção P1 (o
+ *     ANALYST que solicita reabertura ou é autor de fallback manual tem de ser
+ *     o responsável PERSISTIDO do processo). São escritas SQL diretas em
+ *     `processos`: `UPDATE processos SET responsavel_operacional_membership_id`
+ *     via o helper de teste `atribuirResponsavelDeTeste` (#12 — a atribuição
+ *     oficial recusa processo FINAL — e, dentro de `processoAtribuidoA`, #14 e
+ *     #21) e um `INSERT INTO processos` com a MESMA linha mínima do passo 3 do
+ *     registro em `processoAtribuidoA` (#14, #21 — o processo ainda não existe
+ *     e o serviço oficial de atribuição exige um processo já existente; o
+ *     registro o reencontra pelo número e segue idêntico). Nenhum fluxo
+ *     verificado passa a depender delas: só posicionam o responsável antes da
+ *     ação pessoal.
  *
  * Toda data é EXPLÍCITA (hojeReferencia/config.hoje/hoje do tick) — nada
  * depende do relógio civil da máquina para as asserções.
@@ -102,6 +117,26 @@ async function eventosFechamento(pool: Pool, processoId: string, tipo: string) {
   return (await pool.query(`SELECT * FROM closing_events WHERE processo_id=$1 AND tipo_evento=$2 ORDER BY criado_em`, [processoId, tipo])).rows;
 }
 const contar = async (pool: Pool, sql: string, params: unknown[] = []) => Number((await pool.query(sql, params)).rows[0].n);
+
+/**
+ * Produção P1 (filas pessoais): fallback manual é ação PESSOAL — um ANALYST
+ * autor tem de ser o responsável PERSISTIDO do processo (conferido sob o lock
+ * do processo, antes de qualquer escrita; nunca o que a própria entrada
+ * gravaria). Para um processo que o registro ainda vai criar, ele nasce aqui
+ * com a MESMA linha mínima do passo 3 do registro, já atribuído ao ANALYST
+ * (helper de setup `atribuirResponsavelDeTeste`); o registro o reencontra pelo
+ * número e segue idêntico. Exceção de SETUP nº 2 listada no cabeçalho (como a
+ * atribuição do #12): o serviço oficial de atribuição exige um processo já
+ * existente e não FINAL; nenhum fluxo verificado passa a depender dela.
+ */
+async function processoAtribuidoA(pool: Pool, orgId: string, numeroProcesso: string, membershipId: string): Promise<string> {
+  const { rows } = await pool.query(
+    `INSERT INTO processos (organization_id, numero_processo, cliente_id) VALUES ($1, $2, NULL) RETURNING id`,
+    [orgId, numeroProcesso],
+  );
+  await atribuirResponsavelDeTeste(pool, rows[0].id, membershipId);
+  return rows[0].id;
+}
 
 /** Resultado de tracking do armador para UM contêiner (descarga obrigatória; Gate Out/Empty Return opcionais). */
 function tracking(numero: string, f: { descarga: string; gateOut?: string | null; retorno?: string | null; tipo?: string | null }): TrackingEnrichResult {
@@ -724,6 +759,11 @@ test('D16 #12: reabertura AUTORIZADA leva a um recálculo CORRETO com o fato mat
     assert.equal((await containerRow(pool, cen.containerId)).tracking_return_date, '2026-09-28');
 
     const analista = await novoMembro(pool, cen.orgId, 'ANALYST');
+    // Produção P1 (filas pessoais): solicitar reabertura é ação PESSOAL — o
+    // ANALYST solicitante é o responsável do processo (setup; a atribuição
+    // oficial recusa processo FINAL, então usa o helper de teste). A regra
+    // verificada (justificativa obrigatória, só gestor autoriza) não muda.
+    await atribuirResponsavelDeTeste(pool, cen.processoId, analista);
     assert.deepEqual(await cen.closing.solicitarReabertura({ processoId: cen.processoId, membershipId: analista, justificativa: '  ' }), { ok: false, motivo: 'justificativa_obrigatoria' });
     const sol = await cen.closing.solicitarReabertura({ processoId: cen.processoId, membershipId: analista, justificativa: 'Armador corrigiu o Empty Return para 10-02.' });
     assert.equal(sol.ok, true);
@@ -845,6 +885,8 @@ test('D16 #14: fonte mais forte conflita com um valor MANUAL_FALLBACK — não s
     const gestor = await novoGestor(pool, org.id);
     const numero = numeroContainer('DSUN', 1);
     const base = { organizationId: org.id, numeroProcesso: 'IM-D16-FALLBK', containers: [containerContrato(numero)] };
+    // Produção P1 (filas pessoais): o ANALYST autor do fallback é o responsável do processo.
+    await processoAtribuidoA(pool, org.id, 'IM-D16-FALLBK', analista);
 
     // 1) Valor vigente informado por MANUAL_FALLBACK (governança completa).
     const r1 = await registrarProcessoDemurrage(contratoRegistro({
@@ -1312,6 +1354,8 @@ test('D16 #21: reparo automático do outbox recupera o pós-commit interrompido 
     const g1 = await novoGestor(pool, org.id);
     const g2 = await novoMembro(pool, org.id, 'ADMIN');
     const numero = numeroContainer('DSUS', 1);
+    // Produção P1 (filas pessoais): o ANALYST autor do fallback é o responsável do processo.
+    await processoAtribuidoA(pool, org.id, 'IM-D16-OUTBOX', analista);
     const entrada = contratoRegistro({
       organizationId: org.id, numeroProcesso: 'IM-D16-OUTBOX',
       containers: [containerContrato(numero, { tipoOriginal: o('40HC', 'house_document', T0) })],

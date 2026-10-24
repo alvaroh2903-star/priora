@@ -186,23 +186,23 @@ export const FILA_PAGINA_2_ITENS: FilaItemV1[] = [
 export const CURSOR_PAGINA_2 = 'eyJ2IjoiZml4dHVyZSJ9.cGFnaW5hMg';
 
 export function filaPagina1(): FilaRespostaV1 {
-  return { contrato: 'demurrage.leitura.v1', escopo: 'fila_da_equipe', apuracaoStatus: 'OPEN', itens: FILA_PAGINA_1_ITENS, total: 6, cursor: CURSOR_PAGINA_2, limite: 4, incluiuSilenciosos: false };
+  return { contrato: 'demurrage.leitura.v1', escopo: 'EQUIPE', apuracaoStatus: 'OPEN', itens: FILA_PAGINA_1_ITENS, total: 6, cursor: CURSOR_PAGINA_2, limite: 4, incluiuSilenciosos: false };
 }
 export function filaPagina2(): FilaRespostaV1 {
-  return { contrato: 'demurrage.leitura.v1', escopo: 'fila_da_equipe', apuracaoStatus: 'OPEN', itens: FILA_PAGINA_2_ITENS, total: 6, cursor: null, limite: 4, incluiuSilenciosos: false };
+  return { contrato: 'demurrage.leitura.v1', escopo: 'EQUIPE', apuracaoStatus: 'OPEN', itens: FILA_PAGINA_2_ITENS, total: 6, cursor: null, limite: 4, incluiuSilenciosos: false };
 }
 export function filaVazia(): FilaRespostaV1 {
-  return { contrato: 'demurrage.leitura.v1', escopo: 'fila_da_equipe', apuracaoStatus: 'OPEN', itens: [], total: 0, cursor: null, limite: 50, incluiuSilenciosos: false };
+  return { contrato: 'demurrage.leitura.v1', escopo: 'EQUIPE', apuracaoStatus: 'OPEN', itens: [], total: 0, cursor: null, limite: 50, incluiuSilenciosos: false };
 }
 /** Resposta de contagem (`limite=1`) — só o `total` é lido pela tela. */
 export function filaContagem(total: number): FilaRespostaV1 {
-  return { contrato: 'demurrage.leitura.v1', escopo: 'fila_da_equipe', apuracaoStatus: 'OPEN', itens: total ? [FILA_PAGINA_1_ITENS[0]] : [], total, cursor: null, limite: 1, incluiuSilenciosos: false };
+  return { contrato: 'demurrage.leitura.v1', escopo: 'EQUIPE', apuracaoStatus: 'OPEN', itens: total ? [FILA_PAGINA_1_ITENS[0]] : [], total, cursor: null, limite: 1, incluiuSilenciosos: false };
 }
 
 export function filtrosDisponiveis(): FiltrosDisponiveisV1 {
   return {
     contrato: 'demurrage.leitura.v1',
-    escopo: 'fila_da_equipe', apuracaoStatus: 'OPEN', apuracao: { abertos: 9, finalizados: 0 },
+    escopo: 'EQUIPE', apuracaoStatus: 'OPEN', apuracao: { abertos: 9, finalizados: 0 },
     responsaveis: [{ membershipId: '33333333-3333-4333-8333-333333333333', nome: 'Ana Souza' }],
     clientes: [{ id: '11111111-1111-4111-8111-111111111111', nome: 'Alfa Importadora' }, { id: '11111111-1111-4111-8111-111111111112', nome: 'Beta Comércio' }],
     armadores: [{ id: '22222222-2222-4222-8222-222222222222', codigo: 'MAERSK', nome: 'Maersk' }],

@@ -1,5 +1,6 @@
 import { Pool, PoolClient } from 'pg';
 import { getPool } from '../db/pool';
+import { lockProcesso } from '../closing/materialChangeGuard';
 
 /**
  * Fase D15-B — mecanismo COMPARTILHADO de `demurrage_pendencias`, extraído de
@@ -51,7 +52,10 @@ export async function resolverPendenciasComClient(
 }
 
 export class PendenciaResolucaoError extends Error {
-  constructor(public readonly codigo: 'PENDENCIA_NAO_ENCONTRADA' | 'MOTIVO_OBRIGATORIO' | 'AUTOR_NAO_AUTORIZADO', detalhe?: Record<string, unknown>) {
+  constructor(
+    public readonly codigo: 'PENDENCIA_NAO_ENCONTRADA' | 'MOTIVO_OBRIGATORIO' | 'AUTOR_NAO_AUTORIZADO' | 'ATOR_NAO_RESPONSAVEL',
+    detalhe?: Record<string, unknown>,
+  ) {
     super(`${codigo}${detalhe ? ' ' + JSON.stringify(detalhe) : ''}`);
     this.name = 'PendenciaResolucaoError';
   }
@@ -75,24 +79,58 @@ export const PAPEIS_RESOLUCAO_PENDENCIA: readonly string[] = ['ANALYST', 'MANAGE
  * OBRIGATÓRIO e não-vazio. Preserva a linha (histórico); nunca reabre uma já
  * resolvida (idempotente — resolver de novo é NO-OP silencioso, a primeira
  * resolução é que fica registrada).
+ *
+ * Produção P1 (identidade operacional e filas pessoais):
+ *  - o autor precisa estar ATIVO (`desativado_em IS NULL`, `FOR SHARE` — a
+ *    desativação não comita no meio desta transação);
+ *  - ação PESSOAL: ANALYST só resolve pendência de processo ATRIBUÍDO a ele
+ *    (`processos.responsavel_operacional_membership_id`; sem responsável =
+ *    nenhum ANALYST) → `ATOR_NAO_RESPONSAVEL`; MANAGER/ADMIN em qualquer
+ *    processo da organização;
+ *  - a checagem roda sob a ORDEM UNIVERSAL de lock (`materialChangeGuard.ts`):
+ *    processo da pendência SEM lock de linha → `lockProcesso` → processo
+ *    `FOR SHARE` → autor → pendência `FOR UPDATE`. A atribuição
+ *    (`responsavel/atribuirResponsavel.ts`) toma o MESMO lock consultivo, então
+ *    uma reatribuição concorrente nunca passa entre a checagem e a escrita; e
+ *    a autorização vem ANTES do "já resolvida" (nenhuma resposta a quem não
+ *    pode agir no processo).
  */
 export async function resolverPendenciaManualComClient(
   db: Db, input: { pendenciaId: string; organizationId: string; autorMembershipId: string; motivo: string },
 ): Promise<{ resolvida: boolean }> {
   const motivo = (input.motivo ?? '').trim();
   if (!motivo) throw new PendenciaResolucaoError('MOTIVO_OBRIGATORIO');
+  // 1) processo da pendência, SEM lock de linha mutável (`processo_id` nunca muda).
+  const { rows: ident } = await db.query(
+    `SELECT processo_id FROM demurrage_pendencias WHERE id = $1 AND organization_id = $2`,
+    [input.pendenciaId, input.organizationId],
+  );
+  if (!ident.length) throw new PendenciaResolucaoError('PENDENCIA_NAO_ENCONTRADA', { pendenciaId: input.pendenciaId });
+  const processoId: string = ident[0].processo_id;
+  // 2) lock consultivo → 3) processo (responsável relido sob o lock).
+  await lockProcesso(db, processoId);
+  const { rows: proc } = await db.query(
+    `SELECT responsavel_operacional_membership_id FROM processos WHERE id = $1 AND organization_id = $2 FOR SHARE`,
+    [processoId, input.organizationId],
+  );
+  // 4) autor ATIVO + papel interno; 5) ANALYST só como responsável do processo.
   const { rows: autor } = await db.query(
-    `SELECT papel FROM organization_memberships WHERE id = $1 AND organization_id = $2 FOR SHARE`,
+    `SELECT papel FROM organization_memberships WHERE id = $1 AND organization_id = $2 AND desativado_em IS NULL FOR SHARE`,
     [input.autorMembershipId, input.organizationId],
   );
   if (!autor.length || !PAPEIS_RESOLUCAO_PENDENCIA.includes(autor[0].papel)) {
     throw new PendenciaResolucaoError('AUTOR_NAO_AUTORIZADO', { autorMembershipId: input.autorMembershipId });
   }
+  if (autor[0].papel === 'ANALYST' && proc[0]?.responsavel_operacional_membership_id !== input.autorMembershipId) {
+    throw new PendenciaResolucaoError('ATOR_NAO_RESPONSAVEL', { autorMembershipId: input.autorMembershipId });
+  }
+  // 6) pendência `FOR UPDATE`, relida já sob o lock — e ainda do MESMO processo
+  //    cujo responsável foi conferido acima (defesa em profundidade).
   const { rows: pend } = await db.query(
-    `SELECT id, estado FROM demurrage_pendencias WHERE id = $1 AND organization_id = $2 FOR UPDATE`,
+    `SELECT id, estado, processo_id FROM demurrage_pendencias WHERE id = $1 AND organization_id = $2 FOR UPDATE`,
     [input.pendenciaId, input.organizationId],
   );
-  if (!pend.length) throw new PendenciaResolucaoError('PENDENCIA_NAO_ENCONTRADA', { pendenciaId: input.pendenciaId });
+  if (!pend.length || pend[0].processo_id !== processoId) throw new PendenciaResolucaoError('PENDENCIA_NAO_ENCONTRADA', { pendenciaId: input.pendenciaId });
   if (pend[0].estado === 'resolvida') return { resolvida: false };
   await db.query(
     `UPDATE demurrage_pendencias SET estado = 'resolvida', resolvido_em = now(), resolvido_por = $2, resolvido_motivo = $3 WHERE id = $1`,

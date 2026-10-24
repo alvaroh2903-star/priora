@@ -5,7 +5,7 @@ import { AddressInfo } from 'node:net';
 import { randomUUID } from 'crypto';
 import { Pool } from 'pg';
 import { runMigrations } from '../demurrage-engine/db/migrate';
-import { testPool, testDatabaseUrl, truncateAll } from '../demurrage-engine/__tests__/testDb';
+import { atribuirResponsavelDeTeste, testPool, testDatabaseUrl, truncateAll } from '../demurrage-engine/__tests__/testDb';
 import { OrganizationRepository } from '../demurrage-engine/persistence/organizationRepository';
 import { UsuarioRepository } from '../demurrage-engine/persistence/usuarioRepository';
 import { OrganizationMembershipRepository } from '../demurrage-engine/persistence/organizationMembershipRepository';
@@ -81,6 +81,14 @@ async function usuarioInterno(pool: Pool, orgId: string, papel: 'ANALYST' | 'MAN
   return u.homeAccountId!;
 }
 
+// Produção P1 (filas pessoais): membership da sessão de teste, para atribuir o ANALYST como responsável.
+async function membershipIdPorHome(pool: Pool, home: string): Promise<string> {
+  const { rows } = await pool.query(
+    `SELECT m.id FROM organization_memberships m JOIN usuarios u ON u.id = m.usuario_id WHERE u.home_account_id = $1`, [home],
+  );
+  return rows[0].id;
+}
+
 test('D13 (UI, Gate G7) — a query string construída por demurrage-v2-apresentacao.js não altera o banco em nenhum GET', { skip: !url }, async () => {
   const pool = testPool();
   const app = await subirApp(pool);
@@ -88,7 +96,13 @@ test('D13 (UI, Gate G7) — a query string construída por demurrage-v2-apresent
     const org = await setup(pool);
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const { processoId, containerId } = await processoReal(pool, org.id, 'IM-D13-UI-1', 'DTAA');
-    await processoReal(pool, org.id, 'IM-D13-UI-1B', 'DTAB');
+    const { processoId: processoB } = await processoReal(pool, org.id, 'IM-D13-UI-1B', 'DTAB');
+    // Produção P1 (filas pessoais): a fila do ANALYST é MINHA_FILA e detalhe/timeline/contêiner só respondem
+    // para processo atribuído a ele (senão, 404) — os DOIS processos passam a ser dele, para que a fila
+    // continue com duas linhas (página seguinte por cursor exercitada) e as leituras de detalhe respondam 200.
+    const mAnalista = await membershipIdPorHome(pool, home);
+    await atribuirResponsavelDeTeste(pool, processoId, mAnalista);
+    await atribuirResponsavelDeTeste(pool, processoB, mAnalista);
     const hdr = { 'x-test-home-account-id': home };
 
     const { rows: tabelas } = await pool.query(

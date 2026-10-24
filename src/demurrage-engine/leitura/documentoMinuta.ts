@@ -14,6 +14,9 @@ import { isoTimestamp } from './contrato';
  * (onde o arquivo está + hash SHA-256 para provar que é o mesmo), com
  * vínculo a processo, contêiner, organização, autor, data e versão da minuta.
  * Somente leitura (um SELECT).
+ *
+ * Produção P1 (filas pessoais): `responsavelExigido` (sessão ANALYST) entra no
+ * mesmo WHERE — documento de processo não atribuído a ele é o mesmo `null`.
  */
 
 export const CONTRATO_DOCUMENTO_MINUTA_V1 = 'demurrage.leitura.documento-minuta.v1' as const;
@@ -35,7 +38,11 @@ export interface DocumentoMinutaV1 {
   incluidoEm: string;
 }
 
-export async function buscarDocumentoDaMinuta(pool: Pool, organizationId: string, minutaId: string): Promise<DocumentoMinutaV1 | null> {
+export async function buscarDocumentoDaMinuta(
+  pool: Pool, organizationId: string, minutaId: string, responsavelExigido: string | null = null,
+): Promise<DocumentoMinutaV1 | null> {
+  const params: unknown[] = [minutaId, organizationId];
+  if (responsavelExigido) params.push(responsavelExigido);
   const { rows } = await pool.query(
     `SELECT d.id, d.minuta_id, d.versao_minuta, d.processo_id, p.numero_processo, d.container_id, c.numero AS container_numero,
             d.origem, d.referencia_armazenamento, d.nome_arquivo, d.tipo_conteudo, d.tamanho_bytes, d.hash_conteudo,
@@ -45,8 +52,8 @@ export async function buscarDocumentoDaMinuta(pool: Pool, organizationId: string
        JOIN processos p ON p.id = d.processo_id AND p.organization_id = d.organization_id
        LEFT JOIN organization_memberships om ON om.id = d.incluido_por_membership_id AND om.organization_id = d.organization_id
        LEFT JOIN usuarios u ON u.id = om.usuario_id
-      WHERE d.minuta_id = $1 AND d.organization_id = $2`,
-    [minutaId, organizationId],
+      WHERE d.minuta_id = $1 AND d.organization_id = $2${responsavelExigido ? ' AND p.responsavel_operacional_membership_id = $3' : ''}`,
+    params,
   );
   if (!rows.length) return null;
   const r = rows[0];

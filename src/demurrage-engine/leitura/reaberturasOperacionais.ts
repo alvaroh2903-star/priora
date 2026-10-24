@@ -2,8 +2,9 @@ import { Pool } from 'pg';
 import { ehGestor } from '../closing/closingService';
 import { PapelRbac } from '../scheduler/failurePolicy';
 import { sanitizarEvidencia } from '../freeTime/freeTimeTentativas';
-import { ErroLeitura, isoTimestamp } from './contrato';
+import { ErroLeitura, FiltrosAtivos, isoTimestamp, MetaEscopoCompleta } from './contrato';
 import { codificarCursorKeyset, decodificarCursorKeyset, expressaoChaveExata, hashFiltrosKeyset } from './cursorKeyset';
+import { EscopoAplicado, escopoEquipeOrganizacao, filtrosDoEscopo, paresEscopo, predicadoEscopo } from './escopoFila';
 import { dataOuErro } from './parametrosOperacionais';
 
 /**
@@ -48,10 +49,15 @@ import { dataOuErro } from './parametrosOperacionais';
  *    (nenhuma autorização comprovada), `autorizadaEm` é `null` — nunca
  *    inferido de outra coluna. Nenhum caminho de escrita das Entregas 1/2
  *    foi alterado.
+ *
+ * Produção P1 (filas pessoais): a lista respeita o ESCOPO resolvido pelo
+ * servidor (MINHA_FILA — padrão e único do ANALYST: reaberturas dos processos
+ * atribuídos a ele —, EQUIPE ou SEM_RESPONSAVEL), predicado SQL sobre o
+ * responsável do processo antes do `LIMIT`; escopo no hash do cursor (`.v3`).
  */
 
 export const CONTRATO_REABERTURAS_V1 = 'demurrage.leitura.reaberturas.v1' as const;
-export const VERSAO_CURSOR_REABERTURAS = 'p1e3.reaberturas.v2';
+export const VERSAO_CURSOR_REABERTURAS = 'p1e3.reaberturas.v3';
 
 const MAX_LIMITE = 200;
 const LIMITE_PADRAO = 50;
@@ -116,20 +122,32 @@ export interface ReaberturaItemV1 {
   autorizador: IdentidadeSegura | null;
 }
 
-export interface ReaberturasRespostaV1 {
+export interface ReaberturasRespostaV1 extends MetaEscopoCompleta {
   contrato: typeof CONTRATO_REABERTURAS_V1;
   itens: ReaberturaItemV1[];
   cursor: string | null;
+  /** Produção P1 — há próxima página (equivale a `cursor !== null`). */
+  temProxima: boolean;
   limite: number;
 }
 
-function serializarFiltros(organizationId: string, f: FiltroReaberturas) {
+function serializarFiltros(organizationId: string, f: FiltroReaberturas, escopo: EscopoAplicado) {
   return [
     ['v', VERSAO_CURSOR_REABERTURAS], ['organizationId', organizationId],
     ['estado', f.estado ?? 'SOLICITADA'], ['processoId', f.processoId ?? null],
     ['solicitanteMembershipId', f.solicitanteMembershipId ?? null],
     ['criadoDesde', f.criadoDesde ?? null], ['criadoAte', f.criadoAte ?? null],
+    ...paresEscopo(escopo),
   ] as const;
+}
+
+function filtrosAtivosReaberturas(f: FiltroReaberturas, escopo: EscopoAplicado): FiltrosAtivos {
+  const ativos: FiltrosAtivos = { ...filtrosDoEscopo(escopo), estado: f.estado ?? 'SOLICITADA' };
+  if (f.processoId) ativos.processoId = f.processoId;
+  if (f.solicitanteMembershipId) ativos.solicitanteMembershipId = f.solicitanteMembershipId;
+  if (f.criadoDesde) ativos.criadoDesde = f.criadoDesde;
+  if (f.criadoAte) ativos.criadoAte = f.criadoAte;
+  return ativos;
 }
 
 export interface BuscarReaberturasInput {
@@ -138,6 +156,8 @@ export interface BuscarReaberturasInput {
   limite?: number;
   cursor?: string | null;
   papel: PapelRbac;
+  /** Produção P1 — escopo resolvido pela rota; ausente = EQUIPE inteira (chamador interno). */
+  escopo?: EscopoAplicado;
 }
 
 interface LinhaReabertura {
@@ -161,7 +181,8 @@ interface LinhaReabertura {
 export async function buscarReaberturas(pool: Pool, input: BuscarReaberturasInput): Promise<ReaberturasRespostaV1> {
   const limite = Math.min(MAX_LIMITE, Math.max(1, input.limite ?? LIMITE_PADRAO));
   const f = input.filtros;
-  const filtrosHashAtual = hashFiltrosKeyset(serializarFiltros(input.organizationId, f));
+  const escopo = input.escopo ?? escopoEquipeOrganizacao();
+  const filtrosHashAtual = hashFiltrosKeyset(serializarFiltros(input.organizationId, f, escopo));
 
   const cursorRecebido = input.cursor
     ? decodificarCursorKeyset(input.cursor, VERSAO_CURSOR_REABERTURAS, input.organizationId, filtrosHashAtual)
@@ -180,6 +201,8 @@ export async function buscarReaberturas(pool: Pool, input: BuscarReaberturasInpu
     params.push(f.solicitanteMembershipId, input.organizationId);
     where.push(`r.solicitada_por = (SELECT usuario_id FROM organization_memberships WHERE id = $${params.length - 1} AND organization_id = $${params.length})`);
   }
+  const predicado = predicadoEscopo(escopo, 'p.responsavel_operacional_membership_id', params);
+  if (predicado) where.push(predicado);
 
   if (cursorRecebido) {
     // Ordem OFICIAL: mais antiga solicitação primeiro (fila operacionalmente justa) — ASC.
@@ -242,5 +265,14 @@ export async function buscarReaberturas(pool: Pool, input: BuscarReaberturasInpu
       })
     : null;
 
-  return { contrato: CONTRATO_REABERTURAS_V1, itens, cursor: cursorSaida, limite };
+  return {
+    contrato: CONTRATO_REABERTURAS_V1,
+    escopo: escopo.escopo,
+    membershipResolvido: escopo.membershipResolvido,
+    filtros: filtrosAtivosReaberturas(f, escopo),
+    itens,
+    cursor: cursorSaida,
+    temProxima,
+    limite,
+  };
 }

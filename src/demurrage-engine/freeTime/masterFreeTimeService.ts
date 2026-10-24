@@ -473,15 +473,25 @@ export function avaliarDivergenciaHouseComClient(
  * memberships MANAGER/ADMIN da organização. Idempotente por (divergência,
  * ocorrência, destinatário). Sem responsável operacional → só gestores, com o
  * fato registrado no evento. Sem nenhum destinatário → evento `aviso_falhou`.
+ *
+ * Produção P1 (migration 0049) — só memberships ATIVOS recebem: responsável
+ * DESATIVADO conta como "sem responsável" (só gestores, mesmo fato no evento
+ * — mesma leitura da fila SEM_RESPONSAVEL) e gestor desativado não entra.
  */
 export async function enfileirarAvisosComClient(
   client: PoolClient,
   input: { organizationId: string; divergenciaId: string; processoId: string; ocorrenciaSeq: number; autor: string },
 ): Promise<number> {
-  const { rows: p } = await client.query(`SELECT responsavel_operacional_membership_id FROM processos WHERE id = $1`, [input.processoId]);
+  const { rows: p } = await client.query(
+    `SELECT m.id AS responsavel_operacional_membership_id
+       FROM processos p
+       LEFT JOIN organization_memberships m ON m.id = p.responsavel_operacional_membership_id AND m.desativado_em IS NULL
+      WHERE p.id = $1`,
+    [input.processoId],
+  );
   const responsavel: string | null = p[0]?.responsavel_operacional_membership_id ?? null;
   const { rows: gestores } = await client.query(
-    `SELECT id FROM organization_memberships WHERE organization_id = $1 AND papel IN ('MANAGER', 'ADMIN') ORDER BY id`,
+    `SELECT id FROM organization_memberships WHERE organization_id = $1 AND papel IN ('MANAGER', 'ADMIN') AND desativado_em IS NULL ORDER BY id`,
     [input.organizationId],
   );
   const destinatarios: Array<{ tipo: 'responsavel_operacional' | 'gestor'; membershipId: string }> = [];

@@ -1,14 +1,18 @@
 import { Pool } from 'pg';
 import { PapelRbac } from '../scheduler/failurePolicy';
-import { ESCOPO_FILA_DA_EQUIPE, ErroLeitura, isoTimestamp } from './contrato';
+import { ErroLeitura, FiltrosAtivos, isoTimestamp, MetaEscopoCompleta } from './contrato';
 import { codificarCursorKeyset, decodificarCursorKeyset, expressaoChaveExata, hashFiltrosKeyset } from './cursorKeyset';
+import { EscopoAplicado, escopoEquipeOrganizacao, filtrosDoEscopo, paresEscopo, predicadoEscopo } from './escopoFila';
 import { dataOuErro } from './parametrosOperacionais';
 import { IdentidadeSegura } from './reaberturasOperacionais';
 
 /**
  * Produção P1 (Entrega 3; reaberta na correção de minuta) — leitura
- * operacional nº3: minutas da ORGANIZAÇÃO (`GET /minutas`) — a FILA DA
- * EQUIPE, nunca "ações aguardando você" (não existe fila pessoal ainda).
+ * operacional nº3: minutas (`GET /minutas`) no ESCOPO resolvido pelo
+ * servidor (Produção P1, filas pessoais): MINHA_FILA (padrão e único escopo
+ * do ANALYST — minutas dos processos atribuídos a ele), EQUIPE (organização,
+ * opcionalmente por `responsavel`) ou SEM_RESPONSAVEL. Predicado SQL sobre o
+ * responsável do processo, antes do `LIMIT`; escopo no hash do cursor (`.v4`).
  *
  * Correção de minuta (contrato `demurrage.leitura.minutas.v2`): não existe
  * mais "aguardando validação" nem `podeValidar` — o aceite é técnico e
@@ -44,7 +48,7 @@ import { IdentidadeSegura } from './reaberturasOperacionais';
  */
 
 export const CONTRATO_MINUTAS_V2 = 'demurrage.leitura.minutas.v2' as const;
-export const VERSAO_CURSOR_MINUTAS = 'p1e3.minutas.v3';
+export const VERSAO_CURSOR_MINUTAS = 'p1e3.minutas.v4';
 
 const MAX_LIMITE = 200;
 const LIMITE_PADRAO = 50;
@@ -121,23 +125,35 @@ export interface MinutaItemV2 {
   temDocumento: boolean;
 }
 
-export interface MinutasRespostaV2 {
+export interface MinutasRespostaV2 extends MetaEscopoCompleta {
   contrato: typeof CONTRATO_MINUTAS_V2;
-  escopo: typeof ESCOPO_FILA_DA_EQUIPE;
   /** `exige_acao_do_analista` quando nenhum `estado` foi pedido; senão o estado pedido. */
   filtro: string;
   itens: MinutaItemV2[];
   cursor: string | null;
+  /** Produção P1 — há próxima página (equivale a `cursor !== null`). */
+  temProxima: boolean;
   limite: number;
 }
 
-function serializarFiltros(organizationId: string, f: FiltroMinutas) {
+function serializarFiltros(organizationId: string, f: FiltroMinutas, escopo: EscopoAplicado) {
   return [
     ['v', VERSAO_CURSOR_MINUTAS], ['organizationId', organizationId],
     ['estado', f.estado ?? FILTRO_PADRAO], ['processoId', f.processoId ?? null], ['containerId', f.containerId ?? null],
     ['recebidaDesde', f.recebidaDesde ?? null], ['recebidaAte', f.recebidaAte ?? null],
     ['divergente', f.divergente ?? null],
+    ...paresEscopo(escopo),
   ] as const;
+}
+
+function filtrosAtivosMinutas(f: FiltroMinutas, escopo: EscopoAplicado): FiltrosAtivos {
+  const ativos: FiltrosAtivos = { ...filtrosDoEscopo(escopo), estado: f.estado ?? FILTRO_PADRAO };
+  if (f.processoId) ativos.processoId = f.processoId;
+  if (f.containerId) ativos.containerId = f.containerId;
+  if (f.recebidaDesde) ativos.recebidaDesde = f.recebidaDesde;
+  if (f.recebidaAte) ativos.recebidaAte = f.recebidaAte;
+  if (f.divergente !== undefined) ativos.divergente = f.divergente;
+  return ativos;
 }
 
 export interface BuscarMinutasInput {
@@ -146,6 +162,8 @@ export interface BuscarMinutasInput {
   limite?: number;
   cursor?: string | null;
   papel: PapelRbac;
+  /** Produção P1 — escopo resolvido pela rota; ausente = EQUIPE inteira (chamador interno). */
+  escopo?: EscopoAplicado;
 }
 
 interface LinhaMinuta {
@@ -185,7 +203,8 @@ function exigeAcao(r: { estado_minuta: string; regra_avaliacao: string | null; s
 export async function buscarMinutas(pool: Pool, input: BuscarMinutasInput): Promise<MinutasRespostaV2> {
   const limite = Math.min(MAX_LIMITE, Math.max(1, input.limite ?? LIMITE_PADRAO));
   const f = input.filtros;
-  const filtrosHashAtual = hashFiltrosKeyset(serializarFiltros(input.organizationId, f));
+  const escopo = input.escopo ?? escopoEquipeOrganizacao();
+  const filtrosHashAtual = hashFiltrosKeyset(serializarFiltros(input.organizationId, f, escopo));
 
   const cursorRecebido = input.cursor
     ? decodificarCursorKeyset(input.cursor, VERSAO_CURSOR_MINUTAS, input.organizationId, filtrosHashAtual)
@@ -206,6 +225,8 @@ export async function buscarMinutas(pool: Pool, input: BuscarMinutasInput): Prom
   if (f.recebidaDesde) { params.push(f.recebidaDesde); where.push(`m.criado_em >= $${params.length}::date`); }
   if (f.recebidaAte) { params.push(f.recebidaAte); where.push(`m.criado_em < ($${params.length}::date + interval '1 day')`); }
   if (f.divergente !== undefined) { params.push(f.divergente); where.push(`m.divergente_do_tracking = $${params.length}`); }
+  const predicado = predicadoEscopo(escopo, 'p.responsavel_operacional_membership_id', params);
+  if (predicado) where.push(predicado);
 
   if (cursorRecebido) {
     // Ordem OFICIAL: recebida mais antiga primeiro — ASC.
@@ -269,5 +290,15 @@ export async function buscarMinutas(pool: Pool, input: BuscarMinutasInput): Prom
       })
     : null;
 
-  return { contrato: CONTRATO_MINUTAS_V2, escopo: ESCOPO_FILA_DA_EQUIPE, filtro: f.estado ?? FILTRO_PADRAO, itens, cursor: cursorSaida, limite };
+  return {
+    contrato: CONTRATO_MINUTAS_V2,
+    escopo: escopo.escopo,
+    membershipResolvido: escopo.membershipResolvido,
+    filtros: filtrosAtivosMinutas(f, escopo),
+    filtro: f.estado ?? FILTRO_PADRAO,
+    itens,
+    cursor: cursorSaida,
+    temProxima,
+    limite,
+  };
 }

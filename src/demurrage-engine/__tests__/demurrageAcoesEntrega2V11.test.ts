@@ -5,7 +5,8 @@ import { AddressInfo } from 'node:net';
 import { randomUUID } from 'crypto';
 import { Pool } from 'pg';
 import { runMigrations } from '../db/migrate';
-import { testPool, testDatabaseUrl, truncateAll } from './testDb';
+// Produção P1 (filas pessoais): helpers de atribuição do responsável — ações pessoais de ANALYST exigem o processo atribuído.
+import { testPool, testDatabaseUrl, truncateAll, atribuirResponsavelDeTeste, atribuirResponsavelDoContainerDeTeste } from './testDb';
 import { OrganizationRepository } from '../persistence/organizationRepository';
 import { UsuarioRepository } from '../persistence/usuarioRepository';
 import { OrganizationMembershipRepository } from '../persistence/organizationMembershipRepository';
@@ -162,6 +163,8 @@ test('v1.1 #3: retry idêntico (mesmo contêiner/número/data/evidência) devolv
     const org = await criarOrg(pool, 'v11-03');
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const { containerId, numero } = await processoComRelogios(pool, org.id, 'IM-V11-03', 'ECRA');
+    // Produção P1 (filas pessoais): registrar minuta é ação PESSOAL — o ANALYST é o responsável do processo (a regra de idempotência verificada não muda).
+    await atribuirResponsavelDoContainerDeTeste(pool, containerId, await membershipIdPorHome(pool, home));
     const chave = randomUUID();
     const corpo = { documento: DOC_E2, numeroInformado: numero, dataInformada: '2026-09-10', evidenciaRef: 'evid://v11-03' };
 
@@ -188,6 +191,11 @@ test('v1.1 #4: mesma chave com OUTRO contêiner conflita (idempotency_key_reutil
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const { containerId: c1, numero: n1 } = await processoComRelogios(pool, org.id, 'IM-V11-04A', 'ECRB');
     const { containerId: c2, numero: n2 } = await processoComRelogios(pool, org.id, 'IM-V11-04B', 'ECRC');
+    // Produção P1 (filas pessoais): registrar minuta é ação PESSOAL — o ANALYST é o responsável dos DOIS processos,
+    // para que a 2ª requisição chegue à checagem de idempotência (e não pare em ator_nao_responsavel).
+    const membershipAnalista = await membershipIdPorHome(pool, home);
+    await atribuirResponsavelDoContainerDeTeste(pool, c1, membershipAnalista);
+    await atribuirResponsavelDoContainerDeTeste(pool, c2, membershipAnalista);
     const chave = randomUUID();
 
     const r1 = await post(app.base, `/containers/${c1}/minutas`, { documento: DOC_E2, numeroInformado: n1, dataInformada: '2026-09-10', evidenciaRef: 'e1' }, home, { 'idempotency-key': chave });
@@ -210,6 +218,8 @@ test('v1.1 #5: mesma chave com OUTRO número informado conflita, zero escrita no
     const org = await criarOrg(pool, 'v11-05');
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const { containerId, numero } = await processoComRelogios(pool, org.id, 'IM-V11-05', 'ECRD');
+    // Produção P1 (filas pessoais): registrar minuta é ação PESSOAL — o ANALYST é o responsável do processo (a regra de idempotência verificada não muda).
+    await atribuirResponsavelDoContainerDeTeste(pool, containerId, await membershipIdPorHome(pool, home));
     const chave = randomUUID();
 
     const r1 = await post(app.base, `/containers/${containerId}/minutas`, { documento: DOC_E2, numeroInformado: numero, dataInformada: '2026-09-10', evidenciaRef: 'e' }, home, { 'idempotency-key': chave });
@@ -232,6 +242,8 @@ test('v1.1 #6: mesma chave com OUTRA data informada conflita, zero escrita nova'
     const org = await criarOrg(pool, 'v11-06');
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const { containerId, numero } = await processoComRelogios(pool, org.id, 'IM-V11-06', 'ECRE');
+    // Produção P1 (filas pessoais): registrar minuta é ação PESSOAL — o ANALYST é o responsável do processo (a regra de idempotência verificada não muda).
+    await atribuirResponsavelDoContainerDeTeste(pool, containerId, await membershipIdPorHome(pool, home));
     const chave = randomUUID();
 
     const r1 = await post(app.base, `/containers/${containerId}/minutas`, { documento: DOC_E2, numeroInformado: numero, dataInformada: '2026-09-10', evidenciaRef: 'e' }, home, { 'idempotency-key': chave });
@@ -254,6 +266,8 @@ test('v1.1 #7: mesma chave com OUTRA evidência conflita, zero escrita nova', { 
     const org = await criarOrg(pool, 'v11-07');
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const { containerId, numero } = await processoComRelogios(pool, org.id, 'IM-V11-07', 'ECRF');
+    // Produção P1 (filas pessoais): registrar minuta é ação PESSOAL — o ANALYST é o responsável do processo (a regra de idempotência verificada não muda).
+    await atribuirResponsavelDoContainerDeTeste(pool, containerId, await membershipIdPorHome(pool, home));
     const chave = randomUUID();
 
     const r1 = await post(app.base, `/containers/${containerId}/minutas`, { documento: DOC_E2, numeroInformado: numero, dataInformada: '2026-09-10', evidenciaRef: 'evid://original' }, home, { 'idempotency-key': chave });
@@ -276,6 +290,8 @@ test('v1.1 #8: duas requisições CONCORRENTES IDÊNTICAS de minuta criam exatam
     const org = await criarOrg(pool, 'v11-08');
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const { containerId, numero } = await processoComRelogios(pool, org.id, 'IM-V11-08', 'ECRG');
+    // Produção P1 (filas pessoais): registrar minuta é ação PESSOAL — o ANALYST é o responsável do processo (a regra de idempotência verificada não muda).
+    await atribuirResponsavelDoContainerDeTeste(pool, containerId, await membershipIdPorHome(pool, home));
     const chave = randomUUID();
     const corpo = { documento: DOC_E2, numeroInformado: numero, dataInformada: '2026-09-10', evidenciaRef: 'evid://concorrente' };
     const chamar = () => post(app.base, `/containers/${containerId}/minutas`, corpo, home, { 'idempotency-key': chave });
@@ -298,6 +314,8 @@ test('v1.1 #9: duas requisições CONCORRENTES CONFLITANTES de minuta (mesma cha
     const org = await criarOrg(pool, 'v11-09');
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const { containerId, numero } = await processoComRelogios(pool, org.id, 'IM-V11-09', 'ECRH');
+    // Produção P1 (filas pessoais): registrar minuta é ação PESSOAL — o ANALYST é o responsável do processo (a regra de idempotência verificada não muda).
+    await atribuirResponsavelDoContainerDeTeste(pool, containerId, await membershipIdPorHome(pool, home));
     const chave = randomUUID();
 
     const [r1, r2] = await Promise.all([
@@ -319,6 +337,8 @@ test('v1.1 #10: falha injetada ANTES do commit não deixa minuta nem chave bem-s
     const org = await criarOrg(pool, 'v11-10');
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const { containerId, numero } = await processoComRelogios(pool, org.id, 'IM-V11-10', 'ECRI');
+    // Produção P1 (filas pessoais): registrar minuta (também pelo adaptador direto) é ação PESSOAL — o ANALYST é o responsável do processo.
+    await atribuirResponsavelDoContainerDeTeste(pool, containerId, await membershipIdPorHome(pool, home));
     const usuarioId = await usuarioIdPorHome(pool, home);
     const chave = randomUUID();
     const entrada = {
@@ -347,6 +367,8 @@ test('v1.1 #11: retry depois do COMMIT (simulando um crash do chamador que não 
     const org = await criarOrg(pool, 'v11-11');
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const { containerId, numero } = await processoComRelogios(pool, org.id, 'IM-V11-11', 'ECRJ');
+    // Produção P1 (filas pessoais): registrar minuta (também pelo adaptador direto) é ação PESSOAL — o ANALYST é o responsável do processo.
+    await atribuirResponsavelDoContainerDeTeste(pool, containerId, await membershipIdPorHome(pool, home));
     const usuarioId = await usuarioIdPorHome(pool, home);
     const chave = randomUUID();
     const entrada = {
@@ -375,6 +397,8 @@ test('v1.1 #12: não há janela de duplo-write — a identidade de idempotência
     const org = await criarOrg(pool, 'v11-12');
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const { containerId, numero } = await processoComRelogios(pool, org.id, 'IM-V11-12', 'ECRK');
+    // Produção P1 (filas pessoais): registrar minuta (também pelo adaptador direto) é ação PESSOAL — o ANALYST é o responsável do processo.
+    await atribuirResponsavelDoContainerDeTeste(pool, containerId, await membershipIdPorHome(pool, home));
     const usuarioId = await usuarioIdPorHome(pool, home);
     const chave = randomUUID();
     const entrada = {
@@ -438,6 +462,9 @@ test('v1.1 #14: a MESMA chave textual em organizações DIFERENTES nunca interfe
     const homeB = await usuarioInterno(pool, orgB.id, 'ANALYST');
     const { containerId: cA, numero: nA } = await processoComRelogios(pool, orgA.id, 'IM-V11-14A', 'ECRM');
     const { containerId: cB, numero: nB } = await processoComRelogios(pool, orgB.id, 'IM-V11-14B', 'ECRN');
+    // Produção P1 (filas pessoais): registrar minuta é ação PESSOAL — cada ANALYST é o responsável do processo da sua organização.
+    await atribuirResponsavelDoContainerDeTeste(pool, cA, await membershipIdPorHome(pool, homeA));
+    await atribuirResponsavelDoContainerDeTeste(pool, cB, await membershipIdPorHome(pool, homeB));
     const chave = randomUUID();
 
     const rA = await post(app.base, `/containers/${cA}/minutas`, { documento: DOC_E2, numeroInformado: nA, dataInformada: '2026-09-10', evidenciaRef: 'e' }, homeA, { 'idempotency-key': chave });
@@ -558,6 +585,8 @@ test('v1.1 #19: fallback manual — replay CONCORRENTE idêntico nunca duplica j
     const org = await criarOrg(pool, 'v11-19');
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const { containerId } = await processoMinimo(pool, org.id, 'IM-V11-19', 'ECRR');
+    // Produção P1 (filas pessoais): fallback manual é ação PESSOAL — o ANALYST é o responsável do processo.
+    await atribuirResponsavelDoContainerDeTeste(pool, containerId, await membershipIdPorHome(pool, home));
     const corpo = { campo: 'house', valorDias: 12, observadoEm: T, evidenciaRef: 'evid://v11-19', justificativa: 'Confirmado por e-mail.' };
     const chamar = () => post(app.base, `/containers/${containerId}/fallback-manual`, corpo, home);
 
@@ -613,6 +642,8 @@ test('v1.1 #21 (P1): registro de minuta — duas requisições CONCORRENTES no m
     const org = await criarOrg(pool, 'v11-21');
     const homeAnalyst = await usuarioInterno(pool, org.id, 'ANALYST');
     const { containerId, numero } = await processoComRelogios(pool, org.id, 'IM-V11-21', 'ECRT');
+    // Produção P1 (filas pessoais): registrar minuta é ação PESSOAL — o ANALYST é o responsável do processo.
+    await atribuirResponsavelDoContainerDeTeste(pool, containerId, await membershipIdPorHome(pool, homeAnalyst));
     const registrar = () => post(app.base, `/containers/${containerId}/minutas`, { documento: DOC_E2, numeroInformado: numero, dataInformada: '2026-09-10', evidenciaRef: 'e' }, homeAnalyst, { 'idempotency-key': randomUUID() });
     const [r1, r2] = await Promise.all([registrar(), registrar()]);
     assert.deepEqual([r1.status, r2.status], [201, 201], 'chaves diferentes = duas operações lógicas, ambas aplicadas em série');
@@ -655,6 +686,9 @@ test('v1.1 #23: reabertura (solicitação e autorização) — concorrência per
     const homeAnalyst = await usuarioInterno(pool, org.id, 'ANALYST');
     const homeManager = await usuarioInterno(pool, org.id, 'MANAGER');
     const { processoId } = await processoFinalizavelSemCusto(pool, org.id, 'IM-V11-23', 'ECRV');
+    // Produção P1 (filas pessoais): solicitar reabertura é ação PESSOAL — o ANALYST é o responsável do processo
+    // (a autorização continua organizacional, pelo MANAGER).
+    await atribuirResponsavelDeTeste(pool, processoId, await membershipIdPorHome(pool, homeAnalyst));
     await new ClosingService(pool).finalizarProcesso({ processoId, membershipId: await membershipIdPorHome(pool, homeManager), config: { hoje: '2026-10-01' } });
 
     const chamarSolicitar = () => post(app.base, `/processos/${processoId}/reabertura/solicitar`, { justificativa: 'Corrigir.' }, homeAnalyst);
@@ -707,7 +741,8 @@ test('v1.1 #25: migração limpa 0001→0045 aplica em ordem e reexecutar é um 
     assert.ok(r1.applied.includes('0045_leitura_operacional_indices.sql'));
     assert.ok(r1.applied.includes('0046_leitura_operacional_pendencias_por_processo.sql'));
     assert.ok(r1.applied.includes('0047_handoff_controle_capacidade.sql'));
-    assert.equal(r1.applied[r1.applied.length - 1], '0048_minuta_aceite_tecnico_encerramento_automatico.sql');
+    // Produção P1 (filas pessoais): a migration 0049 (sessões, identidade e atribuição — aditiva) passa a ser a última.
+    assert.equal(r1.applied[r1.applied.length - 1], '0049_sessoes_identidade_atribuicao.sql');
     const r2 = await runMigrations(pool);
     assert.deepEqual(r2.applied, [], 'reexecutar não reaplica nada');
   } finally { await pool.end(); }

@@ -1,6 +1,6 @@
 import { NextFunction, Request, RequestHandler, Response, Router } from 'express';
 import { Pool } from 'pg';
-import { requireAuth } from '../middleware/requireAuth';
+import { requireSessao } from '../auth/sessaoHumana';
 import { getPool } from '../demurrage-engine/db/pool';
 import { autorizarInterno, AutorizedRequest, criarAutorizarInterno, tratarErroLeitura } from '../demurrage-engine/leitura/autorizacao';
 import { buscarFilaOperacional } from '../demurrage-engine/leitura/filaOperacional';
@@ -8,13 +8,16 @@ import { buscarDetalheContainer, buscarDetalheProcesso } from '../demurrage-engi
 import { buscarTimelineProcesso } from '../demurrage-engine/leitura/timeline';
 import { normalizarFiltrosFila, normalizarSituacaoApuracao, buscarOpcoesFiltros } from '../demurrage-engine/leitura/filtros';
 import { ErroLeitura } from '../demurrage-engine/leitura/contrato';
-import { organizacaoDoProcesso } from '../demurrage-engine/acoes/organizacaoRecurso';
-import { buscarPendenciasProcesso, cursorPendenciasOuErro, normalizarFiltrosPendencias } from '../demurrage-engine/leitura/pendenciasOperacionais';
+import {
+  buscarPendenciasEscopo, buscarPendenciasProcesso, cursorPendenciasListaOuErro, cursorPendenciasOuErro,
+  normalizarFiltrosPendencias, normalizarFiltrosPendenciasLista,
+} from '../demurrage-engine/leitura/pendenciasOperacionais';
 import { buscarReaberturas, normalizarFiltrosReaberturas } from '../demurrage-engine/leitura/reaberturasOperacionais';
 import { buscarMinutas, normalizarFiltrosMinutas } from '../demurrage-engine/leitura/minutasOperacionais';
 import { buscarDocumentoDaMinuta } from '../demurrage-engine/leitura/documentoMinuta';
 import { paginacaoOperacionalDaQuery } from '../demurrage-engine/leitura/parametrosOperacionais';
 import { responderErroLeituraOperacional } from '../demurrage-engine/leitura/falhaLeituraOperacional';
+import { processoDentroDoEscopo, resolverEscopo, responsavelExigidoNaLeitura } from '../demurrage-engine/leitura/escopoFila';
 
 /**
  * Fase D12 (Gate G7) — rotas internas (SOMENTE LEITURA) da Demurrage V2.
@@ -33,6 +36,18 @@ import { responderErroLeituraOperacional } from '../demurrage-engine/leitura/fal
  * os IDs exigidos pelas rotas de ação já congeladas (Entrega 2). Mesma
  * disciplina zero-escrita; paginação por cursor KEYSET assinado (nunca
  * OFFSET), ver `leitura/cursorKeyset.ts`.
+ *
+ * Produção P1 (filas pessoais): toda LISTA/contagem (`/processos`,
+ * `/filtros`, `/minutas`, `/reaberturas`, `/pendencias`,
+ * `/processos/:id/pendencias`) aceita `escopo=MINHA_FILA|EQUIPE|SEM_RESPONSAVEL`,
+ * resolvido no servidor pelo papel da SESSÃO (`leitura/escopoFila.ts`:
+ * ANALYST só MINHA_FILA; MANAGER/ADMIN os três, padrão EQUIPE) e aplicado em
+ * SQL. Todo DETALHE de item ligado a processo (detalhe, timeline, contêiner,
+ * pendências, documento da minuta): ANALYST só no processo atribuído a ele —
+ * a restrição entra no PRÓPRIO WHERE da leitura (`responsavelExigidoNaLeitura`)
+ * e fora do escopo é o MESMO `404 nao_encontrado` de inexistente/outra
+ * organização (o frontend congelado mostra "não encontrado ou sem acesso"; um
+ * 403 bloquearia o módulo inteiro).
  */
 
 const RE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -63,16 +78,18 @@ export function criarDemurrageV2Router(deps: DemurrageV2RoutesDeps = {}): Router
   const router = Router();
   const pool = () => (deps.pool ?? getPool)();
 
-  router.use(deps.requireAuthMiddleware ?? requireAuth);
+  router.use(deps.requireAuthMiddleware ?? requireSessao);
   router.use(deps.autorizarInternoMiddleware ?? (deps.pool ? criarAutorizarInterno({ pool: deps.pool }) : autorizarInterno));
 
-  /** GET /processos — fila operacional paginada (seção 2). */
+  /** GET /processos — fila operacional paginada (seção 2), no escopo resolvido pela sessão. */
   router.get('/processos', async (req: AutorizedRequest, res: Response, next: NextFunction) => {
     try {
-      const filtros = normalizarFiltrosFila(req.query as Record<string, unknown>);
+      const query = req.query as Record<string, unknown>;
+      const filtros = normalizarFiltrosFila(query);
       const { limite, cursor } = paginacaoDaQuery(req.query);
+      const escopo = await resolverEscopo(pool(), req.autorizacao!, query, filtros.responsavelMembershipId ?? null);
       const resposta = await buscarFilaOperacional(pool(), {
-        organizationId: req.autorizacao!.organizationId, filtros, limite, cursor,
+        organizationId: req.autorizacao!.organizationId, filtros, limite, cursor, escopo,
       });
       res.json(resposta);
     } catch (err) {
@@ -83,7 +100,12 @@ export function criarDemurrageV2Router(deps: DemurrageV2RoutesDeps = {}): Router
   /** GET /filtros — opções e contagens (seção 6). Antes de `/processos/:processoId` não colide (caminho fixo). */
   router.get('/filtros', async (req: AutorizedRequest, res: Response, next: NextFunction) => {
     try {
-      const opcoes = await buscarOpcoesFiltros(pool(), req.autorizacao!.organizationId, undefined, normalizarSituacaoApuracao(req.query as Record<string, unknown>));
+      const query = req.query as Record<string, unknown>;
+      const aut = req.autorizacao!;
+      const apuracao = normalizarSituacaoApuracao(query);
+      const escopo = await resolverEscopo(pool(), aut, query);
+      // `responsaveis` por PAPEL: gestor → todo membership interno ativo; ANALYST → só ele mesmo.
+      const opcoes = await buscarOpcoesFiltros(pool(), aut.organizationId, undefined, apuracao, { escopo, sessao: aut });
       res.json(opcoes);
     } catch (err) {
       tratarErroLeitura(err, res, next);
@@ -94,7 +116,8 @@ export function criarDemurrageV2Router(deps: DemurrageV2RoutesDeps = {}): Router
   router.get('/processos/:processoId', async (req: AutorizedRequest, res: Response, next: NextFunction) => {
     try {
       const processoId = idOuErro(req.params.processoId, 'processoId');
-      const detalhe = await buscarDetalheProcesso(pool(), req.autorizacao!.organizationId, processoId);
+      const aut = req.autorizacao!;
+      const detalhe = await buscarDetalheProcesso(pool(), aut.organizationId, processoId, undefined, responsavelExigidoNaLeitura(aut));
       if (!detalhe) {
         res.status(404).json({ error: 'nao_encontrado' });
         return;
@@ -110,8 +133,9 @@ export function criarDemurrageV2Router(deps: DemurrageV2RoutesDeps = {}): Router
     try {
       const processoId = idOuErro(req.params.processoId, 'processoId');
       const { limite, cursor } = paginacaoDaQuery(req.query);
+      const aut = req.autorizacao!;
       const resposta = await buscarTimelineProcesso(pool(), {
-        organizationId: req.autorizacao!.organizationId, processoId, limite, cursor,
+        organizationId: aut.organizationId, processoId, limite, cursor, responsavelExigido: responsavelExigidoNaLeitura(aut),
       });
       if (!resposta) {
         res.status(404).json({ error: 'nao_encontrado' });
@@ -127,7 +151,8 @@ export function criarDemurrageV2Router(deps: DemurrageV2RoutesDeps = {}): Router
   router.get('/containers/:containerId', async (req: AutorizedRequest, res: Response, next: NextFunction) => {
     try {
       const containerId = idOuErro(req.params.containerId, 'containerId');
-      const detalhe = await buscarDetalheContainer(pool(), req.autorizacao!.organizationId, containerId);
+      const aut = req.autorizacao!;
+      const detalhe = await buscarDetalheContainer(pool(), aut.organizationId, containerId, undefined, responsavelExigidoNaLeitura(aut));
       if (!detalhe) {
         res.status(404).json({ error: 'nao_encontrado' });
         return;
@@ -157,6 +182,7 @@ export function criarDemurrageV2Router(deps: DemurrageV2RoutesDeps = {}): Router
    * ====================================================================== */
 
   const ROTA_PENDENCIAS = 'GET /processos/:processoId/pendencias';
+  const ROTA_PENDENCIAS_ESCOPO = 'GET /pendencias';
   const ROTA_REABERTURAS = 'GET /reaberturas';
   const ROTA_MINUTAS = 'GET /minutas';
   const ROTA_DOCUMENTO_MINUTA = 'GET /minutas/:minutaId/documento';
@@ -166,15 +192,22 @@ export function criarDemurrageV2Router(deps: DemurrageV2RoutesDeps = {}): Router
     try {
       const processoId = idOuErro(req.params.processoId, 'processoId');
       const org = req.autorizacao!.organizationId;
-      const filtros = normalizarFiltrosPendencias(req.query as Record<string, unknown>);
-      const { limite, cursor } = paginacaoOperacionalDaQuery(req.query as Record<string, unknown>);
-      cursorPendenciasOuErro({ organizationId: org, processoId, filtros, cursor });
+      const query = req.query as Record<string, unknown>;
+      const filtros = normalizarFiltrosPendencias(query);
+      const { limite, cursor } = paginacaoOperacionalDaQuery(query);
+      // Escopo e cursor validados ANTES da posse: nenhum dos dois depende do processo (nada vaza).
+      const escopo = await resolverEscopo(pool(), req.autorizacao!, query);
+      cursorPendenciasOuErro({ organizationId: org, processoId, filtros, cursor, escopo });
 
-      const orgDoRecurso = await organizacaoDoProcesso(pool(), processoId);
-      if (orgDoRecurso !== org) { res.status(404).json({ error: 'nao_encontrado' }); return; }
+      // Inexistente, de outra organização ou fora do escopo (ANALYST: processo não
+      // atribuído a ele) = o MESMO 404, numa única consulta (nada distingue os casos).
+      if (!(await processoDentroDoEscopo(pool(), org, processoId, escopo))) {
+        res.status(404).json({ error: 'nao_encontrado' });
+        return;
+      }
 
       const resposta = await buscarPendenciasProcesso(pool(), {
-        organizationId: org, processoId, filtros, limite, cursor, papel: req.autorizacao!.papel,
+        organizationId: org, processoId, filtros, limite, cursor, papel: req.autorizacao!.papel, escopo,
       });
       res.json(resposta);
     } catch (err) {
@@ -182,13 +215,43 @@ export function criarDemurrageV2Router(deps: DemurrageV2RoutesDeps = {}): Router
     }
   });
 
-  /** GET /reaberturas — reaberturas da organização (padrão: SOLICITADA, aguardando autorização). */
+  /**
+   * GET /pendencias — lista de AÇÃO de pendências ENTRE processos, no escopo da
+   * sessão (Produção P1, filas pessoais): ANALYST → as dos processos atribuídos
+   * a ele. Mesmos filtros/ordem/keyset da lista por processo (+ `processoId`).
+   * `processoId` de processo inexistente, de outra organização ou fora do
+   * escopo = o MESMO 404 de `/processos/:id/pendencias`.
+   */
+  router.get('/pendencias', async (req: AutorizedRequest, res: Response) => {
+    try {
+      const query = req.query as Record<string, unknown>;
+      const aut = req.autorizacao!;
+      const filtros = normalizarFiltrosPendenciasLista(query);
+      const { limite, cursor } = paginacaoOperacionalDaQuery(query);
+      const escopo = await resolverEscopo(pool(), aut, query);
+      cursorPendenciasListaOuErro({ organizationId: aut.organizationId, filtros, cursor, escopo });
+      if (filtros.processoId && !(await processoDentroDoEscopo(pool(), aut.organizationId, filtros.processoId, escopo))) {
+        res.status(404).json({ error: 'nao_encontrado' });
+        return;
+      }
+      const resposta = await buscarPendenciasEscopo(pool(), {
+        organizationId: aut.organizationId, filtros, limite, cursor, papel: aut.papel, escopo,
+      });
+      res.json(resposta);
+    } catch (err) {
+      responderErroLeituraOperacional(err, res, ROTA_PENDENCIAS_ESCOPO);
+    }
+  });
+
+  /** GET /reaberturas — reaberturas no escopo da sessão (padrão: SOLICITADA, aguardando autorização). */
   router.get('/reaberturas', async (req: AutorizedRequest, res: Response) => {
     try {
-      const filtros = normalizarFiltrosReaberturas(req.query as Record<string, unknown>);
-      const { limite, cursor } = paginacaoOperacionalDaQuery(req.query as Record<string, unknown>);
+      const query = req.query as Record<string, unknown>;
+      const filtros = normalizarFiltrosReaberturas(query);
+      const { limite, cursor } = paginacaoOperacionalDaQuery(query);
+      const escopo = await resolverEscopo(pool(), req.autorizacao!, query);
       const resposta = await buscarReaberturas(pool(), {
-        organizationId: req.autorizacao!.organizationId, filtros, limite, cursor, papel: req.autorizacao!.papel,
+        organizationId: req.autorizacao!.organizationId, filtros, limite, cursor, papel: req.autorizacao!.papel, escopo,
       });
       res.json(resposta);
     } catch (err) {
@@ -196,13 +259,15 @@ export function criarDemurrageV2Router(deps: DemurrageV2RoutesDeps = {}): Router
     }
   });
 
-  /** GET /minutas — minutas da organização, a fila da EQUIPE (padrão: vigentes que exigem ação do analista — divergente, inconsistente, recebida legada). */
+  /** GET /minutas — minutas no escopo da sessão (padrão: vigentes que exigem ação do analista — divergente, inconsistente, recebida legada). */
   router.get('/minutas', async (req: AutorizedRequest, res: Response) => {
     try {
-      const filtros = normalizarFiltrosMinutas(req.query as Record<string, unknown>);
-      const { limite, cursor } = paginacaoOperacionalDaQuery(req.query as Record<string, unknown>);
+      const query = req.query as Record<string, unknown>;
+      const filtros = normalizarFiltrosMinutas(query);
+      const { limite, cursor } = paginacaoOperacionalDaQuery(query);
+      const escopo = await resolverEscopo(pool(), req.autorizacao!, query);
       const resposta = await buscarMinutas(pool(), {
-        organizationId: req.autorizacao!.organizationId, filtros, limite, cursor, papel: req.autorizacao!.papel,
+        organizationId: req.autorizacao!.organizationId, filtros, limite, cursor, papel: req.autorizacao!.papel, escopo,
       });
       res.json(resposta);
     } catch (err) {
@@ -213,12 +278,14 @@ export function criarDemurrageV2Router(deps: DemurrageV2RoutesDeps = {}): Router
   /**
    * GET /minutas/:minutaId/documento — referência AUDITÁVEL do documento da
    * minuta (Produção P1). Organização sempre da sessão, dentro do próprio
-   * WHERE: outra organização é 404 idêntico a inexistente. Só leitura.
+   * WHERE: outra organização — e, para ANALYST, processo não atribuído a ele
+   * — é 404 idêntico a inexistente. Só leitura.
    */
   router.get('/minutas/:minutaId/documento', async (req: AutorizedRequest, res: Response) => {
     try {
       const minutaId = idOuErro(req.params.minutaId, 'minutaId');
-      const documento = await buscarDocumentoDaMinuta(pool(), req.autorizacao!.organizationId, minutaId);
+      const aut = req.autorizacao!;
+      const documento = await buscarDocumentoDaMinuta(pool(), aut.organizationId, minutaId, responsavelExigidoNaLeitura(aut));
       if (!documento) { res.status(404).json({ error: 'nao_encontrado' }); return; }
       res.json(documento);
     } catch (err) {
@@ -227,11 +294,12 @@ export function criarDemurrageV2Router(deps: DemurrageV2RoutesDeps = {}): Router
   });
 
   // Falha inesperada levantada ANTES do handler (ex.: `autorizarInterno` sem
-  // conseguir consultar o banco) chega aqui por `next(err)` — SÓ nestes três
+  // conseguir consultar o banco) chega aqui por `next(err)` — SÓ nestes cinco
   // caminhos. Erros das rotas D12 acima não casam estes caminhos e seguem,
   // como antes, para o tratador padrão do app.
   for (const [caminho, rota] of [
     ['/processos/:processoId/pendencias', ROTA_PENDENCIAS],
+    ['/pendencias', ROTA_PENDENCIAS_ESCOPO],
     ['/reaberturas', ROTA_REABERTURAS],
     ['/minutas', ROTA_MINUTAS],
     ['/minutas/:minutaId/documento', ROTA_DOCUMENTO_MINUTA],

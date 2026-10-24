@@ -28,7 +28,10 @@ import {
  * checagens abaixo antes do backfill) E a conta Microsoft da SESSÃO precisa
  * ser a mesma caixa (senão o access token da sessão nem pertence à caixa
  * cujo histórico se quer ler). Status exige apenas pertencimento à
- * organização (qualquer papel) — não expõe corpo, anexo nem token.
+ * organização (qualquer papel interno) — não expõe corpo, anexo nem token.
+ * Produção P1 (migration 0049): toda checagem acima exige membership interno
+ * ATIVO (`membro()` nunca devolve membership desativado nem CLIENT) — um
+ * ADMIN desativado é negado como quem não é ADMIN.
  */
 
 const RE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -54,7 +57,7 @@ async function carregarCaixa(pool: Pool, caixaId: string): Promise<CaixaCaptura>
   return rows[0];
 }
 
-/** A conta da sessão precisa SER a caixa, e o membro precisa ser ADMIN da organização da caixa. */
+/** A conta da sessão precisa SER a caixa, e o membro precisa ser ADMIN ATIVO da organização da caixa. */
 async function exigirAdminDaCaixa(pool: Pool, caixa: CaixaCaptura, sessaoHomeAccountId: string): Promise<void> {
   if (caixa.home_account_id !== sessaoHomeAccountId) throw new ErroCaptura(403, 'conta_da_sessao_nao_corresponde_a_caixa');
   const m = await membro(pool, sessaoHomeAccountId, caixa.organization_id);

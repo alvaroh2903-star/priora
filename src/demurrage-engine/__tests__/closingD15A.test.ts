@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Pool } from 'pg';
 import { runMigrations } from '../db/migrate';
-import { testPool, testDatabaseUrl, truncateAll } from './testDb';
+import { testPool, testDatabaseUrl, truncateAll, atribuirResponsavelDeTeste } from './testDb';
 import { OrganizationRepository } from '../persistence/organizationRepository';
 import { ProcessoRepository } from '../persistence/processoRepository';
 import { ContainerRepository } from '../persistence/containerRepository';
@@ -297,6 +297,10 @@ test('D15-A #6: duas solicitações de reabertura concorrentes nunca duplicam a 
     await setupBanco(pool);
     const cen = await cenarioFinal(pool, 'CONS0000001');
     const analistaId = await novoMembro(pool, cen.orgId, 'ANALYST');
+    // Produção P1 (filas pessoais): solicitar reabertura é ação PESSOAL — o
+    // ANALYST só solicita no processo atribuído a ele; atribuí-lo mantém o
+    // ANALYST como ator e a regra testada (concorrência) intacta.
+    await atribuirResponsavelDeTeste(pool, cen.processoId, analistaId);
     const [r1, r2] = await Promise.all([
       cen.svc.solicitarReabertura({ processoId: cen.processoId, membershipId: analistaId, justificativa: 'tentativa 1' }),
       cen.svc.solicitarReabertura({ processoId: cen.processoId, membershipId: analistaId, justificativa: 'tentativa 2' }),
@@ -352,6 +356,10 @@ test('D15-A #7 (reescrito na correção de minuta P1): falha no meio do registro
     const base = await seedZero(pool, 'ROLV0000001');
     const svc = new ClosingService(pool);
     const analistaId = await novoMembro(pool, base.orgId, 'ANALYST');
+    // Produção P1 (filas pessoais): registrar minuta é ação PESSOAL — o ANALYST
+    // só registra no processo atribuído a ele; atribuí-lo mantém o ANALYST como
+    // ator e a regra testada (rollback total) intacta.
+    await atribuirResponsavelDeTeste(pool, base.processoId, analistaId);
     const m = await svc.registrarMinuta({ containerId: base.containerId, membershipId: analistaId, numeroInformado: 'ROLV0000001', dataInformada: '2026-09-12', documento: docD15A('a'), config: cfg });
     assert.ok(m.ok && m.minuta.estado === 'DIVERGENTE');
     const minutasAntes = (await pool.query(`SELECT id, estado_minuta, substituida_por_id FROM minutas ORDER BY id`)).rows;

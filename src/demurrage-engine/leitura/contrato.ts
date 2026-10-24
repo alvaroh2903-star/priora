@@ -2,6 +2,7 @@ import { CivilDate } from '../temporal/civilDate';
 import { Badge, ClockFact, EstadoOperacional, PrioridadeBalde, Responsabilidade } from '../lifecycle/types';
 import { BlocoPrazoRelogio, diasDemurrageOperacionais } from '../lifecycle/prazoFreeTime';
 import { centavosExatos, somarCentavosExatos, formatarCentavos } from './moedaExata';
+import type { EscopoFila } from './escopoFila';
 
 /**
  * Fase D12 (Gate G1) — Contrato operacional e API interna da Demurrage.
@@ -506,12 +507,53 @@ export function encerramentoDoProcesso(row: {
 export type SituacaoApuracaoFiltro = 'OPEN' | 'FINAL' | 'TODOS';
 
 /**
- * Escopo das listas organizacionais (fila, `/filtros`, `/minutas`). Enquanto
- * não existir fila pessoal (identidade por sessão — ver diagnóstico de
- * autenticação no relatório da correção P1), toda lista é a FILA DA EQUIPE:
- * nunca "ações aguardando você".
+ * Produção P1 (filas pessoais) — filtros EFETIVAMENTE aplicados pelo servidor
+ * a uma lista, com os nomes dos parâmetros da query string. `escopo` e
+ * `responsavel` (o responsável filtrado — o da sessão em MINHA_FILA, o
+ * escolhido na EQUIPE, ou null) estão sempre presentes; os demais só quando
+ * ativos (padrões que sempre valem, como `apuracaoStatus`, são explícitos).
  */
-export const ESCOPO_FILA_DA_EQUIPE = 'fila_da_equipe' as const;
+export interface FiltrosAtivos {
+  escopo: EscopoFila;
+  responsavel: string | null;
+  [campo: string]: string | number | boolean | null;
+}
+
+/**
+ * Produção P1 (filas pessoais) — o que toda lista/contagem informa sobre o
+ * escopo aplicado (substitui a constante legada `fila_da_equipe`: uma lista
+ * organizacional nunca é chamada de "minha fila", e a fila pessoal agora
+ * existe). `membershipResolvido`: dono da fila (a sessão em MINHA_FILA, o
+ * `responsavel` filtrado na EQUIPE) ou null.
+ *
+ * `membershipResolvido`/`filtros` (e `temProxima` nas listas) são SEMPRE
+ * emitidos pelo servidor (`ComMetaEscopo`); ficam opcionais nas interfaces
+ * públicas só porque as fixtures congeladas da D13
+ * (`frontend-tests/fixtures/demurrageV2Fixtures.ts`) são tipadas contra elas.
+ */
+export interface MetaEscopoLeitura {
+  escopo: EscopoFila;
+  membershipResolvido?: string | null;
+  filtros?: FiltrosAtivos;
+}
+
+/** Meta do escopo OBRIGATÓRIA — contratos novos (minutas, reaberturas, pendências, Gestão) e o que o servidor devolve. */
+export interface MetaEscopoCompleta {
+  escopo: EscopoFila;
+  membershipResolvido: string | null;
+  filtros: FiltrosAtivos;
+}
+
+/** Forma que o servidor realmente devolve para os contratos congelados da D13 (fila, `/filtros`). */
+export type ComMetaEscopo<T> = T & MetaEscopoCompleta;
+
+/** Responsável operacional exibido em item/detalhe. `ativo: false` = membership desativado (o item está em SEM_RESPONSAVEL). */
+export interface ResponsavelOperacionalLeitura {
+  membershipId: string;
+  nome: string;
+  /** Sempre emitido pelo servidor (opcional no tipo pelo mesmo motivo de `MetaEscopoLeitura`). */
+  ativo?: boolean;
+}
 
 export interface FilaItemV1 {
   contrato: typeof CONTRATO_FILA_ITEM_V1;
@@ -524,7 +566,7 @@ export interface FilaItemV1 {
   house: string | null;
   mbl: string | null;
   armador: { id: string; codigo: string; nome: string } | null;
-  responsavelOperacional: { membershipId: string; nome: string } | null;
+  responsavelOperacional: ResponsavelOperacionalLeitura | null;
   conteineres: ComposicaoContainers;
   /** Contêineres do processo que casaram com o filtro ativo (Q4); null quando nenhum filtro por contêiner está em uso. */
   conteineresQueCasaram: string[] | null;
@@ -547,15 +589,15 @@ export interface FilaItemV1 {
   derivadoEm: string | null;
 }
 
-export interface FilaRespostaV1 {
+export interface FilaRespostaV1 extends MetaEscopoLeitura {
   contrato: typeof CONTRATO_LEITURA_V1;
-  /** Sempre a fila da EQUIPE (organização) — não existe fila pessoal ainda. */
-  escopo: typeof ESCOPO_FILA_DA_EQUIPE;
   /** Situação da apuração aplicada (padrão OPEN — processos FINAL fora da fila ativa). */
   apuracaoStatus: SituacaoApuracaoFiltro;
   itens: FilaItemV1[];
   total: number;
   cursor: string | null;
+  /** Produção P1 — há próxima página (equivale a `cursor !== null`). Sempre emitido pelo servidor. */
+  temProxima?: boolean;
   limite: number;
   incluiuSilenciosos: boolean;
 }
@@ -608,7 +650,7 @@ export interface ProcessoDetalheV1 {
   house: string | null;
   mbl: string | null;
   armador: { id: string; codigo: string; nome: string } | null;
-  responsavelOperacional: { membershipId: string; nome: string } | null;
+  responsavelOperacional: ResponsavelOperacionalLeitura | null;
   apuracaoStatus: 'OPEN' | 'FINAL';
   fechadoEm: string | null;
   estadoMaisRelevante: { codigo: EstadoOperacional | 'NAO_DERIVADO'; rotulo: string };
@@ -662,14 +704,18 @@ export interface TimelineRespostaV1 {
  * Filtros (seção 6).
  * ------------------------------------------------------------------ */
 
-export interface FiltrosDisponiveisV1 {
+export interface FiltrosDisponiveisV1 extends MetaEscopoLeitura {
   contrato: typeof CONTRATO_LEITURA_V1;
-  escopo: typeof ESCOPO_FILA_DA_EQUIPE;
   /** Situação da apuração a que as opções e contagens abaixo se referem (padrão OPEN). */
   apuracaoStatus: SituacaoApuracaoFiltro;
   /** Totais por situação — o "Finalizados (n)" de um filtro explícito, sem misturar com a fila ativa. */
   apuracao: { abertos: number; finalizados: number };
-  responsaveis: Array<{ membershipId: string; nome: string }>;
+  /**
+   * Produção P1 (filas pessoais): MANAGER/ADMIN → todo membership interno
+   * ATIVO da organização (inclusive sem processo — é a lista de quem pode ser
+   * atribuído); ANALYST → só ele mesmo. `papel` sempre emitido pelo servidor.
+   */
+  responsaveis: Array<{ membershipId: string; nome: string; papel?: string }>;
   clientes: Array<{ id: string; nome: string }>;
   armadores: Array<{ id: string; codigo: string; nome: string }>;
   estados: Array<{ codigo: string; total: number }>;
@@ -691,7 +737,11 @@ export type CodigoErroLeitura =
   /** D14 v1.1 — período histórico obrigatório ausente (nunca um "desde sempre" implícito). */
   | 'periodo_obrigatorio'
   /** D14 v1.1 — `periodoInicio` posterior a `periodoFim`. */
-  | 'periodo_invertido';
+  | 'periodo_invertido'
+  /** Produção P1 (autenticação) — membership da organização ativa foi desativado. */
+  | 'membership_inativo'
+  /** Produção P1 (filas pessoais) — escopo de fila não permitido ao papel da sessão. */
+  | 'escopo_nao_permitido';
 
 export class ErroLeitura extends Error {
   constructor(

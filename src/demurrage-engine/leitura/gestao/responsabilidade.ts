@@ -1,7 +1,8 @@
 import { createHash } from 'crypto';
 import { Pool } from 'pg';
-import { ErroLeitura, isoTimestamp } from '../contrato';
+import { ErroLeitura, isoTimestamp, MetaEscopoCompleta } from '../contrato';
 import { codificarCursorAssinado, decodificarCursorAssinado } from '../cursorAssinado';
+import { EscopoAplicado, escopoEquipeOrganizacao, filtrosDoEscopo, paresEscopo, sufixoEscopo } from '../escopoFila';
 
 /**
  * Fase D14 — Grupo C (Cap. 30.3): responsabilidade da Rocket. Lê
@@ -22,6 +23,11 @@ import { codificarCursorAssinado, decodificarCursorAssinado } from '../cursorAss
  *    memória.
  *  `NAO_APLICAVEL` é uma decisão vigente real (versionada, auditada em D11):
  *  aparece no resumo e no detalhe como qualquer outro status.
+ *
+ * Produção P1 (filas pessoais): resumo e detalhe aplicam o MESMO predicado
+ * de ESCOPO sobre o responsável do processo da decisão (e a composição G-C-*
+ * de `drilldown.ts` também) — reconciliam por escopo. O escopo CALCULADO
+ * entra no hash do cursor do detalhe (`.v2`). Sem escopo = organização.
  */
 
 export const STATUS_DECISAO = ['CONFIRMADA_ROCKET', 'CONFIRMADA_CLIENTE', 'DIVIDIDA', 'NAO_APLICAVEL'] as const;
@@ -59,14 +65,18 @@ const VIGENTES_DA_ORGANIZACAO = `
  WHERE d.organization_id = $1
    AND NOT EXISTS (SELECT 1 FROM responsabilidade_decisoes d2 WHERE d2.substitui_decisao_id = d.id)`;
 
-export async function montarGestaoResponsabilidade(pool: Pool, organizationId: string): Promise<GestaoResponsabilidadeV1> {
+export async function montarGestaoResponsabilidade(
+  pool: Pool, organizationId: string, escopo: EscopoAplicado = escopoEquipeOrganizacao(),
+): Promise<GestaoResponsabilidadeV1> {
+  const params: unknown[] = [organizationId];
+  const escopoSql = sufixoEscopo(escopo, 'p.responsavel_operacional_membership_id', params);
   const { rows } = await pool.query(
     `SELECT d.status, count(*)::int AS total,
             coalesce(sum(d.dias_rocket) FILTER (WHERE d.status IN ('CONFIRMADA_ROCKET', 'DIVIDIDA')), 0)::int AS dias_rocket
-     ${VIGENTES_DA_ORGANIZACAO}
+     ${VIGENTES_DA_ORGANIZACAO}${escopoSql}
      GROUP BY d.status
      ORDER BY d.status`,
-    [organizationId],
+    params,
   );
   return {
     contrato: 'demurrage.gestao.responsabilidade.v1',
@@ -77,7 +87,7 @@ export async function montarGestaoResponsabilidade(pool: Pool, organizationId: s
 
 // ---------------------------------------------------------------- detalhe paginado
 
-export const VERSAO_CURSOR_DECISOES = 'd14.gestao.responsabilidade.decisoes.v1';
+export const VERSAO_CURSOR_DECISOES = 'd14.gestao.responsabilidade.decisoes.v2';
 const LIMITE_PADRAO = 50;
 const MAX_LIMITE = 200;
 const RE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -91,14 +101,18 @@ export interface FiltrosDecisoes {
 export interface ListarDecisoesOpts extends FiltrosDecisoes {
   limite?: number;
   cursor?: string | null;
+  /** Produção P1 — escopo resolvido pela rota; ausente = organização inteira (EQUIPE). */
+  escopo?: EscopoAplicado;
 }
 
-export interface DecisoesResponsabilidadeV1 {
+export interface DecisoesResponsabilidadeV1 extends MetaEscopoCompleta {
   contrato: 'demurrage.gestao.responsabilidade.decisoes.v1';
-  /** Total de decisões vigentes que casam os filtros (reconcilia com `porStatus` do resumo quando sem filtros). */
+  /** Total de decisões vigentes que casam os filtros (reconcilia com `porStatus` do resumo no MESMO escopo, sem filtros). */
   total: number;
   itens: DecisaoVigenteLeitura[];
   cursor: string | null;
+  /** Produção P1 — há próxima página (equivale a `cursor !== null`). */
+  temProxima: boolean;
 }
 
 function validarFiltros(f: FiltrosDecisoes): void {
@@ -107,8 +121,12 @@ function validarFiltros(f: FiltrosDecisoes): void {
   if (f.containerId !== undefined && !RE_UUID.test(f.containerId)) throw new ErroLeitura(400, 'valor_invalido', { campo: 'container' });
 }
 
-function hashFiltros(f: FiltrosDecisoes): string {
-  const canonico = JSON.stringify({ status: f.status ?? null, processoId: f.processoId?.toLowerCase() ?? null, containerId: f.containerId?.toLowerCase() ?? null });
+function hashFiltros(f: FiltrosDecisoes, escopo: EscopoAplicado): string {
+  const canonico = JSON.stringify({
+    status: f.status ?? null, processoId: f.processoId?.toLowerCase() ?? null, containerId: f.containerId?.toLowerCase() ?? null,
+    // Produção P1: escopo CALCULADO pelo servidor — cursor de outro escopo/membership é `cursor_invalido`.
+    escopo: paresEscopo(escopo),
+  });
   return createHash('sha256').update(canonico).digest('base64url').slice(0, 16);
 }
 
@@ -118,8 +136,9 @@ const DECIDIDO_EM_EXATO = `to_char(d.decidido_em AT TIME ZONE 'UTC', 'YYYY-MM-DD
 export async function listarDecisoesResponsabilidade(pool: Pool, organizationId: string, opts: ListarDecisoesOpts = {}): Promise<DecisoesResponsabilidadeV1> {
   const filtros: FiltrosDecisoes = { status: opts.status, processoId: opts.processoId, containerId: opts.containerId };
   validarFiltros(filtros);
+  const escopo = opts.escopo ?? escopoEquipeOrganizacao();
   const limite = Math.min(opts.limite ?? LIMITE_PADRAO, MAX_LIMITE);
-  const filtroHash = hashFiltros(filtros);
+  const filtroHash = hashFiltros(filtros, escopo);
 
   let chave: { ts: string; id: string } | null = null;
   if (opts.cursor) {
@@ -141,6 +160,7 @@ export async function listarDecisoesResponsabilidade(pool: Pool, organizationId:
   if (filtros.status) { params.push(filtros.status); condicoes += ` AND d.status = $${params.length}`; }
   if (filtros.processoId) { params.push(filtros.processoId); condicoes += ` AND d.processo_id = $${params.length}`; }
   if (filtros.containerId) { params.push(filtros.containerId); condicoes += ` AND d.container_id = $${params.length}`; }
+  condicoes += sufixoEscopo(escopo, 'p.responsavel_operacional_membership_id', params);
 
   const { rows: totalRows } = await pool.query(`SELECT count(*)::int AS n ${VIGENTES_DA_ORGANIZACAO}${condicoes}`, params);
 
@@ -185,12 +205,21 @@ export async function listarDecisoesResponsabilidade(pool: Pool, organizationId:
     decididoEm: isoTimestamp(r.decidido_em) as string,
   }));
 
+  const cursor = temMais && ultima
+    ? codificarCursorAssinado({ v: VERSAO_CURSOR_DECISOES, organizationId, filtroHash, ts: ultima.decidido_em_exato, id: ultima.id })
+    : null;
+  const filtrosAtivos: MetaEscopoCompleta['filtros'] = { ...filtrosDoEscopo(escopo) };
+  if (filtros.status) filtrosAtivos.status = filtros.status;
+  if (filtros.processoId) filtrosAtivos.processo = filtros.processoId;
+  if (filtros.containerId) filtrosAtivos.container = filtros.containerId;
   return {
     contrato: 'demurrage.gestao.responsabilidade.decisoes.v1',
+    escopo: escopo.escopo,
+    membershipResolvido: escopo.membershipResolvido,
+    filtros: filtrosAtivos,
     total: Number(totalRows[0].n),
     itens,
-    cursor: temMais && ultima
-      ? codificarCursorAssinado({ v: VERSAO_CURSOR_DECISOES, organizationId, filtroHash, ts: ultima.decidido_em_exato, id: ultima.id })
-      : null,
+    cursor,
+    temProxima: cursor !== null,
   };
 }

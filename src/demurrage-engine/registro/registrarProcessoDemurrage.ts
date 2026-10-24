@@ -218,10 +218,22 @@ const PAPEIS_GESTOR = ['MANAGER', 'ADMIN'];
  * `field_observations.criado_por` referencia `usuarios(id)` (governança já
  * existente desde a Fase 1). `FOR SHARE` impede que o papel mude para CLIENT
  * enquanto esta transação usa o membership (mesmo cuidado da migration 0007).
+ *
+ * Produção P1 (identidade operacional e filas pessoais) — o fallback manual é
+ * ação PESSOAL:
+ *  - membership DESATIVADO (migration 0049) → `MANUAL_FALLBACK_AUTOR_NAO_AUTORIZADO`
+ *    (`motivo: 'membership_inativo'`); o `FOR SHARE` também segura a
+ *    desativação até o COMMIT;
+ *  - ANALYST só no processo ATRIBUÍDO a ele (`responsavelProcesso`, relido
+ *    sob `lockProcesso` + `FOR UPDATE`/`FOR SHARE` do processo pelo chamador;
+ *    sem responsável = nenhum ANALYST) → `MANUAL_FALLBACK_AUTOR_NAO_AUTORIZADO`
+ *    (`motivo: 'ator_nao_responsavel'` — o código fechado do contrato D10 é
+ *    compartilhado com o handoff e não ganha valor novo); MANAGER/ADMIN em
+ *    qualquer processo da organização.
  */
-async function resolverAutorManualFallback(db: Db, org: string, autorMembershipId: string): Promise<string> {
+async function resolverAutorManualFallback(db: Db, org: string, autorMembershipId: string, responsavelProcesso: string | null): Promise<string> {
   const { rows } = await db.query(
-    `SELECT usuario_id, papel FROM organization_memberships WHERE id = $1 AND organization_id = $2 FOR SHARE`,
+    `SELECT usuario_id, papel, desativado_em FROM organization_memberships WHERE id = $1 AND organization_id = $2 FOR SHARE`,
     [autorMembershipId, org],
   );
   if (!rows.length) {
@@ -230,7 +242,27 @@ async function resolverAutorManualFallback(db: Db, org: string, autorMembershipI
   if (!PAPEIS_AUTOR_FALLBACK_MANUAL.includes(rows[0].papel)) {
     throw new ErroContratoDemurrage('MANUAL_FALLBACK_AUTOR_NAO_AUTORIZADO', { autorMembershipId, papel: rows[0].papel });
   }
+  if (rows[0].desativado_em !== null) {
+    throw new ErroContratoDemurrage('MANUAL_FALLBACK_AUTOR_NAO_AUTORIZADO', { autorMembershipId, papel: rows[0].papel, motivo: 'membership_inativo' });
+  }
+  if (rows[0].papel === 'ANALYST' && responsavelProcesso !== autorMembershipId) {
+    throw new ErroContratoDemurrage('MANUAL_FALLBACK_AUTOR_NAO_AUTORIZADO', { autorMembershipId, papel: rows[0].papel, motivo: 'ator_nao_responsavel' });
+  }
   return rows[0].usuario_id;
+}
+
+/**
+ * Autores (distintos) de todo `manual_fallback` da entrada — a MESMA seleção
+ * de House/Master do passo 5b (sobreposição do contêiner > nível do processo).
+ */
+function autoresManualFallback(reg: RegistroNormalizado): string[] {
+  const autores = new Set<string>();
+  for (const c of reg.containers) {
+    for (const obs of [c.houseFreeTimeDays ?? reg.entrada.houseFreeTimeDays, c.masterFreeTimeDays ?? reg.entrada.masterFreeTimeDays]) {
+      if (obs && obs.fonte === 'manual_fallback' && obs.manualFallback) autores.add(obs.manualFallback.autorMembershipId);
+    }
+  }
+  return [...autores];
 }
 
 /**
@@ -241,6 +273,7 @@ async function resolverAutorManualFallback(db: Db, org: string, autorMembershipI
  * (`processarAvisosFallbackManualPendentes`) fala com o transporte, fora de
  * qualquer transação. Idempotente: uma justificativa por observação e uma
  * entrega por (justificativa, gestor) — reprocessar nunca duplica o aviso.
+ * Produção P1 (migration 0049): só gestores ATIVOS recebem a entrega.
  */
 async function registrarGovernancaManualFallback(
   db: Db, org: string, observationId: string, mf: ManualFallbackGovernanca,
@@ -255,7 +288,7 @@ async function registrarGovernancaManualFallback(
   await db.query(
     `INSERT INTO demurrage_fallback_manual_avisos (organization_id, justificativa_id, destinatario_membership_id)
      SELECT $1, $2, m.id FROM organization_memberships m
-      WHERE m.organization_id = $1 AND m.papel::text = ANY($3::text[])
+      WHERE m.organization_id = $1 AND m.papel::text = ANY($3::text[]) AND m.desativado_em IS NULL
      ON CONFLICT (justificativa_id, destinatario_membership_id) DO NOTHING`,
     [org, justificativaId, PAPEIS_GESTOR],
   );
@@ -490,6 +523,22 @@ async function aplicar(db: Db, reg: RegistroNormalizado, opcoes: OpcoesRegistro 
   );
   if (prev[0]) {
     if (prev[0].payload_hash !== reg.payloadHash) throw new ErroContratoDemurrage('CHAVE_IDEMPOTENCIA_REUTILIZADA', { chave: reg.chaveIdempotencia });
+    // Produção P1 (filas pessoais): a réplica de um `manual_fallback` só sai
+    // DEPOIS de reautorizar o autor sob o lock do processo (ativo, papel,
+    // responsável) — quem já não pode agir no processo nunca recebe "aplicado".
+    // Só para entradas com `manual_fallback` (o handoff nunca as envia — sua
+    // réplica segue intocada). Mesma ordem de lock do passo 3 (registro →
+    // consultivo → linha do processo).
+    const autores = autoresManualFallback(reg);
+    if (autores.length) {
+      const processoReplay = (prev[0].resultado as ResultadoRegistroDemurrage).processoId;
+      await lockProcesso(db, processoReplay);
+      const { rows: pReplay } = await db.query(
+        `SELECT responsavel_operacional_membership_id FROM processos WHERE id = $1 FOR SHARE`,
+        [processoReplay],
+      );
+      for (const a of autores) await resolverAutorManualFallback(db, org, a, pReplay[0]?.responsavel_operacional_membership_id ?? null);
+    }
     return { ...(prev[0].resultado as ResultadoRegistroDemurrage), status: 'ja_registrado', registroId: prev[0].id };
   }
 
@@ -542,9 +591,19 @@ async function aplicar(db: Db, reg: RegistroNormalizado, opcoes: OpcoesRegistro 
   // Passo 3b — relê e trava (`FOR UPDATE`) a linha do PROCESSO, agora com o
   // lock consultivo já adquirido (status fresco, nunca uma leitura anterior).
   const { rows: pr } = await db.query(
-    `SELECT id, apuracao_status, condicao_comercial_id FROM processos WHERE id = $1 FOR UPDATE`,
+    `SELECT id, apuracao_status, condicao_comercial_id, responsavel_operacional_membership_id FROM processos WHERE id = $1 FOR UPDATE`,
     [processoId],
   );
+  // Produção P1 (filas pessoais): autor de todo `manual_fallback` autorizado
+  // AQUI — sob o lock consultivo e o `FOR UPDATE` do processo (a atribuição
+  // toma o MESMO lock: nenhuma reatribuição passa entre a checagem e a
+  // escrita), contra o responsável PERSISTIDO (nunca um que esta mesma
+  // entrada tente gravar no passo 4) e antes de qualquer regra de estado ou
+  // escrita. O passo 5b reaproveita o `usuario_id` resolvido.
+  const autorUsuarioPorMembership = new Map<string, string>();
+  for (const a of autoresManualFallback(reg)) {
+    autorUsuarioPorMembership.set(a, await resolverAutorManualFallback(db, org, a, pr[0].responsavel_operacional_membership_id ?? null));
+  }
   if (pr[0].apuracao_status === 'FINAL') throw new ErroContratoDemurrage('PROCESSO_FINAL', { numeroProcesso: reg.numeroProcesso });
 
   const conflitos: ResultadoRegistroDemurrage['conflitosMesmaFonte'] = [];
@@ -721,7 +780,7 @@ async function aplicar(db: Db, reg: RegistroNormalizado, opcoes: OpcoesRegistro 
     const autor = `demurrage.registro.v1:${e.origem.sistema}`;
     const house = c.houseFreeTimeDays ?? e.houseFreeTimeDays;
     if (house) {
-      const autorUsuarioId = house.fonte === 'manual_fallback' ? await resolverAutorManualFallback(db, org, house.manualFallback!.autorMembershipId) : undefined;
+      const autorUsuarioId = house.fonte === 'manual_fallback' ? autorUsuarioPorMembership.get(house.manualFallback!.autorMembershipId) : undefined;
       const r = await promoverHouseFreeTimeComClient(db, {
         organizationId: org, containerId, valor: house.valor, fonte: house.fonte as FieldObservationSource,
         observadoEm: dataObs(house), evidenciaRef: house.evidenciaRef ?? null, criadoPor: autorUsuarioId,
@@ -733,7 +792,7 @@ async function aplicar(db: Db, reg: RegistroNormalizado, opcoes: OpcoesRegistro 
     }
     const master = c.masterFreeTimeDays ?? e.masterFreeTimeDays;
     if (master) {
-      const autorUsuarioId = master.fonte === 'manual_fallback' ? await resolverAutorManualFallback(db, org, master.manualFallback!.autorMembershipId) : undefined;
+      const autorUsuarioId = master.fonte === 'manual_fallback' ? autorUsuarioPorMembership.get(master.manualFallback!.autorMembershipId) : undefined;
       const r = await promoverMasterFreeTimeComClient(db, {
         organizationId: org, containerId, valor: master.valor, fonte: master.fonte as FieldObservationSource,
         observadoEm: dataObs(master), evidenciaRef: master.evidenciaRef ?? null, autor, criadoPor: autorUsuarioId,

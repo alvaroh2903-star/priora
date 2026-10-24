@@ -17,7 +17,9 @@ import { LifecycleRepository } from '../persistence/lifecycleRepository';
  * Regras de produto:
  *  - o cliente envia a minuta fora do sistema; o ANALISTA (ou qualquer
  *    responsável interno — ANALYST/MANAGER/ADMIN) a registra com o documento
- *    real (referência auditável — ver `documentos`, migration 0048);
+ *    real (referência auditável — ver `documentos`, migration 0048). Produção
+ *    P1 (filas pessoais): é ação PESSOAL — o ANALYST só registra no processo
+ *    atribuído a ele; MANAGER/ADMIN em qualquer processo da organização;
  *  - NÃO existe aprovação de MANAGER/ADMIN: a verificação técnica automática
  *    (`avaliarMinutaTecnicamente`) decide sozinha — ACEITA (coerente e igual
  *    à devolução do tracking), DIVERGENTE (coerente, data diferente),
@@ -292,7 +294,11 @@ export interface IdempotenciaRegistroMinuta {
 
 export interface RegistrarMinutaTecnicaInput {
   containerId: string;
-  /** Membership REAL de quem registra (ANALYST/MANAGER/ADMIN da organização do contêiner) — nunca papel informado. */
+  /**
+   * Membership REAL e ATIVO de quem registra (ANALYST/MANAGER/ADMIN da
+   * organização do contêiner) — nunca papel informado. ANALYST só no
+   * processo atribuído a ele (`ator_nao_responsavel`).
+   */
   membershipId: string;
   numeroInformado: string | null;
   dataInformada: string | null;
@@ -326,7 +332,11 @@ export type ResultadoRegistroMinutaTecnica =
       exigeReabertura: boolean;
       documento: DocumentoRegistrado | null;
     }
-  | { ok: false; motivo: 'container_nao_encontrado' | 'ator_nao_autorizado' | 'documento_obrigatorio' | 'documento_invalido' | 'idempotency_key_reutilizada'; campo?: string };
+  | {
+      ok: false;
+      motivo: 'container_nao_encontrado' | 'ator_nao_autorizado' | 'ator_nao_responsavel' | 'documento_obrigatorio' | 'documento_invalido' | 'idempotency_key_reutilizada';
+      campo?: string;
+    };
 
 async function documentoDaMinuta(db: Pool | PoolClient, minutaId: string): Promise<DocumentoRegistrado | null> {
   const { rows } = await db.query(`SELECT id, versao_minuta, hash_conteudo FROM documentos WHERE minuta_id = $1`, [minutaId]);
@@ -389,7 +399,10 @@ export async function registrarMinutaTecnica(pool: Pool, input: RegistrarMinutaT
 
     // 2) lock consultivo → 3) processo → 4) contêiner.
     await lockProcesso(client, processoId);
-    const { rows: pr } = await client.query(`SELECT organization_id, apuracao_status FROM processos WHERE id = $1 FOR UPDATE`, [processoId]);
+    const { rows: pr } = await client.query(
+      `SELECT organization_id, apuracao_status, responsavel_operacional_membership_id FROM processos WHERE id = $1 FOR UPDATE`,
+      [processoId],
+    );
     const ctx: ContextoProcesso = { processoId, organizationId: pr[0].organization_id, apuracaoStatus: pr[0].apuracao_status };
     const { rows: cr } = await client.query(
       `SELECT id, processo_id, organization_id, numero, discharge_date, gate_out_date, tracking_return_date,
@@ -399,14 +412,28 @@ export async function registrarMinutaTecnica(pool: Pool, input: RegistrarMinutaT
     );
     const c = cr[0] as ContainerTravado;
 
-    // 5) ator REAL — qualquer papel interno da organização do contêiner.
+    // 5) ator REAL — qualquer papel interno ATIVO da organização do contêiner
+    //    (Produção P1: membership desativado = não autorizado; `FOR SHARE`
+    //    segura a desativação até o COMMIT).
     const { rows: ator } = await client.query(
-      `SELECT usuario_id, papel FROM organization_memberships WHERE id = $1 AND organization_id = $2 FOR SHARE`,
+      `SELECT usuario_id, papel FROM organization_memberships
+        WHERE id = $1 AND organization_id = $2 AND desativado_em IS NULL FOR SHARE`,
       [input.membershipId, ctx.organizationId],
     );
     if (!ator.length || !ehPapelInterno(ator[0].papel as PapelRbac)) {
       await client.query('ROLLBACK');
       return { ok: false, motivo: 'ator_nao_autorizado' };
+    }
+    // 5b) ação PESSOAL (Produção P1, filas pessoais): ANALYST só registra em
+    //     processo ATRIBUÍDO a ele (sem responsável = nenhum ANALYST);
+    //     MANAGER/ADMIN em qualquer processo da organização. Sob o lock
+    //     consultivo + `FOR UPDATE` do processo (a atribuição toma o MESMO
+    //     lock — nenhuma reatribuição passa entre a checagem e a escrita) e
+    //     ANTES da réplica idempotente: quem não pode agir aqui nunca recebe a
+    //     resposta de um registro anterior. Nunca exige aprovação de gestor.
+    if (ator[0].papel === 'ANALYST' && pr[0].responsavel_operacional_membership_id !== input.membershipId) {
+      await client.query('ROLLBACK');
+      return { ok: false, motivo: 'ator_nao_responsavel' };
     }
     const usuarioId: string = ator[0].usuario_id;
 

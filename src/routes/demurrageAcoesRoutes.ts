@@ -1,12 +1,12 @@
 import { NextFunction, Request, RequestHandler, Response, Router } from 'express';
 import { Pool } from 'pg';
-import { requireAuth } from '../middleware/requireAuth';
+import { requireSessao } from '../auth/sessaoHumana';
 import { getPool } from '../demurrage-engine/db/pool';
 import { autorizarInterno, AutorizedRequest, criarAutorizarInterno, tratarErroLeitura } from '../demurrage-engine/leitura/autorizacao';
 import { ClosingService } from '../demurrage-engine/closing/closingService';
 import { textoArmazenavel } from '../demurrage-engine/closing/minutaValidation';
 import { decidirResponsabilidade } from '../demurrage-engine/responsabilidade/decidirResponsabilidade';
-import { resolverPendenciaManual } from '../demurrage-engine/registro/pendencias';
+import { PendenciaResolucaoError, resolverPendenciaManual } from '../demurrage-engine/registro/pendencias';
 import { aplicarFallbackManualContainer, CampoFreeTime } from '../demurrage-engine/acoes/fallbackManualAdapter';
 import { validarComandoPendencia } from '../demurrage-engine/acoes/pendenciaCatalogo';
 import {
@@ -21,6 +21,7 @@ import { comEncerramentoAutomatico } from '../demurrage-engine/acoes/encerrament
 import { ErroRotaAcao, classificarFalhaAcao, tratarErroRotaAcao } from '../demurrage-engine/acoes/erros';
 import { ReaberturaRepository } from '../demurrage-engine/persistence/reaberturaRepository';
 import { hojeOperacional } from '../demurrage-engine/time/operationalDate';
+import { atribuirResponsavel } from '../demurrage-engine/responsavel/atribuirResponsavel';
 
 /**
  * Produção P1 (Entrega 2) — rotas internas de AÇÃO operacional, finas, sobre
@@ -52,6 +53,26 @@ import { hojeOperacional } from '../demurrage-engine/time/operationalDate';
  *    devolve também `encerramento` (resultado da avaliação). A rota 4
  *    (`finalizar`) é só acionamento administrativo (MANAGER/ADMIN) da MESMA
  *    avaliação — nunca etapa obrigatória.
+ *
+ * Produção P1 (identidade operacional e filas pessoais) — toda ação confere,
+ * NO BACKEND: sessão válida (middleware) → membership interno ATIVO da
+ * organização ativa (middleware, e de novo no serviço, `FOR SHARE`, contra a
+ * desativação concorrente) → organização do recurso (404) → papel → escopo/
+ * atribuição → concorrência. A identidade é SEMPRE `req.autorizacao` (sessão
+ * do servidor) — nada do corpo/cabeçalho prova quem age.
+ *  - PESSOAIS (ANALYST só no processo ATRIBUÍDO a ele — `responsavel_
+ *    operacional_membership_id`; sem responsável = nenhum ANALYST; MANAGER/
+ *    ADMIN em qualquer processo da organização): fallback manual (1),
+ *    registro de minuta (3a), solicitação de reabertura (5a) e resolução de
+ *    pendência (6). A checagem do responsável roda DENTRO da transação do
+ *    serviço, depois de `lockProcesso` + releitura do processo — o MESMO lock
+ *    da atribuição (8) — e antes de qualquer réplica idempotente. Fora do
+ *    processo atribuído: `403 {error:'ator_nao_responsavel'}`.
+ *  - ORGANIZACIONAIS por natureza (MANAGER/ADMIN, inalteradas; ANALYST →
+ *    403): decisão de responsabilidade (2, decisão financeira Rocket ×
+ *    Cliente), acionamento administrativo do encerramento (4), autorização de
+ *    reabertura (5b), atribuição do responsável (8) e gestão de membros
+ *    (`demurrageAdminRoutes.ts`).
  */
 
 const RE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -89,7 +110,7 @@ export function criarDemurrageAcoesRouter(deps: DemurrageAcoesRoutesDeps = {}): 
   const router = Router();
   const pool = () => (deps.pool ?? getPool)();
 
-  router.use(deps.requireAuthMiddleware ?? requireAuth);
+  router.use(deps.requireAuthMiddleware ?? requireSessao);
   router.use(deps.autorizarInternoMiddleware ?? (deps.pool ? criarAutorizarInterno({ pool: deps.pool }) : autorizarInterno));
 
   /* ====================================================================== *
@@ -124,6 +145,14 @@ export function criarDemurrageAcoesRouter(deps: DemurrageAcoesRoutesDeps = {}): 
 
       if (resultado.ok) { res.status(200).json({ resultado: 'aplicado', processoId: resultado.resultado.processoId, containers: resultado.resultado.containers, encerramento }); return; }
       if (resultado.motivo === 'pos_commit_incompleto') { res.status(200).json({ resultado: 'aceito_com_pendencia', processoId: resultado.processoId }); return; }
+      // Produção P1: autor não autorizado (papel, membership desativado) é 403;
+      // ANALYST fora do processo atribuído a ele é o MESMO 403 das demais
+      // ações pessoais (`ator_nao_responsavel`).
+      if (resultado.codigo === 'MANUAL_FALLBACK_AUTOR_NAO_AUTORIZADO') {
+        if (resultado.detalhe?.motivo === 'ator_nao_responsavel') { res.status(403).json({ error: 'ator_nao_responsavel' }); return; }
+        res.status(403).json({ error: resultado.codigo, detalhe: resultado.detalhe });
+        return;
+      }
       const status = resultado.codigo === 'PROCESSO_FINAL' || resultado.codigo === 'CONTAINER_EM_OUTRO_PROCESSO' || resultado.codigo === 'CHAVE_IDEMPOTENCIA_REUTILIZADA' ? 409 : 400;
       res.status(status).json({ error: resultado.codigo, detalhe: resultado.detalhe });
     } catch (err) {
@@ -214,7 +243,7 @@ export function criarDemurrageAcoesRouter(deps: DemurrageAcoesRoutesDeps = {}): 
         idempotenciaRota: 'registrar_minuta', idempotenciaChave: chaveIdempotencia, hoje: hojeOperacional(),
       });
       if (!resultado.ok) {
-        const status = resultado.motivo === 'ator_nao_autorizado' ? 403
+        const status = (resultado.motivo === 'ator_nao_autorizado' || resultado.motivo === 'ator_nao_responsavel') ? 403
           : resultado.motivo === 'container_nao_encontrado' ? 404
           : (resultado.motivo === 'documento_obrigatorio' || resultado.motivo === 'documento_invalido') ? 400 : 409;
         const campo = 'campo' in resultado && resultado.campo ? { campo: resultado.campo } : {};
@@ -307,7 +336,7 @@ export function criarDemurrageAcoesRouter(deps: DemurrageAcoesRoutesDeps = {}): 
         res.status(200).json({ resultado: 'ja_existe', reaberturaId: aberta?.id ?? null });
         return;
       }
-      const status = r.motivo === 'ator_nao_autorizado' ? 403 : r.motivo === 'processo_nao_encontrado' ? 404 : 409;
+      const status = (r.motivo === 'ator_nao_autorizado' || r.motivo === 'ator_nao_responsavel') ? 403 : r.motivo === 'processo_nao_encontrado' ? 404 : 409;
       res.status(status).json({ error: r.motivo });
     } catch (err) {
       if (err instanceof ErroRotaAcao) { tratarErroRotaAcao(err, res, next); return; }
@@ -371,6 +400,71 @@ export function criarDemurrageAcoesRouter(deps: DemurrageAcoesRoutesDeps = {}): 
         () => resolverPendenciaManual(pool(), { pendenciaId, organizationId: org, autorMembershipId: req.autorizacao!.membershipId, motivo }),
         (x) => x.resolvida);
       res.status(200).json({ resultado: r.resolvida ? 'resolvida' : 'ja_resolvida', encerramento });
+    } catch (err) {
+      if (err instanceof ErroRotaAcao) { tratarErroRotaAcao(err, res, next); return; }
+      // Produção P1: os códigos FECHADOS do serviço viram 4xx (antes caíam no
+      // 500 genérico) — nunca a mensagem nem o detalhe do erro.
+      if (err instanceof PendenciaResolucaoError) {
+        if (err.codigo === 'ATOR_NAO_RESPONSAVEL') { res.status(403).json({ error: 'ator_nao_responsavel' }); return; }
+        if (err.codigo === 'AUTOR_NAO_AUTORIZADO') { res.status(403).json({ error: 'ator_nao_autorizado' }); return; }
+        if (err.codigo === 'MOTIVO_OBRIGATORIO') { res.status(400).json({ error: 'campo_obrigatorio', campo: 'motivo' }); return; }
+        if (err.codigo === 'PENDENCIA_NAO_ENCONTRADA') { res.status(404).json({ error: 'nao_encontrado' }); return; }
+      }
+      respostaFalhaInesperada(res, err);
+    }
+  });
+
+  /* ====================================================================== *
+   * 8 — Atribuir / reatribuir / retirar o RESPONSÁVEL do processo
+   *     (Produção P1 — filas pessoais). MANAGER/ADMIN; ANALYST nunca. Corpo:
+   *     `{membershipId: uuid|null, responsavelAtual: uuid|null, motivo}`;
+   *     `responsavelAtual` é OBRIGATÓRIO (compare-and-set: corrida =
+   *     `409 responsavel_alterado`, nunca atribuição perdida em silêncio).
+   *     `Idempotency-Key` obrigatório. Regras no serviço.
+   * ====================================================================== */
+  router.post('/processos/:processoId/responsavel', async (req: AutorizedRequest, res: Response, next: NextFunction) => {
+    try {
+      const processoId = idOuErro(req.params.processoId, 'processoId');
+      const org = req.autorizacao!.organizationId;
+      const orgDoRecurso = await organizacaoDoProcesso(pool(), processoId);
+      if (orgDoRecurso !== org) { res.status(404).json({ error: 'nao_encontrado' }); return; }
+
+      const chaveBruta = req.get('idempotency-key');
+      if (!chaveBruta) throw new ErroRotaAcao(400, 'idempotency_key_obrigatoria');
+      let chave: string;
+      try {
+        chave = normalizarIdempotencyKey(chaveBruta);
+      } catch (e) {
+        if (e instanceof IdempotencyKeyInvalida) throw new ErroRotaAcao(400, 'idempotency_key_invalida');
+        throw e;
+      }
+      const corpo = corpoOuVazio(req);
+      const idOuNulo = (campo: string): string | null => {
+        if (!(campo in corpo)) throw new ErroRotaAcao(400, 'campo_obrigatorio', { campo });
+        const v = corpo[campo];
+        if (v === null) return null;
+        if (typeof v !== 'string' || !RE_UUID.test(v)) throw new ErroRotaAcao(400, 'valor_invalido', { campo });
+        return v.toLowerCase();
+      };
+      const novo = idOuNulo('membershipId');
+      const atual = idOuNulo('responsavelAtual');
+      const motivo = corpo.motivo;
+      if (typeof motivo !== 'string' || !motivo.trim() || motivo.length > 1000 || !textoArmazenavel(motivo)) {
+        throw new ErroRotaAcao(400, 'campo_obrigatorio', { campo: 'motivo' });
+      }
+
+      const r = await atribuirResponsavel(pool(), {
+        organizationId: org, processoId, autor: { tipo: 'membership', membershipId: req.autorizacao!.membershipId },
+        novoMembershipId: novo, responsavelAtual: atual, motivo, idempotenciaChave: chave,
+      });
+      if (r.ok) {
+        res.status(r.resultado === 'ATRIBUIDO' && !r.replay ? 201 : 200).json(r);
+        return;
+      }
+      const status = r.motivo === 'apenas_manager_admin' ? 403
+        : r.motivo === 'processo_nao_encontrado' ? 404
+        : r.motivo === 'dados_invalidos' || r.motivo === 'responsavel_invalido' ? 400 : 409;
+      res.status(status).json({ error: r.motivo, ...(r.campo ? { campo: r.campo } : {}), ...('responsavelAtual' in r ? { responsavelAtual: r.responsavelAtual } : {}) });
     } catch (err) {
       if (err instanceof ErroRotaAcao) { tratarErroRotaAcao(err, res, next); return; }
       respostaFalhaInesperada(res, err);

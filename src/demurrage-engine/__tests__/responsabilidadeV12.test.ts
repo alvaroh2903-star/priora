@@ -526,6 +526,11 @@ test('v1.2 migração 0033 → 0034: decisões existentes preservadas; dias/per�
     // ao que este teste verifica, só precisa existir para `cenario`
     // funcionar neste schema congelado em 0033.
     await pool.query(`ALTER TABLE tariff_tables ADD COLUMN ativada_em TIMESTAMPTZ`);
+    // Produção P1 (identidade operacional, migration 0049, muito depois): as
+    // leituras de autor de `decidirResponsabilidade` exigem membership ATIVO
+    // (`desativado_em IS NULL`) — scaffold da coluna para este schema
+    // congelado; removido antes da migration real (que a cria sem IF NOT EXISTS).
+    await pool.query(`ALTER TABLE organization_memberships ADD COLUMN desativado_em TIMESTAMPTZ`);
 
     const rk = await cenario(pool, 'MIGRK', { discharge: '2026-03-01', houseFT: 10, masterFT: 3, effective: '2026-03-05' });
     const dRk = await decidir(pool, rk, { status: 'CONFIRMADA_ROCKET', base: 'RELOGIO_ROCKET', periodos: [{ lado: 'ROCKET', inicio: '2026-03-04', fim: '2026-03-04' }] });
@@ -563,8 +568,10 @@ test('v1.2 migração 0033 → 0034: decisões existentes preservadas; dias/per�
     // trecho congelado em 0033; a migration 0037 real adiciona a coluna
     // definitiva (sem IF NOT EXISTS) — remove o scaffold antes para não colidir.
     await pool.query('ALTER TABLE tariff_tables DROP COLUMN ativada_em');
+    await pool.query('ALTER TABLE organization_memberships DROP COLUMN desativado_em');
     const r = await runMigrations(pool);
-    assert.deepEqual(r.applied, ['0034_responsabilidade_v1_2_agregado.sql', '0035_d15a_integridade_final_reabertura.sql', '0036_d15b_integridade_dados_excecoes.sql', '0037_d15c_integridade_tarifaria_e_filas.sql', '0038_d15c_v1_1_publicacao_tarifaria.sql', '0039_tracking_schedule_claims_fencing.sql', '0040_handoff_demurrage.sql', '0041_handoff_vinculo_processo.sql', '0042_acoes_idempotencia.sql', '0043_acoes_minuta_idempotencia_atomica.sql', '0044_acoes_minuta_idempotencia_tenant_e_chave.sql', '0045_leitura_operacional_indices.sql', '0046_leitura_operacional_pendencias_por_processo.sql', '0047_handoff_controle_capacidade.sql', '0048_minuta_aceite_tecnico_encerramento_automatico.sql']);
+    // Produção P1 (filas pessoais): a migration 0049 (sessões, identidade e atribuição — aditiva) passa a ser a última.
+    assert.deepEqual(r.applied, ['0034_responsabilidade_v1_2_agregado.sql', '0035_d15a_integridade_final_reabertura.sql', '0036_d15b_integridade_dados_excecoes.sql', '0037_d15c_integridade_tarifaria_e_filas.sql', '0038_d15c_v1_1_publicacao_tarifaria.sql', '0039_tracking_schedule_claims_fencing.sql', '0040_handoff_demurrage.sql', '0041_handoff_vinculo_processo.sql', '0042_acoes_idempotencia.sql', '0043_acoes_minuta_idempotencia_atomica.sql', '0044_acoes_minuta_idempotencia_tenant_e_chave.sql', '0045_leitura_operacional_indices.sql', '0046_leitura_operacional_pendencias_por_processo.sql', '0047_handoff_controle_capacidade.sql', '0048_minuta_aceite_tecnico_encerramento_automatico.sql', '0049_sessoes_identidade_atribuicao.sql']);
     // A migração não reescreve nem revalida retroativamente nada existente.
     assert.deepEqual(await snapshot(), antes);
 

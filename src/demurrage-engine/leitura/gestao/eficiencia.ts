@@ -3,6 +3,7 @@ import { CivilDate, toOrdinal } from '../../temporal/civilDate';
 import { hojeOperacional } from '../../time/operationalDate';
 import { ErroLeitura } from '../contrato';
 import { buscarEnvelopesSelecionadosDaOrganizacao } from './selecaoFinanceira';
+import { EscopoAplicado, escopoEquipeOrganizacao, filtroEscopoPorProcesso, sufixoEscopo } from '../escopoFila';
 
 /**
  * Fase D14 (Gate G4) — Grupo D: eficiência e conclusão (Cap. 30.4).
@@ -55,6 +56,10 @@ import { buscarEnvelopesSelecionadosDaOrganizacao } from './selecaoFinanceira';
  *     correspondente, caso raro mas possível) saía silenciosamente da média.
  *     Agora usa a MESMA data canônica de Empty Return de G-D1/D2:
  *     `COALESCE(effective_return_date, tracking_return_date)`.
+ *
+ * Produção P1 (filas pessoais): o ESCOPO (`escopoFila.ts`) é UM predicado SQL
+ * de responsável do processo em TODA consulta deste grupo (as mesmas que a
+ * composição G-D-* de `drilldown.ts` usa) — sem escopo = organização.
  */
 
 export interface PeriodoFiltro {
@@ -149,10 +154,11 @@ function condicaoPeriodo(campo: string, periodo: PeriodoObrigatorio, params: unk
   return ` AND ${campo} >= $${params.length - 1} AND ${campo} <= $${params.length}`;
 }
 
-async function mediaDiasDescargaRetorno(pool: Pool, organizationId: string, periodo: PeriodoObrigatorio) {
+async function mediaDiasDescargaRetorno(pool: Pool, organizationId: string, periodo: PeriodoObrigatorio, escopo: EscopoAplicado) {
   const params: unknown[] = [organizationId];
   // D14 v1.1 #3 — mesma data canônica de Empty Return nas três consultas (G-D1/D2/D3): nunca só `tracking_return_date`.
-  const condPeriodo = condicaoPeriodo('COALESCE(c.effective_return_date, c.tracking_return_date)', periodo, params);
+  const condPeriodo = condicaoPeriodo('COALESCE(c.effective_return_date, c.tracking_return_date)', periodo, params)
+    + sufixoEscopo(escopo, 'p.responsavel_operacional_membership_id', params);
   const { rows } = await pool.query(
     `SELECT
         count(*) FILTER (WHERE c.house_free_time_days IS NOT NULL)::int AS d1_denom,
@@ -188,10 +194,11 @@ async function mediaDiasDescargaRetorno(pool: Pool, organizationId: string, peri
  * `valores_apurados`. Cliente e Rocket são universos e médias SEPARADOS.
  */
 async function mediaDiasDemurrageFinal(
-  pool: Pool, organizationId: string, periodo: PeriodoObrigatorio, hoje: CivilDate,
+  pool: Pool, organizationId: string, periodo: PeriodoObrigatorio, hoje: CivilDate, escopo: EscopoAplicado,
 ): Promise<{ cliente: MediaComAmostra; rocket: MediaComAmostra }> {
   const paramsCliente: unknown[] = [organizationId];
-  const condCliente = condicaoPeriodo('r.primeiro_dia_demurrage', periodo, paramsCliente);
+  const condCliente = condicaoPeriodo('r.primeiro_dia_demurrage', periodo, paramsCliente)
+    + sufixoEscopo(escopo, 'p.responsavel_operacional_membership_id', paramsCliente);
   const { rows: clienteRows } = await pool.query(
     `SELECT DISTINCT c.id AS container_id
        FROM containers c
@@ -202,7 +209,8 @@ async function mediaDiasDemurrageFinal(
   );
 
   const paramsRocket: unknown[] = [organizationId];
-  const condRocket = condicaoPeriodo('r.primeiro_dia_demurrage', periodo, paramsRocket);
+  const condRocket = condicaoPeriodo('r.primeiro_dia_demurrage', periodo, paramsRocket)
+    + sufixoEscopo(escopo, 'p.responsavel_operacional_membership_id', paramsRocket);
   const { rows: rocketRows } = await pool.query(
     `SELECT DISTINCT c.id AS container_id
        FROM containers c
@@ -256,9 +264,10 @@ async function mediaDiasDemurrageFinal(
  * plano instável vs. ~7ms com `MATERIALIZED`, que torna o plano determinístico
  * independente da qualidade da estimativa.
  */
-async function mediaEmptyReturnAteConclusao(pool: Pool, organizationId: string, periodo: PeriodoObrigatorio) {
+async function mediaEmptyReturnAteConclusao(pool: Pool, organizationId: string, periodo: PeriodoObrigatorio, escopo: EscopoAplicado) {
   const params: unknown[] = [organizationId];
-  const condPeriodo = condicaoPeriodo('p.fechado_em::date', periodo, params);
+  const condPeriodo = condicaoPeriodo('p.fechado_em::date', periodo, params)
+    + sufixoEscopo(escopo, 'p.responsavel_operacional_membership_id', params);
   const { rows } = await pool.query(
     `WITH processos_final AS MATERIALIZED (
         SELECT p.id, p.fechado_em FROM processos p
@@ -279,9 +288,10 @@ async function mediaEmptyReturnAteConclusao(pool: Pool, organizationId: string, 
   return rows[0];
 }
 
-async function mediaResolucaoPendencias(pool: Pool, organizationId: string, periodo: PeriodoObrigatorio) {
+async function mediaResolucaoPendencias(pool: Pool, organizationId: string, periodo: PeriodoObrigatorio, escopo: EscopoAplicado) {
   const params: unknown[] = [organizationId];
-  const condPeriodo = condicaoPeriodo('dp.resolvido_em::date', periodo, params);
+  const condPeriodo = condicaoPeriodo('dp.resolvido_em::date', periodo, params)
+    + filtroEscopoPorProcesso(escopo, 'dp.processo_id', params);
   const { rows } = await pool.query(
     `SELECT avg(dp.resolvido_em::date - dp.criado_em::date) AS media, count(*)::int AS n
        FROM demurrage_pendencias dp
@@ -292,21 +302,22 @@ async function mediaResolucaoPendencias(pool: Pool, organizationId: string, peri
 }
 
 export async function montarGestaoEficiencia(
-  pool: Pool, organizationId: string, periodoEntrada: PeriodoObrigatorio, hoje?: CivilDate,
+  pool: Pool, organizationId: string, periodoEntrada: PeriodoObrigatorio, hoje?: CivilDate, escopo: EscopoAplicado = escopoEquipeOrganizacao(),
 ): Promise<GestaoEficienciaV1> {
   const h = hoje ?? hojeOperacional();
   const periodo = validarPeriodoObrigatorio(periodoEntrada);
 
   const [devolucao, demurrageFinal, emptyReturnConclusao, resolucaoPendencias] = await Promise.all([
-    mediaDiasDescargaRetorno(pool, organizationId, periodo),
-    mediaDiasDemurrageFinal(pool, organizationId, periodo, h),
-    mediaEmptyReturnAteConclusao(pool, organizationId, periodo),
-    mediaResolucaoPendencias(pool, organizationId, periodo),
+    mediaDiasDescargaRetorno(pool, organizationId, periodo, escopo),
+    mediaDiasDemurrageFinal(pool, organizationId, periodo, h, escopo),
+    mediaEmptyReturnAteConclusao(pool, organizationId, periodo, escopo),
+    mediaResolucaoPendencias(pool, organizationId, periodo, escopo),
   ]);
 
-  // Containers de processos FINAL, filtrados pela data natural de fechamento (decisão #4).
+  // Containers de processos FINAL, filtrados pela data natural de fechamento (decisão #4) — e pelo escopo (P1).
   const paramsContainers: unknown[] = [organizationId];
-  const condPeriodoFechamento = condicaoPeriodo('p.fechado_em::date', periodo, paramsContainers);
+  const condPeriodoFechamento = condicaoPeriodo('p.fechado_em::date', periodo, paramsContainers)
+    + sufixoEscopo(escopo, 'p.responsavel_operacional_membership_id', paramsContainers);
   const { rows: containerRows } = await pool.query(
     `SELECT c.id AS container_id
        FROM containers c JOIN processos p ON p.id = c.processo_id

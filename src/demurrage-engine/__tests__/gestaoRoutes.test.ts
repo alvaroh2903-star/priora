@@ -5,7 +5,7 @@ import { AddressInfo } from 'node:net';
 import { randomUUID } from 'crypto';
 import { Pool } from 'pg';
 import { runMigrations } from '../db/migrate';
-import { testPool, testDatabaseUrl, truncateAll } from './testDb';
+import { atribuirResponsavelDeTeste, testPool, testDatabaseUrl, truncateAll } from './testDb';
 import { OrganizationRepository } from '../persistence/organizationRepository';
 import { UsuarioRepository } from '../persistence/usuarioRepository';
 import { OrganizationMembershipRepository } from '../persistence/organizationMembershipRepository';
@@ -61,6 +61,14 @@ async function usuarioInterno(pool: Pool, orgId: string, papel: 'ANALYST' | 'MAN
   const u = await new UsuarioRepository(pool).create(`Usuario ${randomUUID()}`, `${randomUUID()}@rocket.example`, `home-${randomUUID()}`);
   await new OrganizationMembershipRepository(pool).create(orgId, u.id, papel);
   return u.homeAccountId!;
+}
+
+// Produção P1 (filas pessoais): membership da sessão de teste, para atribuir o ANALYST como responsável.
+async function membershipIdPorHome(pool: Pool, home: string): Promise<string> {
+  const { rows } = await pool.query(
+    `SELECT m.id FROM organization_memberships m JOIN usuarios u ON u.id = m.usuario_id WHERE u.home_account_id = $1`, [home],
+  );
+  return rows[0].id;
 }
 
 async function processoReal(pool: Pool, orgId: string, numeroProcesso: string, prefixo: string, hoje = '2026-09-20') {
@@ -147,10 +155,22 @@ test('D14 G5 — ANALYST nunca recebe `diferencaPotencial` em /financeiro: campo
   const app = await subirApp(pool);
   try {
     const org = await setup(pool);
-    await processoReal(pool, org.id, 'IM-D14-G5-1', 'RGAA');
+    const { processoId } = await processoReal(pool, org.id, 'IM-D14-G5-1', 'RGAA');
     const homeAnalyst = await usuarioInterno(pool, org.id, 'ANALYST');
     const homeManager = await usuarioInterno(pool, org.id, 'MANAGER');
     const homeAdmin = await usuarioInterno(pool, org.id, 'ADMIN');
+    // Produção P1 (filas pessoais): a Gestão do ANALYST é MINHA_FILA — sem atribuição ele lia uma fila VAZIA e
+    // "continuam visíveis" era vácuo. O processo semeado passa a ser dele, e um segundo processo (devolvido, com
+    // decisão de responsabilidade vigente) também, para que `valorAtribuidoCliente` tenha dado real a mostrar.
+    const mAnalyst = await membershipIdPorHome(pool, homeAnalyst);
+    await atribuirResponsavelDeTeste(pool, processoId, mAnalyst);
+    const devolvido = await processoDevolvido(pool, org.id, 'IM-D14-G5-1D', 'RGAD');
+    await confirmarResponsabilidadeClienteIntegral(pool, { containerId: devolvido.containerId, hoje: '2026-09-20' as any, organizationId: org.id });
+    await atribuirResponsavelDeTeste(pool, devolvido.processoId, mAnalyst);
+
+    // Produção P1 (filas pessoais): referência — o MANAGER (EQUIPE) vê a organização inteira; como TODO processo
+    // da organização é do ANALYST, os campos visíveis ao ANALYST precisam ser IDÊNTICOS aos do MANAGER.
+    const bodyReferencia = await (await fetch(`${app.base}/financeiro`, { headers: { 'x-test-home-account-id': homeManager } })).json();
 
     const rAnalyst = await fetch(`${app.base}/financeiro`, { headers: { 'x-test-home-account-id': homeAnalyst } });
     assert.equal(rAnalyst.status, 200);
@@ -160,6 +180,19 @@ test('D14 G5 — ANALYST nunca recebe `diferencaPotencial` em /financeiro: campo
     assert.ok(bodyAnalyst.valorBrutoCliente);
     assert.ok(bodyAnalyst.exposicaoRocket);
     assert.ok(bodyAnalyst.valorAtribuidoCliente);
+    // Produção P1 (filas pessoais): ... e com DADO REAL (não uma fila vazia): a fila lida é a pessoal, cada lado
+    // conta os DOIS contêineres semeados (em grupo de moeda, pendente, indisponível ou sem aplicação), há decisão
+    // vigente somada/contada em `valorAtribuidoCliente`, e os valores são exatamente os da organização (MANAGER).
+    assert.equal(bodyAnalyst.escopo, 'MINHA_FILA');
+    const contagemLado = (l: any) => l.gruposPorMoeda.reduce((acc: number, g: any) => acc + g.confirmados + g.estimados + g.estimativasProvisorias, 0)
+      + l.pendentes + l.indisponiveis + l.semAplicacao;
+    assert.equal(contagemLado(bodyAnalyst.valorBrutoCliente), 2, 'valorBrutoCliente com dado real: os dois contêineres do ANALYST');
+    assert.equal(contagemLado(bodyAnalyst.exposicaoRocket), 2, 'exposicaoRocket com dado real: os dois contêineres do ANALYST');
+    assert.ok(bodyAnalyst.valorAtribuidoCliente.gruposPorMoeda.length + bodyAnalyst.valorAtribuidoCliente.naoCalculadas > 0,
+      'valorAtribuidoCliente com a decisão vigente real');
+    assert.deepEqual(bodyAnalyst.valorBrutoCliente, bodyReferencia.valorBrutoCliente);
+    assert.deepEqual(bodyAnalyst.exposicaoRocket, bodyReferencia.exposicaoRocket);
+    assert.deepEqual(bodyAnalyst.valorAtribuidoCliente, bodyReferencia.valorAtribuidoCliente);
 
     for (const home of [homeManager, homeAdmin]) {
       const r = await fetch(`${app.base}/financeiro`, { headers: { 'x-test-home-account-id': home } });
@@ -190,18 +223,33 @@ test('D14 G5 — ANALYST pode ler /responsabilidade e /operacional normalmente (
   const app = await subirApp(pool);
   try {
     const org = await setup(pool);
-    const { containerId } = await processoDevolvido(pool, org.id, 'IM-D14-G5-2', 'RGBB');
+    const { processoId, containerId } = await processoDevolvido(pool, org.id, 'IM-D14-G5-2', 'RGBB');
     await confirmarResponsabilidadeClienteIntegral(pool, { containerId, hoje: '2026-09-20' as any, organizationId: org.id });
     const homeAnalyst = await usuarioInterno(pool, org.id, 'ANALYST');
+    // Produção P1 (filas pessoais): /operacional e /responsabilidade do ANALYST são MINHA_FILA — sem atribuição
+    // ele lia uma fila VAZIA (indicadores zerados, `porStatus` vazio) e "visíveis" era vácuo. O processo semeado
+    // passa a ser dele; um MANAGER (EQUIPE: a organização inteira, que só tem este processo) é a referência.
+    await atribuirResponsavelDeTeste(pool, processoId, await membershipIdPorHome(pool, homeAnalyst));
+    const homeManager = await usuarioInterno(pool, org.id, 'MANAGER');
 
     const rOp = await fetch(`${app.base}/operacional`, { headers: { 'x-test-home-account-id': homeAnalyst } });
     assert.equal(rOp.status, 200);
-    assert.equal((await rOp.json()).contrato, 'demurrage.gestao.operacional.v1');
+    const bodyOp = await rOp.json();
+    assert.equal(bodyOp.contrato, 'demurrage.gestao.operacional.v1');
+    // Produção P1 (filas pessoais): evidência operacional REAL — a fila pessoal, ao menos um indicador > 0, e os
+    // mesmos valores da organização (MANAGER).
+    assert.equal(bodyOp.escopo, 'MINHA_FILA');
+    assert.ok(bodyOp.indicadores.some((i: any) => i.valor > 0), 'ANALYST: ao menos um indicador operacional com dado real');
+    const bodyOpReferencia = await (await fetch(`${app.base}/operacional`, { headers: { 'x-test-home-account-id': homeManager } })).json();
+    assert.deepEqual(bodyOp.indicadores, bodyOpReferencia.indicadores);
 
     const rResp = await fetch(`${app.base}/responsabilidade`, { headers: { 'x-test-home-account-id': homeAnalyst } });
     assert.equal(rResp.status, 200);
     const bodyResp = await rResp.json();
     assert.ok(bodyResp.contrato);
+    // Produção P1 (filas pessoais): estado de responsabilidade REAL — a decisão CONFIRMADA_CLIENTE semeada aparece.
+    assert.equal(bodyResp.escopo, 'MINHA_FILA');
+    assert.deepEqual(bodyResp.porStatus, [{ status: 'CONFIRMADA_CLIENTE', total: 1 }]);
   } finally { await app.close(); await pool.end(); }
 });
 
@@ -293,6 +341,9 @@ test('D14 v1.3 #2 — rota /responsabilidade (resumo sem `decisoes`) e /responsa
     const hAnalyst = await usuarioInterno(pool, org.id, 'ANALYST');
     const hManager = await usuarioInterno(pool, org.id, 'MANAGER');
     const hAdmin = await usuarioInterno(pool, org.id, 'ADMIN');
+    // Produção P1 (filas pessoais): resumo e detalhe de responsabilidade do ANALYST são MINHA_FILA — o processo
+    // da decisão passa a ser dele, para que os três papéis leiam a MESMA decisão real (MANAGER/ADMIN: EQUIPE).
+    await atribuirResponsavelDeTeste(pool, processoId, await membershipIdPorHome(pool, hAnalyst));
     const get = (caminho: string, home: string) => fetch(`${app.base}${caminho}`, { headers: { 'x-test-home-account-id': home } });
 
     for (const home of [hAnalyst, hManager, hAdmin]) {

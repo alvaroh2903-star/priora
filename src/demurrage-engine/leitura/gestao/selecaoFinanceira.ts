@@ -5,6 +5,7 @@ import { clockFactDoCache } from '../../persistence/lifecycleRepository';
 import {
   ValorEnvelope, envelopeDoRelogio, motorClienteAplicavelDe, selecionarValorAtivo, isoTimestamp,
 } from '../contrato';
+import { EscopoAplicado, sufixoEscopo } from '../escopoFila';
 
 /**
  * Fase D14 (Gate G1) — seleção financeira autoritativa da Gestão.
@@ -79,6 +80,8 @@ export interface EnvelopesContainer {
 export interface SelecaoFinanceiraOpts {
   /** Restringe a seleção a este subconjunto de contêineres (ex.: só os de processos FINAL). Ausente = toda a organização. */
   containerIds?: string[];
+  /** Produção P1 — escopo da fila (predicado SQL sobre o responsável do processo). Ausente = organização inteira. */
+  escopo?: EscopoAplicado;
 }
 
 /** Linha de `relogios` com os campos usados pela seleção (cache puro — nunca escrito aqui). */
@@ -121,6 +124,7 @@ export async function buscarEnvelopesSelecionadosDaOrganizacao(
     params.push(opts.containerIds);
     filtroContainer = ' AND c.id = ANY($2)';
   }
+  if (opts.escopo) filtroContainer += sufixoEscopo(opts.escopo, 'p.responsavel_operacional_membership_id', params);
   const { rows: containerRows } = await pool.query(
     `SELECT c.id AS container_id, c.processo_id, c.effective_return_date, c.tracking_return_date, cc.termo_tipo
        FROM containers c

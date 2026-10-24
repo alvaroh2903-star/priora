@@ -5,7 +5,7 @@ import { AddressInfo } from 'node:net';
 import { randomUUID } from 'crypto';
 import { Pool } from 'pg';
 import { runMigrations } from '../db/migrate';
-import { testPool, testDatabaseUrl, truncateAll } from './testDb';
+import { atribuirResponsavelDeTeste, testPool, testDatabaseUrl, truncateAll } from './testDb';
 import { OrganizationRepository } from '../persistence/organizationRepository';
 import { UsuarioRepository } from '../persistence/usuarioRepository';
 import { OrganizationMembershipRepository } from '../persistence/organizationMembershipRepository';
@@ -185,6 +185,19 @@ test('Entrega 3 #5: processo de OUTRA organização devolve o MESMO 404 de inexi
     assert.equal(rInexistente.status, 404);
     assert.equal(rOutraOrg.status, 404);
     assert.deepEqual(await rInexistente.json(), await rOutraOrg.json(), 'indistinguível — mesmo corpo, mesmo status');
+
+    // Produção P1 (filas pessoais): para o ANALYST o 404 acima já decorre só do predicado de RESPONSÁVEL
+    // (o processo de B nunca é atribuído a ele) — o predicado de ORGANIZAÇÃO não é exercido. Um MANAGER de A
+    // (escopo EQUIPE: sem restrição de responsável) repete as MESMAS asserções: aqui só a organização pode
+    // produzir o 404. Controle: um processo da própria org A é 200 para ele.
+    const homeGestorA = await usuarioInterno(pool, orgA.id, 'MANAGER');
+    const { processoId: processoDeA } = await processoReal(pool, orgA.id, 'IM-E3-05A', 'ETCA');
+    assert.equal((await get(app.base, `/processos/${processoDeA}/pendencias`, homeGestorA)).status, 200, 'controle: MANAGER de A lê o processo da própria organização');
+    const rInexistenteGestor = await get(app.base, `/processos/${randomUUID()}/pendencias`, homeGestorA);
+    const rOutraOrgGestor = await get(app.base, `/processos/${processoDeB}/pendencias`, homeGestorA);
+    assert.equal(rInexistenteGestor.status, 404);
+    assert.equal(rOutraOrgGestor.status, 404);
+    assert.deepEqual(await rInexistenteGestor.json(), await rOutraOrgGestor.json(), 'indistinguível para o MANAGER — mesmo corpo, mesmo status');
   } finally { await app.close(); await pool.end(); }
 });
 
@@ -198,6 +211,9 @@ test('Entrega 3 #6/#7: lista devolve pendenciaId/tipo reais; padrão só devolve
     // processoReal sem mbl/armador próprios dispara mbl_ausente/armador_ausente automaticamente —
     // aqui pedimos um processo normal (com mbl/armador) e abrimos pendências manualmente, controladas.
     const { processoId, containerId } = await processoReal(pool, org.id, 'IM-E3-06', 'ETAD');
+    // Produção P1 (filas pessoais): ANALYST só lê as pendências de processo ATRIBUÍDO a ele (fora disso, o
+    // mesmo 404 de inexistente) — ele passa a ser o responsável; a regra verificada aqui não muda.
+    await atribuirResponsavelDeTeste(pool, processoId, await membershipIdPorHome(pool, home));
     const { rows: [aberta] } = await pool.query(
       `INSERT INTO demurrage_pendencias (organization_id, processo_id, container_id, tipo, contexto) VALUES ($1,$2,$3,'armador_sem_tracking', $4) RETURNING id, tipo`,
       [org.id, processoId, containerId, JSON.stringify({ codigo: 'XYZ' })],
@@ -229,6 +245,9 @@ test('Entrega 3 #8: filtro estado=resolvida funciona', { skip: !url }, async () 
     const org = await criarOrg(pool, 'e3-08');
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const { processoId, containerId } = await processoReal(pool, org.id, 'IM-E3-08', 'ETAE');
+    // Produção P1 (filas pessoais): ANALYST só lê as pendências de processo ATRIBUÍDO a ele (fora disso, o
+    // mesmo 404 de inexistente) — ele passa a ser o responsável; a regra verificada aqui não muda.
+    await atribuirResponsavelDeTeste(pool, processoId, await membershipIdPorHome(pool, home));
     await pool.query(
       `INSERT INTO demurrage_pendencias (organization_id, processo_id, container_id, tipo, contexto, estado, resolvido_em)
        VALUES ($1,$2,$3,'free_time_ausente', '{}', 'resolvida', now())`,
@@ -332,8 +351,13 @@ test('Entrega 3 #13 (P1): /minutas — padrão devolve só o que exige ação (a
     await setup(pool);
     const org = await criarOrg(pool, 'e3-13');
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
-    const { containerId: c1 } = await processoReal(pool, org.id, 'IM-E3-13A', 'ETAI');
-    const { containerId: c2 } = await processoReal(pool, org.id, 'IM-E3-13B', 'ETAJ');
+    const { processoId: p1, containerId: c1 } = await processoReal(pool, org.id, 'IM-E3-13A', 'ETAI');
+    const { processoId: p2, containerId: c2 } = await processoReal(pool, org.id, 'IM-E3-13B', 'ETAJ');
+    // Produção P1 (filas pessoais): /minutas do ANALYST é MINHA_FILA (processos atribuídos a ele) — os DOIS
+    // processos passam a ser dele, para que a VALIDADA continue na fila consultada e o filtro padrão seja o que a exclui.
+    const mAnalista = await membershipIdPorHome(pool, home);
+    await atribuirResponsavelDeTeste(pool, p1, mAnalista);
+    await atribuirResponsavelDeTeste(pool, p2, mAnalista);
     await pool.query(`INSERT INTO minutas (container_id, estado_minuta, numero_informado) VALUES ($1,'RECEBIDA','X')`, [c1]);
     await pool.query(`INSERT INTO minutas (container_id, estado_minuta, numero_informado, data_validada) VALUES ($1,'VALIDADA','X','2026-09-10')`, [c2]);
 
@@ -345,7 +369,9 @@ test('Entrega 3 #13 (P1): /minutas — padrão devolve só o que exige ação (a
     // Produção P1: contrato v2 — a RECEBIDA inserida aqui é LEGADA (aguardava a
     // validação humana que não existe mais); a ação do analista é registrar uma substituta.
     assert.equal(body.contrato, 'demurrage.leitura.minutas.v2');
-    assert.equal(body.escopo, 'fila_da_equipe');
+    // Produção P1 (filas pessoais): a constante 'fila_da_equipe' deixou de existir — o escopo devolvido é o
+    // resolvido pelo servidor, e o do ANALYST é sempre MINHA_FILA.
+    assert.equal(body.escopo, 'MINHA_FILA');
     assert.equal(body.itens[0].legado, true);
     assert.equal(body.itens[0].acaoNecessaria, 'registrar_minuta_substituta');
   } finally { await app.close(); await pool.end(); }
@@ -394,6 +420,11 @@ test('Entrega 3 #15: filas de organização (/reaberturas, /minutas) nunca vazam
     const homeA = await usuarioInterno(pool, orgA.id, 'ANALYST');
     const { processoId: pA, containerId: cA } = await processoReal(pool, orgA.id, 'IM-E3-15A', 'ETAL');
     const { processoId: pB, containerId: cB } = await processoReal(pool, orgB.id, 'IM-E3-15B', 'ETAM');
+    // Produção P1 (filas pessoais): as listas do ANALYST são MINHA_FILA — pA passa a ser dele. Como a fila
+    // pessoal já exclui pB (sem responsável), um MANAGER de A (EQUIPE: só o predicado de organização protege)
+    // também é verificado, para que o isolamento entre organizações continue provado sem depender do responsável.
+    await atribuirResponsavelDeTeste(pool, pA, await membershipIdPorHome(pool, homeA));
+    const homeGestorA = await usuarioInterno(pool, orgA.id, 'MANAGER');
     const uA = await new (await import('../persistence/usuarioRepository')).UsuarioRepository(pool).create('A', `${randomUUID()}@rocket.example`);
     const uB = await new (await import('../persistence/usuarioRepository')).UsuarioRepository(pool).create('B', `${randomUUID()}@rocket.example`);
     await pool.query(`INSERT INTO reaberturas (processo_id, estado, solicitada_por, justificativa) VALUES ($1,'SOLICITADA',$2,'a')`, [pA, uA.id]);
@@ -401,12 +432,14 @@ test('Entrega 3 #15: filas de organização (/reaberturas, /minutas) nunca vazam
     await pool.query(`INSERT INTO minutas (container_id, estado_minuta) VALUES ($1,'RECEBIDA')`, [cA]);
     await pool.query(`INSERT INTO minutas (container_id, estado_minuta) VALUES ($1,'RECEBIDA')`, [cB]);
 
-    const reab = await (await get(app.base, '/reaberturas', homeA)).json();
-    assert.equal(reab.itens.length, 1);
-    assert.equal(reab.itens[0].processo.id, pA);
-    const min = await (await get(app.base, '/minutas', homeA)).json();
-    assert.equal(min.itens.length, 1);
-    assert.equal(min.itens[0].container.id, cA);
+    for (const leitor of [homeA, homeGestorA]) {
+      const reab = await (await get(app.base, '/reaberturas', leitor)).json();
+      assert.equal(reab.itens.length, 1);
+      assert.equal(reab.itens[0].processo.id, pA);
+      const min = await (await get(app.base, '/minutas', leitor)).json();
+      assert.equal(min.itens.length, 1);
+      assert.equal(min.itens[0].container.id, cA);
+    }
   } finally { await app.close(); await pool.end(); }
 });
 
@@ -419,6 +452,9 @@ test('Entrega 3 #16/#17: flags de capacidade corretas por papel, e NUNCA dispens
     const homeAnalyst = await usuarioInterno(pool, org.id, 'ANALYST');
     const homeManager = await usuarioInterno(pool, org.id, 'MANAGER');
     const { processoId, containerId, numero } = await processoReal(pool, org.id, 'IM-E3-16', 'ETAN');
+    // Produção P1 (filas pessoais): leituras do ANALYST (pendências do processo, /reaberturas e /minutas em
+    // MINHA_FILA) só alcançam processo atribuído a ele — ele passa a ser o responsável; as flags por papel não mudam.
+    await atribuirResponsavelDeTeste(pool, processoId, await membershipIdPorHome(pool, homeAnalyst));
     const u = await new (await import('../persistence/usuarioRepository')).UsuarioRepository(pool).create('S', `${randomUUID()}@rocket.example`);
     await pool.query(`INSERT INTO reaberturas (processo_id, estado, solicitada_por, justificativa) VALUES ($1,'SOLICITADA',$2,'m')`, [processoId, u.id]);
     await pool.query(`INSERT INTO minutas (container_id, estado_minuta, numero_informado, data_informada) VALUES ($1,'RECEBIDA',$2,'2026-09-10')`, [containerId, numero]);
@@ -495,6 +531,9 @@ test('Entrega 3 #18: cursor assinado adulterado é rejeitado (400 cursor_invalid
     const org = await criarOrg(pool, 'e3-18');
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const { processoId } = await processoReal(pool, org.id, 'IM-E3-18', 'ETAO');
+    // Produção P1 (filas pessoais): ANALYST só lê as pendências de processo ATRIBUÍDO a ele (fora disso, o
+    // mesmo 404 de inexistente) — ele passa a ser o responsável; a regra verificada aqui não muda.
+    await atribuirResponsavelDeTeste(pool, processoId, await membershipIdPorHome(pool, home));
     await semearPendenciasEmLote(pool, org.id, processoId, 3);
     const p1 = await (await get(app.base, `/processos/${processoId}/pendencias?limite=1`, home)).json();
     assert.ok(p1.cursor);
@@ -516,9 +555,22 @@ test('Entrega 3 #19: cursor de OUTRA organização é rejeitado', { skip: !url }
     const homeB = await usuarioInterno(pool, orgB.id, 'ANALYST');
     const { processoId: pA } = await processoReal(pool, orgA.id, 'IM-E3-19A', 'ETAP');
     const { processoId: pB } = await processoReal(pool, orgB.id, 'IM-E3-19B', 'ETAQ');
+    // Produção P1 (filas pessoais): ANALYST só lê as pendências de processo ATRIBUÍDO a ele (fora disso, o
+    // mesmo 404 de inexistente) — sem isto homeA recebia 404, `cursorDeA` era `undefined` e homeB enviava o
+    // literal "undefined" (400 por lixo, não por cursor assinado de outra organização). pA passa a ser de homeA
+    // e pB de homeB (simetria), e o cursor de A é exigido (como em #18/#20): o 400 é de um cursor VÁLIDO de A.
+    await atribuirResponsavelDeTeste(pool, pA, await membershipIdPorHome(pool, homeA));
+    await atribuirResponsavelDeTeste(pool, pB, await membershipIdPorHome(pool, homeB));
     await semearPendenciasEmLote(pool, orgA.id, pA, 2);
     await semearPendenciasEmLote(pool, orgB.id, pB, 2);
     const cursorDeA = (await (await get(app.base, `/processos/${pA}/pendencias?limite=1`, homeA)).json()).cursor;
+    assert.ok(cursorDeA, 'pré-condição: a org A emitiu um cursor assinado válido');
+    // Produção P1 (filas pessoais): controle — na própria sessão de A o mesmo cursor é aceito (200), e o cursor
+    // da própria B é aceito por B; só a troca de organização produz o 400 abaixo.
+    assert.equal((await get(app.base, `/processos/${pA}/pendencias?limite=1&cursor=${encodeURIComponent(cursorDeA)}`, homeA)).status, 200);
+    const cursorDeB = (await (await get(app.base, `/processos/${pB}/pendencias?limite=1`, homeB)).json()).cursor;
+    assert.ok(cursorDeB, 'pré-condição: a org B emitiu um cursor assinado válido');
+    assert.equal((await get(app.base, `/processos/${pB}/pendencias?limite=1&cursor=${encodeURIComponent(cursorDeB)}`, homeB)).status, 200);
     // Mesmo com um processo válido NA org B, o cursor da org A nunca é aceito pela sessão de B.
     const r = await get(app.base, `/processos/${pB}/pendencias?limite=1&cursor=${encodeURIComponent(cursorDeA)}`, homeB);
     assert.equal(r.status, 400);
@@ -533,7 +585,9 @@ test('Entrega 3 #20: cursor de outra ROTA (/minutas) é rejeitado em /reabertura
     await setup(pool);
     const org = await criarOrg(pool, 'e3-20');
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
-    const { containerId } = await processoReal(pool, org.id, 'IM-E3-20', 'ETAR');
+    const { processoId, containerId } = await processoReal(pool, org.id, 'IM-E3-20', 'ETAR');
+    // Produção P1 (filas pessoais): /minutas do ANALYST é MINHA_FILA — o processo passa a ser dele, para haver cursor.
+    await atribuirResponsavelDeTeste(pool, processoId, await membershipIdPorHome(pool, home));
     await pool.query(`INSERT INTO minutas (container_id, estado_minuta) VALUES ($1,'RECEBIDA'), ($1,'RECEBIDA')`, [containerId]);
     const cursorDeMinutas = (await (await get(app.base, '/minutas?limite=1', home)).json()).cursor;
     assert.ok(cursorDeMinutas);
@@ -551,6 +605,9 @@ test('Entrega 3 #21: mudar um filtro invalida o cursor (400) — mudar só o lim
     const org = await criarOrg(pool, 'e3-21');
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const { processoId } = await processoReal(pool, org.id, 'IM-E3-21', 'ETAS');
+    // Produção P1 (filas pessoais): ANALYST só lê as pendências de processo ATRIBUÍDO a ele (fora disso, o
+    // mesmo 404 de inexistente) — ele passa a ser o responsável; a regra verificada aqui não muda.
+    await atribuirResponsavelDeTeste(pool, processoId, await membershipIdPorHome(pool, home));
     await semearPendenciasEmLote(pool, org.id, processoId, 6); // 2 ciclos de 3 tipos -> 2 linhas de 'armador_ausente'
     const p1 = await (await get(app.base, `/processos/${processoId}/pendencias?limite=1&tipo=armador_ausente`, home)).json();
     assert.ok(p1.cursor, 'duas linhas de armador_ausente e limite=1 -> deve haver próxima página');
@@ -571,6 +628,9 @@ test('Entrega 3 #22-23-24-25: paginação completa sem duplicar/omitir, desempat
     const org = await criarOrg(pool, 'e3-2225');
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const { processoId } = await processoReal(pool, org.id, 'IM-E3-2225', 'ETAT');
+    // Produção P1 (filas pessoais): ANALYST só lê as pendências de processo ATRIBUÍDO a ele (fora disso, o
+    // mesmo 404 de inexistente) — ele passa a ser o responsável; a regra verificada aqui não muda.
+    await atribuirResponsavelDeTeste(pool, processoId, await membershipIdPorHome(pool, home));
     const total = 17;
     const idsEsperados = await semearPendenciasEmLote(pool, org.id, processoId, total);
 
@@ -656,6 +716,9 @@ test('Entrega 3 #27: fingerprint do banco idêntico antes/depois de TODAS as lei
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const homeCliente = await usuarioInterno(pool, org.id, 'CLIENT');
     const { processoId, containerId } = await processoReal(pool, org.id, 'IM-E3-27', 'ETAV');
+    // Produção P1 (filas pessoais): sem atribuição, as leituras de SUCESSO do ANALYST virariam 404/listas vazias
+    // (fila pessoal) e o fingerprint deixaria de cobrir o caminho feliz — ele passa a ser o responsável.
+    await atribuirResponsavelDeTeste(pool, processoId, await membershipIdPorHome(pool, home));
     await pool.query(`INSERT INTO demurrage_pendencias (organization_id, processo_id, container_id, tipo, contexto) VALUES ($1,$2,$3,'armador_ausente','{}')`, [org.id, processoId, containerId]);
     await pool.query(`INSERT INTO minutas (container_id, estado_minuta) VALUES ($1,'RECEBIDA')`, [containerId]);
     const u = await new (await import('../persistence/usuarioRepository')).UsuarioRepository(pool).create('S', `${randomUUID()}@rocket.example`);

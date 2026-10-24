@@ -5,7 +5,7 @@ import { AddressInfo } from 'node:net';
 import { randomUUID } from 'crypto';
 import { Pool } from 'pg';
 import { runMigrations } from '../db/migrate';
-import { testPool, testDatabaseUrl, truncateAll } from './testDb';
+import { atribuirResponsavelDeTeste, testPool, testDatabaseUrl, truncateAll } from './testDb';
 import { OrganizationRepository } from '../persistence/organizationRepository';
 import { UsuarioRepository } from '../persistence/usuarioRepository';
 import { OrganizationMembershipRepository } from '../persistence/organizationMembershipRepository';
@@ -275,6 +275,9 @@ test('Entrega 3 v1.1 #P1: /processos/:id/pendencias — travessia exata (aberta 
     const outraOrg = await criarOrg(pool, 'e3v11-p1-outra');
     const analista = await usuarioInterno(pool, org.id, 'ANALYST');
     const processoId = await novoProcesso(pool, org.id, 'IM-E3V11-P1');
+    // Produção P1 (filas pessoais): ANALYST só lê pendências de processo ATRIBUÍDO a ele (senão, 404 igual a
+    // inexistente) — ele passa a ser o responsável; a travessia exata verificada aqui não muda.
+    await atribuirResponsavelDeTeste(pool, processoId, analista.membershipId);
     const outroProcesso = await novoProcesso(pool, org.id, 'IM-E3V11-P1B');
     const processoOutraOrg = await novoProcesso(pool, outraOrg.id, 'IM-E3V11-P1C');
     await semearPendencias(pool, org.id, processoId, 'aberta', 'P1AB');
@@ -403,10 +406,27 @@ test('Entrega 3 v1.1 #P4: cursor do formato ANTERIOR (v1, chave em milissegundos
     }
 
     // Pino da troca de VERSÃO: cursor com a versão `.v1` (e o hash de filtros
-    // correspondente) mas com chave já no formato EXATO de microssegundos e id
-    // UUID válido — passa na checagem de forma da chave, então só a versão
-    // pode rejeitá-lo. Se alguém voltar `VERSAO_CURSOR_*` para `.v1`, este
-    // trecho passa a devolver 200 e o teste falha.
+    // que o servidor ATUAL calcularia se a versão fosse `.v1`) mas com chave
+    // já no formato EXATO de microssegundos e id UUID válido — passa na
+    // checagem de forma da chave e do hash, então só a versão pode
+    // rejeitá-lo. Se alguém voltar `VERSAO_CURSOR_*` para `.v1`, este trecho
+    // passa a devolver 200 e o teste falha.
+    // Produção P1 (filas pessoais): o hash de filtros do servidor passou a
+    // incluir o escopo CALCULADO (`paresEscopo`: `escopo`, `escopoMembership`,
+    // `semResponsavel`) ao final, nas três rotas, e o filtro padrão de
+    // `/minutas` passou a ser `exige_acao_do_analista` (não mais `RECEBIDA`).
+    // Sem esses pares o hash montado aqui nunca batia e o cursor era 400 por
+    // hash — o pino não podia falhar. Agora o hash é EXATAMENTE o do servidor
+    // para o leitor usado (MANAGER, escopo padrão EQUIPE: `['escopo',
+    // 'EQUIPE']`, `['escopoMembership', null]`, `['semResponsavel', false]`).
+    // Prova de que o pino pode falhar (verificada ao migrar este teste): com a
+    // versão ATUAL (`p1e3.pendencias.v3`, `p1e3.reaberturas.v3`,
+    // `p1e3.minutas.v4`) no lugar de `.v1` — em `v` e no par `['v', ...]` —,
+    // estes MESMOS cursores devolvem 200 nas três rotas; ou seja, reverter a
+    // constante para `.v1` faria este trecho devolver 200 e o teste falharia.
+    // (Os pares são escritos à mão — sem importar `escopoFila`, que não existia
+    // em `507bf67` — para o teste não depender da serialização de produção.)
+    const paresEscopoEquipeDoGestor: Array<[string, unknown]> = [['escopo', 'EQUIPE'], ['escopoMembership', null], ['semResponsavel', false]];
     const chaveExata = async (tabela: string, id: string) =>
       (await pool.query(`SELECT ${CHAVE_US('criado_em')} AS k FROM ${tabela} WHERE id = $1`, [id])).rows[0].k as string;
     const v1Exata = async (v: string, filtros: Array<[string, unknown]>, tabela: string, id: string) => codificarCursorKeyset({
@@ -414,11 +434,12 @@ test('Entrega 3 v1.1 #P4: cursor do formato ANTERIOR (v1, chave em milissegundos
     });
     const casosExatos: Array<[string, string]> = [
       [`/processos/${processoId}/pendencias`, await v1Exata('p1e3.pendencias.v1', [['v', 'p1e3.pendencias.v1'], ['organizationId', org.id], ['processoId', processoId],
-        ['estado', 'aberta'], ['tipo', null], ['containerId', null], ['criadoDesde', null], ['criadoAte', null], ['resolvidoDesde', null], ['resolvidoAte', null]], 'demurrage_pendencias', pend.id)],
+        ['estado', 'aberta'], ['tipo', null], ['containerId', null], ['criadoDesde', null], ['criadoAte', null], ['resolvidoDesde', null], ['resolvidoAte', null],
+        ...paresEscopoEquipeDoGestor], 'demurrage_pendencias', pend.id)],
       ['/reaberturas', await v1Exata('p1e3.reaberturas.v1', [['v', 'p1e3.reaberturas.v1'], ['organizationId', org.id], ['estado', 'SOLICITADA'], ['processoId', null],
-        ['solicitanteMembershipId', null], ['criadoDesde', null], ['criadoAte', null]], 'reaberturas', reab.id)],
-      ['/minutas', await v1Exata('p1e3.minutas.v1', [['v', 'p1e3.minutas.v1'], ['organizationId', org.id], ['estado', 'RECEBIDA'], ['processoId', null], ['containerId', null],
-        ['recebidaDesde', null], ['recebidaAte', null], ['divergente', null]], 'minutas', min.id)],
+        ['solicitanteMembershipId', null], ['criadoDesde', null], ['criadoAte', null], ...paresEscopoEquipeDoGestor], 'reaberturas', reab.id)],
+      ['/minutas', await v1Exata('p1e3.minutas.v1', [['v', 'p1e3.minutas.v1'], ['organizationId', org.id], ['estado', 'exige_acao_do_analista'], ['processoId', null], ['containerId', null],
+        ['recebidaDesde', null], ['recebidaAte', null], ['divergente', null], ...paresEscopoEquipeDoGestor], 'minutas', min.id)],
     ];
     for (const [caminho, cursor] of casosExatos) {
       const r = await get(app.base, `${caminho}?cursor=${encodeURIComponent(cursor)}`, gestor.home);
@@ -432,9 +453,18 @@ test('Entrega 3 v1.1 #P4: cursor do formato ANTERIOR (v1, chave em milissegundos
  * #V1-#V2 — validação estrita, ANTES de qualquer consulta da leitura.
  * ========================================================================= */
 
+// Produção P1 (filas pessoais): a autorização passou a resolver o usuário
+// (`SELECT id FROM usuarios WHERE home_account_id = $1`) e depois consultar
+// `organization_memberships` por `usuario_id` (organização ativa da sessão,
+// memberships desativados) — o filtro antigo (`u.home_account_id = $1`, do
+// JOIN único que não existe mais) deixou de reconhecê-las.
+function consultaDaAutorizacao(sql: string): boolean {
+  return sql.includes('FROM usuarios WHERE home_account_id = $1')
+    || /FROM organization_memberships m\s+WHERE m\.usuario_id = \$1/.test(sql);
+}
 /** Consultas que NÃO são do middleware de autorização (`resolverAutorizacao`). */
 function consultasDaLeitura(consultas: string[]): string[] {
-  return consultas.filter((sql) => !sql.includes('u.home_account_id = $1'));
+  return consultas.filter((sql) => !consultaDaAutorizacao(sql));
 }
 
 test('Entrega 3 v1.1 #V1: `limite` só aceita inteiro decimal entre 1 e 200 — o resto é 400 valor_invalido, sem tocar a leitura', { skip: !url }, async () => {
@@ -446,6 +476,9 @@ test('Entrega 3 v1.1 #V1: `limite` só aceita inteiro decimal entre 1 e 200 — 
     const org = await criarOrg(pool, 'e3v11-v1');
     const analista = await usuarioInterno(pool, org.id, 'ANALYST');
     const processoId = await novoProcesso(pool, org.id, 'IM-E3V11-V1');
+    // Produção P1 (filas pessoais): os limites válidos precisam de 200 também em /pendencias do processo —
+    // o ANALYST passa a ser o responsável (fora disso, 404 igual a inexistente).
+    await atribuirResponsavelDeTeste(pool, processoId, analista.membershipId);
     const rotas = [`/processos/${processoId}/pendencias`, '/reaberturas', '/minutas'];
     const invalidos = ['1.5', '2.0', '1e1', '1E2', '+', '-', '+5', '-1', '0', '201', '1000000000000000000000', '', ' ', '   ', ' 5', '5 ', '5abc', 'abc', '0x10', 'Infinity', 'NaN', '١٢'];
     for (const rota of rotas) {
@@ -481,6 +514,9 @@ test('Entrega 3 v1.1 #V2: datas só aceitam datas de calendário reais (AAAA-MM-
     const org = await criarOrg(pool, 'e3v11-v2');
     const analista = await usuarioInterno(pool, org.id, 'ANALYST');
     const processoId = await novoProcesso(pool, org.id, 'IM-E3V11-V2');
+    // Produção P1 (filas pessoais): as datas válidas precisam de 200 também em /pendencias do processo —
+    // o ANALYST passa a ser o responsável (fora disso, 404 igual a inexistente).
+    await atribuirResponsavelDeTeste(pool, processoId, analista.membershipId);
     const pend = `/processos/${processoId}/pendencias`;
     const parametros: Array<[string, string]> = [
       [pend, 'criadoDesde'], [pend, 'criadoAte'], [pend, 'resolvidoDesde'], [pend, 'resolvidoAte'],
@@ -540,6 +576,8 @@ test('Entrega 3 v1.1 #V3: /pendencias valida TODO parâmetro antes da verificaç
     const outraOrg = await criarOrg(pool, 'e3v11-v3-outra');
     const analista = await usuarioInterno(pool, org.id, 'ANALYST');
     const proprio = await novoProcesso(pool, org.id, 'IM-E3V11-V3');
+    // Produção P1 (filas pessoais): "próprio" = atribuído ao ANALYST (só assim a leitura final responde 200).
+    await atribuirResponsavelDeTeste(pool, proprio, analista.membershipId);
     const deOutraOrg = await novoProcesso(pool, outraOrg.id, 'IM-E3V11-V3B');
     const invalidos: Array<[string, Record<string, unknown>]> = [
       ['estado=NAO_EXISTE', { error: 'valor_invalido', campo: 'estado' }],
@@ -604,6 +642,9 @@ test('Entrega 3 v1.1 #E1: falha inesperada do banco na leitura → 500 { error: 
     const org = await criarOrg(pool, 'e3v11-e1');
     const analista = await usuarioInterno(pool, org.id, 'ANALYST');
     const processoId = await novoProcesso(pool, org.id, 'IM-E3V11-E1');
+    // Produção P1 (filas pessoais): a falha simulada é na consulta de pendências, que só roda se o processo
+    // estiver no escopo do ANALYST — ele passa a ser o responsável (senão a rota para no 404 da posse).
+    await atribuirResponsavelDeTeste(pool, processoId, analista.membershipId);
     const casos: Array<[string, RegExp, string]> = [
       [`/processos/${processoId}/pendencias`, /FROM demurrage_pendencias dp/, 'GET /processos/:processoId/pendencias'],
       ['/reaberturas', /FROM reaberturas r/, 'GET /reaberturas'],
@@ -635,7 +676,9 @@ test('Entrega 3 v1.1 #E2: falha inesperada ANTES do handler (autorização sem b
     const org = await criarOrg(pool, 'e3v11-e2');
     const analista = await usuarioInterno(pool, org.id, 'ANALYST');
     const processoId = await novoProcesso(pool, org.id, 'IM-E3V11-E2');
-    espiao.interceptar = (sql) => (sql.includes('u.home_account_id = $1') ? erroDeBanco() : null);
+    // Produção P1 (filas pessoais): a consulta da autorização mudou de texto (memberships por `usuario_id`,
+    // ver `consultaDaAutorizacao`) — o interceptador falha a consulta NOVA da autorização.
+    espiao.interceptar = (sql) => (consultaDaAutorizacao(sql) ? erroDeBanco() : null);
     const { resultado } = await capturarConsoleError(async () => {
       const respostas: Array<[string, number, string]> = [];
       for (const caminho of [`/processos/${processoId}/pendencias`, '/reaberturas', '/minutas', '/filtros', `/processos/${processoId}`]) {
@@ -694,6 +737,16 @@ test('Entrega 3 v1.1 #E3: contratos explícitos preservados nas três rotas — 
     const deOutraOrg = await get(app.base, `/processos/${processoOutraOrg}/pendencias`, analista.home);
     assert.deepEqual([inexistente.status, await inexistente.text()], [deOutraOrg.status, await deOutraOrg.text()]);
     assert.equal(inexistente.status, 404);
+    // Produção P1 (filas pessoais): para o ANALYST o 404 acima já decorre só do predicado de RESPONSÁVEL
+    // (processo de outra organização nunca é atribuído a ele) — o predicado de ORGANIZAÇÃO não é exercido.
+    // Um MANAGER da organização (escopo EQUIPE: sem restrição de responsável) repete a MESMA igualdade:
+    // aqui só a organização pode produzir o 404. Controle: o processo da própria organização é 200 para ele.
+    const gestor = await usuarioInterno(pool, org.id, 'MANAGER');
+    assert.equal((await get(app.base, `/processos/${processoId}/pendencias`, gestor.home)).status, 200, 'controle: MANAGER lê o processo da própria organização');
+    const inexistenteGestor = await get(app.base, `/processos/${randomUUID()}/pendencias`, gestor.home);
+    const deOutraOrgGestor = await get(app.base, `/processos/${processoOutraOrg}/pendencias`, gestor.home);
+    assert.deepEqual([inexistenteGestor.status, await inexistenteGestor.text()], [deOutraOrgGestor.status, await deOutraOrgGestor.text()]);
+    assert.equal(inexistenteGestor.status, 404);
   } finally { await app.close(); await pool.end(); }
 });
 

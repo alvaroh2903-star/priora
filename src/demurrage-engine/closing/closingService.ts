@@ -32,6 +32,13 @@ import {
  *    obrigatória, nunca um atalho para contornar gate;
  *  - os gates de FINAL vivem num único lugar (`gateEncerramentoComClient`).
  *
+ * Produção P1 (identidade operacional e filas pessoais): todo ator é um
+ * membership ATIVO (`desativado_em IS NULL`, `resolverAtor`). Ações
+ * ORGANIZACIONAIS por natureza — `finalizarProcesso` (acionamento
+ * administrativo) e `autorizarReabertura` — seguem só MANAGER/ADMIN, em
+ * qualquer processo da organização. `solicitarReabertura` é PESSOAL: ANALYST
+ * só no processo atribuído a ele (conferido sob o lock — ver o método).
+ *
  * FINAL protegido em profundidade (item 4): guard de aplicação (o orquestrador é
  * NO-OP em processo FINAL) + guard de banco (migration 0017). No fechamento os
  * valores ATIVOS transitam OPEN → FINAL (congelados) ANTES de o processo virar
@@ -149,13 +156,16 @@ export class ClosingService {
   /**
    * Fase D15-A — resolve o ator (usuário + papel) a partir do `membershipId`
    * REAL, dentro da organização do recurso. Nunca aceita papel informado pelo
-   * chamador. Devolve `null` quando o membership não existe ou pertence a
-   * outra organização — o chamador trata isso com o MESMO código de falha de
+   * chamador. Devolve `null` quando o membership não existe, pertence a
+   * outra organização ou está DESATIVADO (Produção P1, migration 0049 — o
+   * `FOR SHARE` impede que a desativação comite enquanto esta transação usa o
+   * membership) — o chamador trata isso com o MESMO código de falha de
    * "não autorizado" (nunca vaza se o problema era o membership ou o papel).
    */
   private async resolverAtor(db: Pool | PoolClient, organizationId: string, membershipId: string): Promise<Ator | null> {
     const { rows } = await db.query(
-      `SELECT usuario_id, papel FROM organization_memberships WHERE id = $1 AND organization_id = $2 FOR SHARE`,
+      `SELECT usuario_id, papel FROM organization_memberships
+        WHERE id = $1 AND organization_id = $2 AND desativado_em IS NULL FOR SHARE`,
       [membershipId, organizationId],
     );
     return rows.length ? { usuarioId: rows[0].usuario_id, papel: rows[0].papel as PapelRbac } : null;
@@ -528,6 +538,15 @@ export class ClosingService {
    * processo CONCLUÍDO). No máximo UMA reabertura aberta por processo: a
    * checagem aqui é defesa de aplicação; o índice único parcial da migration
    * 0035 é a garantia de banco contra a mesma corrida.
+   *
+   * Produção P1 (filas pessoais) — ação PESSOAL: ANALYST só solicita em
+   * processo ATRIBUÍDO a ele (`processos.responsavel_operacional_membership_id`
+   * — sem responsável = nenhum ANALYST) → senão `ator_nao_responsavel`;
+   * MANAGER/ADMIN em qualquer processo da organização. Conferido sob o lock
+   * consultivo e o `FOR UPDATE` do processo — a atribuição
+   * (`responsavel/atribuirResponsavel.ts`) toma o MESMO lock, então uma
+   * reatribuição concorrente nunca passa entre a checagem e a escrita — e
+   * ANTES de `reabertura_ja_aberta` (que devolve a reabertura existente).
    */
   async solicitarReabertura(input: { processoId: string; membershipId: string; justificativa: string }): Promise<{ ok: true; reaberturaId: string } | Falha> {
     const client = await this.pool.connect();
@@ -536,7 +555,7 @@ export class ClosingService {
       await lockProcesso(client, input.processoId);
 
       const { rows: prows } = await client.query(
-        `SELECT organization_id, apuracao_status FROM processos WHERE id = $1 FOR UPDATE`,
+        `SELECT organization_id, apuracao_status, responsavel_operacional_membership_id FROM processos WHERE id = $1 FOR UPDATE`,
         [input.processoId],
       );
       if (!prows.length) { await client.query('ROLLBACK'); return { ok: false, motivo: 'processo_nao_encontrado' }; }
@@ -544,6 +563,10 @@ export class ClosingService {
 
       const ator = await this.resolverAtor(client, proc.organization_id, input.membershipId);
       if (!ator || !ehPapelInterno(ator.papel)) { await client.query('ROLLBACK'); return { ok: false, motivo: 'ator_nao_autorizado' }; }
+      if (ator.papel === 'ANALYST' && proc.responsavel_operacional_membership_id !== input.membershipId) {
+        await client.query('ROLLBACK');
+        return { ok: false, motivo: 'ator_nao_responsavel' };
+      }
 
       if (!input.justificativa || !input.justificativa.trim()) { await client.query('ROLLBACK'); return { ok: false, motivo: 'justificativa_obrigatoria' }; }
 

@@ -17,6 +17,12 @@ import { PAPEIS_RESOLUCAO_PENDENCIA, PendenciaResolucaoError } from '../registro
  * DENTRO da mesma transação (mesma régua de `resolverPendenciaManualComClient`,
  * `registro/pendencias.ts`) e `motivo` é OBRIGATÓRIO e não-vazio ao resolver
  * (reconhecer, que não encerra a divergência, continua com motivo opcional).
+ *
+ * Produção P1 (migration 0049) — membership DESATIVADO: não reconhece nem
+ * resolve (o `FOR SHARE` do autor segura a desativação até o COMMIT) e não
+ * recebe aviso — a entrega enfileirada antes da desativação nunca é
+ * reivindicada nem lida para envio (fica PENDING até uma reativação; mesma
+ * régua de `processarAvisosPendenciaPendentes` para o papel).
  */
 
 export interface AvisoDivergencia {
@@ -55,7 +61,7 @@ async function alterarEstado(
   try {
     await client.query('BEGIN');
     const { rows: autor } = await client.query(
-      `SELECT papel FROM organization_memberships WHERE id = $1 AND organization_id = $2 FOR SHARE`,
+      `SELECT papel FROM organization_memberships WHERE id = $1 AND organization_id = $2 AND desativado_em IS NULL FOR SHARE`,
       [input.autorMembershipId, input.organizationId],
     );
     if (!autor.length || !PAPEIS_RESOLUCAO_PENDENCIA.includes(autor[0].papel)) {
@@ -164,6 +170,8 @@ export async function processarAvisosDivergenciaPendentes(input: ProcessarAvisos
           SELECT id FROM ft_divergencia_entregas
            WHERE (((status = 'PENDING' OR status = 'FAILED') AND tentativas < $3) OR (status = 'PROCESSING' AND expira_em < now()))
              AND NOT (id = ANY($4::uuid[]))
+             AND EXISTS (SELECT 1 FROM organization_memberships m
+                          WHERE m.id = ft_divergencia_entregas.destinatario_membership_id AND m.desativado_em IS NULL)
            ORDER BY criado_em, id
            FOR UPDATE SKIP LOCKED
            LIMIT 1)
@@ -174,18 +182,32 @@ export async function processarAvisosDivergenciaPendentes(input: ProcessarAvisos
     if (!claim) break; // nada elegível
     out.reivindicadas++;
     processadas.push(claim.id);
+    // Detalhe do envio — destinatário ATIVO relido agora (defesa em
+    // profundidade contra a janela entre o claim e o envio). Sem linha: a
+    // posse volta a PENDING sem contar desfecho (nunca lança, nunca envia).
     const { rows } = await input.pool.query(
       `SELECT e.*, d.valor_si, d.valor_master, c.numero AS container_numero, p.numero_processo, p.mbl, u.email, u.nome
          FROM ft_divergencia_entregas e
          JOIN ft_divergencias d ON d.id = e.divergencia_id
          JOIN containers c ON c.id = d.container_id
          JOIN processos p ON p.id = d.processo_id
-         JOIN organization_memberships m ON m.id = e.destinatario_membership_id
+         JOIN organization_memberships m ON m.id = e.destinatario_membership_id AND m.desativado_em IS NULL
          JOIN usuarios u ON u.id = m.usuario_id
         WHERE e.id = $1`,
       [claim.id],
     );
     const e = rows[0];
+    if (!e) {
+      // Devolve também a tentativa consumida pelo claim: a entrega não foi tentada
+      // (destinatário inelegível no envio) e não pode ficar presa no limite de tentativas.
+      await input.pool.query(
+        `UPDATE ft_divergencia_entregas SET status = 'PENDING', tentativas = GREATEST(tentativas - 1, 0),
+                claim_token = NULL, worker_id = NULL, expira_em = NULL, atualizado_em = now()
+          WHERE id = $1 AND status = 'PROCESSING' AND claim_token = $2`,
+        [claim.id, claim.claim_token],
+      );
+      continue;
+    }
     let r: ResultadoEnvioAviso;
     try {
       r = await input.transport.enviar({

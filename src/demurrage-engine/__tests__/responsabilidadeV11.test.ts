@@ -637,6 +637,11 @@ test('v1.1 migração 0032 → 0033: decisões existentes preservadas; a nova re
     // congelado em 0032. Ao final (gate de fechamento), as duas réplicas são
     // removidas e as migrations reais 0034+ rodam — ver o comentário lá.
     await pool.query(`ALTER TABLE tariff_tables ADD COLUMN ativada_em TIMESTAMPTZ`);
+    // Produção P1 (identidade operacional, migration 0049, muito depois): as
+    // leituras de autor de `decidirResponsabilidade` exigem membership ATIVO
+    // (`desativado_em IS NULL`) — scaffold da coluna para este schema
+    // congelado; removido antes da migration real (que a cria sem IF NOT EXISTS).
+    await pool.query(`ALTER TABLE organization_memberships ADD COLUMN desativado_em TIMESTAMPTZ`);
 
     // Decisões criadas ANTES da 0033 (serviço vigente na 0032).
     const cli = await cenario(pool, 'MIGCLI', { discharge: '2026-01-01', houseFT: 5, masterFT: 100, effective: '2026-01-10', diaria: 150 });
@@ -696,6 +701,7 @@ test('v1.1 migração 0032 → 0033: decisões existentes preservadas; a nova re
     // criem (a 0037 preenche `ativada_em = criado_em`, o mesmo fato).
     await pool.query(`DROP TABLE free_time_tentativas`);
     await pool.query(`ALTER TABLE tariff_tables DROP COLUMN ativada_em`);
+    await pool.query('ALTER TABLE organization_memberships DROP COLUMN desativado_em');
     await runMigrations(pool);
     await minutaValidadaDireta(pool, cli.containerId, 'MIGCLI', '2026-01-10');
     assert.deepEqual(

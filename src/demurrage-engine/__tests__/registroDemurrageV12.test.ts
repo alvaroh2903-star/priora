@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Pool } from 'pg';
 import { runMigrations } from '../db/migrate';
-import { testPool, testDatabaseUrl, truncateAll } from './testDb';
+import { testPool, testDatabaseUrl, truncateAll, atribuirResponsavelDeTeste } from './testDb';
 import { OrganizationRepository } from '../persistence/organizationRepository';
 import { UsuarioRepository } from '../persistence/usuarioRepository';
 import { OrganizationMembershipRepository } from '../persistence/organizationMembershipRepository';
@@ -34,6 +34,24 @@ async function membership(pool: Pool, orgId: string, papel: OrganizationRole, em
 
 const gov = (autorMembershipId: string, justificativa = 'Free Time confirmado por telefone — nenhuma fonte documental disponível'): ManualFallbackGovernanca =>
   ({ justificativa, autorMembershipId });
+
+/**
+ * Produção P1 (filas pessoais): o fallback manual é ação PESSOAL — um ANALYST
+ * autor tem de ser o responsável PERSISTIDO do processo (conferido sob o lock
+ * do processo, antes de qualquer escrita; nunca o que a própria entrada
+ * gravaria). Os testes que usam um ANALYST como autor para exercitar OUTRA
+ * regra (evidência, aviso durável, entrega) criam antes o processo com a MESMA
+ * linha mínima do passo 3 do registro, já atribuído a ele; o registro o
+ * reencontra pelo número e segue idêntico.
+ */
+async function processoAtribuidoA(pool: Pool, orgId: string, numeroProcesso: string, membershipId: string): Promise<string> {
+  const { rows } = await pool.query(
+    `INSERT INTO processos (organization_id, numero_processo, cliente_id) VALUES ($1, $2, NULL) RETURNING id`,
+    [orgId, numeroProcesso],
+  );
+  await atribuirResponsavelDeTeste(pool, rows[0].id, membershipId);
+  return rows[0].id;
+}
 
 function portao() {
   let abrir!: () => void;
@@ -107,6 +125,10 @@ test('v1.2 §1 PostgreSQL: sem evidência / evidência vazia → nada é gravado
     const { rows: nada } = await pool.query(`SELECT count(*)::int n FROM processos WHERE numero_processo='IM-EV-PG'`);
     assert.equal(nada[0].n, 0, 'rejeição pura: processo não é criado');
 
+    // Produção P1 (filas pessoais): só DEPOIS das rejeições puras (que seguem
+    // provando que nada é gravado) o processo passa a existir atribuído ao
+    // ANALYST autor — pré-condição do fallback manual como ação pessoal.
+    await processoAtribuidoA(pool, org.id, 'IM-EV-PG', autor.membershipId);
     const r = await registrarProcessoDemurrage(contratoRegistro({
       organizationId: org.id, numeroProcesso: 'IM-EV-PG', containers: [containerContrato(n)],
       houseFreeTimeDays: o(10, 'manual_fallback', T, 'gravacao-ligacao-0920.mp3', gov(autor.membershipId, 'cliente confirmou 10 dias por telefone')),
@@ -179,6 +201,10 @@ test('v1.2 §2: autores internos autorizados (ANALYST operacional, MANAGER, ADMI
     for (const papel of ['ANALYST', 'MANAGER', 'ADMIN'] as const) {
       i++;
       const autor = await membership(pool, org.id, papel, `${papel.toLowerCase()}@rocket.example`);
+      // Produção P1 (filas pessoais): ANALYST só no processo ATRIBUÍDO a ele;
+      // MANAGER/ADMIN seguem aceitos em qualquer processo da organização
+      // (inclusive novo e sem responsável) — por isso só o ANALYST é atribuído.
+      if (papel === 'ANALYST') await processoAtribuidoA(pool, org.id, `IM-AUT-${papel}`, autor.membershipId);
       const r = await registrarProcessoDemurrage(fallback(org.id, numeroContainer('AUTC', i), autor.membershipId, `IM-AUT-${papel}`), { pool });
       assert.equal(r.status, 'registrado', `${papel} deveria ser aceito`);
     }
@@ -193,6 +219,8 @@ test('v1.2 §2: fallback gera aviso DURÁVEL (PENDING) só para os gestores; rep
     const gestor = await membership(pool, org.id, 'MANAGER', 'g@rocket.example');
     const admin = await membership(pool, org.id, 'ADMIN', 'adm@rocket.example');
     await membership(pool, org.id, 'CLIENT', 'c@portal.example');
+    // Produção P1 (filas pessoais): o ANALYST autor é o responsável do processo.
+    await processoAtribuidoA(pool, org.id, 'IM-AUT', analista.membershipId);
     const entrada = fallback(org.id, numeroContainer('AVSA', 1), analista.membershipId);
     await registrarProcessoDemurrage(entrada, { pool });
 
@@ -214,6 +242,8 @@ test('v1.2 §2: falha no transporte mantém a entrega reprocessável; sucesso po
     const org = await setup(pool);
     const analista = await membership(pool, org.id, 'ANALYST', 'a@rocket.example');
     await membership(pool, org.id, 'MANAGER', 'g@rocket.example');
+    // Produção P1 (filas pessoais): o ANALYST autor é o responsável do processo.
+    await processoAtribuidoA(pool, org.id, 'IM-AUT', analista.membershipId);
     await registrarProcessoDemurrage(fallback(org.id, numeroContainer('AVSB', 1), analista.membershipId), { pool });
 
     const recebidos: AvisoFallbackManual[] = [];
@@ -250,6 +280,8 @@ test('v1.2 §2: entrega com posse vencida é recuperada; o worker antigo não fi
     const org = await setup(pool);
     const analista = await membership(pool, org.id, 'ANALYST', 'a@rocket.example');
     await membership(pool, org.id, 'MANAGER', 'g@rocket.example');
+    // Produção P1 (filas pessoais): o ANALYST autor é o responsável do processo.
+    await processoAtribuidoA(pool, org.id, 'IM-AUT', analista.membershipId);
     await registrarProcessoDemurrage(fallback(org.id, numeroContainer('AVSC', 1), analista.membershipId), { pool });
     const g = portao();
     let chamouA = false;
@@ -323,7 +355,8 @@ test('v1.2 §3: 0028 → 0029 → 0030 com seleção legada — vínculo correto
       '0044_acoes_minuta_idempotencia_tenant_e_chave.sql',
       '0045_leitura_operacional_indices.sql',
       '0046_leitura_operacional_pendencias_por_processo.sql',
-      '0047_handoff_controle_capacidade.sql', '0048_minuta_aceite_tecnico_encerramento_automatico.sql',
+      // Produção P1 (filas pessoais): a migration 0049 (sessões, identidade e atribuição — aditiva) passa a ser a última.
+      '0047_handoff_controle_capacidade.sql', '0048_minuta_aceite_tecnico_encerramento_automatico.sql', '0049_sessoes_identidade_atribuicao.sql',
     ]);
 
     // 4) C1 ligado à observação CORRETA (não às iscas).
@@ -382,7 +415,8 @@ test('v1.2 §3: banco novo 0001 → 0030 — registro pelo contrato grava a sele
     await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
     const r = await runMigrations(pool);
     assert.equal(r.applied[0], '0001_organizations_and_users.sql');
-    assert.equal(r.applied[r.applied.length - 1], '0048_minuta_aceite_tecnico_encerramento_automatico.sql');
+    // Produção P1 (filas pessoais): a migration 0049 (sessões, identidade e atribuição — aditiva) passa a ser a última.
+    assert.equal(r.applied[r.applied.length - 1], '0049_sessoes_identidade_atribuicao.sql');
     const org = await new OrganizationRepository(pool).create('Rocket', 'rocket');
     const reg = await registrarProcessoDemurrage(contratoRegistro({
       organizationId: org.id, numeroProcesso: 'IM-NOVO',

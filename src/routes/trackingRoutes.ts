@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import { requireAuth, AuthedRequest } from '../middleware/requireAuth';
+import { AuthedRequest } from '../middleware/requireAuth';
+import { requireSessao } from '../auth/sessaoHumana';
 import {
   trackNumber as trackFedex,
   isFedexConfigured,
@@ -36,7 +37,9 @@ trackingRouter.get('/health', async (_req, res) => {
 });
 
 // A partir daqui, tudo exige login.
-trackingRouter.use(requireAuth);
+// Produção P1 (autenticação): o rastreio (FedEx/DHL por chave de API) não usa
+// a caixa Microsoft — basta a sessão humana; nunca exigiu ser a conta da integração.
+trackingRouter.use(requireSessao);
 
 /* ------------------------------------------------------------------ *
  * Cache de rastreio (TTL curto). O módulo Courier consulta TODOS os

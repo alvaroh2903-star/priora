@@ -7,11 +7,12 @@ import { blocoPrazoRelogio, escolherProximoVencimentoProcesso, CandidatoProximoV
 import { hojeOperacional } from '../time/operationalDate';
 import { CivilDate } from '../temporal/civilDate';
 import {
-  CONTRATO_FILA_ITEM_V1, CONTRATO_LEITURA_V1, ESCOPO_FILA_DA_EQUIPE, ErroLeitura, FilaItemV1, FilaRespostaV1, FiltroFila, LiderLeitura,
+  CONTRATO_FILA_ITEM_V1, CONTRATO_LEITURA_V1, ComMetaEscopo, ErroLeitura, FilaItemV1, FilaRespostaV1, FiltroFila, FiltrosAtivos, LiderLeitura,
   SituacaoApuracaoFiltro, ValorEnvelope, encerramentoDoProcesso, envelopeDoRelogio, isoTimestamp, motorClienteAplicavelDe, rotularEstado,
   selecionarValorAtivo, agregarFinanceiroProcesso, filtroFilaVazio,
 } from './contrato';
 import { codificarCursorAssinado, decodificarCursorAssinado, hmacLeitura } from './cursorAssinado';
+import { EscopoAplicado, escopoEquipeOrganizacao, filtrosDoEscopo, paresEscopo, predicadoEscopo } from './escopoFila';
 
 /**
  * Fase D12 (Gate G2, v1.1) — read model da fila operacional.
@@ -45,15 +46,22 @@ import { codificarCursorAssinado, decodificarCursorAssinado, hmacLeitura } from 
  * ou administrativamente) nunca entra na fila ativa nem nas contagens de
  * `/filtros`; é consultável pelo filtro explícito `apuracaoStatus=FINAL`
  * (ou `TODOS`) e pelo detalhe direto. Busca, ordem, total e cursor seguem
- * o mesmo conjunto filtrado (o filtro entra no hash do cursor). Toda lista
- * aqui é a FILA DA EQUIPE (organização) — não existe fila pessoal ainda.
+ * o mesmo conjunto filtrado (o filtro entra no hash do cursor).
+ *
+ * Produção P1 (filas pessoais): o ESCOPO resolvido pelo servidor
+ * (`escopoFila.ts` — MINHA_FILA, EQUIPE, SEM_RESPONSAVEL) é filtro de
+ * PROCESSO em SQL (`predicadoEscopo`), aplicado aos candidatos ANTES de
+ * qualquer ordenação/paginação — nunca um filtro em memória sobre a página.
+ * Fila e contagens de `/filtros` usam o MESMO predicado; o escopo calculado
+ * entra no hash do cursor (`d12.fila.v1.3`). Sem escopo informado (chamador
+ * interno), a leitura é a EQUIPE inteira — o comportamento anterior.
  */
 
 const MAX_LIMITE = 200;
 const LIMITE_PADRAO = 50;
 
 /** Identidade do esquema de serialização canônica dos filtros/ordem (entra no hash do cursor). */
-export const VERSAO_CURSOR_FILA = 'd12.fila.v1.2';
+export const VERSAO_CURSOR_FILA = 'd12.fila.v1.3';
 
 /** Mesmo limite padrão de tentativas do worker (`processarRecalculosPendentes`, maxTentativas = 5). */
 const RECALCULO_MAX_TENTATIVAS = 5;
@@ -94,13 +102,17 @@ function existsFalhaTecnica(processoIdExpr: string): string {
   )`;
 }
 
-function construirWhereProcesso(organizationId: string, filtros: FiltroFila, params: unknown[]): string {
+/** Escopo efetivo: o resolvido pela rota; sem ele (chamador interno), a EQUIPE com o `responsavel` dos filtros, como antes. */
+function escopoEfetivo(escopo: EscopoAplicado | undefined, f: FiltroFila): EscopoAplicado {
+  return escopo ?? escopoEquipeOrganizacao(f.responsavelMembershipId ?? null);
+}
+
+function construirWhereProcesso(organizationId: string, filtros: FiltroFila, escopo: EscopoAplicado, params: unknown[]): string {
   params.push(organizationId);
   const where: string[] = [`p.organization_id = $${params.length}`];
-  if (filtros.responsavelMembershipId) {
-    params.push(filtros.responsavelMembershipId);
-    where.push(`p.responsavel_operacional_membership_id = $${params.length}`);
-  }
+  // O responsável é SEMPRE o do escopo (MINHA_FILA = a sessão; EQUIPE+responsavel; SEM_RESPONSAVEL).
+  const predicado = predicadoEscopo(escopo, 'p.responsavel_operacional_membership_id', params);
+  if (predicado) where.push(predicado);
   if (filtros.clienteId) {
     params.push(filtros.clienteId);
     where.push(`p.cliente_id = $${params.length}`);
@@ -216,12 +228,13 @@ interface CursorPayload {
  * booleanos), então filtros equivalentes produzem a mesma string. `limite`
  * NÃO entra: não muda a identidade da ordem.
  */
-export function serializarFiltrosCanonico(organizationId: string, hoje: CivilDate, f: FiltroFila): string {
+export function serializarFiltrosCanonico(organizationId: string, hoje: CivilDate, f: FiltroFila, escopo?: EscopoAplicado): string {
+  const e = escopoEfetivo(escopo, f);
   const pares: Array<[string, string | boolean | null]> = [
     ['versao', VERSAO_CURSOR_FILA],
     ['organizationId', organizationId],
     ['hoje', hoje],
-    ['responsavelMembershipId', f.responsavelMembershipId ?? null],
+    ['responsavelMembershipId', e.responsavelMembershipId],
     ['clienteId', f.clienteId ?? null],
     ['armadorId', f.armadorId ?? null],
     ['estado', f.estado ?? null],
@@ -239,12 +252,33 @@ export function serializarFiltrosCanonico(organizationId: string, hoje: CivilDat
     ['busca', f.busca ?? null],
     ['incluirSilenciosos', f.incluirSilenciosos === true],
     ['apuracaoStatus', f.apuracaoStatus ?? 'OPEN'],
+    // Produção P1: escopo CALCULADO pelo servidor (nunca o que viesse no cursor).
+    ...paresEscopo(e),
   ];
   return JSON.stringify(pares);
 }
 
-export function hashFiltros(organizationId: string, hoje: CivilDate, f: FiltroFila): string {
-  return hmacLeitura(serializarFiltrosCanonico(organizationId, hoje, f));
+export function hashFiltros(organizationId: string, hoje: CivilDate, f: FiltroFila, escopo?: EscopoAplicado): string {
+  return hmacLeitura(serializarFiltrosCanonico(organizationId, hoje, f, escopo));
+}
+
+/** `filtros` da resposta: o que o servidor aplicou, com os nomes da query string (booleanos só quando ativos). */
+function filtrosAtivosFila(f: FiltroFila, e: EscopoAplicado): FiltrosAtivos {
+  const ativos: FiltrosAtivos = { ...filtrosDoEscopo(e), apuracaoStatus: f.apuracaoStatus ?? 'OPEN', incluirSilenciosos: f.incluirSilenciosos === true };
+  if (f.clienteId) ativos.cliente = f.clienteId;
+  if (f.armadorId) ativos.armador = f.armadorId;
+  if (f.estado) ativos.estado = f.estado;
+  if (f.balde) ativos.prioridade = f.balde;
+  for (const campo of ['comPendencia', 'comFalhaTecnica', 'dentroDoFreeTime', 'emDemurrage', 'devolvido', 'responsabilidadeEmAnalise', 'exposicaoIndisponivel'] as const) {
+    if (f[campo] === true) ativos[campo] = true;
+  }
+  if (f.periodoInicio && f.periodoFim) {
+    ativos.periodoCampo = f.periodoCampo ?? 'descarga';
+    ativos.periodoInicio = f.periodoInicio;
+    ativos.periodoFim = f.periodoFim;
+  }
+  if (f.busca) ativos.busca = f.busca;
+  return ativos;
 }
 
 function hashOrdem(processoIds: string[]): string {
@@ -281,6 +315,8 @@ interface ProcessoCandidato {
   armador_nome: string | null;
   responsavel_membership_id: string | null;
   responsavel_nome: string | null;
+  /** `false` quando o membership do responsável foi desativado (o processo está em SEM_RESPONSAVEL). */
+  responsavel_ativo: boolean | null;
   processo_calc_em: unknown;
   apuracao_status: 'OPEN' | 'FINAL';
   fechado_em: unknown;
@@ -289,13 +325,14 @@ interface ProcessoCandidato {
   encerramento_avaliado_em: unknown;
 }
 
-async function buscarProcessosCandidatos(pool: Pool, organizationId: string, filtros: FiltroFila): Promise<ProcessoCandidato[]> {
+async function buscarProcessosCandidatos(pool: Pool, organizationId: string, filtros: FiltroFila, escopo: EscopoAplicado): Promise<ProcessoCandidato[]> {
   const params: unknown[] = [];
-  const where = construirWhereProcesso(organizationId, filtros, params);
+  const where = construirWhereProcesso(organizationId, filtros, escopo, params);
   const { rows } = await pool.query(
     `SELECT p.id AS processo_id, p.numero_processo, p.cliente_id, cli.nome AS cliente_nome,
             p.hbl, p.mbl, p.armador_id, arm.codigo_interno AS armador_codigo, arm.nome AS armador_nome,
             p.responsavel_operacional_membership_id AS responsavel_membership_id, resp_u.nome AS responsavel_nome,
+            (resp_m.desativado_em IS NULL) AS responsavel_ativo,
             p.lifecycle_calculated_at AS processo_calc_em,
             p.apuracao_status, p.fechado_em, p.encerramento_bloqueio, p.encerramento_bloqueio_container_id, p.encerramento_avaliado_em
        FROM processos p
@@ -404,6 +441,8 @@ export interface BuscarFilaInput {
   limite?: number;
   cursor?: string | null;
   hoje?: CivilDate;
+  /** Produção P1 — escopo resolvido pela rota (`resolverEscopo`); ausente = EQUIPE inteira (chamador interno). */
+  escopo?: EscopoAplicado;
 }
 
 interface ProcessoAvaliado {
@@ -413,11 +452,14 @@ interface ProcessoAvaliado {
   conteineresQueCasaram: string[] | null;
 }
 
-export async function buscarFilaOperacional(pool: Pool, input: BuscarFilaInput): Promise<FilaRespostaV1> {
+export type FilaRespostaServidor = ComMetaEscopo<FilaRespostaV1> & { temProxima: boolean };
+
+export async function buscarFilaOperacional(pool: Pool, input: BuscarFilaInput): Promise<FilaRespostaServidor> {
   const limite = Math.min(MAX_LIMITE, Math.max(1, input.limite ?? LIMITE_PADRAO));
   const hoje = input.hoje ?? hojeOperacional();
   const f = input.filtros;
-  const filtrosHashAtual = hashFiltros(input.organizationId, hoje, f);
+  const escopo = escopoEfetivo(input.escopo, f);
+  const filtrosHashAtual = hashFiltros(input.organizationId, hoje, f, escopo);
 
   // Cursor inválido/adulterado ou de outro contexto falha ANTES de qualquer leitura pesada.
   const cursorRecebido = input.cursor ? decodificarCursor(input.cursor) : null;
@@ -426,7 +468,7 @@ export async function buscarFilaOperacional(pool: Pool, input: BuscarFilaInput):
   }
 
   // 1) Candidatos pelos filtros de processo (SQL) e TODOS os seus contêineres.
-  const candidatos = await buscarProcessosCandidatos(pool, input.organizationId, f);
+  const candidatos = await buscarProcessosCandidatos(pool, input.organizationId, f, escopo);
   const containers = await buscarContainersDosCandidatos(pool, input.organizationId, candidatos.map((c) => c.processo_id));
   const containersPorProcesso = new Map<string, ContainerCandidato[]>();
   const numeroPorContainerId = new Map<string, string>();
@@ -571,7 +613,7 @@ export async function buscarFilaOperacional(pool: Pool, input: BuscarFilaInput):
       mbl: candidato.mbl,
       armador: candidato.armador_id ? { id: candidato.armador_id, codigo: candidato.armador_codigo ?? '', nome: candidato.armador_nome ?? '' } : null,
       responsavelOperacional: candidato.responsavel_membership_id
-        ? { membershipId: candidato.responsavel_membership_id, nome: candidato.responsavel_nome ?? '' } : null,
+        ? { membershipId: candidato.responsavel_membership_id, nome: candidato.responsavel_nome ?? '', ativo: candidato.responsavel_ativo === true } : null,
       conteineres: consolidado ? consolidado.composicao : composicaoDeEstados([]),
       conteineresQueCasaram,
       estadoMaisRelevante: rotularEstado(consolidado ? consolidado.estadoMaisRelevante : null),
@@ -597,11 +639,14 @@ export async function buscarFilaOperacional(pool: Pool, input: BuscarFilaInput):
 
   return {
     contrato: CONTRATO_LEITURA_V1,
-    escopo: ESCOPO_FILA_DA_EQUIPE,
+    escopo: escopo.escopo,
+    membershipResolvido: escopo.membershipResolvido,
+    filtros: filtrosAtivosFila(f, escopo),
     apuracaoStatus: f.apuracaoStatus ?? 'OPEN',
     itens,
     total: ordem.length,
     cursor: cursorSaida,
+    temProxima: cursorSaida !== null,
     limite,
     incluiuSilenciosos: f.incluirSilenciosos,
   };
@@ -620,13 +665,15 @@ export { compararDesempate };
  * constante (as mesmas consultas em lote da fila, nunca uma por processo).
  *
  * Produção P1: a situação da apuração é a MESMA da fila (padrão `OPEN`) —
- * os contadores da fila ativa nunca incluem processo FINAL.
+ * os contadores da fila ativa nunca incluem processo FINAL. Filas pessoais:
+ * o MESMO escopo da fila (predicado SQL nos candidatos); ausente = EQUIPE.
  */
 export async function contarEstadosEBaldes(
-  pool: Pool, organizationId: string, hoje?: CivilDate, apuracaoStatus: SituacaoApuracaoFiltro = 'OPEN',
+  pool: Pool, organizationId: string, hoje?: CivilDate, apuracaoStatus: SituacaoApuracaoFiltro = 'OPEN', escopo?: EscopoAplicado,
 ): Promise<{ estados: Array<{ codigo: string; total: number }>; baldes: Array<{ codigo: string; total: number }> }> {
   const h = hoje ?? hojeOperacional();
-  const candidatos = await buscarProcessosCandidatos(pool, organizationId, { ...filtroFilaVazio(), apuracaoStatus });
+  const filtros: FiltroFila = { ...filtroFilaVazio(), apuracaoStatus };
+  const candidatos = await buscarProcessosCandidatos(pool, organizationId, filtros, escopoEfetivo(escopo, filtros));
   const containers = await buscarContainersDosCandidatos(pool, organizationId, candidatos.map((c) => c.processo_id));
   const containersPorProcesso = new Map<string, ContainerCandidato[]>();
   for (const c of containers) {

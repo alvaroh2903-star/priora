@@ -5,7 +5,7 @@ import { AddressInfo } from 'node:net';
 import { randomUUID } from 'crypto';
 import { Pool } from 'pg';
 import { runMigrations } from '../db/migrate';
-import { testPool, testDatabaseUrl, truncateAll } from './testDb';
+import { atribuirResponsavelDeTeste, testPool, testDatabaseUrl, truncateAll } from './testDb';
 import { OrganizationRepository } from '../persistence/organizationRepository';
 import { UsuarioRepository } from '../persistence/usuarioRepository';
 import { OrganizationMembershipRepository } from '../persistence/organizationMembershipRepository';
@@ -79,6 +79,14 @@ async function usuarioInterno(pool: Pool, orgId: string, papel: 'ANALYST' | 'MAN
   return u.homeAccountId!;
 }
 
+// Produção P1 (filas pessoais): membership da sessão de teste, para atribuir o ANALYST como responsável.
+async function membershipIdPorHome(pool: Pool, home: string): Promise<string> {
+  const { rows } = await pool.query(
+    `SELECT m.id FROM organization_memberships m JOIN usuarios u ON u.id = m.usuario_id WHERE u.home_account_id = $1`, [home],
+  );
+  return rows[0].id;
+}
+
 test('D12 G7 — rotas V2: fluxo feliz completo (fila, detalhe, timeline, contêiner, filtros)', { skip: !url }, async () => {
   const pool = testPool();
   const app = await subirApp(pool);
@@ -86,6 +94,9 @@ test('D12 G7 — rotas V2: fluxo feliz completo (fila, detalhe, timeline, contê
     const org = await setup(pool);
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const { processoId, containerId } = await processoReal(pool, org.id, 'IM-D12-G7-1', 'GSAA');
+    // Produção P1 (filas pessoais): a fila do ANALYST é MINHA_FILA e detalhe/timeline/contêiner só respondem
+    // para processo atribuído a ele (senão, 404) — ele passa a ser o responsável; o fluxo feliz não muda.
+    await atribuirResponsavelDeTeste(pool, processoId, await membershipIdPorHome(pool, home));
     const hdr = { 'x-test-home-account-id': home };
 
     const fila = await fetch(`${app.base}/processos`, { headers: hdr }).then((r) => r.json());
@@ -161,6 +172,27 @@ test('D12 G7 — recurso de outra organização devolve 404 idêntico ao inexist
     const r3 = await fetch(`${app.base}/processos/${randomUUID()}`, { headers: { 'x-test-home-account-id': home } });
     assert.equal(r3.status, 404);
     assert.deepEqual(await r1.json(), await r3.json(), 'outra organização e inexistente devolvem a MESMA resposta');
+
+    // Produção P1 (filas pessoais): para o ANALYST os 404 acima já decorrem só do predicado de RESPONSÁVEL
+    // (processo de outra organização nunca é atribuído a ele) — o predicado de ORGANIZAÇÃO não é exercido.
+    // Um MANAGER da organização (sem restrição de responsável na leitura de detalhe) repete as MESMAS
+    // asserções: aqui só a organização pode produzir o 404. Controle: o processo/contêiner da própria
+    // organização é 200 para ele.
+    const homeGestor = await usuarioInterno(pool, org.id, 'MANAGER');
+    const hdrGestor = { 'x-test-home-account-id': homeGestor };
+    const proprio = await processoReal(pool, org.id, 'IM-D12-G7-2P', 'GSBC');
+    assert.equal((await fetch(`${app.base}/processos/${proprio.processoId}`, { headers: hdrGestor })).status, 200, 'controle: MANAGER lê o processo da própria organização');
+    assert.equal((await fetch(`${app.base}/containers/${proprio.containerId}`, { headers: hdrGestor })).status, 200, 'controle: MANAGER lê o contêiner da própria organização');
+    const g1 = await fetch(`${app.base}/processos/${processoId}`, { headers: hdrGestor });
+    assert.equal(g1.status, 404);
+    const g2 = await fetch(`${app.base}/containers/${containerId}`, { headers: hdrGestor });
+    assert.equal(g2.status, 404);
+    const g3 = await fetch(`${app.base}/processos/${randomUUID()}`, { headers: hdrGestor });
+    assert.equal(g3.status, 404);
+    const g4 = await fetch(`${app.base}/containers/${randomUUID()}`, { headers: hdrGestor });
+    assert.equal(g4.status, 404);
+    assert.deepEqual(await g1.json(), await g3.json(), 'MANAGER: processo de outra organização e inexistente devolvem a MESMA resposta');
+    assert.deepEqual(await g2.json(), await g4.json(), 'MANAGER: contêiner de outra organização e inexistente devolvem a MESMA resposta');
   } finally { await app.close(); await pool.end(); }
 });
 
@@ -263,7 +295,9 @@ test('D12 G7 — ANALYST enxerga os dois relógios completos (Q2)', { skip: !url
   try {
     const org = await setup(pool);
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
-    const { containerId } = await processoReal(pool, org.id, 'IM-D12-G7-4', 'GSDD');
+    const { processoId, containerId } = await processoReal(pool, org.id, 'IM-D12-G7-4', 'GSDD');
+    // Produção P1 (filas pessoais): detalhe de contêiner do ANALYST só no processo atribuído a ele (senão, 404).
+    await atribuirResponsavelDeTeste(pool, processoId, await membershipIdPorHome(pool, home));
     const r = await fetch(`${app.base}/containers/${containerId}`, { headers: { 'x-test-home-account-id': home } });
     const body = await r.json();
     assert.ok(body.relogios.cliente && body.relogios.rocket);
