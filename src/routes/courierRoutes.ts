@@ -37,6 +37,7 @@ import {
   RefIndex,
   Resolution,
 } from '../couriers/referenceResolver';
+import { docResolutionFromText } from '../couriers/docResolution';
 import { config } from '../config';
 
 export const courierRouter = Router();
@@ -87,32 +88,6 @@ function docExpectFromText(text: string): { mbl: boolean; hbl: boolean; anySeen:
   const mbl = RE_MBL_CITE.test(text);
   const hbl = RE_HBL_CITE.test(text);
   return { mbl, hbl, anySeen: mbl || hbl };
-}
-
-/**
- * Resolução documental detectada DETERMINISTICAMENTE no texto dos e-mails do
- * courier (sem depender da IA). Ex.: "HBL send via TELEX RELEASE" → não há HBL
- * físico a receber. O front informa o motivo ("Via Telex Release") em vez de um
- * genérico "Não esperado". Cobre também Wave BL, emissão no destino e envio ao
- * importador (regras do Manual).
- */
-function docResolutionFromText(text: string): {
-  telex: boolean;
-  wave: boolean;
-  destino: boolean;
-  importador: boolean;
-} {
-  const t = text || '';
-  return {
-    telex: /telex\s*release|\btelex\b/i.test(t),
-    wave: /wave\s*b\/?l|\bwave\s*release\b/i.test(t),
-    destino:
-      /destination\s+issuance|(?:emitid[oa]|issued)[^.\n]{0,30}(?:destino|destination)/i.test(
-        t,
-      ),
-    importador:
-      /(?:enviad[oa]|sent)[^.\n]{0,40}(?:importador|importer|consignee)/i.test(t),
-  };
 }
 
 /**
