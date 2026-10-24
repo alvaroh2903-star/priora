@@ -70,6 +70,19 @@ test('ASS-010 (regressão): "no" como contração em português e "no" de outra 
   }
 });
 
+test('ASS-010 (regressão): português afirmativo com "no" depois de rótulo ou no início da oração segue telex', () => {
+  for (const t of [
+    'Atenção: no telex release consta a liberação.',
+    'Observação: no telex release consta o destinatário.',
+    'Conforme informado no telex release, o HBL foi liberado.',
+    'No telex release consta a liberação.',
+    'No telex release foi informado o destinatário.',
+  ]) {
+    assert.equal(legada(t).telex, true, `fixture inválida (antes já era falso): ${t}`);
+    assert.equal(telex(t), true, t);
+  }
+});
+
 test('ASS-010 (regressão): os dois-pontos não viram fronteira de oração', () => {
   assert.equal(telex('Telex release: not approved.'), false);
   assert.equal(telex('HBL was not printed: telex release instead.'), true);
@@ -253,10 +266,11 @@ test('caracterização (limitação conhecida): negação separada por vírgula 
   assert.equal(telex('Telex release — not approved.'), true);
 });
 
-test('caracterização (limitação conhecida): logo após dois-pontos, "no" é lido como negação também em português', () => {
-  // Ambiguidade residual: em rótulo ("Atenção: no telex…") não há como distinguir
-  // a contração "em + o" do "no" inglês sem outro contexto.
-  assert.equal(telex('Atenção: no telex release consta o HBL.'), false);
+test('caracterização (limitação conhecida): "no" depois de rótulo fora da lista em inglês mantém a leitura anterior', () => {
+  // Conservador: sem rótulo inglês conhecido, "X: no telex" pode ser a contração
+  // portuguesa, então segue afirmativo como antes. É negação NÃO lida, não regressão.
+  assert.equal(telex('HBL: no telex release.'), legada('HBL: no telex release.').telex);
+  assert.equal(telex('HBL: no telex release.'), true);
 });
 
 test('caracterização (limitação conhecida): shipper e "cnee" não são reconhecidos como destinatário (como antes)', () => {

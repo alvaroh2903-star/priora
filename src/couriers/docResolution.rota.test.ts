@@ -45,6 +45,7 @@ const T_ENVIO_NEGADO = '770012345613';
 const T_ENVIO = '770012345614';
 const T_TELEX_NAO_APROVADO = '770012345615';
 const T_TELEX_ROTULO_NEGADO = '770012345616';
+const T_TELEX_ROTULO_PT = '770012345617';
 
 const arquivos = {
   estados: path.join(dataDir, 'courier-estados.json'),
@@ -95,6 +96,7 @@ email(2, T_ENVIO_NEGADO, 'IM2103', 'OHBL not sent to consignee.');
 email(3, T_ENVIO, 'IM2104', 'OHBL sent to consignee, not to the agent.');
 email(4, T_TELEX_NAO_APROVADO, 'IM2105', 'Telex release not approved.');
 email(5, T_TELEX_ROTULO_NEGADO, 'IM2106', 'Status: no telex release.');
+email(6, T_TELEX_ROTULO_PT, 'IM2107', 'Atenção: no telex release consta a liberação.');
 
 const chamadas = { graph: 0, ia: 0 };
 const graphLib = require('@microsoft/microsoft-graph-client');
@@ -158,13 +160,15 @@ test('rota GET /api/couriers: a resolução documental corrigida chega à respos
   const antes = retrato();
   const r = await listar();
   assert.equal(r.status, 200);
-  for (const t of [T_TELEX_NEGADO, T_TELEX, T_ENVIO_NEGADO, T_ENVIO, T_TELEX_NAO_APROVADO, T_TELEX_ROTULO_NEGADO]) {
+  for (const t of [T_TELEX_NEGADO, T_TELEX, T_ENVIO_NEGADO, T_ENVIO, T_TELEX_NAO_APROVADO, T_TELEX_ROTULO_NEGADO, T_TELEX_ROTULO_PT]) {
     assert.ok(porTracking(r.corpo, t), `courier ${t} não apareceu na lista`);
   }
   // Menções negadas não viram evidência; as afirmadas seguem.
   assert.equal(porTracking(r.corpo, T_TELEX_NEGADO).docResolution.telex, false);
   assert.equal(porTracking(r.corpo, T_TELEX_NAO_APROVADO).docResolution.telex, false);
   assert.equal(porTracking(r.corpo, T_TELEX_ROTULO_NEGADO).docResolution.telex, false);
+  // Português afirmativo ("no" = "em + o") segue telex.
+  assert.equal(porTracking(r.corpo, T_TELEX_ROTULO_PT).docResolution.telex, true);
   assert.equal(porTracking(r.corpo, T_TELEX).docResolution.telex, true);
   assert.equal(porTracking(r.corpo, T_ENVIO_NEGADO).docResolution.importador, false);
   assert.equal(porTracking(r.corpo, T_ENVIO).docResolution.importador, true);

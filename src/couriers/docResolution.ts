@@ -55,15 +55,32 @@ const NEGA_DEPOIS = new Set(['not', 'never', 'cannot', 'não', 'nao', 'nunca', '
 /** "not only", "não só": não é negação. */
 const RESTRITIVOS = new Set(['only', 'just', 'merely', 'solely', 'simply', 'só', 'apenas', 'somente', 'unicamente']);
 /**
- * "no" também é "em + o" em português ("conforme informado no telex"): só vale
- * como negação no início da oração, logo depois de dois-pontos ("Status: no
- * telex release") ou depois destas palavras ("there is no telex", "with no
- * telex", "please no telex").
+ * "no" também é "em + o" em português ("conforme informado no telex", "Atenção:
+ * no telex release consta…"). Só vale como negação quando as DUAS condições valem:
+ *  - posição: início da oração, depois destas palavras ("there is no telex",
+ *    "with no telex", "please no telex") ou depois de dois-pontos de um rótulo em
+ *    inglês da lista ("Status: no telex release", "Note: no telex");
+ *  - continuação: a menção não é seguida de palavra que só cabe na contração
+ *    ("no telex release consta…", "No telex release foi…").
+ * Rótulo em português ou fora da lista ("Atenção:", "Observação:") mantém a
+ * leitura de antes (afirmativa).
  */
 const ANTES_DE_NO = new Set([
   'is', 'are', 'was', 'were', 'be', 'been', 'there', 'have', 'has', 'had', 'with',
   'will', 'need', 'needs', 'needed', 'require', 'requires', 'required', 'and', 'or',
-  'please', ':',
+  'please',
+]);
+const ROTULOS_EM_INGLES = new Set([
+  'status', 'confirmed', 'confirmation', 'note', 'notes', 'nb', 'remark', 'remarks',
+  'comment', 'comments', 'update', 'reply', 'answer', 'info', 'information',
+  'attention', 'attn', 'important', 'fyi', 'reminder', 'response', 'ps',
+]);
+const CONTINUACAO_PORTUGUESA = new Set([
+  'consta', 'constam', 'constava', 'constavam', 'está', 'estão', 'estava', 'foi', 'foram',
+  'era', 'aparece', 'aparecem', 'apareceu', 'há', 'havia', 'tem', 'temos', 'vem', 'veio',
+  'vieram', 'segue', 'seguem', 'seguiu', 'informa', 'informam', 'informou', 'indica',
+  'indicam', 'indicou', 'diz', 'dizem', 'disse', 'mostra', 'mostram', 'menciona',
+  'mencionam', 'cita', 'citam', 'o', 'os', 'um', 'uma', 'que',
 ]);
 
 const AUXILIARES = [
@@ -98,8 +115,8 @@ function palavras(s: string): string[] {
 /**
  * Palavras ANTES da menção, mantendo ":" como item. Os dois-pontos não são
  * fronteira de oração ("Telex release: not approved" segue negado), mas marcam
- * o lugar de "no" num rótulo ("Status: no telex release"). Um ":" entre o
- * negador e a menção interrompe a leitura, como qualquer palavra não neutra.
+ * o rótulo antes de "no" ("Status: no telex release"). Um ":" entre o negador e
+ * a menção interrompe a leitura, como qualquer palavra não neutra.
  */
 function palavrasAntes(s: string): string[] {
   return s.toLowerCase().replace(/[’`´]/g, "'").match(/[\p{L}\p{N}]+(?:'[\p{L}]+)?|:/gu) || [];
@@ -107,9 +124,15 @@ function palavrasAntes(s: string): string[] {
 
 const ehNegador = (w: string, conjunto: Set<string>): boolean => conjunto.has(w) || w.endsWith("n't");
 const negadorEfetivo = (lista: string[], k: number, conjunto: Set<string>): boolean =>
-  ehNegador(lista[k], conjunto) &&
-  !RESTRITIVOS.has(lista[k + 1] ?? '') &&
-  (lista[k] !== 'no' || k === 0 || ANTES_DE_NO.has(lista[k - 1]));
+  ehNegador(lista[k], conjunto) && !RESTRITIVOS.has(lista[k + 1] ?? '');
+
+/** O "no" em `lista[k]` é negação, e não a contração "em + o"? (ver ANTES_DE_NO) */
+function noNega(lista: string[], k: number, seguinte: string | undefined): boolean {
+  const anterior = lista[k - 1];
+  const posicao =
+    k === 0 || ANTES_DE_NO.has(anterior) || (anterior === ':' && ROTULOS_EM_INGLES.has(lista[k - 2] ?? ''));
+  return posicao && !CONTINUACAO_PORTUGUESA.has(seguinte ?? '');
+}
 
 /** Texto da mesma oração ANTES de `pos` (sem a palavra parcial colada à menção). */
 function oracaoAntes(t: string, pos: number): string {
@@ -126,10 +149,14 @@ function oracaoDepois(t: string, pos: number): string {
   return m ? depois.slice(0, m.index) : depois;
 }
 
-/** Negador antes da menção, separado dela só por palavras neutras. */
-function negadaAntes(antes: string[], neutras: Set<string>): boolean {
+/**
+ * Negador antes da menção, separado dela só por palavras neutras. `seguinte` é a
+ * 1ª palavra depois da menção, na mesma oração (para o "no" português).
+ */
+function negadaAntes(antes: string[], neutras: Set<string>, seguinte?: string): boolean {
   let vistas = 0;
   for (let k = antes.length - 1; k >= 0; k--) {
+    if (antes[k] === 'no' && !noNega(antes, k, seguinte)) return false;
     if (ehNegador(antes[k], NEGA_ANTES)) return negadorEfetivo(antes, k, NEGA_ANTES);
     if (!neutras.has(antes[k]) || ++vistas > MAX_NEUTRAS) return false;
   }
@@ -150,9 +177,10 @@ function negadaDepois(depois: string[]): boolean {
 function telexAfirmado(t: string): boolean {
   for (const m of t.matchAll(RE_TELEX)) {
     const inicio = m.index ?? 0;
+    const depois = palavras(oracaoDepois(t, inicio + m[0].length));
     const negada =
-      negadaAntes(palavrasAntes(oracaoAntes(t, inicio)), NEUTRAS_ANTES_TELEX) ||
-      negadaDepois(palavras(oracaoDepois(t, inicio + m[0].length)));
+      negadaAntes(palavrasAntes(oracaoAntes(t, inicio)), NEUTRAS_ANTES_TELEX, depois[0]) ||
+      negadaDepois(depois);
     if (!negada) return true;
   }
   return false;
