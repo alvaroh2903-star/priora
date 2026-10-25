@@ -37,6 +37,13 @@ import {
   RefIndex,
   Resolution,
 } from '../couriers/referenceResolver';
+import { docResolutionFromText } from '../couriers/docResolution';
+import {
+  FonteDocumental,
+  indiceComOrigem,
+  mencoesDocumentais,
+} from '../couriers/docAssociation';
+import { pendenciasAbertas } from '../couriers/pendenciasAbertas';
 import { config } from '../config';
 
 export const courierRouter = Router();
@@ -87,32 +94,6 @@ function docExpectFromText(text: string): { mbl: boolean; hbl: boolean; anySeen:
   const mbl = RE_MBL_CITE.test(text);
   const hbl = RE_HBL_CITE.test(text);
   return { mbl, hbl, anySeen: mbl || hbl };
-}
-
-/**
- * Resolução documental detectada DETERMINISTICAMENTE no texto dos e-mails do
- * courier (sem depender da IA). Ex.: "HBL send via TELEX RELEASE" → não há HBL
- * físico a receber. O front informa o motivo ("Via Telex Release") em vez de um
- * genérico "Não esperado". Cobre também Wave BL, emissão no destino e envio ao
- * importador (regras do Manual).
- */
-function docResolutionFromText(text: string): {
-  telex: boolean;
-  wave: boolean;
-  destino: boolean;
-  importador: boolean;
-} {
-  const t = text || '';
-  return {
-    telex: /telex\s*release|\btelex\b/i.test(t),
-    wave: /wave\s*b\/?l|\bwave\s*release\b/i.test(t),
-    destino:
-      /destination\s+issuance|(?:emitid[oa]|issued)[^.\n]{0,30}(?:destino|destination)/i.test(
-        t,
-      ),
-    importador:
-      /(?:enviad[oa]|sent)[^.\n]{0,40}(?:importador|importer|consignee)/i.test(t),
-  };
 }
 
 /**
@@ -370,6 +351,14 @@ async function buildCourierView(accessToken: string) {
     const refIndex: RefIndex = buildRefIndex(
       messages.map((m) => ({ subject: m.subject || '', body: fullTextOf(m) })),
     );
+    // O mesmo índice, guardando a mensagem de origem de cada ligação: a associação
+    // documento → processo por referência só vale vinda de OUTROS e-mails.
+    const indiceDocs = indiceComOrigem(
+      messages.map((m) => ({ id: m.id, subject: m.subject || '', body: fullTextOf(m) })),
+    );
+    // Mensagens de cada tracking (id + corpo), para a evidência documental por
+    // processo com origem estável (mensagem + linha).
+    const fontesByTracking = new Map<string, FonteDocumental[]>();
 
     for (const [cid, msgs] of groups) {
       msgs.sort((a, b) => (a.receivedDateTime < b.receivedDateTime ? 1 : -1));
@@ -439,6 +428,17 @@ async function buildCourierView(accessToken: string) {
         const arr = textByTracking.get(number) || [];
         arr.push(convText);
         textByTracking.set(number, arr);
+        const fontes = fontesByTracking.get(number) || [];
+        for (const x of cand)
+          if (!fontes.some((f) => f.messageId === x.m.id))
+            fontes.push({
+              messageId: x.m.id,
+              // Corpo inteiro (sem o bodyPreview, que repete o início cortado) + anexos.
+              texto: [x.m.body?.content || x.m.bodyPreview || '', attMap.get(x.m.id) || '']
+                .filter(Boolean)
+                .join('\n'),
+            });
+        fontesByTracking.set(number, fontes);
         const carrier = displayCarrier(carrierRaw);
         const existing = byTracking.get(number);
         if (existing) {
@@ -554,8 +554,17 @@ async function buildCourierView(accessToken: string) {
       // citado numa thread vizinha contamina todos os processos do envelope e
       // gera um falso "Via Telex Release". Sem sinal aqui, nada é afirmado.
       const ownText = (textByTracking.get(c.tracking) || []).join('\n');
+      // Citação no envelope inteiro (sem processo e sem negação). Mantido na
+      // resposta; a expectativa por processo da tela vem de docsEnvelope.
       const docExpect = docExpectFromText(courierText);
       const docResolution = docResolutionFromText(ownText);
+      // Evidência documental POR PROCESSO (conteúdo × associação), só dos e-mails
+      // deste courier. É o que define a expectativa física por linha do envelope.
+      const docsEnvelope = mencoesDocumentais(
+        fontesByTracking.get(c.tracking) || [],
+        processosEfetivos,
+        indiceDocs,
+      );
       // Documentos listados no e-mail do courier (cada linha = 1 documento).
       // Usado principalmente quando NENHUM processo foi concluído: mostra quantos
       // e quais documentos vêm no envelope, mesmo sem IMxxxx.
@@ -572,6 +581,7 @@ async function buildCourierView(accessToken: string) {
         for (const cv of convsByProcess.get(processBase(p)) || [])
           linkedConvs.add(cv);
       const conversationIds = Array.from(linkedConvs);
+      const conferencia = conferencias[trackingKey(c.tracking)] || {};
 
       return {
         carrier: c.carrier,
@@ -582,6 +592,7 @@ async function buildCourierView(accessToken: string) {
         referencias: c.referencias,
         docExpect,
         docResolution,
+        docsEnvelope,
         eta,
         // Resolução por referência: transparência de "como" o processo foi achado.
         resolucao: { resolvidos, candidatos },
@@ -594,8 +605,11 @@ async function buildCourierView(accessToken: string) {
         conversationId: c.conversationId,
         estado,
         nota: reg?.nota || null,
-        conferencia: conferencias[trackingKey(c.tracking)] || {},
+        conferencia,
         followups: followups[trackingKey(c.tracking)] || {},
+        // Registros humanos ainda pendentes (ausência registrada ou conflito de
+        // associação/resolução). Concluir o courier não os encerra (HIS-004).
+        pendenciasAbertas: pendenciasAbertas(conferencia, docsEnvelope.mencoes, docResolution),
         // MBL/HBL conhecidos por processo (dos e-mails) — para o follow-up.
         refsPorProcesso: Object.fromEntries(
           processosEfetivos
@@ -613,11 +627,18 @@ async function buildCourierView(accessToken: string) {
       };
     });
 
-    // Concluídos saem da lista principal (viram histórico), conforme o Manual.
+    // Concluídos saem da lista principal (viram histórico), conforme o Manual —
+    // EXCETO os que têm pendência aberta registrada (HIS-004): concluir a
+    // conferência não encerra a divergência nem o conflito. Eles continuam
+    // visíveis, concluídos, com os registros como estão. Sem registro pendente
+    // (inclusive expectativa só desconhecida), o concluído sai da lista.
     const couriers = couriersAll
-      .filter((c) => c.estado !== 'Concluído')
+      .filter((c) => c.estado !== 'Concluído' || c.pendenciasAbertas.length > 0)
       .sort((a, b) => (a.data < b.data ? 1 : -1));
     const concluidos = couriersAll.filter((c) => c.estado === 'Concluído').length;
+    const concluidosComPendencia = couriersAll.filter(
+      (c) => c.estado === 'Concluído' && c.pendenciasAbertas.length > 0,
+    ).length;
 
     // Atividades recentes: derivadas dos e-mails CANDIDATOS mais recentes.
     const seenAtiv = new Set<string>();
@@ -656,6 +677,7 @@ async function buildCourierView(accessToken: string) {
       ),
       atividades,
       concluidos,
+      concluidosComPendencia,
     };
 }
 
@@ -852,20 +874,31 @@ function mapProcessDocs(
 }
 
 /* ------------------------------------------------------------------ *
- * Derivação da "expectativa documental" a partir da análise da Clara
- * (aplica as regras do Manual: Telex/Wave/Emissão no destino, etc.)
+ * Painel da análise da Clara: documentos, observações e revisão. As
+ * observações de Telex/Wave/emissão no destino/cliente só INFORMAM.
  * ------------------------------------------------------------------ */
-function derivarExpectativa(a: Awaited<ReturnType<typeof parseThread>>) {
+export function derivarExpectativa(a: Awaited<ReturnType<typeof parseThread>>) {
   const observacoes: string[] = [];
   const hbl = (a.hblResolution || '').toLowerCase();
+  // A Clara só INFORMA: quem encerra a expectativa do OHBL/OMBL físico é o motor
+  // documental (docResolution), exibido na tabela do envelope. Nenhuma observação
+  // daqui manda deixar de esperar um original.
   if (/telex/.test(hbl))
-    observacoes.push('Telex Release detectado — não esperar OHBL físico.');
+    observacoes.push(
+      'Clara identificou menção a Telex Release. Isso, sozinho, não encerra a expectativa do OHBL físico: vale a confirmação documental exibida na tabela.',
+    );
   if (/wave/.test(hbl))
-    observacoes.push('Wave BL detectado — expectativa de OMBL físico cancelada.');
+    observacoes.push(
+      'Clara identificou menção a Wave BL. Isso, sozinho, não encerra a expectativa do OMBL/OHBL físico: vale a confirmação documental exibida na tabela.',
+    );
   if (/destino|destination/.test(hbl))
-    observacoes.push('Emissão no destino — expectativa documental física cancelada.');
+    observacoes.push(
+      'Clara identificou menção a emissão no destino. Isso, sozinho, não encerra a expectativa do OMBL/OHBL físico: vale a confirmação documental exibida na tabela.',
+    );
   if (/consignee|cliente|client/.test(hbl))
-    observacoes.push('OHBL enviado ao cliente.');
+    observacoes.push(
+      'Clara identificou menção a envio do OHBL ao cliente. Isso, sozinho, não encerra a expectativa do OHBL físico: vale a confirmação documental exibida na tabela.',
+    );
 
   const evidenciaDe = (nome: string): string | null => {
     const n = nome.toLowerCase();
@@ -991,10 +1024,23 @@ courierRouter.get(
       );
 
       const analysis = await parseThread(messages);
+      // IMs escritos no texto da conversa (regex, sem IA). Só qualificam as
+      // SUGESTÕES de processo da tela ("citado na conversa" × "só a Clara"):
+      // aparecer na conversa não prova que o processo está neste courier.
+      const processosNaConversa = Array.from(
+        new Set(
+          messages.flatMap((m) =>
+            (`${m.subject || ''}\n${m.body?.content || m.bodyPreview || ''}`.match(
+              /\bIM\s*[-:]?\s*\d{3,6}\b/gi,
+            ) || []).map((p) => `IM${p.replace(/\D/g, '')}`),
+          ),
+        ),
+      );
       res.json({
         ...analysis,
         expectativa: derivarExpectativa(analysis),
         processosDetalhe: mapProcessDocs(messages),
+        processosNaConversa,
       });
     } catch (err) {
       next(err);

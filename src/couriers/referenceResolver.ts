@@ -281,7 +281,7 @@ function effectiveType(types: Set<RefType>, fallback: RefType): RefType {
  * courier vira uma lista de dezenas de "possíveis processos" que não pertencem
  * ao envelope. Uma consolidação real compartilha MBL entre poucos processos.
  */
-const MAX_SHARED_PROCESSES = 8;
+export const MAX_SHARED_PROCESSES = 8;
 
 /**
  * Resolve os processos de um conjunto de referências, aplicando cardinalidade.
