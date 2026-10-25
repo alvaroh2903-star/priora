@@ -406,14 +406,14 @@ Auditoria de `cc98c9a` e `29a3830` pedida antes de congelar a entrega. **A entre
 | § | Tema | Resultado |
 |---|---|---|
 | 18.1 | D12 75 → 65 | erro do executor; nenhum teste perdido; executor corrigido para provar 75 |
-| 18.2 | Avisos após reatribuição | defeito real (R7) corrigido: migration 0050 + worker + 16 testes |
+| 18.2 | Avisos após reatribuição | defeito real (R7) corrigido: migration 0050 + worker + 18 testes |
 | 18.3 | Integração Microsoft compartilhada | isolamento refutado em `29a3830`; organização dona (0051) + 15 testes; bloqueio multiorganização registrado |
 | 18.4 | Rotas V1 | permissão = membro ativo da dona (não "ser a conta"); conceitos separados |
 | 18.5 | Inventário dos 92 arquivos | classificados; relaxamento C1 e 6 defeitos menores corrigidos; contratos documentados |
 | 18.6 | Segurança das sessões | 12 itens com evidência; D1 corrigido (e ampliado); 16 testes |
 | 18.7 | Testes existentes alterados | todos justificados |
-| 18.8 | Revisão adversarial final | 13 confirmados corrigidos; 6 refutados |
-| 18.9 | Validação final | worktree limpo + banco novo |
+| 18.8 | Revisão adversarial final | 2 rodadas: 13 + 4 confirmados, todos corrigidos; 6 refutados |
+| 18.9 | Validação final | `b03b463`, worktree limpo + banco novo: todas as etapas verdes (suíte completa 1345; D12 75 provado arquivo a arquivo) |
 
 ### 18.1 A divergência D12 75 → 65: erro do executor, nenhum teste perdido
 
@@ -582,11 +582,14 @@ Sem a correção (`29a3830` nos dois arquivos de serviço, migration e teste nov
 - **Consultas sem `organizationId`:** as que restam são por id seguido de autorização, ou globais por desenho (caixa, cursor).
 - **Logs:** o da captura leva só ids e códigos. O e-mail técnico global só sai com contêineres da dona.
 
-**Testes:** `__tests__/integracaoMicrosoftIsolamentoP1.test.ts`, 15 testes adversariais. Em `capturaPreAlerta.test.ts`, mais três testes novos e um reescrito:
-- desvínculo durante o ciclo;
-- pausa durante o ciclo, sem conversa perdida;
-- desvínculo durante a ingestão, antes e dentro da transação final (o caso "dentro" falha se a checagem travada for retirada);
-- corrida real de vínculo, em 10 rodadas., todos com 2 organizações sobre a MESMA integração e pelo app real (sessão, cookies e origem reais; só MSAL e Graph simulados). Contra o código de `29a3830`, 12 dos 14 originais falham; os 2 que passam cobrem só o serviço e o CLI novos.
+**Testes:**
+
+- `__tests__/integracaoMicrosoftIsolamentoP1.test.ts`: 15 testes adversariais, todos com 2 organizações sobre a MESMA integração e pelo app real (sessão, cookies e origem reais; só MSAL e Graph simulados). Contra o código de `29a3830`, 12 dos 14 originais falham; os 2 que passam cobrem só o serviço e o CLI novos.
+- `capturaPreAlerta.test.ts`: mais três testes novos e um reescrito:
+  - desvínculo durante o ciclo;
+  - pausa durante o ciclo, sem conversa perdida;
+  - desvínculo durante a ingestão, antes e dentro da transação final (o caso "dentro" falha se a checagem travada for retirada);
+  - corrida real de vínculo, em 10 rodadas.
 
 **Bloqueio objetivo de deploy multiorganização (registrado).** Com UMA caixa, só a organização dona:
 
@@ -909,4 +912,38 @@ Cinco lentes revisaram todo o diff desta auditoria sobre `29a3830`: avisos, inte
 
 ### 18.9 Validação final (worktree limpo, banco novo)
 
-<!-- RESULTADOS_FINAIS -->
+**Método:**
+
+- `git worktree add --detach` no commit a validar, `npm ci`, banco PostgreSQL 16 recém-criado e uma etapa de cada vez, na ordem pedida.
+- O executor está em `validar_clean_final.sh`, um script de rascunho fora do repositório.
+- A etapa D12 roda os 10 arquivos históricos e **prova** a contagem: o total precisa ser 75 e cada arquivo, rodado isolado, precisa ter a contagem congelada do §18.1, com todos aprovados.
+- `git status --porcelain` saiu vazio antes e depois; só `dist/` e `node_modules/` aparecem, como ignorados.
+
+**Validação definitiva — `b03b463`:**
+
+| # | Etapa | Passados | Falhos | Ignorados | Cancelados | `todo` |
+|---|---|---|---|---|---|---|
+| 01 | Testes novos (`autenticacaoFilasP1`, `filasPessoaisLeituraP1`, `acoesPessoaisP1`, `membershipDesativadoP1`, `avisosReatribuicaoP1`, `integracaoMicrosoftIsolamentoP1`, `sessaoSegurancaP1`) | **129** | 0 | 0 | 0 | 0 |
+| 02 | Autenticação/sessão/autorização existentes (`tokenCacheDuravel`, `capturaPreAlerta`, `shippingInstructions`, `multiTenant`) | **86** | 0 | 0 | 0 | 0 |
+| 03 | Notificações (`avisosReatribuicaoP1`, `membershipDesativadoP1`, `d15b`, `d15bV11`, `d15c`, `d15cV11`, `d15cV12`, `demurrageTickFilas`, `prazoFreeTimeV12`, `registroDemurrage`, `registroDemurrageV12`, `apuracaoV14`, `d16Vertical`, `scheduler`) | **273** | 0 | 0 | 0 | 0 |
+| 04 | Entrega 1 — handoff + capacidade | **87** | 0 | 0 | 0 | 0 |
+| 05 | Entrega 2 — ações | **70** | 0 | 0 | 0 | 0 |
+| 06 | Entrega 3 — leituras operacionais | **47** | 0 | 0 | 0 | 0 |
+| 07 | D12 — os 10 arquivos históricos (incluindo `leituraAutorizacao`) | **75** | 0 | 0 | 0 | 0 |
+| 07b | D12 arquivo a arquivo, cada um isolado: 7 · 10 · 8 · 18 · 6 · 6 · 8 · 4 · 5 · 3 | **75**, todos iguais ao congelado | 0 | 0 | — | 0 |
+| 08 | Suíte completa da Demurrage Engine (`npm run test:demurrage-engine`) | **1345** | 0 | 0 | 0 | 0 |
+| 09 | V1 (`npm run test`) | **25** | 0 | 0 | 0 | 0 |
+| 10 | D13 UI (`npm run test:demurrage-ui`) | **66** | 0 | 0 | 0 | 0 |
+| 11 | `npx tsc --noEmit` | exit 0, sem saída | | | | |
+| 12 | `npm run build` | exit 0 | | | | |
+
+A suíte completa passou de 1290 testes (em `cc98c9a`) para 1345: são os testes novos e reforçados desta auditoria. Nenhum teste anterior sumiu, e a D12 prova os 75.
+
+**1ª validação — `4bb0efc` (registrada, não omitida).** Mesmas etapas, todas verdes, **exceto a 03: 271 passados e 2 falhos**:
+
+- **O que falhou:** o subteste "banco novo" do D15-C #25 e o teste-pai, com `terminating connection due to administrator command` (exceção não capturada).
+- **Causa raiz:** corrida pré-existente no helper de teste `comBancoTemporario`. O `end()` do pg-pool 3.14 resolve antes de os sockets fecharem, e o `pg_terminate_backend` seguinte atinge um cliente já sem ouvinte de erro.
+- **Correção:** `b03b463`, só nos testes e sem mudar nenhuma asserção (§18.7). As suítes afetadas passaram 3 vezes seguidas, e a validação completa foi repetida do zero acima.
+- **Demais etapas da 1ª validação:** 01 129, 02 86, 04 87, 05 70, 06 47, 07 75 (07b ok), 08 1345, 09 25, 10 66, typecheck e build limpos.
+
+**Estado:** entrega **não congelada**; a Production P1 **não** está concluída.
