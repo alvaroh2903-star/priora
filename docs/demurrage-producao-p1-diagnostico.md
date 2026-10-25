@@ -30,11 +30,18 @@
 >   multiorganização concluído.
 > - Correção de minuta e encerramento (`ddc43db`): status no próprio relatório
 >   (`docs/demurrage-producao-p1-correcao-minuta-encerramento.md`).
-> - Administração operacional de tarifas: **entregue para revisão, NÃO
->   congelada** (`docs/demurrage-producao-p1-administracao-tarifas.md`).
-> - **A Production P1 NÃO está concluída.** Restam: a revisão/aprovação da
->   administração de tarifas; armazenamento definitivo dos arquivos de minuta;
->   frontend; integração produtora da Liberação, quando estiver pronta (§7).
+> - **Administração operacional de tarifas — APROVADA E CONGELADA** (decisão
+>   formal do responsável pelo produto; estado congelado `39fe34b`; baseline
+>   anterior `605bde2`; commits aprovados `408aff1` e `39fe34b`). Ver §6 e
+>   `docs/demurrage-producao-p1-administracao-tarifas.md` §16.
+> - **Limitação aceita (tarifas):** para contêiner sem tipo de equipamento, a
+>   contagem informativa de decisões afetadas numa desativação logo depois da
+>   ativação, antes do recálculo, pode ser maior que o real — nunca menor; não
+>   altera seleção, valores, invalidação nem recálculo.
+> - **A Production P1 NÃO está concluída.** Restam: armazenamento definitivo
+>   dos arquivos de minuta; congelamento formal da correção de minuta e
+>   encerramento; frontend; integração produtora da Liberação, quando estiver
+>   pronta (§7).
 
 ## 0. Status executivo
 
@@ -327,6 +334,7 @@ Nenhuma das três entregas toca cálculo, relógio, tarifa, cadência de trackin
 | 3 — Leitura para o frontend redesenhado | **APROVADA E CONGELADA** | v1.1 | 1154/1154 |
 | Adição à Entrega 1 — controle de capacidade da rota HTTP do handoff | **APROVADO E CONGELADO** | código `19fc8d9`, relatório `6c04234` | 1181/1181 |
 | Corretiva — autenticação, identidade, atribuição e filas pessoais | **APROVADA E CONGELADA** | `4bb0efc`, `b03b463`, `8266fba` (baseline `29a3830`) | 1345/1345 |
+| Administração operacional de tarifas | **APROVADA E CONGELADA** | `408aff1`, `39fe34b` (baseline `605bde2`) | 1402/1402 |
 
 **Backend da Produção P1: FORMALMENTE CONCLUÍDO** (decisão final do
 usuário, com o congelamento da Entrega 3 v1.1). **Reaberto depois** de forma
@@ -396,14 +404,75 @@ Checklist obrigatório de deploy: relatório §19.5 e `docs/demurrage-runbook-op
 - typecheck e build limpos;
 - zero falhos, ignorados, cancelados e `todo`.
 
+### Administração operacional de tarifas
+
+**STATUS: APROVADA E CONGELADA** (decisão formal do responsável pelo produto).
+
+- **Estado congelado:** `39fe34be1ebf1b610b90000027860193a8167401`.
+- **Baseline anterior:** `605bde2`.
+- **Commits aprovados:** `408aff1` (código, migration e testes) e `39fe34b` (documentação da validação final).
+- **Relatório:** `docs/demurrage-producao-p1-administracao-tarifas.md` (§13 testes e revisões, §16 congelamento).
+
+**Superfície congelada:**
+- máquina de estados das tabelas;
+- tarifas independentes de cliente e armador;
+- moedas originais;
+- versões e vigências;
+- rascunho, validação, ativação, substituição e desativação;
+- imutabilidade da versão ativa;
+- API administrativa (`/api/demurrage/v2/tarifas`);
+- permissões de MANAGER e ADMIN;
+- isolamento por organização;
+- idempotência;
+- auditoria;
+- simulação;
+- seleção temporal;
+- recálculo dos processos abertos;
+- preservação dos processos finalizados;
+- códigos de indisponibilidade;
+- migration `0052`.
+
+**Regra de alteração:** só mediante defeito comprovado, problema de segurança ou integridade, ou autorização explícita do responsável pelo produto.
+
+**Limitação aceita:**
+- para contêiner sem tipo de equipamento, uma desativação imediatamente posterior à ativação e anterior ao recálculo pode superestimar a contagem informativa de decisões afetadas;
+- essa contagem nunca pode ser menor que o impacto real;
+- não altera a seleção, os valores, a invalidação nem o recálculo;
+- qualquer mudança futura exige a regra de alteração.
+
+**Checklist obrigatório** (relatório §16.5; runbook §12, itens 1 e 7):
+- aplicar as migrations até a 0052 antes do código;
+- confirmar que o boot reconhece a migration;
+- executar a consulta de segurança das tarifas legadas de armador com organização;
+- o resultado deve ser zero antes do deploy;
+- cadastrar e ativar as tarifas necessárias antes de liberar os encerramentos automáticos.
+
+**Regressão final no congelamento** (worktree limpo, banco novo, `408aff1`):
+- novos 57/57;
+- tarifas existentes 142/142;
+- minuta e encerramento 215/215;
+- autenticação e filas 215/215;
+- Entrega 1 + capacidade 87/87;
+- Entrega 2 70/70;
+- Entrega 3 47/47;
+- D12 75/75;
+- notificações 273/273;
+- Demurrage Engine completo 1402/1402;
+- V1 25/25;
+- D13 UI 66/66;
+- typecheck e build limpos;
+- zero falhos, ignorados, cancelados e `todo`.
+
+**Revisão adversarial:** cinco rodadas; 24 achados corrigidos, cada um com teste; última rodada sem achados; regressões comprovadas contra o código anterior.
+
 ---
 
 ## 7. Trabalho futuro separado (fora da Produção P1)
 
 Os itens abaixo **não fazem parte** do backend da Produção P1 concluído e
-não foram iniciados — **exceto o item 3**, que foi autorizado depois,
-implementado como adição estreita à Entrega 1 e está **aprovado e
-congelado** (ver o status consolidado no §6). Cada item restante é uma
+não foram iniciados — **exceto os itens 3 e 4**, que foram autorizados
+depois, implementados e estão **aprovados e congelados** (ver o status
+consolidado no §6). Cada item restante é uma
 frente própria, que depende de autorização explícita do usuário para
 começar e não reabre nenhuma superfície congelada, salvo pelas regras
 acima:
@@ -416,8 +485,9 @@ acima:
    externa (§5, item 8). **Concluída: APROVADA E CONGELADA** como adição
    estreita à Entrega 1, autorizada pelo usuário (código `19fc8d9`,
    relatório `6c04234`) — `docs/demurrage-producao-p1-handoff-capacidade.md`.
-4. Administração de tarifas. **Entregue para revisão, NÃO congelada**
-   (`docs/demurrage-producao-p1-administracao-tarifas.md`).
+4. Administração de tarifas. **Concluída: APROVADA E CONGELADA** em
+   `39fe34b` (commits `408aff1` e `39fe34b`, baseline `605bde2`) —
+   `docs/demurrage-producao-p1-administracao-tarifas.md` §16.
 5. Administração de VesselCall (§3, nota sobre a pendência de VesselCall).
 6. Tracking manual (§3, item 2).
 7. Administração de divergências de Free Time (§3, item 4b).
@@ -429,9 +499,9 @@ acima:
     organização em produção (§6, "Corretiva — autenticação…"). Exige
     autorização específica.
 
-**A Production P1 não está concluída:** restam a revisão/aprovação da
-administração operacional de tarifas (item 4, entregue para revisão), o
-armazenamento definitivo dos arquivos de minuta (item 9),
+**A Production P1 não está concluída:** restam o armazenamento definitivo
+dos arquivos de minuta (item 9), o congelamento formal da correção de minuta
+e encerramento (`docs/demurrage-producao-p1-correcao-minuta-encerramento.md`),
 o frontend (item 1) e a integração produtora da Liberação (item 2), quando
 estiver pronta.
 

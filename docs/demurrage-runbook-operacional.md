@@ -30,7 +30,7 @@ ou, programaticamente, `runMigrations(pool)` (mesma função usada pela suíte d
 - é idempotente — re-executar não reaplica o que já está em `schema_migrations`;
 - é **estritamente aditivo**: 0001–0039 nunca são reescritas; uma correção posterior sempre chega como um arquivo novo (`00NN_...sql`), nunca como edição de um já entregue.
 
-**Produção P1:** aplique as migrations até a `0052_administracao_tarifaria.sql` **antes** de publicar o código. O boot de produção recusa subir sem o schema da 0049 a 0052 (`docs/demurrage-producao-p1-autenticacao-filas.md` §13 e §19.5; a 0052, administração tarifária, em `docs/demurrage-producao-p1-administracao-tarifas.md` §10).
+**Produção P1:** aplique as migrations até a `0052_administracao_tarifaria.sql` **antes** de publicar o código. O boot de produção recusa subir sem o schema da 0049 a 0052 (`docs/demurrage-producao-p1-autenticacao-filas.md` §13 e §19.5; a 0052, administração tarifária — aprovada e congelada em `39fe34b` —, em `docs/demurrage-producao-p1-administracao-tarifas.md` §10 e §16.5).
 
 **Pré-requisito manual conhecido:** a migration `0037_d15c_integridade_tarifaria_e_filas.sql` aborta explicitamente (`RAISE EXCEPTION`) se `tariff_tables` já tiver versões duplicadas sob a nova unicidade (`NULLS NOT DISTINCT`). Isso só ocorreria num ambiente que já tivesse dado tarifário legado anômalo — a própria migration deixa claro que a resolução (qual versão é a verdadeira) é manual, nunca automática. Não há nenhum outro pré-requisito manual conhecido nas 39 migrations (a `0039`, D16 v1.1, só faz backfill automático — ver seção 7.1).
 
@@ -123,6 +123,8 @@ Todas exigem papel interno (`ANALYST`/`MANAGER`/`ADMIN`) resolvido pelo membersh
 
 Entrega de autenticação, identidade, atribuição e filas pessoais: **aprovada e congelada** em `8266fba`. A decisão formal está em `docs/demurrage-producao-p1-autenticacao-filas.md` §19.
 
+Administração operacional de tarifas: **aprovada e congelada** em `39fe34b` (commits `408aff1` e `39fe34b`, baseline `605bde2`). A decisão formal está em `docs/demurrage-producao-p1-administracao-tarifas.md` §16; checklist obrigatório nos itens 1 e 7 abaixo (§16.5 do relatório).
+
 **Limitação aceita (MVP)** — não é suporte multiorganização concluído:
 - **somente uma organização em produção**;
 - captura, reprocessamento, avisos e V1 pertencem **exclusivamente** à organização dona da integração;
@@ -133,11 +135,12 @@ Entrega de autenticação, identidade, atribuição e filas pessoais: **aprovada
 
 **Pré-requisito de ambiente (§1):** `SESSION_SECRET`, `DEMURRAGE_DATABASE_URL` e `PRIORA_TOKEN_CACHE_KEY`.
 
-**Ordem dos itens:** 1, 2 e 3 antes de publicar o código; 4 depois de publicar e antes do smoke test; 5 antes de liberar os analistas; 6 antes de liberar e a cada mudança de provisionamento.
+**Ordem dos itens:** 1, 2 e 3 antes de publicar o código (a consulta de segurança do item 7 também); a confirmação do boot (item 1) ao publicar; 4 depois de publicar e antes do smoke test; 5 antes de liberar os analistas; 6 antes de liberar e a cada mudança de provisionamento; 7 (tarifas ativas) antes de liberar os encerramentos automáticos.
 
 - [ ] **1. Migrations até a 0052**, antes do código.
   - Rodar `npm run db:migrate:demurrage`.
   - `SELECT filename FROM schema_migrations ORDER BY filename DESC LIMIT 1` deve devolver `0052_administracao_tarifaria.sql`.
+  - **Ao publicar, confirmar que o boot reconhece a migration:** em produção o boot recusa subir sem o schema da 0049 a 0052; a instância deve subir **sem** a mensagem `[boot] schema da migration 0052 ausente…`. Conferência equivalente: `SELECT 1 FROM tariff_versao_transicoes LIMIT 0` sem erro.
 - [ ] **2. Administrador da plataforma provisionado.**
   - `vincular-usuario` + `adicionar-membro --org <organização do MVP> --papel ADMIN` + `admin-plataforma --ativar`.
   - Ele precisa de membership interno ativo para conectar a integração.
@@ -167,9 +170,9 @@ Entrega de autenticação, identidade, atribuição e filas pessoais: **aprovada
   - Outra organização em qualquer resultado **bloqueia o deploy** até uma decisão explícita. Nenhuma correção automática.
   - **Repita as consultas a cada mudança de provisionamento.** Não execute `adicionar-membro`, não crie credencial de handoff, não vincule caixa e não vincule a integração para outra organização.
 
-- [ ] **7. Tarifas da organização do MVP** (administração tarifária, entregue para revisão — `docs/demurrage-producao-p1-administracao-tarifas.md` §15). Sem tabela ATIVA aplicável, processo com demurrage não encerra (`valor_cliente_nao_confirmado` / `valor_rocket_nao_confirmado`).
-  - Um MANAGER/ADMIN cria, valida e ativa pela API `/api/demurrage/v2/tarifas` a tabela do cliente (Termo Único e/ou as de Termo por Embarque referenciadas pelas condições) e as de exposição estimada de cada armador usado.
-  - Antes de publicar o código: `SELECT count(*) FROM tariff_tables WHERE tipo = 'armador' AND organization_id IS NOT NULL;` deve ser 0 (linha privada de armador legada passaria a valer para a organização — revisar antes; relatório §3.3/§12).
+- [ ] **7. Tarifas da organização do MVP** (administração tarifária, **aprovada e congelada** em `39fe34b` — `docs/demurrage-producao-p1-administracao-tarifas.md` §15 e §16). Sem tabela ATIVA aplicável, processo com demurrage não encerra (`valor_cliente_nao_confirmado` / `valor_rocket_nao_confirmado`).
+  - **Antes do deploy — consulta de segurança das tarifas legadas de armador com organização:** `SELECT count(*) FROM tariff_tables WHERE tipo = 'armador' AND organization_id IS NOT NULL;` **deve ser 0**. Diferente de 0 (linha privada de armador legada, que passaria a valer para a organização; relatório §3.3/§12) **bloqueia o deploy** até decisão explícita. Nenhuma correção automática.
+  - **Antes de liberar os encerramentos automáticos:** um MANAGER/ADMIN cria, valida e ativa pela API `/api/demurrage/v2/tarifas` a tabela do cliente (Termo Único e/ou as de Termo por Embarque referenciadas pelas condições) e as de exposição estimada de cada armador usado. Não existe interruptor próprio do encerramento automático: o bloqueio pelos gates é a proteção.
   - Conferir que nenhum recálculo tarifário ficou esgotado: `SELECT count(*) FROM recalculo_outbox WHERE tipo = 'tarifa' AND estado = 'FAILED' AND tentativas >= 5;` deve ser 0 (senão, `GET /eventos/:id/recalculo` e `POST …/reprocessar`), e `SELECT count(*) FROM tariff_recalculo_expansoes WHERE concluida_em IS NULL;` deve cair a 0 em até um tick. Na linha do tick, o segmento `recalculo-tarifario` deve vir sem `ERRO=`/`ENCERRAMENTO-ERRO=` e com `expansao-falhas=0` (diferente de 0 por vários ticks = processo com lock retido).
 
 Depois de publicar: rodar o smoke test do relatório (§13, passo 6). Ao trocar a organização dona no futuro, o que só acontece com autorização, limpe os stores locais da V1 e reinicie as instâncias (§13, passo 7).

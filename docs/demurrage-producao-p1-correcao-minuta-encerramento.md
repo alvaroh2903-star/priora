@@ -688,6 +688,12 @@ organizações.
 
 ## 13. Diagnóstico separado — tarifas (somente leitura, nada implementado)
 
+> **Atualização:** a administração operacional de tarifas foi implementada
+> depois, em entrega própria, e está **aprovada e congelada** em `39fe34b`
+> (`docs/demurrage-producao-p1-administracao-tarifas.md` §16). Este
+> diagnóstico fica como registro histórico; o status desta correção de minuta
+> e encerramento não muda.
+
 ### 13.1 Tabelas exigidas pelo motor
 
 `tariff_tables` (tipo `rocket_cliente` por organização | `armador` global,

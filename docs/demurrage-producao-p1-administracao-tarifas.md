@@ -1,10 +1,16 @@
 # Produção P1 — Administração tarifária operacional
 
-> **Estado: ENTREGUE PARA REVISÃO — NÃO congelada.** Este relatório não
-> congela a entrega nem declara a Produção P1 concluída. Frontend, HTML, CSS,
-> JavaScript de apresentação e design **não** foram alterados (§15).
-> Armazenamento definitivo de minutas, integração produtora da Liberação e
-> multiorganização **não** foram iniciados.
+> **APROVADA E CONGELADA** em `39fe34b` por decisão formal do responsável
+> pelo produto (§16). Baseline anterior `605bde2`; commits aprovados `408aff1`
+> (código, migration e testes) e `39fe34b` (documentação da validação final).
+> **A Production P1 NÃO está concluída** (§16.8).
+> **Limitação aceita:** para contêiner sem tipo de equipamento, uma
+> desativação logo depois da ativação e antes do recálculo pode superestimar
+> a contagem informativa de decisões afetadas — nunca subestimar; seleção,
+> valores, invalidação e recálculo não mudam (§16.4).
+> Frontend, HTML, CSS, JavaScript de apresentação e design **não** foram
+> alterados (§15.5). Armazenamento definitivo de minutas, integração
+> produtora da Liberação e multiorganização **não** foram iniciados.
 
 Motivo da entrega: processo com demurrage não encerra sem tabela tarifária
 ativa (gate `valor_cliente_nao_confirmado` / `valor_rocket_nao_confirmado`,
@@ -701,13 +707,15 @@ Fora do escopo desta entrega (registrados, nenhum silencioso):
     o valor em dia com a seleção atual: se a versão for desativada antes de o
     recálculo da própria ativação ser consumido, o número de um contêiner sem
     equipamento pode ser maior que o real (nunca menor). Equipamento
-    reconhecido é exato.
+    reconhecido é exato. **Limitação aceita no congelamento (§16.4).**
 
 ---
 
 ## 15. Checklist operacional e confirmação de escopo
 
 ### 15.1 Implantação
+
+> **Checklist obrigatório do congelamento: §16.5.**
 
 - [ ] Aplicar as migrations até a **0052** antes do código (o boot de
       produção recusa subir sem `tariff_versao_transicoes`). Conferir:
@@ -776,4 +784,172 @@ Fora do escopo desta entrega (registrados, nenhum silencioso):
   **preservados** (suítes do §13).
 - Migrations 0001–0051 (inclusive 0049, 0050, 0051): **não alteradas**; só a
   0052, aditiva.
-- Entrega **não congelada**; Produção P1 **não** declarada concluída.
+- À época da validação, a entrega não estava congelada; depois ela foi
+  **aprovada e congelada** em `39fe34b` (§16). A Produção P1 **não** está
+  concluída (§16.8).
+
+---
+
+## 16. Congelamento formal
+
+> **APROVADA E CONGELADA** por decisão formal do responsável pelo produto,
+> no estado `39fe34be1ebf1b610b90000027860193a8167401`. Este registro é só
+> documentação: nenhum código, migration, teste, frontend, HTML, CSS,
+> JavaScript de apresentação ou design foi alterado nele. **A Production P1
+> NÃO está concluída** (§16.8).
+
+### 16.1 Baseline e commits aprovados
+
+| Item | Valor |
+|---|---|
+| Branch | `claude/practical-cerf-mnz7oj` |
+| Baseline anterior | `605bde2` (congelamento da entrega de autenticação, identidade, atribuição e filas pessoais) |
+| Commit aprovado — código, migration e testes | `408aff1` |
+| Commit aprovado — documentação da validação final | `39fe34b` |
+| Estado congelado | `39fe34be1ebf1b610b90000027860193a8167401` |
+
+### 16.2 Superfície congelada
+
+- máquina de estados das tabelas: RASCUNHO, ATIVA, SUBSTITUIDA e
+  DESATIVADA, derivados das transições append-only (§3.1, §3.2);
+- tarifas independentes de cliente (Termo Único e Termo por Embarque) e de
+  armador (exposição estimada), sem que um lado alimente o outro (§3.3);
+- moedas originais: gravadas e devolvidas exatamente, uma por versão, nunca
+  normalizadas, somadas ou convertidas (§4, §9);
+- versões e vigências: numeração por dimensão, vigência inclusiva,
+  substituição integral ou truncamento, conflito no resto (§6, §7);
+- rascunho, validação, ativação, substituição e desativação, com If-Match
+  (revisão, hash, impacto confirmado) e sem volta silenciosa (§3.2, §4,
+  §6.2–§6.4, §7, §8.1);
+- imutabilidade da versão ativa: API (409) e banco (triggers 0037/0038 e
+  0052; rascunho desativado terminal; faixa nunca troca de versão) (§10);
+- API administrativa `/api/demurrage/v2/tarifas`, contratos
+  `demurrage.tarifas.*.v1` (§4);
+- permissões: só MANAGER e ADMIN alteram, com o papel relido sob lock;
+  ANALYST lê só o operacional; CLIENT sem acesso (§5);
+- isolamento por organização: organização sempre da sessão, outra
+  organização = 404 idêntico, FKs compostas, cursores presos (§5, §10);
+- idempotência: `Idempotency-Key` obrigatória, replay sem efeito, pedido
+  diferente ou outro autor = 409 (§4, §7, §11);
+- auditoria: um evento por mutação, append-only, sem segredo, cookie ou
+  token (§11);
+- simulação: transação de leitura, nunca grava nem recalcula (§4, §9);
+- seleção temporal: data de referência do processo por contêiner, nunca a
+  data do servidor; fonte única `apuracao/resolucaoTarifaria.ts` (§6.1, §9);
+- recálculo dos processos abertos: outbox existente, expansão depois do
+  COMMIT sob o lock do processo, etapa isolada do tick, falha observável e
+  reexecutável (§8.2);
+- preservação dos processos finalizados: FINAL nunca recalculado; reaberto
+  segue a regra formal (§8.2);
+- códigos de indisponibilidade estáveis (tabela do §9);
+- migration `0052_administracao_tarifaria.sql` (§10).
+
+### 16.3 Regra de alteração
+
+A superfície congelada só muda mediante:
+
+1. defeito comprovado;
+2. problema de segurança ou de integridade;
+3. autorização explícita do responsável pelo produto.
+
+### 16.4 Limitação aceita
+
+- Para contêiner **sem tipo de equipamento**, uma desativação feita logo
+  depois da ativação, antes de o recálculo dessa ativação ser consumido,
+  pode **superestimar** a contagem informativa de decisões de
+  responsabilidade afetadas (`decisoesResponsabilidadeInvalidadas`, §8.2;
+  risco 15 do §14).
+- Essa contagem **nunca** pode ser menor que o impacto real.
+- A limitação **não altera** a seleção, os valores, a invalidação nem o
+  recálculo: só o número exibido e confirmado.
+- Qualquer mudança futura nesse comportamento segue a regra de alteração
+  (§16.3).
+
+### 16.5 Checklist obrigatório
+
+**Ordem:** itens 1, 3 e 4 antes de publicar o código; 2 ao publicar; 5 antes
+de liberar a operação que depende do encerramento automático.
+
+1. **Aplicar as migrations até a 0052, antes do código.**
+   - Rodar `npm run db:migrate:demurrage`.
+   - Conferir: `SELECT filename FROM schema_migrations ORDER BY filename DESC
+     LIMIT 1` deve devolver `0052_administracao_tarifaria.sql`.
+2. **Confirmar que o boot reconhece a migration.**
+   - Em produção o boot recusa subir sem o schema da 0049 a 0052
+     (`verificarTabelaDeSessoes`, `src/app.ts`).
+   - A instância deve subir **sem** a mensagem `[boot] schema da migration
+     0052 ausente…`.
+   - Conferência equivalente no banco: `SELECT 1 FROM tariff_versao_transicoes
+     LIMIT 0` sem erro.
+3. **Executar a consulta de segurança das tarifas legadas de armador com
+   organização:**
+
+   ```sql
+   SELECT count(*) FROM tariff_tables WHERE tipo = 'armador' AND organization_id IS NOT NULL;
+   ```
+4. **O resultado deve ser zero antes do deploy.** Diferente de zero = linha
+   privada de armador legada, que passaria a valer para a organização sem
+   evento nem recálculo dirigido (§3.3, §12): **bloqueia o deploy** até
+   decisão explícita do responsável. Nenhuma correção automática.
+5. **Cadastrar e ativar as tarifas necessárias antes de liberar os
+   encerramentos automáticos.**
+   - Tabela do cliente (Termo Único e/ou as de Termo por Embarque
+     referenciadas pelas condições) e de exposição estimada de cada armador
+     usado, pela API, por MANAGER ou ADMIN (§15.2).
+   - Sem tabela ATIVA aplicável o encerramento fica bloqueado em
+     `valor_cliente_nao_confirmado` / `valor_rocket_nao_confirmado`. Não
+     existe interruptor próprio do encerramento automático: o bloqueio pelos
+     gates é a proteção.
+   - Depois de cada ativação: `GET /eventos/:eventoId/recalculo` até
+     `concluido: true` e as conferências do §15.3.
+
+O mesmo checklist está no runbook (`docs/demurrage-runbook-operacional.md`,
+§12, itens 1 e 7).
+
+### 16.6 Resultados finais
+
+Validação sequencial em worktree limpo com banco novo, no commit `408aff1`.
+O código congelado é idêntico; `39fe34b` só acrescenta documentação (§13.5).
+
+| Etapa | Resultado |
+|---|---|
+| Testes novos (32 obrigatórios, extras e regressões das revisões) | **57/57** |
+| Tarifas existentes | **142/142** |
+| Minuta e encerramento | **215/215** |
+| Autenticação e filas | **215/215** |
+| Entrega 1 + capacidade | **87/87** |
+| Entrega 2 | **70/70** |
+| Entrega 3 | **47/47** |
+| D12 (os 10 arquivos históricos, cada um com a contagem congelada) | **75/75** |
+| Notificações | **273/273** |
+| Suíte completa da Demurrage Engine | **1402/1402** |
+| V1 | **25/25** |
+| D13 UI | **66/66** |
+| `tsc --noEmit` e build | limpos |
+
+Zero falhos, ignorados, cancelados e `todo` em todas as etapas.
+
+### 16.7 Revisão adversarial
+
+- **Cinco rodadas** sobre o código, depois da revisão de desenho (§13.4).
+- **24 achados corrigidos**: 16 na 1ª rodada (4 major, 12 minor), 5 na 2ª,
+  1 na 3ª e 2 na 4ª; cada um com teste.
+- **Última rodada sem achados.**
+- **Regressões comprovadas contra o código anterior:** com a correção
+  revertida numa cópia de trabalho, cada teste de regressão falha pelo
+  motivo esperado; com a correção, passa (§13.3).
+
+### 16.8 O que continua fora (a Production P1 não está concluída)
+
+Restam, cada um como frente própria que depende de autorização explícita:
+
+- armazenamento definitivo dos arquivos de minuta;
+- congelamento formal da correção de minuta e encerramento
+  (`docs/demurrage-producao-p1-correcao-minuta-encerramento.md`);
+- frontend;
+- integração produtora da Liberação, quando estiver pronta.
+
+A arquitetura multiorganização (canal de integração por organização) segue
+como trabalho separado, com autorização específica; vale a limitação do MVP
+de uma única organização em produção
+(`docs/demurrage-producao-p1-autenticacao-filas.md` §19.4).

@@ -1083,7 +1083,7 @@ Zero falhos, ignorados, cancelados e `todo` em todas as etapas. Detalhe e a 1ª 
 
 Restam, cada um como frente própria que depende de autorização explícita:
 
-- administração operacional de tarifas;
+- administração operacional de tarifas — **depois aprovada e congelada** em `39fe34b` (`docs/demurrage-producao-p1-administracao-tarifas.md` §16);
 - armazenamento definitivo dos arquivos de minuta;
 - frontend;
 - integração produtora da Liberação, quando estiver pronta.
