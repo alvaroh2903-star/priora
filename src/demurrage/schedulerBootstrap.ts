@@ -10,6 +10,7 @@ import { CivilDate } from '../demurrage-engine/temporal/civilDate';
 import { criarGraphAlertTransport, resolverDestinatariosPorEnv } from './alertTransportGraph';
 import { reaplicarIntencoesShippingInstructions } from '../demurrage-engine/shippingInstructions/ingestaoShippingInstructions';
 import { processarRecalculosPendentes } from '../demurrage-engine/freeTime/recalculoOutbox';
+import { processarRecalculoTarifario } from '../demurrage-engine/tariffs/admin/recalculo';
 import { processarAvisosDivergenciaPendentes, AvisoDivergenciaTransport } from '../demurrage-engine/freeTime/divergenciaAvisos';
 import { criarAvisoDivergenciaTransportGraph } from './avisoDivergenciaTransportGraph';
 import { processarPosCommitOutboxPendentes } from '../demurrage-engine/registro/registrarProcessoDemurrage';
@@ -45,6 +46,28 @@ export interface TickDeps {
   processarAvisosPendencia?: typeof processarAvisosPendenciaPendentes;
   /** SÓ TESTE: substitui a varredura de encerramento automático (ex.: simular falha da etapa inteira). */
   varrerEncerramento?: typeof varrerEncerramentoAutomatico;
+  /** SÓ TESTE: substitui o consumidor da etapa de recálculo tarifário (ex.: simular falha da etapa inteira). */
+  processarRecalculoTarifario?: typeof processarRecalculoTarifario;
+}
+
+/** Produção P1 (administração tarifária) — recálculo por mudança de tarifa (outbox `tipo = 'tarifa'`). */
+export interface EtapaRecalculoTarifarioResultado {
+  /** Expansões (eventos → itens por contêiner) que avançaram neste tick. */
+  expansoes: number;
+  /** Itens criados pelas expansões e expansões que falharam (adiadas para o próximo tick). */
+  expansaoItens: number;
+  expansaoFalhas: number;
+  reivindicados: number;
+  concluidos: number;
+  falhados: number;
+  restantes: number | null;
+  esgotados: number | null;
+  /** Processos recalculados nesta etapa cujo encerramento foi avaliado / que encerraram; erro dessa avaliação (a varredura cobre). */
+  encerramentoAvaliados: number;
+  encerramentoFinalizados: number;
+  encerramentoErro: string | null;
+  /** Erro da etapa inteira (isolada — nunca derruba o tick). */
+  erro: string | null;
 }
 
 /** Produção P1 — contadores da varredura de encerramento automático (rede de segurança). */
@@ -160,6 +183,34 @@ async function etapaEncerramento(deps: TickDeps, hoje: CivilDate): Promise<Etapa
   }
 }
 
+/**
+ * Produção P1 (administração tarifária) — consome SÓ os itens `tarifa` do
+ * outbox de recálculo, com fronteira de erro própria: o recálculo dos
+ * processos afetados por uma ativação/desativação de tarifa nunca depende do
+ * sucesso do tracking (a etapa de base, que também consome o outbox, pode
+ * falhar antes de chegar a ele). Mesmo claim/época/retentativa; mesmo `hoje`
+ * do tick (data final de contêiner não devolvido — nunca a data de
+ * referência tarifária, que é a do processo).
+ */
+async function etapaRecalculoTarifario(deps: TickDeps, hoje: CivilDate, workerId: string): Promise<EtapaRecalculoTarifarioResultado> {
+  try {
+    const r = await (deps.processarRecalculoTarifario ?? processarRecalculoTarifario)({ pool: deps.pool, hoje, workerId });
+    return {
+      expansoes: r.expansao.expansoes, expansaoItens: r.expansao.itens, expansaoFalhas: r.expansao.falhas,
+      reivindicados: r.reivindicados, concluidos: r.concluidos, falhados: r.falhados,
+      restantes: r.restantes, esgotados: r.esgotados,
+      encerramentoAvaliados: r.encerramento.avaliados, encerramentoFinalizados: r.encerramento.finalizados,
+      encerramentoErro: r.encerramento.erro, erro: null,
+    };
+  } catch (e) {
+    console.error('[demurrage-scheduler] etapa recalculo-tarifario falhou (isolada):', mensagemErro(e));
+    return {
+      expansoes: 0, expansaoItens: 0, expansaoFalhas: 0, reivindicados: 0, concluidos: 0, falhados: 0, restantes: null, esgotados: null,
+      encerramentoAvaliados: 0, encerramentoFinalizados: 0, encerramentoErro: null, erro: mensagemErro(e),
+    };
+  }
+}
+
 async function etapaAvisosPendencia(deps: TickDeps, workerId: string): Promise<EtapaAvisosPendenciaResultado> {
   const vazio = { reivindicadas: 0, enviadas: 0, falhadas: 0, possePerdida: 0 };
   if (!deps.avisoPendenciaTransport) {
@@ -208,6 +259,8 @@ export interface TickResultado {
   avisosPendencia: EtapaAvisosPendenciaResultado;
   /** Produção P1 — varredura de encerramento automático. */
   encerramento: EtapaEncerramentoResultado;
+  /** Produção P1 (administração tarifária) — recálculo por mudança de tarifa. */
+  recalculoTarifario: EtapaRecalculoTarifarioResultado;
 }
 
 /**
@@ -220,7 +273,7 @@ export async function executarTickDemurrage(deps: TickDeps, hojeInjetado?: Civil
   const hoje = hojeInjetado ?? hojeOperacional(); // fuso local, nunca UTC.
   const workerId = deps.workerId ?? `tick-${process.pid}`;
   // Etapas existentes: INALTERADAS (mesma ordem, mesma propagação de erro).
-  let base: Omit<TickResultado, 'posCommit' | 'avisosFallback' | 'avisosPendencia' | 'encerramento'> | null = null;
+  let base: Omit<TickResultado, 'posCommit' | 'avisosFallback' | 'avisosPendencia' | 'encerramento' | 'recalculoTarifario'> | null = null;
   let erroBase: unknown = null;
   try {
     const cal = await passagemDoCalendario(deps.pool, hoje);
@@ -229,7 +282,10 @@ export async function executarTickDemurrage(deps: TickDeps, hojeInjetado?: Civil
     // Master Free Time: reaplica intenções já extraídas a contêineres novos e
     // consome o outbox de recálculo (relógio Rocket, exposição, lifecycle).
     const si = await reaplicarIntencoesShippingInstructions({ pool: deps.pool });
-    const rec = await processarRecalculosPendentes({ pool: deps.pool, hoje, workerId });
+    // Produção P1 (administração tarifária): esta etapa segue com os tipos de
+    // Free Time; os itens `tarifa` (que podem ser muitos de uma vez) têm etapa
+    // própria e isolada abaixo, e nunca atrasam o recálculo de Free Time.
+    const rec = await processarRecalculosPendentes({ pool: deps.pool, hoje, workerId, tipos: ['master_free_time', 'house_free_time'] });
     const avisos = deps.avisoTransport
       ? await processarAvisosDivergenciaPendentes({ pool: deps.pool, transport: deps.avisoTransport, workerId })
       : { enviadas: 0, falhadas: 0 };
@@ -252,11 +308,15 @@ export async function executarTickDemurrage(deps: TickDeps, hojeInjetado?: Civil
   const posCommit = await etapaPosCommit(deps, hoje, workerId);
   const avisosFallback = await etapaAvisosFallback(deps, workerId);
   const avisosPendencia = await etapaAvisosPendencia(deps, workerId);
+  // Produção P1 (administração tarifária) — recálculo por tarifa ANTES do
+  // encerramento: a própria etapa avalia o encerramento dos processos que
+  // recalculou, e a varredura abaixo continua como rede de segurança.
+  const recalculoTarifario = await etapaRecalculoTarifario(deps, hoje, workerId);
   // Produção P1 — encerramento automático: DEPOIS de tracking/recálculos/reparos
   // do tick, para avaliar o estado mais recente; fronteira de erro própria.
   const encerramento = await etapaEncerramento(deps, hoje);
   if (erroBase) throw erroBase; // comportamento pré-existente preservado: o tick reporta o erro ao laço
-  return { ...base!, posCommit, avisosFallback, avisosPendencia, encerramento };
+  return { ...base!, posCommit, avisosFallback, avisosPendencia, encerramento, recalculoTarifario };
 }
 
 /** Linha de log de um tick (inclui os contadores das etapas da D10 v1.3). */
@@ -281,7 +341,14 @@ export function formatarLogTick(t: TickResultado): string {
       `${t.avisosPendencia.erro ? ` ERRO=${t.avisosPendencia.erro}` : ''} | ` +
       `encerramento: avaliados=${t.encerramento.avaliados} finalizados=${t.encerramento.finalizados} ` +
       `bloqueados=${t.encerramento.bloqueados} falhas=${t.encerramento.falhas}` +
-      `${t.encerramento.erro ? ` ERRO=${t.encerramento.erro}` : ''}`
+      `${t.encerramento.erro ? ` ERRO=${t.encerramento.erro}` : ''} | ` +
+      `recalculo-tarifario: expansoes=${t.recalculoTarifario.expansoes} expansao-itens=${t.recalculoTarifario.expansaoItens} ` +
+      `expansao-falhas=${t.recalculoTarifario.expansaoFalhas} reivindicados=${t.recalculoTarifario.reivindicados} concluidos=${t.recalculoTarifario.concluidos} ` +
+      `falhados=${t.recalculoTarifario.falhados} restantes=${t.recalculoTarifario.restantes ?? '?'} ` +
+      `esgotados=${t.recalculoTarifario.esgotados ?? '?'} encerramento-avaliados=${t.recalculoTarifario.encerramentoAvaliados} ` +
+      `encerramento-finalizados=${t.recalculoTarifario.encerramentoFinalizados}` +
+      `${t.recalculoTarifario.encerramentoErro ? ` ENCERRAMENTO-ERRO=${t.recalculoTarifario.encerramentoErro}` : ''}` +
+      `${t.recalculoTarifario.erro ? ` ERRO=${t.recalculoTarifario.erro}` : ''}`
   );
 }
 

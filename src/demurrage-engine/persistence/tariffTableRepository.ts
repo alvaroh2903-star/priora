@@ -68,9 +68,33 @@ export interface SelecaoTabela {
   armadorId?: string | null;
   termoComercial?: 'embarque' | 'unico' | null;
   referenceDate: CivilDate;
+  /**
+   * Produção P1 (administração tarifária) — SÓ a prévia de desativação: a
+   * seleção como ficaria sem esta versão (mesma regra, uma versão a menos).
+   * O caminho de cálculo nunca passa isto.
+   */
+  excluirTabelaId?: string;
 }
 
-export type MotivoIndisponivel = 'TARIFF_VERSION_NOT_PROVEN' | 'TARIFF_TABLE_NOT_FOUND' | 'TARIFF_VERSION_NOT_ACTIVATED';
+export type MotivoIndisponivel =
+  | 'TARIFF_VERSION_NOT_PROVEN' | 'TARIFF_TABLE_NOT_FOUND' | 'TARIFF_VERSION_NOT_ACTIVATED'
+  /** Produção P1 (administração tarifária): versão fixada por ID foi DESATIVADA. */
+  | 'TARIFF_VERSION_DEACTIVATED';
+
+/**
+ * Produção P1 (administração tarifária) — filtros de ciclo de vida, gravados
+ * em `tariff_versao_transicoes` (migration 0052) porque a versão ativada é
+ * imutável:
+ *  - versão DESATIVADA nunca é candidata;
+ *  - versão SUBSTITUÍDA só é candidata até o seu fim efetivo (o menor
+ *    `vigencia_efetiva_fim` das substituições) — datas anteriores à sucessora
+ *    continuam com a versão delas.
+ * Sem nenhuma transição (todo o legado), o resultado é idêntico ao anterior.
+ */
+const FILTRO_CICLO_DE_VIDA = `
+          AND NOT EXISTS (SELECT 1 FROM tariff_versao_transicoes d WHERE d.tariff_table_id = tariff_tables.id AND d.tipo = 'DESATIVACAO')
+          AND NOT EXISTS (SELECT 1 FROM tariff_versao_transicoes s WHERE s.tariff_table_id = tariff_tables.id AND s.tipo = 'SUBSTITUICAO'
+                            AND s.vigencia_efetiva_fim < $5::date)`;
 
 export interface SelecaoResultado {
   tabela: TabelaResolvida | null;
@@ -87,7 +111,7 @@ function mapFaixa(row: any): Faixa {
   };
 }
 
-interface CandidatoRow {
+export interface CandidatoRow {
   id: string;
   tipo: 'rocket_cliente' | 'armador';
   versao: number;
@@ -136,55 +160,100 @@ export class TariffTableRepository {
    * rascunho; o que falta é uma versão comprovadamente aplicável.
    */
   async selecionarVigente(sel: SelecaoTabela): Promise<SelecaoResultado> {
+    const candidata = await this.candidataVigente(sel);
+    if (candidata) return { tabela: await this.resolver(candidata), motivo: null };
+
+    // (3) Nenhuma ativada é aplicável — decide se a identidade da tabela
+    // existe (mesmo só em rascunho) ou se nada foi cadastrado para ela.
+    const existe = await this.pool.query(
+      `SELECT 1 FROM tariff_tables WHERE tipo = $1 AND organization_id IS NOT DISTINCT FROM $2
+          AND armador_id IS NOT DISTINCT FROM $3 AND termo_comercial IS NOT DISTINCT FROM $4 LIMIT 1`,
+      [sel.tipo, sel.organizationId ?? null, sel.armadorId ?? null, sel.termoComercial ?? null],
+    );
+    if (existe.rows.length === 0) return { tabela: null, motivo: 'TARIFF_TABLE_NOT_FOUND' };
+    return { tabela: null, motivo: 'TARIFF_VERSION_NOT_PROVEN' };
+  }
+
+  /**
+   * A versão que a seleção escolhe na data (passos 1 e 2), sem carregar
+   * faixas — a MESMA regra de `selecionarVigente` (que a usa), exposta para a
+   * prévia de desativação, que só precisa de id e vigência.
+   */
+  async candidataVigente(sel: SelecaoTabela): Promise<CandidatoRow | null> {
     const dims = [sel.tipo, sel.organizationId ?? null, sel.armadorId ?? null, sel.termoComercial ?? null];
     const filtroDimensao = `tipo = $1 AND organization_id IS NOT DISTINCT FROM $2
           AND armador_id IS NOT DISTINCT FROM $3 AND termo_comercial IS NOT DISTINCT FROM $4`;
+    const exclusao = sel.excluirTabelaId ? ` AND id <> $6::uuid` : '';
     const colunas = `id, tipo, versao, day_count_basis, qualidade_fonte, vigencia_inicio, vigencia_fim,
               to_char(verificada_em AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS verificada_data`;
 
     // (1) Vigência CONHECIDA que cobre a data: a mais recente vence; empate de
     // vigência quebrado pela versão mais alta; ID só como desempate final
     // defensivo (determinismo, sem significado de negócio).
-    const conhecida = await this.pool.query<CandidatoRow>(
-      `SELECT ${colunas}
+    // (2) Só se nenhuma de (1) cobrir: início desconhecido, só a partir da
+    // data civil (UTC) de verificada_em; a verificação mais recente vence;
+    // mesmo desempate (versão, depois ID).
+    // Produção P1 (administração tarifária): os dois passos num ÚNICO
+    // comando (`passo` ordena primeiro) — um só instantâneo do banco, nunca o
+    // passo 1 antes e o passo 2 depois do COMMIT de uma ativação concorrente.
+    // Mesma ordem e mesmo resultado de antes.
+    const candidata = await this.pool.query<CandidatoRow>(
+      `SELECT ${colunas}, 1 AS passo, vigencia_inicio AS chave_data
          FROM tariff_tables
         WHERE ${filtroDimensao}
           AND ativada_em IS NOT NULL
-          AND vigencia_inicio IS NOT NULL AND vigencia_inicio <= $5
-          AND (vigencia_fim IS NULL OR vigencia_fim >= $5)
-        ORDER BY vigencia_inicio DESC, versao DESC, id ASC
-        LIMIT 1`,
-      [...dims, sel.referenceDate],
-    );
-    if (conhecida.rows.length > 0) {
-      return { tabela: await this.resolver(conhecida.rows[0]), motivo: null };
-    }
-
-    // (2) Início desconhecido: só a partir da data civil de verificada_em; a
-    // verificação mais recente vence; mesmo desempate (versão, depois ID).
-    const desconhecida = await this.pool.query<CandidatoRow>(
-      `SELECT ${colunas}
+          AND vigencia_inicio IS NOT NULL AND vigencia_inicio <= $5::date
+          AND (vigencia_fim IS NULL OR vigencia_fim >= $5::date)${FILTRO_CICLO_DE_VIDA}${exclusao}
+       UNION ALL
+       SELECT ${colunas}, 2 AS passo, (verificada_em AT TIME ZONE 'UTC')::date AS chave_data
          FROM tariff_tables
         WHERE ${filtroDimensao}
           AND ativada_em IS NOT NULL
           AND vigencia_inicio IS NULL
-          AND to_char(verificada_em AT TIME ZONE 'UTC', 'YYYY-MM-DD') <= $5
-        ORDER BY to_char(verificada_em AT TIME ZONE 'UTC', 'YYYY-MM-DD') DESC, versao DESC, id ASC
+          AND (verificada_em AT TIME ZONE 'UTC')::date <= $5::date${FILTRO_CICLO_DE_VIDA}${exclusao}
+        ORDER BY passo ASC, chave_data DESC, versao DESC, id ASC
         LIMIT 1`,
-      [...dims, sel.referenceDate],
+      sel.excluirTabelaId ? [...dims, sel.referenceDate, sel.excluirTabelaId] : [...dims, sel.referenceDate],
     );
-    if (desconhecida.rows.length > 0) {
-      return { tabela: await this.resolver(desconhecida.rows[0]), motivo: null };
-    }
+    return candidata.rows[0] ?? null;
+  }
 
-    // (3) Nenhuma ativada é aplicável — decide se a identidade da tabela
-    // existe (mesmo só em rascunho) ou se nada foi cadastrado para ela.
-    const existe = await this.pool.query(
-      `SELECT 1 FROM tariff_tables WHERE ${filtroDimensao} LIMIT 1`,
-      dims,
+  /**
+   * Produção P1 (administração tarifária) — EXPOSIÇÃO ESTIMADA ao armador.
+   * Antes desta fase o motor só lia a tabela PÚBLICA (`organizationId` nunca
+   * era passado), o que tornava invisível uma tabela de armador da
+   * organização. Regra, sem volta silenciosa à pública:
+   *  - a organização que JÁ ATIVOU alguma versão privada para o armador
+   *    (mesmo que depois desativada ou substituída) passa a ter, para datas a
+   *    partir do menor início dessas versões, SOMENTE a dimensão privada: sem
+   *    versão privada aplicável na data, o resultado é "sem versão vigente" —
+   *    nunca a estimativa pública;
+   *  - antes desse corte, ou sem nenhuma versão privada ativada (rascunho não
+   *    conta), vale a pública legada exatamente como antes.
+   * Sem armador no processo, nada é selecionável (motivo legado
+   * `TARIFF_TABLE_NOT_FOUND`, como antes).
+   */
+  async selecionarVigenteArmador(organizationId: string | null, armadorId: string | null, referenceDate: CivilDate): Promise<SelecaoResultado> {
+    if (!armadorId) return { tabela: null, motivo: 'TARIFF_TABLE_NOT_FOUND' };
+    const privada = organizationId !== null && (await this.dimensaoPrivadaArmadorGoverna(organizationId, armadorId, referenceDate));
+    return this.selecionarVigente({ tipo: 'armador', organizationId: privada ? organizationId : null, armadorId, referenceDate });
+  }
+
+  /**
+   * true = na data, a exposição ao armador é governada SÓ pela dimensão
+   * privada da organização (data ≥ menor início das versões privadas já
+   * ativadas, inclusive desativadas/substituídas). Mesma regra usada pelo
+   * diagnóstico de motivo — nunca duas definições do corte.
+   */
+  async dimensaoPrivadaArmadorGoverna(organizationId: string, armadorId: string, referenceDate: CivilDate): Promise<boolean> {
+    const { rows } = await this.pool.query(
+      `SELECT min(COALESCE(vigencia_inicio, (verificada_em AT TIME ZONE 'UTC')::date)) AS corte
+         FROM tariff_tables
+        WHERE tipo = 'armador' AND organization_id = $1 AND armador_id = $2 AND ativada_em IS NOT NULL`,
+      [organizationId, armadorId],
     );
-    if (existe.rows.length === 0) return { tabela: null, motivo: 'TARIFF_TABLE_NOT_FOUND' };
-    return { tabela: null, motivo: 'TARIFF_VERSION_NOT_PROVEN' };
+    const corte: CivilDate | null = rows[0]?.corte ?? null;
+    return corte !== null && referenceDate >= corte;
   }
 
   /**
@@ -226,15 +295,19 @@ export class TariffTableRepository {
    * nela) volta a resolver normalmente na próxima apuração autorizada.
    */
   async buscarAtivadaPorId(tabelaId: string): Promise<{ tabela: TabelaResolvida | null; motivo: MotivoIndisponivel | null }> {
-    const { rows } = await this.pool.query<CandidatoRow & { ativada_em: string | null }>(
+    const { rows } = await this.pool.query<CandidatoRow & { ativada_em: string | null; desativada: boolean }>(
       `SELECT id, tipo, versao, day_count_basis, qualidade_fonte,
               vigencia_inicio, vigencia_fim,
               to_char(verificada_em AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS verificada_data,
-              ativada_em
+              ativada_em,
+              EXISTS (SELECT 1 FROM tariff_versao_transicoes d WHERE d.tariff_table_id = tariff_tables.id AND d.tipo = 'DESATIVACAO') AS desativada
          FROM tariff_tables WHERE id = $1`,
       [tabelaId],
     );
     if (rows.length === 0) return { tabela: null, motivo: 'TARIFF_TABLE_NOT_FOUND' };
+    // Produção P1 (administração tarifária): desativada vence rascunho — um
+    // rascunho abandonado também nunca mais será ativado.
+    if (rows[0].desativada) return { tabela: null, motivo: 'TARIFF_VERSION_DEACTIVATED' };
     if (rows[0].ativada_em === null) return { tabela: null, motivo: 'TARIFF_VERSION_NOT_ACTIVATED' };
     return { tabela: await this.resolver(rows[0]), motivo: null };
   }

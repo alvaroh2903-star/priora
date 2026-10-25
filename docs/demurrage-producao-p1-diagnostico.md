@@ -30,9 +30,11 @@
 >   multiorganização concluído.
 > - Correção de minuta e encerramento (`ddc43db`): status no próprio relatório
 >   (`docs/demurrage-producao-p1-correcao-minuta-encerramento.md`).
-> - **A Production P1 NÃO está concluída.** Restam: administração operacional
->   de tarifas; armazenamento definitivo dos arquivos de minuta; frontend;
->   integração produtora da Liberação, quando estiver pronta (§7).
+> - Administração operacional de tarifas: **entregue para revisão, NÃO
+>   congelada** (`docs/demurrage-producao-p1-administracao-tarifas.md`).
+> - **A Production P1 NÃO está concluída.** Restam: a revisão/aprovação da
+>   administração de tarifas; armazenamento definitivo dos arquivos de minuta;
+>   frontend; integração produtora da Liberação, quando estiver pronta (§7).
 
 ## 0. Status executivo
 
@@ -414,7 +416,8 @@ acima:
    externa (§5, item 8). **Concluída: APROVADA E CONGELADA** como adição
    estreita à Entrega 1, autorizada pelo usuário (código `19fc8d9`,
    relatório `6c04234`) — `docs/demurrage-producao-p1-handoff-capacidade.md`.
-4. Administração de tarifas.
+4. Administração de tarifas. **Entregue para revisão, NÃO congelada**
+   (`docs/demurrage-producao-p1-administracao-tarifas.md`).
 5. Administração de VesselCall (§3, nota sobre a pendência de VesselCall).
 6. Tracking manual (§3, item 2).
 7. Administração de divergências de Free Time (§3, item 4b).
@@ -426,8 +429,9 @@ acima:
     organização em produção (§6, "Corretiva — autenticação…"). Exige
     autorização específica.
 
-**A Production P1 não está concluída:** restam a administração operacional de
-tarifas (item 4), o armazenamento definitivo dos arquivos de minuta (item 9),
+**A Production P1 não está concluída:** restam a revisão/aprovação da
+administração operacional de tarifas (item 4, entregue para revisão), o
+armazenamento definitivo dos arquivos de minuta (item 9),
 o frontend (item 1) e a integração produtora da Liberação (item 2), quando
 estiver pronta.
 

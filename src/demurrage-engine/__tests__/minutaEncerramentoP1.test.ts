@@ -966,7 +966,7 @@ test('P1 #18b: migration 0048 é ADITIVA — aplica sobre um banco na 0047 com d
 
     const up = await runMigrations(pool);
     // Produção P1 (filas pessoais): a 0049 (sessões/identidade/atribuição, aditiva) vem junto num upgrade a partir da 0047; auditoria final: também a 0050 e a 0051 (aditivas).
-    assert.deepEqual(up.applied, ['0048_minuta_aceite_tecnico_encerramento_automatico.sql', '0049_sessoes_identidade_atribuicao.sql', '0050_avisos_redirecionamento_responsavel.sql', '0051_integracao_microsoft_organizacao.sql']);
+    assert.deepEqual(up.applied, ['0048_minuta_aceite_tecnico_encerramento_automatico.sql', '0049_sessoes_identidade_atribuicao.sql', '0050_avisos_redirecionamento_responsavel.sql', '0051_integracao_microsoft_organizacao.sql', '0052_administracao_tarifaria.sql' /* Produção P1 (administração tarifária): aditiva */]);
     const depois = (await pool.query(`SELECT id, estado_minuta, data_validada, regra_avaliacao, substituida_por_id FROM minutas ORDER BY id`)).rows;
     assert.deepEqual(depois.map((m: any) => ({ id: m.id, estado_minuta: m.estado_minuta, data_validada: m.data_validada })), antes, 'nenhuma linha legada reescrita');
     assert.ok(depois.every((m: any) => m.regra_avaliacao === null && m.substituida_por_id === null));

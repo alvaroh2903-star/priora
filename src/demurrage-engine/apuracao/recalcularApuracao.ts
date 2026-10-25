@@ -7,10 +7,8 @@ import { ValorApuradoRepository } from '../persistence/valorApuradoRepository';
 import { LifecycleRepository } from '../persistence/lifecycleRepository';
 import { calcularInputHashValor } from '../domain/valorApurado';
 import { TariffTableRepository, TabelaResolvida } from '../persistence/tariffTableRepository';
-import { calcularTermoPorEmbarque } from '../tariffs/engines/termoPorEmbarqueEngine';
-import { calcularTermoUnico } from '../tariffs/engines/termoUnicoEngine';
-import { calcularExposicaoRocket } from '../tariffs/engines/exposicaoRocketEngine';
-import { MotorComercial, MotorResult, RelogioTipo } from '../tariffs/types';
+import { MotorResult, RelogioTipo } from '../tariffs/types';
+import { apurarLadoArmador, apurarLadoCliente } from './resolucaoTarifaria';
 import { lockProcesso } from '../closing/materialChangeGuard';
 import { abrirPendenciaComClient, resolverPendenciasComClient } from '../registro/pendencias';
 
@@ -65,17 +63,6 @@ export interface RecalcularResultado {
 
 function diasDoRelogio(r: { status: string; diasDemurrage?: number }): number {
   return r.status === 'OK' ? (r as any).diasDemurrage : 0;
-}
-
-/**
- * Resultado UNAVAILABLE quando NÃO há tabela aplicável (gap 5): sem tabelaId/versao
- * fabricados (''/0). tabelaId=null, versaoTabela=null e o motivo real da ausência.
- */
-function unavailable(motor: MotorComercial, motivo: string): MotorResult {
-  return {
-    motorComercial: motor, confirmationStatus: 'UNAVAILABLE', total: null, moeda: null,
-    diasCobrados: null, faixasAplicadas: [], dayCountBasisAplicada: null, tabelaId: null, versaoTabela: null, motivo,
-  };
 }
 
 /**
@@ -213,44 +200,17 @@ export async function recalcularApuracaoContainerComClient(
       await resolverPendenciasComClient(client, processoId, null, ['condicao_comercial_ausente']);
     }
 
-    // 2a) Cliente — modelo único conforme a condição comercial.
+    // 2a) Cliente — modelo único conforme a condição comercial. Produção P1
+    // (administração tarifária): escolha de tabela e motor em
+    // `resolucaoTarifaria.ts` (fonte única, também usada pelo diagnóstico de
+    // leitura), sem mudança de regra.
     const clocksCliente = clocks.cliente;
     if (clocksCliente.status === 'OK' && clocksCliente.diasDemurrage >= 1) {
       const diasCliente = clocksCliente.diasDemurrage;
-      const primeiroDia = clocksCliente.primeiroDiaDemurrage;
-      let res: MotorResult | null = null;
-      let tabelaResolvidaCliente: TabelaResolvida | null = null;
-      if (termoTipo === 'embarque') {
-        // D15-C v1.2 (corretiva): leitura de PRODUÇÃO por ID —
-        // `buscarAtivadaPorId`, nunca `buscarPorId` (que devolve rascunhos
-        // de propósito, para administração/revisão). Um rascunho
-        // referenciado pela condição comercial nunca é usado nem congelado
-        // por um cálculo real; devolve UNAVAILABLE com o motivo explícito.
-        const selEmbarque = condicaoTabelaId
-          ? await tariffs.buscarAtivadaPorId(condicaoTabelaId)
-          : { tabela: null, motivo: 'TARIFF_TABLE_NOT_FOUND' as const };
-        const tabela = selEmbarque.tabela;
-        tabelaResolvidaCliente = tabela;
-        // Gap 5: sem tabela aplicável → UNAVAILABLE com tabelaId/versao NULL e motivo real (nunca ''/0).
-        res = tabela
-          ? calcularTermoPorEmbarque({
-              equipamentoNormalizado: equipamento, diasDemurrageCliente: diasCliente,
-              faixas: tabela.faixas, tabelaId: tabela.id, versaoTabela: tabela.versao,
-            })
-          : unavailable('termo_embarque', selEmbarque.motivo ?? 'TARIFF_TABLE_NOT_FOUND');
-      } else if (termoTipo === 'unico') {
-        const sel = await tariffs.selecionarVigente({
-          tipo: 'rocket_cliente', organizationId: c.organization_id, termoComercial: 'unico', referenceDate: primeiroDia,
-        });
-        const t: TabelaResolvida | null = sel.tabela;
-        tabelaResolvidaCliente = t;
-        res = t
-          ? calcularTermoUnico({
-              equipamentoNormalizado: equipamento, freeTimeDaysCliente: c.house_free_time_days ?? 0, diasDemurrageCliente: diasCliente,
-              faixas: t.faixas, dayCountBasis: t.dayCountBasis, qualidadeFonte: t.qualidadeFonte, tabelaId: t.id, versaoTabela: t.versao,
-            })
-          : unavailable('termo_unico', sel.motivo ?? 'TARIFF_VERSION_NOT_PROVEN');
-      }
+      const { res, tabela: tabelaResolvidaCliente } = await apurarLadoCliente(tariffs, {
+        termoTipo, condicaoTabelaId, organizationId: c.organization_id, primeiroDiaDemurrage: clocksCliente.primeiroDiaDemurrage,
+        equipamento, houseFreeTimeDays: c.house_free_time_days, diasDemurrageCliente: diasCliente,
+      });
       if (res) {
         await persistir(client, valores, containerId, 'cliente', res, {
           equipamento, freeTimeDays: c.house_free_time_days ?? null, diasDemurrage: diasCliente, finalDate, tabela: tabelaResolvidaCliente,
@@ -263,20 +223,18 @@ export async function recalcularApuracaoContainerComClient(
       await valores.supersederRelogio(client, containerId, 'cliente');
     }
 
-    // 2b) Exposição Rocket — regra da Fase 4 (inalterada): tabela do armador por descarga.
+    // 2b) Exposição Rocket — regra da Fase 4: tabela do armador por descarga.
+    // Produção P1 (administração tarifária): tabela privada da organização do
+    // contêiner primeiro; sem versão privada aplicável, a pública legada.
     if (clocks.rocket.status === 'OK' && clocks.rocket.diasDemurrage >= 1) {
-      const sel = await tariffs.selecionarVigente({
-        tipo: 'armador', armadorId: proc.armador_id, referenceDate: c.discharge_date ?? finalDate,
-      });
-      const t: TabelaResolvida | null = sel.tabela;
       // Gap 5: sem tabela do armador → UNAVAILABLE com tabelaId/versao NULL e motivo real.
-      const res = t
-        ? calcularExposicaoRocket({
-            equipamentoNormalizado: equipamento, freeTimeDaysMaster: c.master_free_time_days ?? 0,
-            diasDemurrageRocket: clocks.rocket.diasDemurrage, faixas: t.faixas,
-            dayCountBasis: t.dayCountBasis, qualidadeFonte: t.qualidadeFonte, tabelaId: t.id, versaoTabela: t.versao,
-          })
-        : unavailable('exposicao_armador', sel.motivo ?? 'TARIFF_TABLE_NOT_FOUND');
+      const { res, tabela: t } = await apurarLadoArmador(tariffs, {
+        // Relógio Rocket OK implica descarga presente (freeTimeClock): a data
+        // de referência é SEMPRE a descarga — nunca a data final do período,
+        // que para contêiner não devolvido é o "hoje" do servidor.
+        organizationId: c.organization_id, armadorId: proc.armador_id, dataReferencia: c.discharge_date as CivilDate,
+        equipamento, masterFreeTimeDays: c.master_free_time_days, diasDemurrageRocket: clocks.rocket.diasDemurrage,
+      });
       await persistir(client, valores, containerId, 'rocket', res, {
         equipamento, freeTimeDays: c.master_free_time_days ?? null, diasDemurrage: clocks.rocket.diasDemurrage, finalDate, tabela: t,
       });

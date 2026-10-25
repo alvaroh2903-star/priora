@@ -41,6 +41,7 @@ export async function truncateAll(pool: Pool): Promise<void> {
       tracking_schedule_claims,
       tracking_alert_deliveries, tracking_incidents,
       tracking_events, tracking_fetches, container_tracking_targets, tracking_targets,
+      tariff_recalculo_expansoes, tariff_versao_transicoes, tariff_admin_eventos,
       valores_apurados, tariff_brackets, tariff_tables,
       relogios,
       backfill_items, backfill_runs,

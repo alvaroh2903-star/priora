@@ -21,6 +21,7 @@ import { criarDemurrageV2Router } from './routes/demurrageV2Routes';
 import { criarDemurrageGestaoRouter } from './routes/demurrageGestaoRoutes';
 import { criarDemurrageAcoesRouter } from './routes/demurrageAcoesRoutes';
 import { criarDemurrageAdminRouter } from './routes/demurrageAdminRoutes';
+import { criarDemurrageTarifasRouter } from './routes/demurrageTarifasRoutes';
 import { auditoriaRouter } from './routes/auditoriaRoutes';
 import { capturaRouter } from './routes/capturaRoutes';
 import { demurrageHandoffRouter } from './routes/demurrageHandoffRoutes';
@@ -78,9 +79,9 @@ export const SEGREDO_DE_DESENVOLVIMENTO = 'dev-insecure-secret-change-me';
 
 /**
  * Pré-requisito de boot: com banco configurado, o schema que este código lê
- * precisa existir — sessões (0049), redirecionamento dos avisos (0050) e
- * organização dona da integração (0051). Produção: lança (o processo não
- * sobe). Desenvolvimento: só avisa.
+ * precisa existir — sessões (0049), redirecionamento dos avisos (0050),
+ * organização dona da integração (0051) e administração tarifária (0052).
+ * Produção: lança (o processo não sobe). Desenvolvimento: só avisa.
  */
 export async function verificarTabelaDeSessoes(pool: () => Pool = getPool): Promise<void> {
   if (!temBanco()) return;
@@ -88,6 +89,7 @@ export async function verificarTabelaDeSessoes(pool: () => Pool = getPool): Prom
     ['0049', `SELECT 1 FROM sessoes_humanas LIMIT 0`],
     ['0050', `SELECT envio_confirmado_em FROM ft_divergencia_entregas LIMIT 0`],
     ['0051', `SELECT 1 FROM integracao_microsoft_vinculos LIMIT 0`],
+    ['0052', `SELECT 1 FROM tariff_versao_transicoes LIMIT 0`],
   ];
   for (const [migration, sql] of exigidos) {
     try {
@@ -215,6 +217,8 @@ export function criarApp(deps: CriarAppDeps = {}): Express {
   app.use('/api/demurrage/v2/acoes', criarDemurrageAcoesRouter({ pool: poolOuPadrao, requireAuthMiddleware: requireSessao }));
   // Produção P1 (autenticação) — membros da organização (ADMIN), só backend.
   app.use('/api/demurrage/v2/admin', criarDemurrageAdminRouter({ pool: poolOuPadrao, requireAuthMiddleware: requireSessao }));
+  // Produção P1 — administração tarifária (MANAGER/ADMIN; ANALYST só leitura operacional), só backend.
+  app.use('/api/demurrage/v2/tarifas', criarDemurrageTarifasRouter({ pool: poolOuPadrao, requireAuthMiddleware: requireSessao }));
   app.use('/api/demurrage/v2', criarDemurrageV2Router({ pool: poolOuPadrao, requireAuthMiddleware: requireSessao }));
   // Caminho V2 sem rota: 404 aqui — nunca cai no router V1 (que exigiria a
   // caixa Microsoft da integração e responderia 401/403 enganosos).

@@ -637,6 +637,11 @@ test('v1.1 migração 0032 → 0033: decisões existentes preservadas; a nova re
     // congelado em 0032. Ao final (gate de fechamento), as duas réplicas são
     // removidas e as migrations reais 0034+ rodam — ver o comentário lá.
     await pool.query(`ALTER TABLE tariff_tables ADD COLUMN ativada_em TIMESTAMPTZ`);
+    // Produção P1 (administração tarifária, migration 0052, muito depois): a
+    // seleção de versão (`selecionarVigente`/`buscarAtivadaPorId`, usada por
+    // `cenario`) lê as transições de ciclo de vida — scaffold mínimo da tabela
+    // para este schema congelado; removido antes da migration real.
+    await pool.query(`CREATE TABLE tariff_versao_transicoes (tariff_table_id UUID, tipo TEXT, vigencia_efetiva_fim DATE)`);
     // Produção P1 (identidade operacional, migration 0049, muito depois): as
     // leituras de autor de `decidirResponsabilidade` exigem membership ATIVO
     // (`desativado_em IS NULL`) — scaffold da coluna para este schema
@@ -701,6 +706,7 @@ test('v1.1 migração 0032 → 0033: decisões existentes preservadas; a nova re
     // criem (a 0037 preenche `ativada_em = criado_em`, o mesmo fato).
     await pool.query(`DROP TABLE free_time_tentativas`);
     await pool.query(`ALTER TABLE tariff_tables DROP COLUMN ativada_em`);
+    await pool.query('DROP TABLE tariff_versao_transicoes');
     await pool.query('ALTER TABLE organization_memberships DROP COLUMN desativado_em');
     await runMigrations(pool);
     await minutaValidadaDireta(pool, cli.containerId, 'MIGCLI', '2026-01-10');

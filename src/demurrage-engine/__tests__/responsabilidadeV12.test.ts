@@ -526,6 +526,11 @@ test('v1.2 migração 0033 → 0034: decisões existentes preservadas; dias/per�
     // ao que este teste verifica, só precisa existir para `cenario`
     // funcionar neste schema congelado em 0033.
     await pool.query(`ALTER TABLE tariff_tables ADD COLUMN ativada_em TIMESTAMPTZ`);
+    // Produção P1 (administração tarifária, migration 0052, muito depois): a
+    // seleção de versão (`selecionarVigente`/`buscarAtivadaPorId`, usada por
+    // `cenario`) lê as transições de ciclo de vida — scaffold mínimo da tabela
+    // para este schema congelado; removido antes da migration real.
+    await pool.query(`CREATE TABLE tariff_versao_transicoes (tariff_table_id UUID, tipo TEXT, vigencia_efetiva_fim DATE)`);
     // Produção P1 (identidade operacional, migration 0049, muito depois): as
     // leituras de autor de `decidirResponsabilidade` exigem membership ATIVO
     // (`desativado_em IS NULL`) — scaffold da coluna para este schema
@@ -568,10 +573,11 @@ test('v1.2 migração 0033 → 0034: decisões existentes preservadas; dias/per�
     // trecho congelado em 0033; a migration 0037 real adiciona a coluna
     // definitiva (sem IF NOT EXISTS) — remove o scaffold antes para não colidir.
     await pool.query('ALTER TABLE tariff_tables DROP COLUMN ativada_em');
+    await pool.query('DROP TABLE tariff_versao_transicoes');
     await pool.query('ALTER TABLE organization_memberships DROP COLUMN desativado_em');
     const r = await runMigrations(pool);
     // Produção P1 (filas pessoais): a migration 0049 (sessões, identidade e atribuição — aditiva); auditoria final: 0050 (avisos seguem o responsável atual) e 0051 (organização dona da integração), aditivas — a 0051 passa a ser a última.
-    assert.deepEqual(r.applied, ['0034_responsabilidade_v1_2_agregado.sql', '0035_d15a_integridade_final_reabertura.sql', '0036_d15b_integridade_dados_excecoes.sql', '0037_d15c_integridade_tarifaria_e_filas.sql', '0038_d15c_v1_1_publicacao_tarifaria.sql', '0039_tracking_schedule_claims_fencing.sql', '0040_handoff_demurrage.sql', '0041_handoff_vinculo_processo.sql', '0042_acoes_idempotencia.sql', '0043_acoes_minuta_idempotencia_atomica.sql', '0044_acoes_minuta_idempotencia_tenant_e_chave.sql', '0045_leitura_operacional_indices.sql', '0046_leitura_operacional_pendencias_por_processo.sql', '0047_handoff_controle_capacidade.sql', '0048_minuta_aceite_tecnico_encerramento_automatico.sql', '0049_sessoes_identidade_atribuicao.sql', '0050_avisos_redirecionamento_responsavel.sql', '0051_integracao_microsoft_organizacao.sql']);
+    assert.deepEqual(r.applied, ['0034_responsabilidade_v1_2_agregado.sql', '0035_d15a_integridade_final_reabertura.sql', '0036_d15b_integridade_dados_excecoes.sql', '0037_d15c_integridade_tarifaria_e_filas.sql', '0038_d15c_v1_1_publicacao_tarifaria.sql', '0039_tracking_schedule_claims_fencing.sql', '0040_handoff_demurrage.sql', '0041_handoff_vinculo_processo.sql', '0042_acoes_idempotencia.sql', '0043_acoes_minuta_idempotencia_atomica.sql', '0044_acoes_minuta_idempotencia_tenant_e_chave.sql', '0045_leitura_operacional_indices.sql', '0046_leitura_operacional_pendencias_por_processo.sql', '0047_handoff_controle_capacidade.sql', '0048_minuta_aceite_tecnico_encerramento_automatico.sql', '0049_sessoes_identidade_atribuicao.sql', '0050_avisos_redirecionamento_responsavel.sql', '0051_integracao_microsoft_organizacao.sql', '0052_administracao_tarifaria.sql' /* Produção P1 (administração tarifária): aditiva */]);
     // A migração não reescreve nem revalida retroativamente nada existente.
     assert.deepEqual(await snapshot(), antes);
 

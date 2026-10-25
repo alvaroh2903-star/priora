@@ -269,7 +269,8 @@ test('v1.2 #5: banco novo — migração limpa 0001→0044 cria a FK composta e 
     await pool.query('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
     const r = await runMigrations(pool);
     // Produção P1 (filas pessoais): a migration 0049 (sessões, identidade e atribuição — aditiva); auditoria final: 0050 (avisos seguem o responsável atual) e 0051 (organização dona da integração), aditivas — a 0051 passa a ser a última.
-    assert.equal(r.applied[r.applied.length - 1], '0051_integracao_microsoft_organizacao.sql');
+    // Produção P1 (administração tarifária): a 0052 (aditiva) passa a ser a última.
+    assert.equal(r.applied[r.applied.length - 1], '0052_administracao_tarifaria.sql');
 
     const { rows: fk } = await pool.query(
       `SELECT 1 FROM pg_constraint WHERE conname = 'minutas_idempotencia_organizacao_do_container'`,

@@ -152,7 +152,11 @@ test('0007 — organization_id imutável nas tabelas de tenant', { skip: !url },
       // Produção P1 (auditoria final, isolamento da integração): organização
       // DONA da caixa da integração Microsoft — migration 0051 (histórico
       // append-only, organização imutável).
-      'integracao_microsoft_vinculos'];
+      'integracao_microsoft_vinculos',
+      // Produção P1 (administração tarifária): eventos de auditoria e
+      // transições de ciclo de vida das versões (append-only) e expansão do
+      // recálculo tarifário — migration 0052 (organização imutável).
+      'tariff_admin_eventos', 'tariff_versao_transicoes', 'tariff_recalculo_expansoes'];
     const { rows } = await pool.query(`
       SELECT c.table_name,
              EXISTS (SELECT 1 FROM pg_trigger tg

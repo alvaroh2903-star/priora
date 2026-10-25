@@ -28,6 +28,9 @@ import { recalcularApuracaoContainer } from '../apuracao/recalcularApuracao';
  * teto).
  */
 
+/** Máximo de tentativas automáticas de um item (padrão do worker). */
+export const MAX_TENTATIVAS_RECALCULO = 5;
+
 export interface ProcessarRecalculosInput {
   pool: Pool;
   hoje: CivilDate;
@@ -35,6 +38,19 @@ export interface ProcessarRecalculosInput {
   limite?: number;
   ttlMs?: number;
   maxTentativas?: number;
+  /**
+   * Produção P1 (administração tarifária) — restringe o claim a estes tipos
+   * (ex.: `['tarifa']` na etapa isolada do tick). Ausente = todos os tipos,
+   * exatamente o comportamento anterior.
+   */
+  tipos?: string[];
+  /**
+   * Produção P1 (administração tarifária) — item FAILED só é reivindicado se
+   * falhou ANTES deste instante (início da etapa): no máximo uma tentativa
+   * por item por etapa, sem parar a etapa por causa dele. Ausente = sem
+   * restrição, exatamente o comportamento anterior.
+   */
+  falhadosAntesDe?: Date;
   /** Injeção para teste; default: recalcularApuracaoContainer. */
   recalcular?: (pool: Pool, containerId: string, config: { dataReferencia: CivilDate }) => Promise<unknown>;
 }
@@ -52,7 +68,8 @@ export interface ProcessarRecalculosResultado {
 export async function processarRecalculosPendentes(input: ProcessarRecalculosInput): Promise<ProcessarRecalculosResultado> {
   const limite = input.limite ?? 50;
   const ttl = Math.max(1, Math.floor((input.ttlMs ?? 10 * 60_000) / 1000));
-  const maxTentativas = input.maxTentativas ?? 5;
+  const maxTentativas = input.maxTentativas ?? MAX_TENTATIVAS_RECALCULO;
+  const tipos = input.tipos ?? null;
   const recalcular = input.recalcular ?? recalcularApuracaoContainer;
 
   const { rows: itens } = await input.pool.query(
@@ -61,24 +78,28 @@ export async function processarRecalculosPendentes(input: ProcessarRecalculosInp
             expira_em = now() + ($2 || ' seconds')::interval, atualizado_em = now()
       WHERE o.id IN (
         SELECT id FROM recalculo_outbox
-         WHERE estado = 'PENDING'
-            OR (estado = 'FAILED' AND tentativas < $3)
-            OR (estado = 'PROCESSING' AND expira_em < now())
+         WHERE (estado = 'PENDING'
+            OR (estado = 'FAILED' AND tentativas < $3 AND ($6::timestamptz IS NULL OR atualizado_em < $6::timestamptz))
+            OR (estado = 'PROCESSING' AND expira_em < now()))
+           AND ($5::text[] IS NULL OR tipo = ANY($5::text[]))
          ORDER BY criado_em
          FOR UPDATE SKIP LOCKED
          LIMIT $4)
       RETURNING id, container_id, epoca`,
-    [input.workerId, String(ttl), maxTentativas, limite],
+    [input.workerId, String(ttl), maxTentativas, limite, tipos, input.falhadosAntesDe ?? null],
   );
 
   const out: ProcessarRecalculosResultado = { reivindicados: itens.length, concluidos: 0, falhados: 0, restantes: 0, esgotados: 0 };
   for (const item of itens) {
     try {
-      await recalcular(input.pool, item.container_id, { dataReferencia: input.hoje });
+      const r = await recalcular(input.pool, item.container_id, { dataReferencia: input.hoje });
+      // Produção P1 (administração tarifária): desfecho observável — processo
+      // já FINAL no consumo é IGNORADO (o pipeline é NO-OP), nunca "recalculado".
+      const desfecho = (r as { skipped?: unknown } | null)?.skipped === 'FINAL' ? 'IGNORADO_FINAL' : 'RECALCULADO';
       const { rowCount } = await input.pool.query(
-        `UPDATE recalculo_outbox SET estado = 'DONE', erro = NULL, concluido_em = now(), atualizado_em = now()
+        `UPDATE recalculo_outbox SET estado = 'DONE', erro = NULL, desfecho = $4, concluido_em = now(), atualizado_em = now()
           WHERE id = $1 AND estado = 'PROCESSING' AND worker_id = $2 AND epoca = $3`,
-        [item.id, input.workerId, item.epoca],
+        [item.id, input.workerId, item.epoca, desfecho],
       );
       if ((rowCount ?? 0) > 0) out.concluidos++;
     } catch (erro: any) {
@@ -93,8 +114,8 @@ export async function processarRecalculosPendentes(input: ProcessarRecalculosInp
   const { rows: cont } = await input.pool.query(
     `SELECT count(*) FILTER (WHERE estado <> 'DONE' AND tentativas < $1)::int AS restantes,
             count(*) FILTER (WHERE estado = 'FAILED' AND tentativas >= $1)::int AS esgotados
-       FROM recalculo_outbox WHERE estado <> 'DONE'`,
-    [maxTentativas],
+       FROM recalculo_outbox WHERE estado <> 'DONE' AND ($2::text[] IS NULL OR tipo = ANY($2::text[]))`,
+    [maxTentativas, tipos],
   );
   out.restantes = cont[0].restantes;
   out.esgotados = cont[0].esgotados;
