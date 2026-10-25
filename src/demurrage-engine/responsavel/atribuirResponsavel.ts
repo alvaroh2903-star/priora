@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { Pool, PoolClient } from 'pg';
 import { lockProcesso } from '../closing/materialChangeGuard';
 import { FieldObservationRepository } from '../persistence/fieldObservationRepository';
+import { redirecionarAvisosDoResponsavelComClient } from '../freeTime/divergenciaAvisos';
 
 /**
  * Produção P1 (filas pessoais) — ATRIBUIR / REATRIBUIR / RETIRAR o
@@ -9,8 +10,10 @@ import { FieldObservationRepository } from '../persistence/fieldObservationRepos
  *
  * Reutiliza o contrato existente: o responsável continua sendo
  * `processos.responsavel_operacional_membership_id` (FK composta por
- * organização, CLIENT barrado por trigger da 0007, membership inativo barrado
- * pela 0049), e a escrita passa pelo MESMO ledger de observações do registro
+ * organização, CLIENT barrado por trigger da 0007; membership inativo é
+ * recusado por ESTE serviço — a 0049 deliberadamente não tem trigger para
+ * isso, para não derrubar o handoff), e a escrita passa pelo MESMO ledger de
+ * observações do registro
  * (`field_observations` + `processo_campos_selecionados`) com a fonte nova
  * `atribuicao_interna` — prioridade acima de todas, então uma observação
  * posterior do handoff (fonte `outro`) nunca desfaz uma atribuição interna.
@@ -33,7 +36,11 @@ import { FieldObservationRepository } from '../persistence/fieldObservationRepos
  *    (o papel do autor é conferido ANTES do replay — um ANALYST nunca recebe
  *    o resultado de outra pessoa);
  *  - trilha append-only `processo_atribuicoes`: autor, anterior, novo, data,
- *    motivo (também para o pedido que não mudou nada — INALTERADO).
+ *    motivo (também para o pedido que não mudou nada — INALTERADO);
+ *  - a reatribuição vale IMEDIATAMENTE também para os avisos: na MESMA
+ *    transação, as entregas ainda não enviadas do responsável anterior são
+ *    invalidadas de forma auditável e o novo responsável recebe a sua
+ *    (`redirecionarAvisosDoResponsavelComClient`).
  */
 
 export const VERSAO_HASH_ATRIBUICAO = 'acoes.atribuir_responsavel.v2';
@@ -178,6 +185,10 @@ export async function atribuirResponsavel(pool: Pool, input: AtribuirResponsavel
          ON CONFLICT (processo_id, campo) DO UPDATE SET observation_id = EXCLUDED.observation_id, atualizado_em = now()`,
         [input.processoId, input.organizationId, observationId],
       );
+      await redirecionarAvisosDoResponsavelComClient(client, {
+        organizationId: input.organizationId, processoId: input.processoId,
+        autor: input.autor.tipo === 'membership' ? `membership:${input.autor.membershipId}` : `operador:${input.autor.descricao.trim().slice(0, 200)}`,
+      });
     }
 
     const { rows: ins } = await client.query(

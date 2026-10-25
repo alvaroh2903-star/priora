@@ -77,18 +77,27 @@ function temBanco(): boolean {
 export const SEGREDO_DE_DESENVOLVIMENTO = 'dev-insecure-secret-change-me';
 
 /**
- * Pré-requisito de boot: com banco configurado, a tabela de sessões
- * (migration 0049) precisa existir. Produção: lança (o processo não sobe).
- * Desenvolvimento: só avisa.
+ * Pré-requisito de boot: com banco configurado, o schema que este código lê
+ * precisa existir — sessões (0049), redirecionamento dos avisos (0050) e
+ * organização dona da integração (0051). Produção: lança (o processo não
+ * sobe). Desenvolvimento: só avisa.
  */
 export async function verificarTabelaDeSessoes(pool: () => Pool = getPool): Promise<void> {
   if (!temBanco()) return;
-  try {
-    await pool().query(`SELECT 1 FROM sessoes_humanas LIMIT 0`);
-  } catch {
-    const msg = '[boot] tabela sessoes_humanas ausente ou banco indisponível — rode `npm run db:migrate:demurrage` (migration 0049) antes de publicar.';
-    if (config.isProduction) throw new Error(msg);
-    console.error(msg);
+  const exigidos: Array<[string, string]> = [
+    ['0049', `SELECT 1 FROM sessoes_humanas LIMIT 0`],
+    ['0050', `SELECT envio_confirmado_em FROM ft_divergencia_entregas LIMIT 0`],
+    ['0051', `SELECT 1 FROM integracao_microsoft_vinculos LIMIT 0`],
+  ];
+  for (const [migration, sql] of exigidos) {
+    try {
+      await pool().query(sql);
+    } catch (err) {
+      const msg = `[boot] schema da migration ${migration} ausente ou banco indisponível (${(err as { code?: string })?.code ?? 'erro'}) — rode \`npm run db:migrate:demurrage\` antes de publicar.`;
+      if (config.isProduction) throw new Error(msg);
+      console.error(msg);
+      return;
+    }
   }
 }
 
@@ -124,7 +133,9 @@ export function criarApp(deps: CriarAppDeps = {}): Express {
       store = criarPgSessionStore({ pool, ociosidadeMs: config.sessionIdleMs, absolutoMs: config.sessionMaxAgeMs });
       const intervalo = deps.purgarSessoesACada === undefined ? 60 * 60 * 1000 : deps.purgarSessoesACada;
       if (intervalo) {
-        const t = setInterval(() => { purgarSessoes(pool()).catch(() => undefined); }, intervalo);
+        const t = setInterval(() => {
+          purgarSessoes(pool()).catch((err) => console.warn('[sessao] purga de sessões falhou:', err?.code ?? err?.name ?? 'erro'));
+        }, intervalo);
         t.unref();
       }
     } else {
@@ -219,7 +230,13 @@ export function criarApp(deps: CriarAppDeps = {}): Express {
   // banco ou da Microsoft) — só o status; o log não leva cabeçalhos/cookies.
   app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
     const status = Number.isInteger(err?.statusCode) ? err.statusCode : Number.isInteger(err?.status) ? err.status : 500;
-    console.error(`[http] ${req.method} ${req.path} → ${status}:`, err?.code ?? err?.name ?? 'erro', err?.message ? String(err.message).slice(0, 200) : '');
+    // ≥500: também os quadros da pilha (só "at função (arquivo:linha)" — sem a
+    // linha da mensagem, que já vai truncada), para o diagnóstico não se perder.
+    const pilha = status >= 500 && typeof err?.stack === 'string'
+      ? err.stack.split('\n').filter((l: string) => l.trimStart().startsWith('at ')).slice(0, 10).join('\n')
+      : '';
+    console.error(`[http] ${req.method} ${req.path} → ${status}:`, err?.code ?? err?.name ?? 'erro', err?.message ? String(err.message).slice(0, 200) : '',
+      ...(pilha ? [`\n${pilha}`] : []));
     res.status(status).json({
       error: status >= 500 ? 'Erro interno do servidor.' : (err?.message || 'Erro.'),
     });

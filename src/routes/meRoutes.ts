@@ -6,6 +6,7 @@ import {
 } from '../auth/sessaoHumana';
 import { EstadoIntegracao, estadoIntegracaoPadrao } from '../auth/authRoutes';
 import { PgSessionStore, sessaoViva } from '../auth/sessaoStore';
+import { avaliarUsoDaCaixaDaIntegracao, integracaoAtual } from '../demurrage-engine/identidade/integracaoOrganizacao';
 
 /**
  * Produção P1 (autenticação) — identidade operacional da sessão.
@@ -33,6 +34,14 @@ import { PgSessionStore, sessaoViva } from '../auth/sessaoStore';
  * administrativa) durante a requisição, a gravação não alcança a linha e a
  * resposta é `401` — nenhuma sessão "renasce". Os cursores emitidos para a
  * organização anterior deixam de valer (todo cursor carrega a organização).
+ *
+ * Produção P1 (isolamento da integração): `conexaoMicrosoft.podeUsarCaixaDaIntegracao`
+ * diz se ESTA pessoa pode usar as rotas V1 (caixa da integração) — a mesma
+ * regra do guard V1 (`requireAuth`): integração conectada, organização dona
+ * vinculada e membership interno ATIVO na dona; mais o indicador barato de
+ * token em cache (`comToken`) da mesma conta, em vez de renovar o token a cada
+ * `/api/me`. Nunca expõe o identificador da conta nem a organização dona.
+ * `contaDestaSessao` fica por compatibilidade (não decide mais nada).
  */
 
 export const CONTRATO_ME = 'priora.me.v2' as const;
@@ -40,6 +49,8 @@ export const CONTRATO_ME = 'priora.me.v2' as const;
 export interface MeRoutesDeps {
   pool?: () => Pool;
   estadoIntegracao?: () => Promise<EstadoIntegracao>;
+  /** Conta ATUAL da integração + organização dona. Default: relidas do banco. */
+  organizacaoDona?: () => Promise<{ homeAccountId: string; organizationId: string | null } | null>;
 }
 
 const RE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -52,6 +63,7 @@ export function criarMeRouter(deps: MeRoutesDeps = {}): Router {
   const router = Router();
   const pool = () => (deps.pool ?? getPool)();
   const estadoIntegracao = deps.estadoIntegracao ?? estadoIntegracaoPadrao;
+  const organizacaoDona = deps.organizacaoDona ?? (() => integracaoAtual(pool()));
 
   async function corpoMe(req: Request) {
     const r = await resolverIdentidadeDaSessao(pool(), req);
@@ -69,6 +81,9 @@ export function criarMeRouter(deps: MeRoutesDeps = {}): Router {
       : internos.length === 1 ? internos[0] : null;
     const origem = ativa === null ? null : eu.organizacaoAtivaId ? 'selecionada' as const : 'unica' as const;
     const integracao = await estadoIntegracao().catch(() => ({ conectada: false, homeAccountId: null, comToken: false }));
+    const usoCaixa = avaliarUsoDaCaixaDaIntegracao(await organizacaoDona().catch(() => null), internos);
+    const podeUsarCaixaDaIntegracao = usoCaixa.ok && integracao.conectada && integracao.comToken
+      && integracao.homeAccountId === usoCaixa.homeAccountId;
     return {
       contrato: CONTRATO_ME,
       authenticated: true as const,
@@ -87,6 +102,7 @@ export function criarMeRouter(deps: MeRoutesDeps = {}): Router {
       conexaoMicrosoft: {
         integracaoConectada: integracao.conectada,
         contaDestaSessao: integracao.conectada && integracao.homeAccountId === eu.homeAccountId,
+        podeUsarCaixaDaIntegracao,
       },
     };
   }

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { AuthedRequest } from '../middleware/requireAuth';
-import { requireSessao } from '../auth/sessaoHumana';
+import { membershipsInternosAtivos, RequestComIdentidade, requireSessao } from '../auth/sessaoHumana';
+import { getPool } from '../demurrage-engine/db/pool';
 import {
   trackNumber as trackFedex,
   isFedexConfigured,
@@ -38,8 +39,20 @@ trackingRouter.get('/health', async (_req, res) => {
 
 // A partir daqui, tudo exige login.
 // Produção P1 (autenticação): o rastreio (FedEx/DHL por chave de API) não usa
-// a caixa Microsoft — basta a sessão humana; nunca exigiu ser a conta da integração.
+// a caixa Microsoft — não exige ser a conta da integração —, mas exige o mesmo
+// acesso interno das demais telas: sessão humana válida E pelo menos um
+// membership interno ATIVO, relido a cada requisição (desativado ou só CLIENT
+// → 403, nunca apenas "tem sessão").
 trackingRouter.use(requireSessao);
+trackingRouter.use(async (req: RequestComIdentidade, res, next) => {
+  try {
+    const internos = await membershipsInternosAtivos(getPool(), req.identidade!.usuarioId);
+    if (!internos.length) { res.status(403).json({ error: 'usuario_sem_papel_interno' }); return; }
+    next();
+  } catch (err) {
+    next(err);
+  }
+});
 
 /* ------------------------------------------------------------------ *
  * Cache de rastreio (TTL curto). O módulo Courier consulta TODOS os

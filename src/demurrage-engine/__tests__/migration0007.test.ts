@@ -148,7 +148,11 @@ test('0007 — organization_id imutável nas tabelas de tenant', { skip: !url },
       // atribuição do responsável — migration 0049. `sessoes_humanas` e
       // `usuario_eventos` não entram: não têm organization_id (a organização
       // ativa é dado da sessão; identidade é global), de propósito.
-      'membership_eventos', 'processo_atribuicoes'];
+      'membership_eventos', 'processo_atribuicoes',
+      // Produção P1 (auditoria final, isolamento da integração): organização
+      // DONA da caixa da integração Microsoft — migration 0051 (histórico
+      // append-only, organização imutável).
+      'integracao_microsoft_vinculos'];
     const { rows } = await pool.query(`
       SELECT c.table_name,
              EXISTS (SELECT 1 FROM pg_trigger tg

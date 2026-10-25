@@ -1158,13 +1158,33 @@ test('extra. integração Microsoft: só administrador de plataforma conecta; tr
   });
 });
 
-test('extra. V1 (caixa da integração): sem sessão 401; outra pessoa 403 com código (nunca laço de login)', { skip: !url }, async () => {
-  await comApp(async ({ ms, c, nav }) => {
+// Produção P1 (isolamento da integração): a regra "só a pessoa que É a conta da integração usa a V1"
+// foi substituída por "membro interno ATIVO da organização DONA da integração (migration 0051)".
+test('extra. V1 (caixa da integração): sem sessão 401; membro da organização dona passa; outra organização 403 com código (nunca laço de login)', { skip: !url }, async () => {
+  await comApp(async ({ pool, ms, c, nav }) => {
     assert.equal((await nav().json('/api/emails')).status, 401);
     const a = await logado(ms, nav(), c.ana);
-    const r = await a.json('/api/emails');
+    let r = await a.json('/api/emails');
     assert.equal(r.status, 403);
-    assert.ok(['integracao_desconectada', 'conexao_microsoft_de_outra_conta'].includes(r.body.codigo), JSON.stringify(r.body));
+    assert.equal(r.body.codigo, 'integracao_desconectada', JSON.stringify(r.body));
+    // Conta técnica da integração (não é usuária da Priora), ainda sem organização dona.
+    await pool.query(
+      `INSERT INTO msal_conta_ativa (id, home_account_id, username, conectada_em) VALUES ('default', 'conta-tecnica.tenant', 'integracao@rocket.example', now())`,
+    );
+    r = await a.json('/api/emails');
+    assert.equal(r.status, 403);
+    assert.equal(r.body.codigo, 'integracao_sem_organizacao');
+    const { vincularIntegracaoAOrganizacao } = await import('../identidade/integracaoOrganizacao');
+    await vincularIntegracaoAOrganizacao(pool, { organizationId: c.orgX.id, operador: 'Equipe Priora', motivo: 'teste' });
+    // Membro ativo da dona (X) passa da regra de organização — só o token MSAL não existe no teste.
+    r = await a.json('/api/emails');
+    assert.equal(r.status, 403);
+    assert.equal(r.body.codigo, 'integracao_sem_token');
+    // Membro só da organização Y: 403 com código, nunca 401.
+    const y = await logado(ms, nav(), c.yan);
+    r = await y.json('/api/emails');
+    assert.equal(r.status, 403);
+    assert.equal(r.body.codigo, 'integracao_de_outra_organizacao');
   });
 });
 

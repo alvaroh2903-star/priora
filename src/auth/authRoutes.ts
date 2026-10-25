@@ -11,7 +11,7 @@ import {
   ErroConexaoIntegracao, ProvedorIdentidade, ProvedorIntegracao, provedorIdentidadeMsal, provedorIntegracaoMsal,
 } from './provedorIdentidade';
 import { apagarTransacao, desafioPkce, gravarTransacao, lerTransacao, novaTransacao } from './transacaoOAuth';
-import { encerrarSessaoEstrita, IdentidadeSessao, membershipsInternosAtivos, resolverIdentidadeDaSessao } from './sessaoHumana';
+import { encerrarSessao, encerrarSessaoEstrita, IdentidadeSessao, membershipsInternosAtivos, resolverIdentidadeDaSessao } from './sessaoHumana';
 
 /**
  * Produção P1 (autenticação) — LOGIN DE PESSOA e CONEXÃO DE INTEGRAÇÃO,
@@ -336,6 +336,29 @@ export function criarAuthRouter(deps: AuthRoutesDeps = {}): Router {
       // Organização ativa: nenhuma escolha implícita gravada (ver cabeçalho).
       req.session.organizacaoAtivaId = null;
       await salvar(req);
+      // Reconferência DEPOIS de gravar: uma desativação do último acesso interno,
+      // ou um desvínculo da identidade, que comitou entre a checagem acima e a
+      // gravação revogou "todas as sessões" antes desta existir. Se o vínculo e
+      // o acesso ainda aparecem aqui, a revogação deles (feita após o COMMIT)
+      // alcança esta linha já gravada; se não aparecem, esta própria sessão é
+      // encerrada. Falha FECHADA: erro nesta leitura encerra a sessão (nenhum
+      // Set-Cookie de sessão viva sai junto com o 500).
+      let aindaValida: boolean;
+      try {
+        const { rows: vinculo } = await pool().query(
+          `SELECT 1 FROM usuarios WHERE id = $1 AND home_account_id = $2`, [usuario.id, pessoa.homeAccountId],
+        );
+        aindaValida = vinculo.length > 0 && (await membershipsInternosAtivos(pool(), usuario.id)).length > 0;
+      } catch (err) {
+        await encerrarSessao(req);
+        throw err;
+      }
+      if (!aindaValida) {
+        await encerrarSessaoEstrita(req);
+        res.clearCookie(nomeCookie(), { httpOnly: true, secure: seguro(), sameSite: 'lax', path: '/' });
+        paginaErro(res, 403, 'Acesso não autorizado', 'Seu usuário não tem acesso interno ativo em nenhuma organização.');
+        return;
+      }
 
       if (usuario.administrador_plataforma === true && integracao.configurado()) {
         // Encadeamento é conveniência: erro ao ler o estado não impede o login.

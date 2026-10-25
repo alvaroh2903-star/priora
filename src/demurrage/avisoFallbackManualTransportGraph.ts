@@ -1,6 +1,6 @@
 import { AvisoFallbackManual, AvisoFallbackManualTransport } from '../demurrage-engine/registro/avisosFallbackManual';
 import { sendMail as graphSendMail } from '../graph/graphService';
-import { acquireGraphTokenForActiveAccount } from '../auth/backgroundToken';
+import { TokenCanalGraph, resolverTokenCanal, tokenGraphDoCanalDaIntegracao } from '../auth/backgroundToken';
 
 /**
  * Fase D10 v1.3 — transporte do aviso de FALLBACK MANUAL de Free Time por
@@ -11,6 +11,14 @@ import { acquireGraphTokenForActiveAccount } from '../auth/backgroundToken';
  * O corpo traz SÓ o necessário: processo, contêiner, House/Master Free Time,
  * valor, justificativa, referência da evidência, autor e data da observação.
  * Nunca payload bruto, token, corpo de e-mail ou documento.
+ *
+ * Produção P1 (isolamento da integração): o e-mail sai da CAIXA DA
+ * INTEGRAÇÃO e fica nos Itens Enviados dela, que pertencem à organização
+ * DONA. Só é enviado quando a organização do aviso é a dona
+ * (`tokenGraphDoCanalDaIntegracao`, relido do banco a cada envio); aviso de
+ * outra organização falha de forma EXPLÍCITA e auditável
+ * (`canal_de_outra_organizacao`, ou `integracao_sem_organizacao` sem dona)
+ * sem chamar o Graph — a entrega fica FAILED, nada é perdido.
  */
 export function montarEmailFallbackManual(a: AvisoFallbackManual): { subject: string; body: string } {
   const qual = a.campo === 'houseFreeTimeDays' ? 'House Free Time' : 'Master Free Time';
@@ -31,16 +39,18 @@ export function montarEmailFallbackManual(a: AvisoFallbackManual): { subject: st
 }
 
 export function criarAvisoFallbackManualTransportGraph(deps: {
-  getToken?: () => Promise<string | null>;
+  /** Token do canal para as organizações do conteúdo. Default: só a organização DONA da integração. */
+  getToken?: (organizacoes: string[]) => Promise<TokenCanalGraph>;
   send?: (accessToken: string, input: { subject: string; body: string; to: string[]; contentType?: 'Text' | 'HTML' }) => Promise<void>;
 } = {}): AvisoFallbackManualTransport {
-  const getToken = deps.getToken ?? acquireGraphTokenForActiveAccount;
+  const getToken = deps.getToken ?? tokenGraphDoCanalDaIntegracao;
   const send = deps.send ?? ((t, i) => graphSendMail(t, i as any));
   return {
     async enviar(aviso) {
       if (!aviso.destinatarioEmail) return { ok: false, erro: 'destinatario_sem_email' };
-      const token = await getToken();
-      if (!token) return { ok: false, erro: 'sem_token_graph' };
+      const canal = resolverTokenCanal(await getToken([aviso.organizationId]), 'sem_token_graph');
+      if ('erro' in canal) return { ok: false, erro: canal.erro };
+      const { token } = canal;
       try {
         const { subject, body } = montarEmailFallbackManual(aviso);
         await send(token, { subject, body, to: [aviso.destinatarioEmail], contentType: 'Text' });

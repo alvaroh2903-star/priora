@@ -525,6 +525,12 @@ test('Outbox de recálculo: dois workers não processam o mesmo item; falha perm
 test('Avisos: envio fora de transação, dois processadores não enviam a mesma entrega, falha externa é retentável', { skip: !url }, async () => {
   const pool = testPool();
   const observador = testPool();
+  // Produção P1 (auditoria final): cada processador com o PRÓPRIO pool, identificado por
+  // `application_name` — a checagem "nenhuma transação/lock aberto durante o envio" vale para
+  // as conexões de QUEM está enviando. O worker revalida cada entrega numa transação curta sob
+  // o lock do processo (avisos após reatribuição); contar qualquer sessão do banco tornava o
+  // teste intermitente quando o OUTRO processador estava nessa transação curta.
+  const poolDe = { A: new Pool({ connectionString: url!, application_name: 'aviso-A' }), B: new Pool({ connectionString: url!, application_name: 'aviso-B' }) };
   try {
     await setup(pool);
     const s = await cenario(pool);
@@ -537,18 +543,26 @@ test('Avisos: envio fora de transação, dois processadores não enviam a mesma 
     let semTransacaoAberta = true;
     const transport: AvisoDivergenciaTransport = {
       async enviar(a) {
-        // Outro processo enxerga o claim já confirmado (PROCESSING) e não há sessão "idle in transaction".
-        estadosDuranteEnvio.push((await observador.query(`SELECT status FROM ft_divergencia_entregas WHERE id = $1`, [a.entregaId])).rows[0].status);
-        const { rows } = await observador.query(`SELECT count(*)::int n FROM pg_stat_activity WHERE datname = current_database() AND state LIKE 'idle in transaction%'`);
-        if (rows[0].n > 0) semTransacaoAberta = false;
+        // Outro processo enxerga o claim já confirmado (PROCESSING), e o processador que ENVIA não
+        // tem nenhuma conexão em transação nem segurando lock consultivo.
+        const ent = (await observador.query(`SELECT status, worker_id FROM ft_divergencia_entregas WHERE id = $1`, [a.entregaId])).rows[0];
+        estadosDuranteEnvio.push(ent.status);
+        const { rows } = await observador.query(
+          `SELECT (SELECT count(*)::int FROM pg_stat_activity
+                    WHERE datname = current_database() AND application_name = $1 AND (xact_start IS NOT NULL OR state LIKE 'idle in transaction%')) AS em_transacao,
+                  (SELECT count(*)::int FROM pg_locks l JOIN pg_stat_activity sa ON sa.pid = l.pid
+                    WHERE sa.application_name = $1 AND l.locktype = 'advisory') AS locks`,
+          [`aviso-${ent.worker_id}`],
+        );
+        if (rows[0].em_transacao > 0 || rows[0].locks > 0) semTransacaoAberta = false;
         await new Promise((r) => setTimeout(r, 30));
         enviados.push(a.entregaId);
         return { ok: true };
       },
     };
     const [x, y] = await Promise.all([
-      processarAvisosDivergenciaPendentes({ pool, transport, workerId: 'A' }),
-      processarAvisosDivergenciaPendentes({ pool, transport, workerId: 'B' }),
+      processarAvisosDivergenciaPendentes({ pool: poolDe.A, transport, workerId: 'A' }),
+      processarAvisosDivergenciaPendentes({ pool: poolDe.B, transport, workerId: 'B' }),
     ]);
     assert.equal(x.enviadas + y.enviadas, 2);
     assert.equal(new Set(enviados).size, 2, 'cada entrega enviada uma única vez');
@@ -565,7 +579,7 @@ test('Avisos: envio fora de transação, dois processadores não enviam a mesma 
     assert.equal(await count(pool, `SELECT count(*) n FROM ft_divergencia_eventos WHERE tipo = 'aviso_falhou'`), 2);
     const retry = await processarAvisosDivergenciaPendentes({ pool, workerId: 'A', transport: { async enviar() { return { ok: true }; } } });
     assert.equal(retry.enviadas, 2);
-  } finally { await pool.end(); await observador.end(); }
+  } finally { await pool.end(); await observador.end(); await poolDe.A.end(); await poolDe.B.end(); }
 });
 
 test('Avisos: entrega abandonada após interrupção é recuperada; finalização com token antigo é recusada', { skip: !url }, async () => {
@@ -618,7 +632,9 @@ test('Rotas: POST reprocessa pelo serviço idempotente; exige membro da organiza
     const b = await cenario(pool, { slug: 'org-b' });
     const { criarHandlerReprocessarSI, processRouter } = await import('../../routes/processRoutes');
     const f = portasFake([msg('m1', '2026-08-20T10:00:00Z', 'MBL: MAEU123456789\nFree time: 14 days')]);
-    const handler = criarHandlerReprocessarSI({ pool: () => pool, portas: () => f.p });
+    // Produção P1 (integração de plataforma): a conversa vem da caixa da integração, cuja organização
+    // DONA (migration 0051) é a A — antes, o `organizationId` do corpo era livre.
+    const handler = criarHandlerReprocessarSI({ pool: () => pool, portas: () => f.p, organizacaoDona: async () => ({ homeAccountId: 'conta-integracao', organizationId: a.orgId }) });
     const chamar = async (org: string, home: string) => {
       const { res, out } = resStub();
       let erro: unknown = null;

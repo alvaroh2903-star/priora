@@ -1,4 +1,4 @@
-import { ConfidentialClientApplication, LogLevel } from '@azure/msal-node';
+import { AccountInfo, AuthError, ConfidentialClientApplication, LogLevel } from '@azure/msal-node';
 import { authority, config, isAzureConfigured } from '../config';
 import { getMsalClient } from './msalClient';
 import { connectMicrosoftAccount } from './microsoftConnection';
@@ -73,6 +73,21 @@ export class ErroConexaoIntegracao extends Error {
   }
 }
 
+/**
+ * Remove do cache MSAL compartilhado os tokens de uma conta RECUSADA na
+ * conexão da integração (nonce ou conta divergente). A conexão da integração
+ * não muda em nenhum caso; se a remoção falhar, isso fica registrado (só o
+ * código do erro — nunca token ou conta) em vez de sumir em silêncio.
+ */
+async function removerTokensRecusados(msal: ConfidentialClientApplication, conta: AccountInfo): Promise<void> {
+  try {
+    await msal.getTokenCache().removeAccount(conta);
+  } catch (err) {
+    console.error('[auth] tokens da conta recusada NÃO removidos do cache da integração:',
+      (err as AuthError)?.errorCode || (err as Error)?.name || 'erro');
+  }
+}
+
 const ESCOPOS_IDENTIDADE = ['User.Read'];
 
 function clienteDescartavel(): ConfidentialClientApplication {
@@ -129,15 +144,16 @@ export const provedorIntegracaoMsal: ProvedorIntegracao = {
     });
     if (!r.account) throw new ErroConexaoIntegracao('sem_conta');
     if (nonceDasClaims(r.idTokenClaims) !== p.nonceEsperado) {
-      await msal.getTokenCache().removeAccount(r.account).catch(() => undefined);
+      await removerTokensRecusados(msal, r.account);
       throw new ErroConexaoIntegracao('nonce_invalido');
     }
     if (p.contaEsperada !== null && r.account.homeAccountId !== p.contaEsperada) {
-      await msal.getTokenCache().removeAccount(r.account).catch(() => undefined);
+      await removerTokensRecusados(msal, r.account);
       throw new ErroConexaoIntegracao('conta_divergente');
     }
     // Outra instância pode ter trocado a conexão: compara com o estado do banco.
-    await recarregarContaAtiva().catch(() => null);
+    // Erro de leitura PROPAGA (500) — nunca decidir com a memória possivelmente velha.
+    await recarregarContaAtiva();
     await connectMicrosoftAccount(r.account.homeAccountId, r.account.username);
     return { homeAccountId: r.account.homeAccountId };
   },

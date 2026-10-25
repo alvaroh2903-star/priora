@@ -1,6 +1,6 @@
 import { AlertTransport, EntregaPendente } from '../demurrage-engine/scheduler/alertOutbox';
 import { sendMail as graphSendMail } from '../graph/graphService';
-import { acquireGraphTokenForActiveAccount } from '../auth/backgroundToken';
+import { TokenCanalGraph, resolverTokenCanal, tokenGraphDoCanalDaIntegracao } from '../auth/backgroundToken';
 
 /**
  * Adaptador do transporte de alerta sobre Microsoft Graph / e-mail (revisão 13
@@ -17,6 +17,19 @@ import { acquireGraphTokenForActiveAccount } from '../auth/backgroundToken';
  * O mapeamento real (e-mail do responsável técnico; e-mails por organização)
  * é dado operacional que ainda PRECISA DE SUA VALIDAÇÃO — enquanto não houver
  * destinatário, a entrega fica FAILED/reprocessável (nada se perde).
+ *
+ * Produção P1 (isolamento da integração): o e-mail sai da CAIXA DA
+ * INTEGRAÇÃO e fica nos Itens Enviados dela, que pertencem à organização
+ * DONA. Só é enviado quando TODA organização cujo dado o e-mail carrega é a
+ * dona (`organizacoesDoConteudo` → `tokenGraphDoCanalDaIntegracao`, relido do
+ * banco a cada envio):
+ *  - `operacional_org`: a organização da entrega (e a dos seus contêineres);
+ *  - `tecnico_global`: o corpo lista os contêineres de TODAS as organizações
+ *    do alvo (número de contêiner é dado da organização) — mesma regra: só
+ *    sai quando todos são da dona.
+ * Caso contrário a entrega falha de forma EXPLÍCITA e auditável
+ * (`canal_de_outra_organizacao` / `integracao_sem_organizacao`) sem chamar o
+ * Graph — FAILED, nada é perdido.
  */
 
 export interface DestinatariosEntrega {
@@ -27,8 +40,8 @@ export interface DestinatariosEntrega {
 export interface GraphAlertTransportDeps {
   /** Resolve os destinatários de uma entrega (técnica global × operacional por org). */
   resolverDestinatarios: (entrega: EntregaPendente) => Promise<DestinatariosEntrega> | DestinatariosEntrega;
-  /** Injeção para teste: obtenção do token. Default: conta Microsoft ativa. */
-  getToken?: () => Promise<string | null>;
+  /** Injeção para teste: token do canal para as organizações do conteúdo. Default: só a organização DONA da integração. */
+  getToken?: (organizacoes: string[]) => Promise<TokenCanalGraph>;
   /** Injeção para teste: envio pelo Graph. Default: graphService.sendMail. */
   send?: (accessToken: string, input: { subject: string; body: string; to: string[]; cc?: string[]; contentType?: 'Text' | 'HTML' }) => Promise<void>;
   /** Montagem do assunto/corpo. Default: `montarEmailPadrao`. */
@@ -59,8 +72,15 @@ export function montarEmailPadrao(entrega: EntregaPendente): { subject: string; 
   };
 }
 
+/** Organizações cujo dado o e-mail da entrega carrega (contêineres + organização da entrega operacional). */
+export function organizacoesDoConteudo(entrega: EntregaPendente): string[] {
+  const orgs = new Set<string>(entrega.containers.map((c) => c.organizationId));
+  if (entrega.escopo !== 'tecnico_global' && entrega.organizationId) orgs.add(entrega.organizationId);
+  return [...orgs];
+}
+
 export function criarGraphAlertTransport(deps: GraphAlertTransportDeps): AlertTransport {
-  const getToken = deps.getToken ?? acquireGraphTokenForActiveAccount;
+  const getToken = deps.getToken ?? tokenGraphDoCanalDaIntegracao;
   const send = deps.send ?? graphSendMail;
   const montar = deps.montarEmail ?? montarEmailPadrao;
 
@@ -70,10 +90,9 @@ export function criarGraphAlertTransport(deps: GraphAlertTransportDeps): AlertTr
       if (!dest || !dest.to || dest.to.length === 0) {
         return { ok: false, erro: 'sem destinatários configurados para a entrega' };
       }
-      const token = await getToken();
-      if (!token) {
-        return { ok: false, erro: 'sem token Graph (conta Microsoft não conectada)' };
-      }
+      const canal = resolverTokenCanal(await getToken(organizacoesDoConteudo(entrega)), 'sem token Graph (conta Microsoft não conectada)');
+      if ('erro' in canal) return { ok: false, erro: canal.erro };
+      const { token } = canal;
       try {
         const { subject, body } = montar(entrega);
         await send(token, { subject, body, to: dest.to, cc: dest.cc, contentType: 'Text' });

@@ -741,8 +741,8 @@ test('v1.1 #25: migração limpa 0001→0045 aplica em ordem e reexecutar é um 
     assert.ok(r1.applied.includes('0045_leitura_operacional_indices.sql'));
     assert.ok(r1.applied.includes('0046_leitura_operacional_pendencias_por_processo.sql'));
     assert.ok(r1.applied.includes('0047_handoff_controle_capacidade.sql'));
-    // Produção P1 (filas pessoais): a migration 0049 (sessões, identidade e atribuição — aditiva) passa a ser a última.
-    assert.equal(r1.applied[r1.applied.length - 1], '0049_sessoes_identidade_atribuicao.sql');
+    // Produção P1 (filas pessoais): a migration 0049 (sessões, identidade e atribuição — aditiva); auditoria final: 0050 (avisos seguem o responsável atual) e 0051 (organização dona da integração), aditivas — a 0051 passa a ser a última.
+    assert.equal(r1.applied[r1.applied.length - 1], '0051_integracao_microsoft_organizacao.sql');
     const r2 = await runMigrations(pool);
     assert.deepEqual(r2.applied, [], 'reexecutar não reaplica nada');
   } finally { await pool.end(); }

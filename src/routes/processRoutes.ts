@@ -8,6 +8,7 @@ import {
   registrarConversaPreAlerta,
 } from '../demurrage-engine/shippingInstructions/ingestaoShippingInstructions';
 import { criarPortasShippingInstructions } from '../demurrage/shippingInstructionsPorts';
+import { DonoIntegracao, organizacaoDonaDaIntegracao } from '../demurrage-engine/identidade/integracaoOrganizacao';
 import {
   searchLogisticsMessages,
   listRecentSummaries,
@@ -132,6 +133,8 @@ const RE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 export interface ReprocessarSIDeps {
   pool?: () => Pool;
   portas?: (accessToken: string) => PortasShippingInstructions;
+  /** Organização dona da integração quando o guard V1 não a anexou. Default: relida do banco. */
+  organizacaoDona?: () => Promise<DonoIntegracao | null>;
 }
 
 /**
@@ -144,6 +147,13 @@ export interface ReprocessarSIDeps {
  * ser membro não-CLIENT e ATIVO (Produção P1, migration 0049 — desativado =
  * sem permissão) da organização informada. A rota GET de análise acima
  * permanece somente leitura.
+ *
+ * Produção P1 (isolamento da integração): a conversa é lida da caixa da
+ * INTEGRAÇÃO, cujo conteúdo pertence à organização DONA (migration 0051) — o
+ * `organizationId` do corpo precisa SER a dona (senão 403
+ * `organizacao_nao_e_dona_da_integracao`); nunca é a escolha do cliente que
+ * decide em que organização o e-mail é gravado. Sem dona → 403
+ * `integracao_sem_organizacao` (falha fechada).
  */
 export function criarHandlerReprocessarSI(deps: ReprocessarSIDeps = {}): RequestHandler {
   return async (req: AuthedRequest, res, next) => {
@@ -154,12 +164,23 @@ export function criarHandlerReprocessarSI(deps: ReprocessarSIDeps = {}): Request
         res.status(400).json({ error: 'Informe organizationId (UUID) e conversationId.' });
         return;
       }
-      const homeAccountId = req.session?.homeAccountId;
+      const homeAccountId = req.identidade?.homeAccountId ?? req.session?.homeAccountId;
       if (!homeAccountId) {
         res.status(401).json({ error: 'Não autenticado.' });
         return;
       }
       const pool = (deps.pool ?? getPool)();
+      const dona = req.integracao?.organizationId
+        ?? (await (deps.organizacaoDona ?? (() => organizacaoDonaDaIntegracao(pool)))())?.organizationId
+        ?? null;
+      if (!dona) {
+        res.status(403).json({ error: 'A caixa Microsoft da integração ainda não foi vinculada a uma organização.', codigo: 'integracao_sem_organizacao' });
+        return;
+      }
+      if (organizationId !== dona) {
+        res.status(403).json({ error: 'Esta caixa pertence a outra organização.', codigo: 'organizacao_nao_e_dona_da_integracao' });
+        return;
+      }
       const { rows } = await pool.query(
         `SELECT u.id AS usuario_id, m.papel FROM usuarios u
            JOIN organization_memberships m ON m.usuario_id = u.id

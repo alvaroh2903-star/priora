@@ -5,6 +5,10 @@ import {
   AtorProvisionamento, ErroProvisionamento, adicionarMembership, definirAdministradorPlataforma, definirAtivo, definirPapel,
   desvincularIdentidade, listarMembros, revogarSessoes, usuarioPorEmail, vincularIdentidadeMicrosoft,
 } from './provisionamento';
+import {
+  ErroIntegracaoOrganizacao, desvincularIntegracao, historicoVinculosDaConta, integracaoAtual, vincularIntegracaoAOrganizacao,
+  vinculosAtivosDeOutrasContas,
+} from './integracaoOrganizacao';
 
 /**
  * Produção P1 (autenticação) — CLI do OPERADOR DE PLATAFORMA (só backend; não
@@ -24,11 +28,26 @@ import {
  *
  * Implantação (ver o relatório da entrega, seção "Implantação"):
  *   ... conta-integracao
- *       mostra a conta Microsoft conectada hoje como integração e a quem ela
- *       está vinculada (para o operador CONFIRMAR que é a conta certa);
+ *       mostra a conta Microsoft conectada hoje como integração, a quem ela
+ *       está vinculada e a ORGANIZAÇÃO DONA da caixa (com o histórico de
+ *       vínculos), para o operador CONFIRMAR que é a conta certa;
+ *   ... vincular-integracao-organizacao --org <organizationId> --operador ... --motivo ...
+ *       Produção P1 (isolamento da integração): define a organização DONA da
+ *       caixa da integração atual. Só membros ATIVOS dessa organização usam
+ *       a caixa (V1, captura, reprocessamento) e só os avisos dela saem por
+ *       ela. Idempotente; recusa se a conta já tem outra dona; encerra
+ *       vínculos de captura LEGADOS dessa conta em outras organizações;
+ *   ... desvincular-integracao-organizacao --operador ... --motivo ... [--conta <homeAccountId>]
+ *       remove a dona (histórico preservado; encerra o vínculo de captura da
+ *       caixa naquela organização). Trocar a conta da integração NÃO leva a
+ *       dona: a conta nova fica sem dona até um novo vínculo; `--conta`
+ *       desvincula uma conta ANTERIOR cujo vínculo ficou ativo (listada em
+ *       `conta-integracao` como `vinculosAtivosDeOutrasContas`);
  *   ... vincular-conta-integracao --nome "..." --email ... --operador ... --motivo ...
- *       vincula a conta de integração já conectada a um usuário e o torna
- *       administrador de plataforma (sem precisar descobrir oid/tid);
+ *       OPCIONAL (legado): vincula a conta técnica da integração a um usuário
+ *       e o torna administrador de plataforma. Não é necessário para operar a
+ *       V1 nem a captura (vale o membership na organização dona) e não é
+ *       recomendado: a conta técnica não precisa ser usuária da Priora;
  *   ... processos-sem-responsavel --org <id> [--limite 50]
  *       processos ABERTOS sem responsável (nulo ou desativado);
  *   ... atribuir-responsavel --org <id> --processo <id> --para <membershipId|nenhum>
@@ -137,10 +156,31 @@ export async function executarCli(argv: string[], saida: (linha: string) => void
             WHERE c.id = 'default'`,
         );
         const c = rows[0];
-        saida(JSON.stringify(!c?.home_account_id ? { conectada: false } : {
+        if (!c?.home_account_id) {
+          saida(JSON.stringify({ conectada: false, organizacaoDona: null, vinculosAtivosDeOutrasContas: await vinculosAtivosDeOutrasContas(pool) }));
+          return 0;
+        }
+        const atual = await integracaoAtual(pool);
+        const historico = await historicoVinculosDaConta(pool, c.home_account_id);
+        const dona = atual?.organizationId ? historico.find((v) => v.id === atual.vinculoId) ?? null : null;
+        saida(JSON.stringify({
           conectada: true, username: c.username, homeAccountId: c.home_account_id, conectadaEm: c.conectada_em,
           usuarioVinculado: c.usuario_id ? { id: c.usuario_id, nome: c.nome, email: c.email, administradorPlataforma: c.administrador_plataforma } : null,
+          organizacaoDona: dona ? { id: dona.organizationId, nome: dona.organizacaoNome, vinculadoEm: dona.vinculadoEm, vinculadoPor: dona.vinculadoPor, motivo: dona.motivo } : null,
+          historicoVinculos: historico,
+          vinculosAtivosDeOutrasContas: await vinculosAtivosDeOutrasContas(pool),
         }));
+        return 0;
+      }
+      case 'vincular-integracao-organizacao': {
+        const r = await vincularIntegracaoAOrganizacao(pool, { organizationId: texto(o, 'org'), operador: texto(o, 'operador'), motivo: texto(o, 'motivo') });
+        saida(JSON.stringify(r));
+        return 0;
+      }
+      case 'desvincular-integracao-organizacao': {
+        const conta = typeof o.conta === 'string' && o.conta.trim() ? o.conta.trim() : null;
+        const r = await desvincularIntegracao(pool, { operador: texto(o, 'operador'), motivo: texto(o, 'motivo'), ...(conta ? { homeAccountId: conta } : {}) });
+        saida(JSON.stringify(r));
         return 0;
       }
       case 'vincular-conta-integracao': {
@@ -196,11 +236,12 @@ export async function executarCli(argv: string[], saida: (linha: string) => void
         return resumo.falhas.length ? 1 : 0;
       }
       default:
-        saida('comandos: vincular-usuario | adicionar-membro | definir-papel | desativar-membro | reativar-membro | admin-plataforma | desvincular-usuario | revogar-sessoes | listar-membros | conta-integracao | vincular-conta-integracao | processos-sem-responsavel | atribuir-responsavel | atribuir-sem-responsavel');
+        saida('comandos: vincular-usuario | adicionar-membro | definir-papel | desativar-membro | reativar-membro | admin-plataforma | desvincular-usuario | revogar-sessoes | listar-membros | conta-integracao | vincular-integracao-organizacao | desvincular-integracao-organizacao | vincular-conta-integracao | processos-sem-responsavel | atribuir-responsavel | atribuir-sem-responsavel');
         return 2;
     }
   } catch (err) {
     if (err instanceof ErroProvisionamento) { saida(JSON.stringify({ erro: err.codigo, ...err.detalhe })); return 1; }
+    if (err instanceof ErroIntegracaoOrganizacao) { saida(JSON.stringify({ erro: err.codigo, ...err.detalhe })); return 1; }
     saida(JSON.stringify({ erro: (err as Error).message }));
     return 1;
   }

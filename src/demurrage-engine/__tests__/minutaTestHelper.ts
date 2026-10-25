@@ -29,11 +29,18 @@ export async function registrarMinutaDeTeste(
     // ANALYST precisa ser o responsável do processo. Sem responsável, o
     // analista criado aqui passa a sê-lo; com responsável, é ele quem registra.
     const { rows } = await pool.query(
-      `SELECT c.organization_id, c.processo_id, p.responsavel_operacional_membership_id AS responsavel
-         FROM containers c JOIN processos p ON p.id = c.processo_id WHERE c.id = $1`,
+      `SELECT c.organization_id, c.processo_id, p.responsavel_operacional_membership_id AS responsavel, m.papel::text AS papel
+         FROM containers c JOIN processos p ON p.id = c.processo_id
+         LEFT JOIN organization_memberships m ON m.id = p.responsavel_operacional_membership_id
+        WHERE c.id = $1`,
       [p.containerId],
     );
     const responsavel: string | null = rows[0].responsavel ?? null;
+    // O ator padrão deste helper é sempre um ANALYST: um responsável prévio de
+    // outro papel trocaria o ator em silêncio — o teste precisa passar `membershipId`.
+    if (responsavel && rows[0].papel !== 'ANALYST') {
+      throw new Error(`registrarMinutaDeTeste: o responsável do processo é ${rows[0].papel}, não ANALYST — passe membershipId`);
+    }
     const ator = responsavel ?? await novoMembro(pool, rows[0].organization_id, 'ANALYST');
     if (!responsavel) {
       await pool.query(`UPDATE processos SET responsavel_operacional_membership_id = $2 WHERE id = $1`, [rows[0].processo_id, ator]);

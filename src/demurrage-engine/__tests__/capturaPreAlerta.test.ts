@@ -40,6 +40,7 @@ import {
   vincularCaixa,
 } from '../shippingInstructions/capturaPreAlerta';
 import { iniciarCapturaPreAlerta } from '../../demurrage/capturaBootstrap';
+import { desvincularIntegracao } from '../identidade/integracaoOrganizacao';
 
 const url = testDatabaseUrl();
 const DIA_MS = 24 * 60 * 60_000;
@@ -51,7 +52,16 @@ async function setup(pool: Pool): Promise<void> {
   await truncateAll(pool);
 }
 
-/** Organização com UM membro ADMIN (a "conta ativa" que fará o vínculo). */
+/**
+ * Organização com UM membro ADMIN (a "conta ativa" que fará o vínculo).
+ *
+ * Produção P1 (integração de plataforma): a caixa da captura é a da
+ * INTEGRAÇÃO, e só a organização DONA dela (migration 0051) a vincula/lê. Os
+ * cenários desta suíte usam a conta `home-<slug>` como a caixa da integração
+ * de cada organização — o helper grava esse vínculo de dona (o que o
+ * operador faz pelo CLI `vincular-integracao-organizacao`). A regra exercida
+ * por cada teste não muda.
+ */
 async function orgComAdmin(pool: Pool, slug: string) {
   const org = await new OrganizationRepository(pool).create(`Org ${slug}`, slug);
   const usuarios = new UsuarioRepository(pool);
@@ -60,7 +70,24 @@ async function orgComAdmin(pool: Pool, slug: string) {
   const username = `admin-${slug}@x.com`;
   const u = await usuarios.create(`Admin ${slug}`, username, home);
   const m = await membros.create(org.id, u.id, 'ADMIN');
+  await pool.query(
+    `INSERT INTO integracao_microsoft_vinculos (home_account_id, organization_id, vinculado_por, motivo) VALUES ($1, $2, 'teste', 'caixa da integração da organização')`,
+    [home, org.id],
+  );
   return { orgId: org.id as string, homeAccountId: home, username, membershipId: m.id as string, usuarioId: u.id as string };
+}
+
+/**
+ * Produção P1 (auditoria final, isolamento da integração): pausar/retomar/remover
+ * conferem a dona da integração ATUAL (`msal_conta_ativa` + vínculo ativo) —
+ * conecta a conta da organização como a integração atual.
+ */
+async function conectarComoIntegracao(pool: Pool, org: { homeAccountId: string; username: string }) {
+  await pool.query(
+    `INSERT INTO msal_conta_ativa (id, home_account_id, username, conectada_em) VALUES ('default', $1, $2, now())
+     ON CONFLICT (id) DO UPDATE SET home_account_id = EXCLUDED.home_account_id, username = EXCLUDED.username, conectada_em = now()`,
+    [org.homeAccountId, org.username],
+  );
 }
 
 /** Acrescenta um membro NÃO-ADMIN à organização (para testar autorização negativa). */
@@ -231,8 +258,9 @@ test('Vínculo: exige ADMIN da organização', { skip: !url }, async () => {
     await setup(pool);
     const org = await orgComAdmin(pool, 'vinculo-admin');
     const analista = await membroComum(pool, org.orgId, 'vinculo-admin-analyst', 'ANALYST');
+    // Produção P1 (integração de plataforma): a caixa é a da integração (dona = org), não a conta do analista.
     await assert.rejects(
-      vincularCaixa(pool, { organizationId: org.orgId, sessaoHomeAccountId: analista.homeAccountId, contaAtiva: { homeAccountId: analista.homeAccountId, username: 'x@x.com' } }),
+      vincularCaixa(pool, { organizationId: org.orgId, sessaoHomeAccountId: analista.homeAccountId, contaAtiva: { homeAccountId: org.homeAccountId, username: org.username } }),
       (e: unknown) => e instanceof ErroCaptura && e.status === 403 && e.codigo === 'apenas_admin_da_organizacao',
     );
     const caixa = await vincularCaixa(pool, { organizationId: org.orgId, sessaoHomeAccountId: org.homeAccountId, contaAtiva: { homeAccountId: org.homeAccountId, username: org.username } });
@@ -240,19 +268,30 @@ test('Vínculo: exige ADMIN da organização', { skip: !url }, async () => {
   } finally { await pool.end(); }
 });
 
-test('Vínculo: a conta da sessão precisa corresponder à caixa (conta ativa)', { skip: !url }, async () => {
+// Produção P1 (integração de plataforma): a regra antiga ("a conta da sessão precisa SER a caixa")
+// foi substituída — a caixa é a da integração, a organização precisa ser a DONA dela e a pessoa,
+// ADMIN ativo dessa organização (sem precisar ser a conta Microsoft).
+test('Vínculo: a caixa é a da integração (conectada) e a organização precisa ser a dona; a pessoa não precisa ser a conta', { skip: !url }, async () => {
   const pool = testPool();
   try {
     await setup(pool);
     const org = await orgComAdmin(pool, 'vinculo-sessao');
     await assert.rejects(
       vincularCaixa(pool, { organizationId: org.orgId, sessaoHomeAccountId: org.homeAccountId, contaAtiva: { homeAccountId: 'outra-conta', username: 'outra@x.com' } }),
-      (e: unknown) => e instanceof ErroCaptura && e.status === 403 && e.codigo === 'conta_da_sessao_nao_corresponde_a_caixa',
+      (e: unknown) => e instanceof ErroCaptura && e.status === 403 && e.codigo === 'organizacao_nao_e_dona_da_integracao',
     );
     await assert.rejects(
       vincularCaixa(pool, { organizationId: org.orgId, sessaoHomeAccountId: org.homeAccountId, contaAtiva: null }),
-      (e: unknown) => e instanceof ErroCaptura && e.codigo === 'conta_da_sessao_nao_corresponde_a_caixa',
+      (e: unknown) => e instanceof ErroCaptura && e.status === 403 && e.codigo === 'integracao_desconectada',
     );
+    // Conta técnica da integração (não é usuária da Priora) com dona = org: o ADMIN (outra conta) vincula.
+    await pool.query(
+      `INSERT INTO integracao_microsoft_vinculos (home_account_id, organization_id, vinculado_por, motivo) VALUES ('conta-tecnica', $1, 'teste', 'teste')`,
+      [org.orgId],
+    );
+    const caixa = await vincularCaixa(pool, { organizationId: org.orgId, sessaoHomeAccountId: org.homeAccountId, contaAtiva: { homeAccountId: 'conta-tecnica', username: 'tecnica@x.com' } });
+    assert.equal(caixa.home_account_id, 'conta-tecnica');
+    assert.equal(caixa.organization_id, org.orgId);
   } finally { await pool.end(); }
 });
 
@@ -271,46 +310,60 @@ test('Vínculo: uma caixa não pode pertencer a duas organizações (mesma org �
       vincularCaixa(pool, { organizationId: orgA.orgId, sessaoHomeAccountId: orgA.homeAccountId, contaAtiva }),
       (e: unknown) => e instanceof ErroCaptura && e.status === 409 && e.codigo === 'caixa_ja_vinculada',
     );
+    // Produção P1 (integração de plataforma): B não é a dona da caixa (dona = A) — recusada antes
+    // mesmo da regra "uma caixa, uma organização" (409), que continua no banco (UNIQUE parcial).
     await assert.rejects(
       vincularCaixa(pool, { organizationId: orgB.orgId, sessaoHomeAccountId: orgA.homeAccountId, contaAtiva }),
-      (e: unknown) => e instanceof ErroCaptura && e.status === 409 && e.codigo === 'caixa_vinculada_a_outra_organizacao',
+      (e: unknown) => e instanceof ErroCaptura && e.status === 403 && e.codigo === 'organizacao_nao_e_dona_da_integracao',
     );
     const { rows } = await pool.query(`SELECT count(*)::int n FROM email_caixas WHERE home_account_id = $1`, [orgA.homeAccountId]);
     assert.equal(rows[0].n, 1, 'nenhuma segunda linha foi criada');
   } finally { await pool.end(); }
 });
 
+// Produção P1 (auditoria final): a corrida REAL do modelo novo — dois ADMINs ATIVOS da organização
+// dona vinculando a MESMA caixa ao mesmo tempo (a recusa de outra organização já é determinística,
+// pela regra da dona). Só o UNIQUE parcial decide; o perdedor recebe `caixa_ja_vinculada`.
 test('Vínculo: corrida de duas requisições simultâneas para a mesma caixa — só uma vence (UNIQUE parcial)', { skip: !url }, async () => {
   const pool = testPool();
   try {
     await setup(pool);
-    const orgA = await orgComAdmin(pool, 'corrida-a');
-    const orgB = await orgComAdmin(pool, 'corrida-b');
-    const contaAtiva = { homeAccountId: orgA.homeAccountId, username: orgA.username };
-    const [ra, rb] = await Promise.allSettled([
-      vincularCaixa(pool, { organizationId: orgA.orgId, sessaoHomeAccountId: orgA.homeAccountId, contaAtiva }),
-      vincularCaixa(pool, { organizationId: orgB.orgId, sessaoHomeAccountId: orgA.homeAccountId, contaAtiva }),
-    ]);
-    const sucessos = [ra, rb].filter((r) => r.status === 'fulfilled');
-    const falhas = [ra, rb].filter((r) => r.status === 'rejected');
-    assert.equal(sucessos.length, 1, 'exatamente uma requisição vence a corrida');
-    assert.equal(falhas.length, 1);
-    const { rows } = await pool.query(`SELECT count(*)::int n FROM email_caixas WHERE home_account_id = $1 AND estado <> 'removida'`, [orgA.homeAccountId]);
-    assert.equal(rows[0].n, 1);
+    const org = await orgComAdmin(pool, 'corrida');
+    const outroAdmin = await membroComum(pool, org.orgId, 'corrida-admin2', 'ANALYST');
+    await pool.query(`UPDATE organization_memberships SET papel = 'ADMIN' WHERE id = $1`, [outroAdmin.membershipId]);
+    const contaAtiva = { homeAccountId: org.homeAccountId, username: org.username };
+    for (let rodada = 0; rodada < 10; rodada++) {
+      await pool.query(`DELETE FROM email_caixas WHERE home_account_id = $1`, [org.homeAccountId]);
+      const resultados = await Promise.allSettled([
+        vincularCaixa(pool, { organizationId: org.orgId, sessaoHomeAccountId: org.homeAccountId, contaAtiva }),
+        vincularCaixa(pool, { organizationId: org.orgId, sessaoHomeAccountId: outroAdmin.homeAccountId, contaAtiva }),
+      ]);
+      const sucessos = resultados.filter((r) => r.status === 'fulfilled');
+      const falhas = resultados.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+      assert.equal(sucessos.length, 1, `rodada ${rodada}: exatamente uma requisição vence a corrida`);
+      assert.equal(falhas.length, 1);
+      const e = falhas[0].reason;
+      assert.ok(e instanceof ErroCaptura && e.status === 409 && e.codigo === 'caixa_ja_vinculada', `rodada ${rodada}: ${String(e?.codigo ?? e)}`);
+      const { rows } = await pool.query(`SELECT count(*)::int n FROM email_caixas WHERE home_account_id = $1 AND estado <> 'removida'`, [org.homeAccountId]);
+      assert.equal(rows[0].n, 1);
+    }
   } finally { await pool.end(); }
 });
 
-test('Vínculo: pausar/retomar/remover exigem ADMIN e a conta da sessão ser a caixa', { skip: !url }, async () => {
+// Produção P1 (integração de plataforma): exigem ADMIN da organização DONA da caixa — a pessoa não
+// precisa ser a conta da caixa (o analista agora é recusado por não ser ADMIN).
+test('Vínculo: pausar/retomar/remover exigem ADMIN da organização dona da caixa', { skip: !url }, async () => {
   const pool = testPool();
   try {
     await setup(pool);
     const org = await orgComAdmin(pool, 'alterar');
+    await conectarComoIntegracao(pool, org);
     const analista = await membroComum(pool, org.orgId, 'alterar-analyst');
     const caixa = await vincularCaixa(pool, { organizationId: org.orgId, sessaoHomeAccountId: org.homeAccountId, contaAtiva: { homeAccountId: org.homeAccountId, username: org.username } });
 
     await assert.rejects(
       alterarCaixa(pool, { caixaId: caixa.id, sessaoHomeAccountId: analista.homeAccountId, acao: 'pausar' }),
-      (e: unknown) => e instanceof ErroCaptura && e.codigo === 'conta_da_sessao_nao_corresponde_a_caixa',
+      (e: unknown) => e instanceof ErroCaptura && e.status === 403 && e.codigo === 'apenas_admin_da_organizacao',
     );
     const pausada = await alterarCaixa(pool, { caixaId: caixa.id, sessaoHomeAccountId: org.homeAccountId, acao: 'pausar' });
     assert.equal(pausada.estado, 'pausada');
@@ -338,6 +391,7 @@ test('Ciclo: caixa não vinculada (ou pausada) não captura nada', { skip: !url 
     assert.equal(semCaixas.caixas, 0);
 
     const org = await orgComAdmin(pool, 'nao-vinculada');
+    await conectarComoIntegracao(pool, org);
     const caixa = await vincularCaixa(pool, { organizationId: org.orgId, sessaoHomeAccountId: org.homeAccountId, contaAtiva: { homeAccountId: org.homeAccountId, username: org.username } });
     await alterarCaixa(pool, { caixaId: caixa.id, sessaoHomeAccountId: org.homeAccountId, acao: 'pausar' });
     const pausada = await executarCicloCaptura({ pool, abrirCaixa, workerId: 'w1' });
@@ -737,6 +791,7 @@ test('Backfill: exige intervalo explícito de até 30 dias e limite explícito d
   try {
     await setup(pool);
     const org = await orgComAdmin(pool, 'backfill-limites');
+    await conectarComoIntegracao(pool, org);
     const caixa = await vincularCaixa(pool, { organizationId: org.orgId, sessaoHomeAccountId: org.homeAccountId, contaAtiva: { homeAccountId: org.homeAccountId, username: org.username } });
     const { porta } = portaFake({});
     const ate = new Date('2026-09-27T00:00:00Z');
@@ -1015,5 +1070,110 @@ test('Regressão: o reprocessamento manual (equivalente à rota POST) continua f
     assert.equal(resultado.status, 'concluida');
     assert.ok(containerId);
     assert.equal(await masterFt(pool, containerId!), 21);
+  } finally { await pool.end(); }
+});
+
+
+// Produção P1 (auditoria final, isolamento da integração): a posse da organização dona é relida
+// antes de CADA gravação de conteúdo — um desvínculo DURANTE um ciclo em andamento nunca deixa o
+// que é lido depois dele ir para a organização anterior.
+test('Ciclo: desvínculo da organização dona durante o ciclo — nada lido depois dele é gravado nela', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await setup(pool);
+    const org = await orgComAdmin(pool, 'posse-ciclo');
+    const caixa = await vincularCaixa(pool, { organizationId: org.orgId, sessaoHomeAccountId: org.homeAccountId, contaAtiva: { homeAccountId: org.homeAccountId, username: org.username } });
+    const agora = new Date('2026-09-27T12:00:00Z');
+    const dentro = new Date(agora.getTime() - 2 * DIA_MS).toISOString();
+    const { porta } = portaFake({
+      paginasDelta: { inbox: [{ mensagens: [meta('i1', 'conv-posse', dentro, 'Shipping Instructions IM7101-01')], deltaLink: 'https://graph/delta/inbox/D1' }] },
+      conversas: { 'conv-posse': [msgSI('i1', 'conv-posse', dentro, { subject: 'Shipping Instructions IM7101-01' })] },
+    });
+    // O operador desvincula a dona exatamente enquanto a página do Graph está sendo lida.
+    const paginaOriginal = porta.paginaDelta.bind(porta);
+    porta.paginaDelta = async (pasta, cursor) => {
+      const r = await paginaOriginal(pasta, cursor);
+      if (pasta === 'inbox') await desvincularIntegracao(pool, { operador: 'Equipe Priora', motivo: 'troca de dona', homeAccountId: org.homeAccountId });
+      return r;
+    };
+    const r = await executarCicloCaptura({ pool, abrirCaixa: async () => ({ porta }), workerId: 'w-posse', agora, log: () => undefined });
+    assert.equal(r.registradas, 0, 'nada registrado depois do desvínculo');
+    assert.equal((await pool.query(`SELECT count(*)::int n FROM si_conversas_descobertas WHERE organization_id = $1`, [org.orgId])).rows[0].n, 0);
+    assert.equal((await pool.query(`SELECT count(*)::int n FROM si_conversas WHERE organization_id = $1`, [org.orgId])).rows[0].n, 0);
+    assert.equal((await pool.query(`SELECT estado FROM email_caixas WHERE id = $1`, [caixa.id])).rows[0].estado, 'removida');
+  } finally { await pool.end(); }
+});
+
+
+test('Ciclo: caixa PAUSADA durante o ciclo — o cursor não avança e a conversa é descoberta quando a caixa é retomada', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await setup(pool);
+    const org = await orgComAdmin(pool, 'pausa-ciclo');
+    const caixa = await vincularCaixa(pool, { organizationId: org.orgId, sessaoHomeAccountId: org.homeAccountId, contaAtiva: { homeAccountId: org.homeAccountId, username: org.username } });
+    const agora = new Date('2026-09-27T12:00:00Z');
+    const dentro = new Date(agora.getTime() - 2 * DIA_MS).toISOString();
+    const pagina = { mensagens: [meta('i1', 'conv-pausa', dentro, 'Shipping Instructions IM7201-01')], deltaLink: 'https://graph/delta/inbox/D1' };
+    const { porta } = portaFake({
+      paginasDelta: { inbox: [pagina, pagina] },
+      conversas: { 'conv-pausa': [msgSI('i1', 'conv-pausa', dentro, { subject: 'Shipping Instructions IM7201-01' })] },
+    });
+    // O ADMIN pausa a caixa enquanto a conversa é carregada.
+    let pausou = false;
+    const carregar = porta.carregarConversa.bind(porta);
+    porta.carregarConversa = async (id) => {
+      if (!pausou) { pausou = true; await pool.query(`UPDATE email_caixas SET estado = 'pausada' WHERE id = $1`, [caixa.id]); }
+      return carregar(id);
+    };
+    const r1 = await executarCicloCaptura({ pool, abrirCaixa: async () => ({ porta }), workerId: 'w-p1', agora, log: () => undefined });
+    assert.equal(r1.registradas, 0);
+    const { rows: [est] } = await pool.query(`SELECT cursor_link, ultimo_sucesso_em, lease_owner FROM email_sync_estado WHERE caixa_id = $1 AND pasta = 'inbox'`, [caixa.id]);
+    assert.deepEqual([est.cursor_link, est.ultimo_sucesso_em, est.lease_owner], [null, null, null], 'cursor NÃO avança; lease liberada; sem "sucesso"');
+    // Retomada: a mesma página é relida e a conversa é descoberta.
+    await pool.query(`UPDATE email_caixas SET estado = 'ativa' WHERE id = $1`, [caixa.id]);
+    const r2 = await executarCicloCaptura({ pool, abrirCaixa: async () => ({ porta }), workerId: 'w-p2', agora, log: () => undefined });
+    assert.equal(r2.registradas, 1, 'nenhuma conversa perdida');
+  } finally { await pool.end(); }
+});
+
+test('Ingestão: desvínculo da dona durante a leitura da SI (antes e dentro da transação final) — nada da leitura é gravado nela', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await setup(pool);
+    for (const momento of ['carregarConversa', 'lerAnexo'] as const) {
+      await truncateAll(pool);
+      const org = await orgComAdmin(pool, `posse-ingestao-${momento.toLowerCase()}`);
+      const { containerId } = await criarProcesso(pool, org.orgId, 'IM7301-01', { container: 'MSCU7301001' });
+      const caixa = await vincularCaixa(pool, { organizationId: org.orgId, sessaoHomeAccountId: org.homeAccountId, contaAtiva: { homeAccountId: org.homeAccountId, username: org.username } });
+      const quando = '2026-09-25T10:00:00Z';
+      const conv: MensagemSI[] = [{
+        ...msgSI('m1', 'conv-ing', quando, { subject: 'Shipping Instructions IM7301-01', body: 'FREE TIME MASTER: 14 days' }),
+        attachments: [{ id: 'a1', name: 'si.pdf', contentType: 'application/pdf', size: 10 }],
+      }];
+      const { porta } = portaFake({
+        paginasDelta: { inbox: [{ mensagens: [meta('m1', 'conv-ing', quando, 'Shipping Instructions IM7301-01')], deltaLink: 'D' }], sentitems: [{ mensagens: [] }] },
+        conversas: { 'conv-ing': conv },
+      });
+      const desvincular = () => desvincularIntegracao(pool, { operador: 'Equipe Priora', motivo: 'troca de dona', homeAccountId: org.homeAccountId });
+      let chamadasConversa = 0;
+      const carregar = porta.portasSI.carregarConversa.bind(porta.portasSI);
+      porta.portasSI.carregarConversa = async (id) => {
+        const r = await carregar(id);
+        // 1ª leitura = descoberta; 2ª = ingestão (o desvínculo cai depois da leitura do Graph).
+        if (++chamadasConversa === 2 && momento === 'carregarConversa') await desvincular();
+        return r;
+      };
+      porta.portasSI.lerAnexo = async () => {
+        if (momento === 'lerAnexo') await desvincular();
+        return { dataBase64: Buffer.from('pdf').toString('base64'), mimeType: 'application/pdf' };
+      };
+      // Descoberta e ingestão separadas: a descoberta usa a mesma porta (carregarConversa nº 1).
+      (porta as any).carregarConversa = porta.portasSI.carregarConversa;
+      await executarCicloCaptura({ pool, abrirCaixa: async () => ({ porta }), workerId: `w-${momento}`, agora: new Date('2026-09-27T12:00:00Z'), log: () => undefined });
+      assert.equal((await pool.query(`SELECT count(*)::int n FROM si_intencoes WHERE organization_id = $1`, [org.orgId])).rows[0].n, 0, `${momento}: nenhuma intenção gravada`);
+      assert.equal(await masterFt(pool, containerId!), null, `${momento}: o Free Time não foi promovido`);
+      const { rows: [desc] } = await pool.query(`SELECT estado FROM si_conversas_descobertas WHERE caixa_id = $1`, [caixa.id]);
+      assert.equal(desc.estado, 'registrada', `${momento}: a descoberta não avança para ingerida/pendente`);
+    }
   } finally { await pool.end(); }
 });

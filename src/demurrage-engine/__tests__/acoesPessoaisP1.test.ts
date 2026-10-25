@@ -23,6 +23,7 @@ import { seedArmadorTables } from '../tariffs/seed/armadorTables';
 import { criarDemurrageAcoesRouter } from '../../routes/demurrageAcoesRoutes';
 import { containerContrato, contratoRegistro, ingerirTrackingDoContainer, numeroContainer, o, resultadoTracking } from './registroDemurrageHelpers';
 import { documentoDeTeste } from './minutaTestHelper';
+import { ErroContratoDemurrage, ManualFallbackGovernanca } from '../registro/contrato';
 
 /**
  * Produção P1 (identidade operacional e filas pessoais) — autorização REAL,
@@ -724,4 +725,38 @@ test('P1 #11 — corrida determinística: reatribuição comitada enquanto a aç
     const doNovo = await post(app.base, `/pendencias/${pend}/resolver`, corpoPendencia('armador_ausente'), eq.a2.home);
     assert.equal(doNovo.status, 200);
   } finally { await app.close(); await pool.end(); }
+});
+
+
+test('P1 ações — D10: manual_fallback de ANALYST num processo que a PRÓPRIA entrada cria é recusado (não há responsável persistido); MANAGER cria; ANALYST responsável do processo existente registra', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await setup(pool);
+    const e = await equipe(pool, 'd10novo');
+    const gov = (autorMembershipId: string): ManualFallbackGovernanca =>
+      ({ justificativa: 'Free Time confirmado por telefone — nenhuma fonte documental disponível', autorMembershipId });
+    const entrada = (processo: string, autor: string) => contratoRegistro({
+      organizationId: e.orgId, numeroProcesso: processo, containers: [containerContrato(proximoNumero('DNVA'))],
+      houseFreeTimeDays: o(9, 'manual_fallback', T, 'email-operacional.eml', gov(autor)),
+    });
+    // (a) ANALYST, processo novo: recusado ANTES de qualquer escrita — nada é criado.
+    await assert.rejects(
+      registrarProcessoDemurrage(entrada('IM-D10-NOVO-A', e.a1.membershipId), { pool }),
+      (err: unknown) => err instanceof ErroContratoDemurrage && err.codigo === 'MANUAL_FALLBACK_AUTOR_NAO_AUTORIZADO'
+        && err.detalhe.motivo === 'ator_nao_responsavel',
+    );
+    const { rows: nada } = await pool.query(`SELECT 1 FROM processos WHERE organization_id = $1 AND numero_processo = 'IM-D10-NOVO-A'`, [e.orgId]);
+    assert.equal(nada.length, 0, 'a recusa desfaz a criação do processo');
+    // (b) MANAGER, processo novo: registra.
+    const rM = await registrarProcessoDemurrage(entrada('IM-D10-NOVO-M', e.gestor.membershipId), { pool });
+    assert.equal(rM.status, 'registrado');
+    // (c) ANALYST responsável PERSISTIDO de um processo existente: registra (controle positivo).
+    const rM2 = await registrarProcessoDemurrage(entrada('IM-D10-EXIST', e.gestor.membershipId), { pool });
+    await pool.query(`UPDATE processos SET responsavel_operacional_membership_id = $2 WHERE id = $1`, [rM2.processoId, e.a1.membershipId]);
+    const outra = contratoRegistro({
+      organizationId: e.orgId, numeroProcesso: 'IM-D10-EXIST', containers: [containerContrato(proximoNumero('DEXA'))],
+      masterFreeTimeDays: o(7, 'manual_fallback', T, 'email-operacional-2.eml', gov(e.a1.membershipId)),
+    });
+    assert.equal((await registrarProcessoDemurrage(outra, { pool })).status, 'registrado');
+  } finally { await pool.end(); }
 });

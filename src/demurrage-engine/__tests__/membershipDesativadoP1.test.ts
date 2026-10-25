@@ -180,6 +180,46 @@ test('P1 desativado — pendência: desativação entre o claim e o envio devolv
   } finally { await pool.end(); }
 });
 
+test('P1 desativado — pendência: posse VENCIDA recuperada no limite e destinatário desativado na janela: tentativas exatas, nunca uma a mais, nunca presa invisível', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await setup(pool);
+    const s = await cenarioPendencia(pool, 'pvencida');
+    await dispararR07(pool, s, s.gestor.usuarioId);
+    // (a) worker morreu durante a ÚLTIMA tentativa (5 de 5): a recuperação não incrementa (LEAST) e a
+    //     devolução não pode "devolver" uma tentativa que o claim não consumiu.
+    await pool.query(
+      `UPDATE demurrage_pendencia_avisos SET status = 'PROCESSING', tentativas = 5, claim_token = gen_random_uuid(),
+              worker_id = 'morto', expira_em = now() - interval '1 minute'`,
+    );
+    const fake = transportePendencia();
+    const r = await processarAvisosPendenciaPendentes({
+      pool: poolDesativandoAposClaim(pool, 'demurrage_pendencia_avisos', s.gestor.membershipId), transport: fake.t, workerId: 'w1',
+    });
+    assert.equal(r.reivindicadas, 1);
+    assert.equal(fake.enviados.length, 0);
+    const [a] = await avisosPendencia(pool);
+    assert.equal(a.tentativas, 5, 'nenhuma tentativa a mais');
+    assert.equal(a.status, 'FAILED', 'no limite: esgotada e contada, nunca um PENDING que nenhum claim alcança');
+    assert.equal(r.esgotadas, 1);
+    await reativar(pool, s.gestor.membershipId);
+    assert.equal((await processarAvisosPendenciaPendentes({ pool, transport: fake.t, workerId: 'w2' })).reivindicadas, 0, 'limite preservado');
+    // (b) abaixo do limite (posse vencida com 2): o claim de recuperação conta a 3ª; a devolução volta a 2, PENDING.
+    const s2 = await cenarioPendencia(pool, 'pvencida2');
+    await dispararR07(pool, s2, s2.gestor.usuarioId);
+    await pool.query(
+      `UPDATE demurrage_pendencia_avisos SET status = 'PROCESSING', tentativas = 2, claim_token = gen_random_uuid(),
+              worker_id = 'morto', expira_em = now() - interval '1 minute' WHERE destinatario_membership_id = $1`,
+      [s2.gestor.membershipId],
+    );
+    await processarAvisosPendenciaPendentes({
+      pool: poolDesativandoAposClaim(pool, 'demurrage_pendencia_avisos', s2.gestor.membershipId), transport: fake.t, workerId: 'w3',
+    });
+    const b = (await avisosPendencia(pool)).find((x) => x.destinatario_membership_id === s2.gestor.membershipId);
+    assert.deepEqual({ status: b.status, tentativas: b.tentativas, claim: b.claim_token }, { status: 'PENDING', tentativas: 2, claim: null });
+  } finally { await pool.end(); }
+});
+
 /* =========================== fallback manual (D10) =========================== */
 
 const gov = (autorMembershipId: string): ManualFallbackGovernanca =>
@@ -252,6 +292,30 @@ test('P1 desativado — fallback manual: entrega enfileirada ANTES da desativaç
     const depois = (await avisosFallback(pool)).find((a) => a.destinatario_membership_id === s.gestor.membershipId);
     assert.equal(depois.status, 'PENDING');
     assert.equal(depois.claim_token, null);
+  } finally { await pool.end(); }
+});
+
+test('P1 desativado — fallback manual: posse VENCIDA recuperada no limite e gestor desativado na janela: tentativas exatas; esgotada, não presa', { skip: !url }, async () => {
+  const pool = testPool();
+  try {
+    await setup(pool);
+    const s = await cenarioFallback(pool, 'fvencida');
+    await registrarProcessoDemurrage(fallback(s.orgId, numeroContainer('FDES', 3), s.admin.membershipId, 'IM-P1-FVENC'), { pool });
+    await pool.query(
+      `UPDATE demurrage_fallback_manual_avisos SET status = 'PROCESSING', tentativas = 5, claim_token = gen_random_uuid(),
+              worker_id = 'morto', expira_em = now() - interval '1 minute' WHERE destinatario_membership_id = $1`,
+      [s.gestor.membershipId],
+    );
+    await pool.query(`UPDATE demurrage_fallback_manual_avisos SET status = 'SENT', enviado_em = now() WHERE destinatario_membership_id = $1`, [s.admin.membershipId]);
+    const fake = transporteFallback();
+    const r = await processarAvisosFallbackManualPendentes({
+      pool: poolDesativandoAposClaim(pool, 'demurrage_fallback_manual_avisos', s.gestor.membershipId), transport: fake.t, workerId: 'w1',
+    });
+    assert.equal(r.reivindicadas, 1);
+    assert.equal(fake.enviados.length, 0);
+    const doGestor = (await avisosFallback(pool)).find((a) => a.destinatario_membership_id === s.gestor.membershipId);
+    assert.deepEqual({ status: doGestor.status, tentativas: doGestor.tentativas, claim: doGestor.claim_token }, { status: 'FAILED', tentativas: 5, claim: null });
+    assert.equal(r.esgotadas, 1);
   } finally { await pool.end(); }
 });
 
@@ -374,6 +438,17 @@ test('P1 desativado — captura: membro() nega ADMIN desativado (e CLIENT); vinc
     await membership(pool, org.id, 'ADMIN', 'admin2-cap@x.com', 'home-admin2-cap');
     const cliente = await membership(pool, org.id, 'CLIENT', 'cliente-cap@x.com', 'home-cliente-cap');
     const contaAtiva = { homeAccountId: 'home-admin-cap', username: 'admin-cap@x.com' };
+    // Produção P1 (integração de plataforma): a caixa é a da integração, cuja organização DONA
+    // (migration 0051) é esta — o que o operador grava com `vincular-integracao-organizacao`.
+    await pool.query(
+      `INSERT INTO integracao_microsoft_vinculos (home_account_id, organization_id, vinculado_por, motivo) VALUES ('home-admin-cap', $1, 'teste', 'teste')`,
+      [org.id],
+    );
+    // …e é a integração ATUAL (pausar/retomar/remover conferem a dona da integração atual).
+    await pool.query(
+      `INSERT INTO msal_conta_ativa (id, home_account_id, username, conectada_em) VALUES ('default', 'home-admin-cap', 'admin-cap@x.com', now())
+       ON CONFLICT (id) DO UPDATE SET home_account_id = EXCLUDED.home_account_id, username = EXCLUDED.username, conectada_em = now()`,
+    );
 
     assert.ok(await membro(pool, 'home-admin-cap', org.id), 'ADMIN ativo é membro');
     assert.equal(await membro(pool, cliente.homeAccountId!, org.id), null, 'CLIENT nunca tem acesso interno');
@@ -413,6 +488,8 @@ test('P1 desativado — captura: membro() nega ADMIN desativado (e CLIENT); vinc
     const backfill = await chamar(rota('/caixas/:caixaId/backfill', 'post'), {
       params: { caixaId: caixa.id }, body: { desde: '2026-09-01T00:00:00Z', ate: '2026-09-02T00:00:00Z', limite: 10 },
       session: { homeAccountId: 'home-admin-cap' }, accessToken: 't',
+      // Produção P1 (integração de plataforma): o que o guard V1 anexa (caixa da organização dona).
+      integracao: { homeAccountId: 'home-admin-cap', organizationId: org.id, membershipId: admin.membershipId },
     });
     assert.equal(backfill.status, 403);
     assert.equal(backfill.body.error, 'apenas_admin_da_organizacao');
@@ -450,7 +527,11 @@ test('P1 desativado — reprocessamento manual da SI: membro DESATIVADO recebe 4
 
     const { criarHandlerReprocessarSI } = await import('../../routes/processRoutes');
     const conversa: MensagemSI[] = [{ id: 'm1', conversationId: CONV, receivedDateTime: '2026-08-20T10:00:00Z', subject: 'Shipping Instructions IM2734', body: 'MBL: MAEU123456789\nFree time: 14 days', attachments: [] }];
-    const handler = criarHandlerReprocessarSI({ pool: () => pool, portas: () => portasSI(conversa) });
+    // Produção P1 (integração de plataforma): a conversa vem da caixa da integração, cuja organização DONA é esta.
+    const handler = criarHandlerReprocessarSI({
+      pool: () => pool, portas: () => portasSI(conversa),
+      organizacaoDona: async () => ({ homeAccountId: 'conta-integracao', organizationId: org.id }),
+    });
     const chamar = async () => {
       const { res, out } = resStub();
       let erro: unknown = null;

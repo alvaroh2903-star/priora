@@ -52,8 +52,8 @@ test('migrations: aplica todas as migrations pendentes em um banco novo e é ide
       '0044_acoes_minuta_idempotencia_tenant_e_chave.sql',
       '0045_leitura_operacional_indices.sql',
       '0046_leitura_operacional_pendencias_por_processo.sql',
-      // Produção P1 (filas pessoais): a migration 0049 (sessões, identidade e atribuição — aditiva) passa a ser a última.
-      '0047_handoff_controle_capacidade.sql', '0048_minuta_aceite_tecnico_encerramento_automatico.sql', '0049_sessoes_identidade_atribuicao.sql',
+      // Produção P1 (filas pessoais): a migration 0049 (sessões, identidade e atribuição — aditiva); auditoria final: 0050 (avisos seguem o responsável atual) e 0051 (organização dona da integração), aditivas — a 0051 passa a ser a última.
+      '0047_handoff_controle_capacidade.sql', '0048_minuta_aceite_tecnico_encerramento_automatico.sql', '0049_sessoes_identidade_atribuicao.sql', '0050_avisos_redirecionamento_responsavel.sql', '0051_integracao_microsoft_organizacao.sql',
     ];
 
     const first = await runMigrations(pool);

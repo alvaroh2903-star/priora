@@ -1,9 +1,9 @@
-import { Router } from 'express';
+import { RequestHandler, Router } from 'express';
 import { Pool } from 'pg';
 import { requireAuth, AuthedRequest } from '../middleware/requireAuth';
 import { getPool } from '../demurrage-engine/db/pool';
-import { getActiveAccount, ActiveAccount } from '../auth/activeAccount';
 import { estadoCacheMsal } from '../auth/tokenCacheDuravel';
+import { integracaoAtual } from '../demurrage-engine/identidade/integracaoOrganizacao';
 import { criarPortaCaixaPostal } from '../demurrage/capturaPreAlertaPorts';
 import {
   CaixaCaptura,
@@ -23,12 +23,18 @@ import {
  * rota POST manual de reprocessamento (`processRoutes.ts`) não é alterada —
  * continua o fallback independente desta captura.
  *
- * Autorização: vincular/pausar/retomar/remover/backfill exigem ADMIN da
- * organização (verificado dentro de `vincularCaixa`/`alterarCaixa`, ou nas
- * checagens abaixo antes do backfill) E a conta Microsoft da SESSÃO precisa
- * ser a mesma caixa (senão o access token da sessão nem pertence à caixa
- * cujo histórico se quer ler). Status exige apenas pertencimento à
- * organização (qualquer papel interno) — não expõe corpo, anexo nem token.
+ * Autorização (Produção P1 — integração de plataforma): a caixa é a da
+ * INTEGRAÇÃO (conta ATUAL, relida do banco), não a conta da pessoa.
+ * Vincular/pausar/retomar/remover/backfill exigem que a organização (alvo ou
+ * da caixa) seja a DONA da integração (senão 403
+ * `organizacao_nao_e_dona_da_integracao`) e que a pessoa da sessão seja ADMIN
+ * ATIVO dela (senão 403 `apenas_admin_da_organizacao`) — verificado dentro
+ * de `vincularCaixa`/`alterarCaixa`, ou nas checagens abaixo antes do
+ * backfill. A pessoa NÃO precisa ser a conta Microsoft. O guard V1
+ * (`requireAuth`) já exige membership ativo na organização dona. Status exige
+ * apenas pertencimento à organização consultada (qualquer papel interno) —
+ * não expõe corpo, anexo nem token. Nenhum `organizationId`/`caixaId` vindo
+ * do cliente dá acesso cruzado: todos são conferidos contra a dona.
  * Produção P1 (migration 0049): toda checagem acima exige membership interno
  * ATIVO (`membro()` nunca devolve membership desativado nem CLIENT) — um
  * ADMIN desativado é negado como quem não é ADMIN.
@@ -38,8 +44,30 @@ const RE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 export interface CapturaRoutesDeps {
   pool?: () => Pool;
-  contaAtiva?: () => ActiveAccount | null;
+  /** Conta ATUAL da integração (a caixa). Default: `msal_conta_ativa` relida do banco. */
+  contaAtiva?: () => Promise<{ homeAccountId: string; username: string } | null> | { homeAccountId: string; username: string } | null;
   criarPorta?: (accessToken: string) => PortaCaixaPostal;
+  /** Guard V1 (injeção para teste). Default: `requireAuth`. */
+  requireAuth?: RequestHandler;
+}
+
+/** Pessoa da SESSÃO (ator): a identidade resolvida pelo guard; o `homeAccountId` cru só em harness antigo. */
+function atorDaSessao(req: AuthedRequest): string | null {
+  return req.identidade?.homeAccountId ?? (typeof req.session?.homeAccountId === 'string' ? req.session.homeAccountId : null);
+}
+
+/**
+ * Resposta pública de uma caixa (vincular/pausar/retomar/remover): nunca o
+ * identificador da conta técnica da integração (`home_account_id` — quem
+ * administra a captura não é essa conta) nem o estado interno do token; o
+ * mesmo recorte do `status`.
+ */
+function caixaPublica(caixa: CaixaCaptura) {
+  const c = caixa as CaixaCaptura & { vinculada_em?: unknown; removida_em?: unknown; atualizado_em?: unknown };
+  return {
+    id: c.id, organization_id: c.organization_id, username: c.username, estado: c.estado,
+    vinculada_em: c.vinculada_em ?? null, removida_em: c.removida_em ?? null, atualizado_em: c.atualizado_em ?? null,
+  };
 }
 
 function tratarErro(err: unknown, res: import('express').Response, next: import('express').NextFunction): void {
@@ -57,21 +85,28 @@ async function carregarCaixa(pool: Pool, caixaId: string): Promise<CaixaCaptura>
   return rows[0];
 }
 
-/** A conta da sessão precisa SER a caixa, e o membro precisa ser ADMIN ATIVO da organização da caixa. */
-async function exigirAdminDaCaixa(pool: Pool, caixa: CaixaCaptura, sessaoHomeAccountId: string): Promise<void> {
-  if (caixa.home_account_id !== sessaoHomeAccountId) throw new ErroCaptura(403, 'conta_da_sessao_nao_corresponde_a_caixa');
+/**
+ * Backfill: o token da requisição é o da integração ATUAL (`req.integracao`)
+ * e o que ele lê é atribuído à organização da caixa. Exige: a organização da
+ * caixa é a DONA da integração atual; a caixa É a conta atual da integração;
+ * a pessoa da sessão é ADMIN ATIVO dessa organização.
+ */
+async function exigirAdminDaCaixa(pool: Pool, caixa: CaixaCaptura, sessaoHomeAccountId: string, integracao: AuthedRequest['integracao']): Promise<void> {
+  if (!integracao) throw new ErroCaptura(403, 'integracao_sem_organizacao');
+  if (caixa.organization_id !== integracao.organizationId) throw new ErroCaptura(403, 'organizacao_nao_e_dona_da_integracao');
+  if (caixa.home_account_id !== integracao.homeAccountId) throw new ErroCaptura(403, 'caixa_nao_e_a_da_integracao');
   const m = await membro(pool, sessaoHomeAccountId, caixa.organization_id);
   if (!m || m.papel !== 'ADMIN') throw new ErroCaptura(403, 'apenas_admin_da_organizacao');
 }
 
 export function criarCapturaRouter(deps: CapturaRoutesDeps = {}): Router {
   const router = Router();
-  router.use(requireAuth);
+  router.use(deps.requireAuth ?? requireAuth);
   const pool = () => (deps.pool ?? getPool)();
-  const obterContaAtiva = deps.contaAtiva ?? getActiveAccount;
+  const obterContaAtiva = deps.contaAtiva ?? (async () => integracaoAtual(pool()));
   const criarPorta = deps.criarPorta ?? criarPortaCaixaPostal;
 
-  /** POST /api/captura/caixas — vincula a caixa CONECTADA (conta ativa) a uma organização. Body: { organizationId }. */
+  /** POST /api/captura/caixas — vincula a caixa da INTEGRAÇÃO (conta atual) à organização DONA. Body: { organizationId }. */
   router.post('/caixas', async (req: AuthedRequest, res, next) => {
     try {
       const organizationId = String((req.body as any)?.organizationId ?? '');
@@ -79,17 +114,18 @@ export function criarCapturaRouter(deps: CapturaRoutesDeps = {}): Router {
         res.status(400).json({ error: 'Informe organizationId (UUID).' });
         return;
       }
-      const homeAccountId = req.session?.homeAccountId;
+      const homeAccountId = atorDaSessao(req);
       if (!homeAccountId) {
         res.status(401).json({ error: 'Não autenticado.' });
         return;
       }
+      const conta = await obterContaAtiva();
       const caixa = await vincularCaixa(pool(), {
         organizationId,
         sessaoHomeAccountId: homeAccountId,
-        contaAtiva: obterContaAtiva(),
+        contaAtiva: conta ? { homeAccountId: conta.homeAccountId, username: conta.username } : null,
       });
-      res.status(201).json(caixa);
+      res.status(201).json(caixaPublica(caixa));
     } catch (err) {
       tratarErro(err, res, next);
     }
@@ -103,7 +139,7 @@ export function criarCapturaRouter(deps: CapturaRoutesDeps = {}): Router {
         res.status(400).json({ error: 'Informe organizationId (UUID) na query.' });
         return;
       }
-      const homeAccountId = req.session?.homeAccountId;
+      const homeAccountId = atorDaSessao(req);
       if (!homeAccountId) {
         res.status(401).json({ error: 'Não autenticado.' });
         return;
@@ -126,10 +162,10 @@ export function criarCapturaRouter(deps: CapturaRoutesDeps = {}): Router {
   /** POST /api/captura/caixas/:caixaId/pausar */
   router.post('/caixas/:caixaId/pausar', async (req: AuthedRequest, res, next) => {
     try {
-      const homeAccountId = req.session?.homeAccountId;
+      const homeAccountId = atorDaSessao(req);
       if (!homeAccountId) { res.status(401).json({ error: 'Não autenticado.' }); return; }
       const caixa = await alterarCaixa(pool(), { caixaId: req.params.caixaId, sessaoHomeAccountId: homeAccountId, acao: 'pausar' });
-      res.json(caixa);
+      res.json(caixaPublica(caixa));
     } catch (err) {
       tratarErro(err, res, next);
     }
@@ -138,10 +174,10 @@ export function criarCapturaRouter(deps: CapturaRoutesDeps = {}): Router {
   /** POST /api/captura/caixas/:caixaId/retomar */
   router.post('/caixas/:caixaId/retomar', async (req: AuthedRequest, res, next) => {
     try {
-      const homeAccountId = req.session?.homeAccountId;
+      const homeAccountId = atorDaSessao(req);
       if (!homeAccountId) { res.status(401).json({ error: 'Não autenticado.' }); return; }
       const caixa = await alterarCaixa(pool(), { caixaId: req.params.caixaId, sessaoHomeAccountId: homeAccountId, acao: 'retomar' });
-      res.json(caixa);
+      res.json(caixaPublica(caixa));
     } catch (err) {
       tratarErro(err, res, next);
     }
@@ -150,10 +186,10 @@ export function criarCapturaRouter(deps: CapturaRoutesDeps = {}): Router {
   /** DELETE /api/captura/caixas/:caixaId — remove/desativa o vínculo. */
   router.delete('/caixas/:caixaId', async (req: AuthedRequest, res, next) => {
     try {
-      const homeAccountId = req.session?.homeAccountId;
+      const homeAccountId = atorDaSessao(req);
       if (!homeAccountId) { res.status(401).json({ error: 'Não autenticado.' }); return; }
       const caixa = await alterarCaixa(pool(), { caixaId: req.params.caixaId, sessaoHomeAccountId: homeAccountId, acao: 'remover' });
-      res.json(caixa);
+      res.json(caixaPublica(caixa));
     } catch (err) {
       tratarErro(err, res, next);
     }
@@ -161,13 +197,13 @@ export function criarCapturaRouter(deps: CapturaRoutesDeps = {}): Router {
 
   /**
    * POST /api/captura/caixas/:caixaId/backfill — Body: { desde, ate, limite }
-   * (ambos obrigatórios e explícitos; sem default). Exige ADMIN da
-   * organização da caixa e a conta da sessão SER a caixa (o access token da
-   * requisição é o que lê a caixa no Graph).
+   * (ambos obrigatórios e explícitos; sem default). Exige a caixa SER a da
+   * integração atual, da organização DONA, e ADMIN ATIVO dela (o access token
+   * da requisição é o da integração e é o que lê a caixa no Graph).
    */
   router.post('/caixas/:caixaId/backfill', async (req: AuthedRequest, res, next) => {
     try {
-      const homeAccountId = req.session?.homeAccountId;
+      const homeAccountId = atorDaSessao(req);
       if (!homeAccountId) { res.status(401).json({ error: 'Não autenticado.' }); return; }
       const body = req.body as any;
       const desde = body?.desde ? new Date(body.desde) : null;
@@ -179,7 +215,7 @@ export function criarCapturaRouter(deps: CapturaRoutesDeps = {}): Router {
       }
       const db = pool();
       const caixa = await carregarCaixa(db, req.params.caixaId);
-      await exigirAdminDaCaixa(db, caixa, homeAccountId);
+      await exigirAdminDaCaixa(db, caixa, homeAccountId, req.integracao);
       const resultado = await executarBackfill({
         pool: db,
         caixaId: caixa.id,

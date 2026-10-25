@@ -93,11 +93,19 @@ export interface IngerirInput {
   maxTentativasAutomaticas?: number;
   /** Quem acionou (auditoria das pendências/eventos). */
   autor?: string;
+  /**
+   * Produção P1 (isolamento da integração) — captura automática: a caixa
+   * ainda é da organização que recebe o conteúdo? Chamado depois da leitura
+   * da conversa no Graph (sem trava) e, travado (`FOR SHARE` no vínculo da
+   * organização dona), dentro da transação que grava o resultado. Falso →
+   * nada é gravado (`posse_perdida`).
+   */
+  conferirPosse?: (c: Pool | PoolClient, travar: boolean) => Promise<boolean>;
 }
 
 /** Registra a conversa de pré-alerta da organização (idempotente). */
 export async function registrarConversaPreAlerta(
-  pool: Pool,
+  pool: Pool | PoolClient,
   input: { organizationId: string; conversationId: string; origem: 'importacao_automatica' | 'manual' },
 ): Promise<void> {
   await pool.query(
@@ -476,6 +484,9 @@ export async function ingerirShippingInstructions(input: IngerirInput): Promise<
   const msg = primeiraMensagem(mensagens);
   if (!msg) return { status: 'conversa_vazia', promovidos: 0, pendenciasAbertas: 0 };
   const hash = hashConteudo(msg);
+  if (input.conferirPosse && !(await input.conferirPosse(pool, false))) {
+    return { status: 'posse_perdida', conteudoHash: hash, messageId: msg.id, promovidos: 0, pendenciasAbertas: 0 };
+  }
 
   const claim = await reivindicarVersao(pool, {
     organizationId: input.organizationId, conversationId: input.conversationId, msg, hash, modo: input.modo,
@@ -516,6 +527,12 @@ export async function ingerirShippingInstructions(input: IngerirInput): Promise<
     );
     if (!v[0]) {
       await client.query('ROLLBACK');
+      return { status: 'posse_perdida', versaoId: posse.versaoId, conteudoHash: hash, messageId: msg.id, promovidos: 0, pendenciasAbertas: 0 };
+    }
+    if (input.conferirPosse && !(await input.conferirPosse(client, true))) {
+      // A caixa deixou de ser da organização durante a leitura: nada da leitura é gravado nela.
+      await client.query('ROLLBACK');
+      await marcarFalha('posse_da_caixa_encerrada');
       return { status: 'posse_perdida', versaoId: posse.versaoId, conteudoHash: hash, messageId: msg.id, promovidos: 0, pendenciasAbertas: 0 };
     }
 

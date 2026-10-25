@@ -48,6 +48,7 @@ export async function truncateAll(pool: Pool): Promise<void> {
       containers, processos, condicoes_comerciais, clientes,
       container_type_mappings, armadores,
       sessoes_humanas, processo_atribuicoes, membership_eventos, usuario_eventos,
+      integracao_microsoft_vinculos,
       organization_memberships, usuarios, organizations
     RESTART IDENTITY CASCADE;
   `);

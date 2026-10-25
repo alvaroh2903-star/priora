@@ -1,6 +1,7 @@
-import { Pool } from 'pg';
+import { Pool, PoolClient } from 'pg';
 import { MensagemSI, extrairReferencias, primeiraMensagem } from './extracaoShippingInstructions';
 import { PortasShippingInstructions, ingerirShippingInstructions, registrarConversaPreAlerta } from './ingestaoShippingInstructions';
+import { organizacaoDonaDaIntegracao, vinculoAtivoDaConta } from '../identidade/integracaoOrganizacao';
 
 /**
  * CAPTURA AUTOMÁTICA do pré-alerta (V1): polling incremental do Microsoft Graph
@@ -12,6 +13,13 @@ import { PortasShippingInstructions, ingerirShippingInstructions, registrarConve
  *
  * Garantias:
  * - Organização vem SÓ do vínculo da caixa (feito por ADMIN), nunca do e-mail.
+ * - Produção P1 (isolamento da integração): a caixa é a da INTEGRAÇÃO de
+ *   plataforma, e só a organização DONA dela (migration 0051, vínculo
+ *   explícito do operador) pode vincular, retomar, pausar, remover ou fazer
+ *   backfill — e o ciclo só lê uma caixa cuja organização é a dona da conta
+ *   (senão a caixa fica `token_estado = indisponivel`,
+ *   `organizacao_nao_e_dona_da_integracao`). O conteúdo de uma caixa nunca é
+ *   atribuído a uma organização que não é a dona.
  * - Identificação conservadora: 1ª mensagem com marcador SHIPPING
  *   INSTRUCTION(S) e EXATAMENTE um código integral de processo (IM3126-26).
  * - Triagem só por metadados (assunto + preview); a conversa completa só é
@@ -137,7 +145,7 @@ export class ErroCaptura extends Error {
  * 0049): só membership interno ATIVO conta — desativado ou CLIENT devolvem
  * `null` (nenhum acesso interno); as checagens de ADMIN herdam a regra.
  */
-export async function membro(pool: Pool, homeAccountId: string, organizationId: string): Promise<{ membershipId: string; papel: string } | null> {
+export async function membro(pool: Pool | PoolClient, homeAccountId: string, organizationId: string): Promise<{ membershipId: string; papel: string } | null> {
   const { rows } = await pool.query(
     `SELECT m.id, m.papel FROM usuarios u JOIN organization_memberships m ON m.usuario_id = u.id
       WHERE u.home_account_id = $1 AND m.organization_id = $2
@@ -148,54 +156,137 @@ export async function membro(pool: Pool, homeAccountId: string, organizationId: 
 }
 
 /**
- * Vincula a caixa CONECTADA (conta ativa) a uma organização. Exige: a conta da
- * sessão é a conta ativa; o usuário é ADMIN da organização; a caixa não está
- * vinculada a outra organização (UNIQUE parcial no banco protege a corrida).
+ * A organização é a DONA da conta desta caixa (vínculo ativo da 0051)?
+ * Travado `FOR SHARE` quando chamado numa transação: um desvínculo
+ * concorrente espera — e o vínculo de captura criado aqui é encerrado por ele.
+ */
+async function organizacaoEDonaDaConta(pool: Pool | PoolClient, homeAccountId: string, organizationId: string, travar = false): Promise<boolean> {
+  if (!travar) return (await vinculoAtivoDaConta(pool, homeAccountId))?.organizationId === organizationId;
+  const { rows } = await pool.query(
+    `SELECT organization_id FROM integracao_microsoft_vinculos
+      WHERE home_account_id = $1 AND desvinculado_em IS NULL FOR SHARE`,
+    [homeAccountId],
+  );
+  return rows[0]?.organization_id === organizationId;
+}
+
+/**
+ * A caixa ainda é da organização que vai receber o conteúdo AGORA? (ativa + o
+ * vínculo de dona da 0051 da conta dela, para essa organização, ainda ativo).
+ * Relida antes de CADA gravação de conteúdo do ciclo/backfill — não só no
+ * início: um desvínculo (e um novo vínculo de outra organização) durante um
+ * ciclo em andamento nunca deixa o conteúdo lido depois dele ir para a
+ * organização anterior.
+ */
+export async function posseVigente(pool: Pool | PoolClient, caixa: Pick<CaixaCaptura, 'id'>, travar = false): Promise<boolean> {
+  // `travar` (numa transação): `FOR SHARE` no vínculo — um desvínculo concorrente
+  // (que sempre atualiza o vínculo ANTES da caixa) espera esta gravação terminar.
+  const { rows } = await pool.query(
+    `SELECT 1 FROM email_caixas ec
+       JOIN integracao_microsoft_vinculos v
+         ON v.home_account_id = ec.home_account_id AND v.organization_id = ec.organization_id AND v.desvinculado_em IS NULL
+      WHERE ec.id = $1 AND ec.estado = 'ativa'${travar ? ' FOR SHARE OF v' : ''}`,
+    [caixa.id],
+  );
+  return rows.length > 0;
+}
+
+/** A caixa perdeu a posse (pausada, removida ou dona desvinculada) no meio do ciclo: para sem avançar o cursor. */
+class ErroSemPosse extends Error {
+  constructor() { super('caixa_sem_posse'); this.name = 'ErroSemPosse'; }
+}
+
+/** Exportado para as rotas e o ciclo: a caixa pertence à organização dona da sua conta? */
+export async function caixaDaOrganizacaoDona(pool: Pool, caixa: Pick<CaixaCaptura, 'home_account_id' | 'organization_id'>): Promise<boolean> {
+  return organizacaoEDonaDaConta(pool, caixa.home_account_id, caixa.organization_id);
+}
+
+/**
+ * Vincula a caixa da INTEGRAÇÃO (conta ATUAL, relida do banco pela rota) a
+ * uma organização. Produção P1 (integração de plataforma) — a pessoa da
+ * sessão NÃO precisa ser a conta Microsoft. Exige:
+ *  - integração conectada (`contaAtiva`) → senão 403 `integracao_desconectada`;
+ *  - a organização é a DONA dessa conta (vínculo ativo da 0051) → senão 403
+ *    `organizacao_nao_e_dona_da_integracao`;
+ *  - a pessoa da sessão (`sessaoHomeAccountId`) é ADMIN ATIVO dessa
+ *    organização → senão 403 `apenas_admin_da_organizacao`;
+ *  - a caixa não está vinculada a outra organização (UNIQUE parcial no banco
+ *    protege a corrida).
  */
 export async function vincularCaixa(pool: Pool, input: {
   organizationId: string;
+  /** Pessoa da SESSÃO (ator) — não a caixa. */
   sessaoHomeAccountId: string;
+  /** Conta ATUAL da integração (a caixa). */
   contaAtiva: { homeAccountId: string; username: string } | null;
 }): Promise<CaixaCaptura> {
-  if (!input.contaAtiva || input.contaAtiva.homeAccountId !== input.sessaoHomeAccountId) {
-    throw new ErroCaptura(403, 'conta_da_sessao_nao_corresponde_a_caixa');
-  }
-  const m = await membro(pool, input.sessaoHomeAccountId, input.organizationId);
-  if (!m || m.papel !== 'ADMIN') throw new ErroCaptura(403, 'apenas_admin_da_organizacao');
-  const { rows: atual } = await pool.query(
-    `SELECT * FROM email_caixas WHERE home_account_id = $1 AND estado <> 'removida'`, [input.contaAtiva.homeAccountId],
-  );
-  if (atual[0]) {
-    throw new ErroCaptura(409, atual[0].organization_id === input.organizationId ? 'caixa_ja_vinculada' : 'caixa_vinculada_a_outra_organizacao');
-  }
+  if (!input.contaAtiva) throw new ErroCaptura(403, 'integracao_desconectada');
+  const conta = input.contaAtiva;
+  const c = await pool.connect();
   try {
-    const { rows } = await pool.query(
+    await c.query('BEGIN');
+    if (!(await organizacaoEDonaDaConta(c, conta.homeAccountId, input.organizationId, true))) {
+      throw new ErroCaptura(403, 'organizacao_nao_e_dona_da_integracao');
+    }
+    const m = await membro(c, input.sessaoHomeAccountId, input.organizationId);
+    if (!m || m.papel !== 'ADMIN') throw new ErroCaptura(403, 'apenas_admin_da_organizacao');
+    const { rows: atual } = await c.query(
+      `SELECT * FROM email_caixas WHERE home_account_id = $1 AND estado <> 'removida'`, [conta.homeAccountId],
+    );
+    if (atual[0]) {
+      throw new ErroCaptura(409, atual[0].organization_id === input.organizationId ? 'caixa_ja_vinculada' : 'caixa_vinculada_a_outra_organizacao');
+    }
+    const { rows } = await c.query(
       `INSERT INTO email_caixas (organization_id, home_account_id, username, vinculada_por_membership_id)
        VALUES ($1, $2, $3, $4) RETURNING *`,
-      [input.organizationId, input.contaAtiva.homeAccountId, input.contaAtiva.username, m.membershipId],
+      [input.organizationId, conta.homeAccountId, conta.username, m.membershipId],
     );
+    await c.query('COMMIT');
     return rows[0];
   } catch (e: any) {
-    if (e?.code === '23505') throw new ErroCaptura(409, 'caixa_vinculada_a_outra_organizacao');
+    await c.query('ROLLBACK').catch(() => undefined);
+    if (e?.code === '23505') {
+      // Corrida perdida no UNIQUE parcial: o código diz de QUEM é o vínculo vencedor.
+      const { rows: venc } = await pool.query(
+        `SELECT organization_id FROM email_caixas WHERE home_account_id = $1 AND estado <> 'removida'`, [conta.homeAccountId],
+      );
+      throw new ErroCaptura(409, venc[0]?.organization_id === input.organizationId ? 'caixa_ja_vinculada' : 'caixa_vinculada_a_outra_organizacao');
+    }
     throw e;
+  } finally {
+    c.release();
   }
 }
 
-/** Pausar, retomar ou remover o vínculo: ADMIN da organização da caixa e a conta da sessão É a caixa. */
+/**
+ * Pausar, retomar ou remover o vínculo. Produção P1 (integração de
+ * plataforma): a organização da caixa precisa ser a DONA da integração ATUAL
+ * (conta atual + vínculo ativo da 0051, relidos do banco) → sem dona, 403
+ * `integracao_sem_organizacao`; outra organização, 403
+ * `organizacao_nao_e_dona_da_integracao` — um vínculo remanescente de uma
+ * conta ANTERIOR nunca dá a outra organização poder sobre a captura. A pessoa
+ * da sessão precisa ser ADMIN ATIVO da organização da caixa → senão 403
+ * `apenas_admin_da_organizacao`. A pessoa não precisa ser a conta Microsoft.
+ * O ADMIN da dona pode limpar também a caixa de uma conta anterior da MESMA
+ * organização (o ciclo nunca a lê: a conta não é a atual).
+ */
 export async function alterarCaixa(pool: Pool, input: { caixaId: string; sessaoHomeAccountId: string; acao: 'pausar' | 'retomar' | 'remover' }): Promise<CaixaCaptura> {
   const { rows } = await pool.query(`SELECT * FROM email_caixas WHERE id = $1 AND estado <> 'removida'`, [input.caixaId]);
   const caixa = rows[0];
   if (!caixa) throw new ErroCaptura(404, 'caixa_nao_encontrada');
-  if (caixa.home_account_id !== input.sessaoHomeAccountId) throw new ErroCaptura(403, 'conta_da_sessao_nao_corresponde_a_caixa');
+  const dona = await organizacaoDonaDaIntegracao(pool);
+  if (!dona) throw new ErroCaptura(403, 'integracao_sem_organizacao');
+  if (caixa.organization_id !== dona.organizationId) throw new ErroCaptura(403, 'organizacao_nao_e_dona_da_integracao');
   const m = await membro(pool, input.sessaoHomeAccountId, caixa.organization_id);
   if (!m || m.papel !== 'ADMIN') throw new ErroCaptura(403, 'apenas_admin_da_organizacao');
   const alvo = input.acao === 'pausar' ? 'pausada' : input.acao === 'retomar' ? 'ativa' : 'removida';
   const { rows: up } = await pool.query(
     `UPDATE email_caixas SET estado = $2, alterada_por_membership_id = $3,
        removida_em = CASE WHEN $2 = 'removida' THEN now() ELSE NULL END, atualizado_em = now()
-     WHERE id = $1 RETURNING *`,
+     WHERE id = $1 AND estado <> 'removida' RETURNING *`,
     [caixa.id, alvo, m.membershipId],
   );
+  if (!up[0]) throw new ErroCaptura(404, 'caixa_nao_encontrada');
   return up[0];
 }
 
@@ -243,18 +334,34 @@ async function descobrir(
   ctx: Ctx, caixa: CaixaCaptura, porta: PortaCaixaPostal, pasta: PastaCaptura, origem: 'delta' | 'backfill',
   conversationId: string, gatilho: string,
 ): Promise<void> {
+  // Posse conferida ANTES de ler o Graph e de novo, travada, na gravação.
+  if (!(await posseVigente(ctx.pool, caixa))) throw new ErroSemPosse();
   const a = analisarConversa(await porta.carregarConversa(conversationId));
-  const { rowCount } = await ctx.pool.query(
-    `INSERT INTO si_conversas_descobertas
-       (organization_id, caixa_id, conversation_id, pasta, origem, message_id_gatilho, primeira_mensagem_id, processo_codigo, estado, motivo)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-     ON CONFLICT (organization_id, conversation_id) DO NOTHING`,
-    [caixa.organization_id, caixa.id, conversationId, pasta, origem, gatilho, a.primeiraMensagemId,
-      a.registrar ? a.processoCodigo : null, a.registrar ? 'registrada' : 'rejeitada', a.registrar ? null : a.motivo],
-  );
+  const c = await ctx.pool.connect();
+  let rowCount: number;
+  try {
+    await c.query('BEGIN');
+    if (!(await posseVigente(c, caixa, true))) throw new ErroSemPosse();
+    rowCount = (await c.query(
+      `INSERT INTO si_conversas_descobertas
+         (organization_id, caixa_id, conversation_id, pasta, origem, message_id_gatilho, primeira_mensagem_id, processo_codigo, estado, motivo)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       ON CONFLICT (organization_id, conversation_id) DO NOTHING`,
+      [caixa.organization_id, caixa.id, conversationId, pasta, origem, gatilho, a.primeiraMensagemId,
+        a.registrar ? a.processoCodigo : null, a.registrar ? 'registrada' : 'rejeitada', a.registrar ? null : a.motivo],
+    )).rowCount ?? 0;
+    if (rowCount && a.registrar) {
+      await registrarConversaPreAlerta(c, { organizationId: caixa.organization_id, conversationId, origem: 'importacao_automatica' });
+    }
+    await c.query('COMMIT');
+  } catch (e) {
+    await c.query('ROLLBACK').catch(() => undefined);
+    throw e;
+  } finally {
+    c.release();
+  }
   if (!rowCount) return; // outra instância/backfill já descobriu
   if (a.registrar) {
-    await registrarConversaPreAlerta(ctx.pool, { organizationId: caixa.organization_id, conversationId, origem: 'importacao_automatica' });
     ctx.res.registradas++;
     ctx.log('conversa_registrada', { caixaId: caixa.id, pasta, origem, processo: a.processoCodigo });
   } else {
@@ -328,6 +435,8 @@ export async function sincronizarPasta(
   try {
     for (;;) {
       if (Date.now() - inicio > op.orcamentoMs) { await liberar(); return 'orcamento_de_tempo'; }
+      // Nada é lido de uma caixa que perdeu a posse (pausada/removida/dona desvinculada) — e o cursor não avança.
+      if (!(await posseVigente(pool, caixa))) { await liberar(); ctx.log('caixa_sem_posse', logBase); return 'sem_posse'; }
       let pagina: PaginaMensagens;
       try {
         pagina = await porta.paginaDelta(pasta, cursor ? { link: cursor } : { desde: janela });
@@ -361,6 +470,12 @@ export async function sincronizarPasta(
           await descobrir(ctx, caixa, porta, pasta, 'delta', n.conversationId, n.gatilho);
         } catch (e) {
           completa = false;
+          if (e instanceof ErroSemPosse) {
+            // Posse perdida no meio da página: o cursor NÃO avança (sem erro nem backoff — a caixa retomada relê a página).
+            await liberar();
+            ctx.log('caixa_sem_posse', logBase);
+            return 'sem_posse';
+          }
           if (e instanceof ErroLimiteGraph) {
             await atualizar(`proxima_tentativa_em = now() + ($4 || ' seconds')::interval, ultimo_erro = 'graph_limite', ultimo_erro_em = now()`, [String(Math.max(1, e.retryAfterSegundos))]);
           } else {
@@ -415,6 +530,7 @@ async function ingerirDescobertas(ctx: Ctx, caixa: CaixaCaptura, porta: PortaCai
     [caixa.organization_id, caixa.id, MAX_TENTATIVAS_INGESTAO],
   );
   for (const d of rows) {
+    if (!(await posseVigente(ctx.pool, caixa))) { ctx.log('caixa_sem_posse', { caixaId: caixa.id }); break; }
     if (!ctx.orcamento.reservar(d.conversation_id)) { ctx.res.limiteAtingido = true; break; }
     let estado: string | null = null, resultado: string | null = null, versaoId: string | null = null;
     let erro: string | null = null, tentativas = d.tentativas as number, proxima: Date | null = null, motivo: string | null = null;
@@ -423,6 +539,8 @@ async function ingerirDescobertas(ctx: Ctx, caixa: CaixaCaptura, porta: PortaCai
       const r = await ingerirShippingInstructions({
         pool: ctx.pool, organizationId: caixa.organization_id, conversationId: d.conversation_id, portas: porta.portasSI,
         modo: 'automatico', workerId: ctx.workerId, autor: `captura:caixa:${caixa.id}`,
+        // Posse reconferida DENTRO da ingestão (depois da leitura do Graph e, travada, na transação final).
+        conferirPosse: (c, travar) => posseVigente(c, caixa, travar),
       });
       resultado = r.status;
       versaoId = r.versaoId ?? null;
@@ -485,6 +603,17 @@ export async function executarCicloCaptura(input: CicloInput): Promise<CicloResu
   for (const caixa of caixas as CaixaCaptura[]) {
     res.caixas++;
     try {
+      // Produção P1 (isolamento da integração): só lê a caixa cuja organização
+      // é a DONA da conta — nunca atribui o conteúdo a outra organização.
+      if (!(await caixaDaOrganizacaoDona(input.pool, caixa))) {
+        await input.pool.query(
+          `UPDATE email_caixas SET token_estado = 'indisponivel', token_motivo = 'organizacao_nao_e_dona_da_integracao',
+             token_verificado_em = now(), atualizado_em = now() WHERE id = $1`,
+          [caixa.id],
+        );
+        log('caixa_sem_organizacao_dona', { caixaId: caixa.id });
+        continue;
+      }
       const aberta = await input.abrirCaixa(caixa);
       if ('indisponivel' in aberta) {
         await input.pool.query(
@@ -533,6 +662,8 @@ export async function executarBackfill(input: BackfillInput): Promise<CicloResul
   const { rows } = await input.pool.query(`SELECT * FROM email_caixas WHERE id = $1 AND estado = 'ativa'`, [input.caixaId]);
   const caixa: CaixaCaptura | undefined = rows[0];
   if (!caixa) throw new ErroCaptura(404, 'caixa_nao_ativa');
+  // Produção P1 (isolamento da integração): defesa em profundidade — além da rota.
+  if (!(await caixaDaOrganizacaoDona(input.pool, caixa))) throw new ErroCaptura(403, 'organizacao_nao_e_dona_da_integracao');
   const res = resultadoVazio();
   const ctx: Ctx = { pool: input.pool, workerId: input.workerId, log: input.log ?? logCapturaPadrao, orcamento: new Orcamento(input.limite), res };
   res.caixas = 1;
@@ -546,7 +677,12 @@ export async function executarBackfill(input: BackfillInput): Promise<CicloResul
       res.candidatas += novas.length;
       for (const n of novas) {
         if (!ctx.orcamento.reservar(n.conversationId)) { res.limiteAtingido = true; break externo; }
-        await descobrir(ctx, caixa, input.porta, pasta, 'backfill', n.conversationId, n.gatilho);
+        try {
+          await descobrir(ctx, caixa, input.porta, pasta, 'backfill', n.conversationId, n.gatilho);
+        } catch (e) {
+          if (e instanceof ErroSemPosse) { ctx.log('caixa_sem_posse', { caixaId: caixa.id, pasta }); break externo; }
+          throw e;
+        }
       }
       if (!pagina.nextLink) break;
       link = pagina.nextLink;

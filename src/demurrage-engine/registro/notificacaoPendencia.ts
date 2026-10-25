@@ -110,11 +110,8 @@ export async function processarAvisosPendenciaPendentes(input: ProcessarAvisosPe
     // gestor (MANAGER/ADMIN) ATIVO AGORA; nunca o papel/estado do momento em
     // que a entrega nasceu.
     const { rows: claims } = await input.pool.query(
-      `UPDATE demurrage_pendencia_avisos a
-          SET status = 'PROCESSING', claim_token = gen_random_uuid(), worker_id = $1,
-              expira_em = now() + ($2 || ' seconds')::interval, tentativas = LEAST(a.tentativas + 1, $3), atualizado_em = now()
-        WHERE a.id = (
-          SELECT av.id FROM demurrage_pendencia_avisos av
+      `WITH alvo AS (
+          SELECT av.id, av.tentativas AS tentativas_antes FROM demurrage_pendencia_avisos av
             JOIN organization_memberships m ON m.id = av.destinatario_membership_id
            WHERE ((av.status IN ('PENDING', 'FAILED') AND av.tentativas < $3) OR (av.status = 'PROCESSING' AND av.expira_em < now()))
              AND NOT (av.id = ANY($4::uuid[]))
@@ -122,7 +119,12 @@ export async function processarAvisosPendenciaPendentes(input: ProcessarAvisosPe
            ORDER BY av.criado_em, av.id
            FOR UPDATE OF av SKIP LOCKED
            LIMIT 1)
-        RETURNING a.id, a.claim_token`,
+       UPDATE demurrage_pendencia_avisos a
+          SET status = 'PROCESSING', claim_token = gen_random_uuid(), worker_id = $1,
+              expira_em = now() + ($2 || ' seconds')::interval, tentativas = LEAST(a.tentativas + 1, $3), atualizado_em = now()
+         FROM alvo
+        WHERE a.id = alvo.id
+        RETURNING a.id, a.claim_token, alvo.tentativas_antes`,
       [input.workerId, String(ttl), max, processadas, PAPEIS_GESTOR],
     );
     const claim = claims[0];
@@ -151,11 +153,18 @@ export async function processarAvisosPendenciaPendentes(input: ProcessarAvisosPe
     if (!a) {
       // Devolve também a tentativa consumida pelo claim: a entrega não foi tentada
       // (destinatário inelegível no envio) e não pode ficar presa no limite de tentativas.
+      // `tentativas` volta EXATAMENTE ao valor de antes do claim (o `LEAST` do claim
+      // não incrementa uma posse vencida recuperada no limite — "menos um" daria uma
+      // tentativa a mais). Já no limite (só uma posse vencida recuperada chega aqui
+      // assim), a entrega fica FAILED — contada em `esgotadas`, nunca um PENDING
+      // invisível que nenhum claim alcança.
       await input.pool.query(
-        `UPDATE demurrage_pendencia_avisos SET status = 'PENDING', tentativas = GREATEST(tentativas - 1, 0),
-                claim_token = NULL, worker_id = NULL, expira_em = NULL, atualizado_em = now()
+        `UPDATE demurrage_pendencia_avisos
+            SET status = CASE WHEN $3::int >= $4::int THEN 'FAILED' ELSE 'PENDING' END,
+                erro = CASE WHEN $3::int >= $4::int THEN COALESCE(erro, 'destinatario_inelegivel_no_envio') ELSE erro END,
+                tentativas = $3, claim_token = NULL, worker_id = NULL, expira_em = NULL, atualizado_em = now()
           WHERE id = $1 AND status = 'PROCESSING' AND claim_token = $2`,
-        [claim.id, claim.claim_token],
+        [claim.id, claim.claim_token, claim.tentativas_antes, max],
       );
       continue;
     }
