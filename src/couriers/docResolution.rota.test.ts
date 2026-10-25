@@ -46,6 +46,8 @@ const T_ENVIO = '770012345614';
 const T_TELEX_NAO_APROVADO = '770012345615';
 const T_TELEX_ROTULO_NEGADO = '770012345616';
 const T_TELEX_ROTULO_PT = '770012345617';
+const T_TELEX_PENDENTE = '770012345618';
+const T_TELEX_SEM_MARCADOR = '770012345619';
 
 const arquivos = {
   estados: path.join(dataDir, 'courier-estados.json'),
@@ -97,6 +99,8 @@ email(3, T_ENVIO, 'IM2104', 'OHBL sent to consignee, not to the agent.');
 email(4, T_TELEX_NAO_APROVADO, 'IM2105', 'Telex release not approved.');
 email(5, T_TELEX_ROTULO_NEGADO, 'IM2106', 'Status: no telex release.');
 email(6, T_TELEX_ROTULO_PT, 'IM2107', 'Atenção: no telex release consta a liberação.');
+email(7, T_TELEX_PENDENTE, 'IM2108', 'Telex release pending payment.');
+email(8, T_TELEX_SEM_MARCADOR, 'IM2109', 'HBL via telex release.');
 
 const chamadas = { graph: 0, ia: 0 };
 const graphLib = require('@microsoft/microsoft-graph-client');
@@ -160,21 +164,31 @@ test('rota GET /api/couriers: a resolução documental corrigida chega à respos
   const antes = retrato();
   const r = await listar();
   assert.equal(r.status, 200);
-  for (const t of [T_TELEX_NEGADO, T_TELEX, T_ENVIO_NEGADO, T_ENVIO, T_TELEX_NAO_APROVADO, T_TELEX_ROTULO_NEGADO, T_TELEX_ROTULO_PT]) {
-    assert.ok(porTracking(r.corpo, t), `courier ${t} não apareceu na lista`);
+  const todos = [
+    T_TELEX_NEGADO, T_TELEX, T_ENVIO_NEGADO, T_ENVIO, T_TELEX_NAO_APROVADO, T_TELEX_ROTULO_NEGADO,
+    T_TELEX_ROTULO_PT, T_TELEX_PENDENTE, T_TELEX_SEM_MARCADOR,
+  ];
+  for (const t of todos) assert.ok(porTracking(r.corpo, t), `courier ${t} não apareceu na lista`);
+  const telexDe = (t: string) => {
+    const d = porTracking(r.corpo, t).docResolution;
+    return { confirmado: d.telex, pendente: d.telexPendente };
+  };
+  // Menções negadas: nem confirmado nem pendente.
+  for (const t of [T_TELEX_NEGADO, T_TELEX_NAO_APROVADO, T_TELEX_ROTULO_NEGADO]) {
+    assert.deepEqual(telexDe(t), { confirmado: false, pendente: false }, t);
   }
-  // Menções negadas não viram evidência; as afirmadas seguem.
-  assert.equal(porTracking(r.corpo, T_TELEX_NEGADO).docResolution.telex, false);
-  assert.equal(porTracking(r.corpo, T_TELEX_NAO_APROVADO).docResolution.telex, false);
-  assert.equal(porTracking(r.corpo, T_TELEX_ROTULO_NEGADO).docResolution.telex, false);
-  // Português afirmativo ("no" = "em + o") segue telex.
-  assert.equal(porTracking(r.corpo, T_TELEX_ROTULO_PT).docResolution.telex, true);
-  assert.equal(porTracking(r.corpo, T_TELEX).docResolution.telex, true);
+  // Conclusão explícita: Telex Release Confirmado.
+  assert.deepEqual(telexDe(T_TELEX), { confirmado: true, pendente: false });
+  // Pendência, menção sem marcador e português afirmativo sem conclusão: Telex Release Pendente.
+  for (const t of [T_TELEX_PENDENTE, T_TELEX_SEM_MARCADOR, T_TELEX_ROTULO_PT]) {
+    assert.deepEqual(telexDe(t), { confirmado: false, pendente: true }, t);
+  }
   assert.equal(porTracking(r.corpo, T_ENVIO_NEGADO).docResolution.importador, false);
   assert.equal(porTracking(r.corpo, T_ENVIO).docResolution.importador, true);
-  // Mesmo formato de antes: só as quatro chaves.
+  // Os quatro campos de antes e o novo; nunca confirmado e pendente juntos.
   for (const c of r.corpo.couriers) {
-    assert.deepEqual(Object.keys(c.docResolution).sort(), ['destino', 'importador', 'telex', 'wave']);
+    assert.deepEqual(Object.keys(c.docResolution).sort(), ['destino', 'importador', 'telex', 'telexPendente', 'wave']);
+    assert.ok(!(c.docResolution.telex && c.docResolution.telexPendente));
   }
   // Registros existentes: lidos e devolvidos, nunca reescritos.
   const sel = porTracking(r.corpo, T_TELEX_NEGADO);

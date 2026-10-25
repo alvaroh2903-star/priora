@@ -1,27 +1,42 @@
 /**
  * Priora — Resolução documental do OHBL detectada DETERMINISTICAMENTE no texto
- * dos e-mails do courier (sem IA, sem I/O). Ex.: "HBL send via TELEX RELEASE"
- * → não há HBL físico a receber. O front informa o motivo ("Via Telex Release")
- * em vez de um genérico "Não esperado". Cobre também Wave BL, emissão no destino
- * e envio ao importador (regras do Manual).
+ * dos e-mails do courier (sem IA, sem I/O). O front informa o motivo em vez de um
+ * genérico "Não esperado". Cobre também Wave BL, emissão no destino e envio ao
+ * importador (regras do Manual).
  *
- * ASS-010 (entrega PARCIAL): uma menção de telex ou de envio ao destinatário
- * EXPLICITAMENTE NEGADA na própria oração ("No telex release", "Telex release not
- * approved", "OHBL not sent to consignee") não é evidência afirmativa. Fora deste
- * escopo, com o comportamento anterior mantido: telex condicional/pendente,
- * cronologia entre mensagens, atribuição por documento, envio ao shipper, a
- * análise da IA, Wave BL e emissão no destino.
+ * ASS-010 (entregas PARCIAIS):
+ *  - menção de telex ou de envio ao destinatário EXPLICITAMENTE NEGADA na própria
+ *    oração ("No telex release", "Telex release not approved", "OHBL not sent to
+ *    consignee") ou telex CANCELADO não é evidência afirmativa;
+ *  - Telex Release CONFIRMADO × PENDENTE: só confirma o telex uma conclusão
+ *    explícita ("released", "completed", "confirmed", "done", "liberado",
+ *    "realizado"…). Promessa, previsão, condição, pedido, pergunta, "approved" e
+ *    menção sem marcador ("HBL via telex release") ficam PENDENTES. Pendente não
+ *    encerra a expectativa do OHBL físico.
+ * Fora do escopo: cronologia entre mensagens (ASS-009), atribuição por
+ * documento/IM, avaliação da fonte, envio ao shipper, a análise da IA, Wave BL e
+ * emissão no destino.
  *
- * A agregação continua a de antes: o resultado é por texto (envelope), e basta
- * uma menção não negada para o sinal valer. Isso é limitação conhecida (sem
- * atribuição por documento), não regra nova.
+ * O resultado é por texto (envelope). Sem atribuição por IM, uma pendência em
+ * qualquer menção impede a confirmação do envelope inteiro (não se usa a
+ * confirmação de um documento como prova para outro).
  */
 
 export interface DocResolution {
+  /**
+   * Telex Release CONFIRMADO: alguma menção com conclusão explícita e NENHUMA
+   * menção pendente no texto. Só ele encerra a expectativa do OHBL físico.
+   * Nunca é verdadeiro junto com `telexPendente`.
+   */
   telex: boolean;
   wave: boolean;
   destino: boolean;
   importador: boolean;
+  /**
+   * Telex Release PENDENTE: alguma menção de telex não negada que não é
+   * confirmação explícita. NÃO encerra a expectativa do OHBL físico.
+   */
+  telexPendente: boolean;
 }
 
 /** Mesmos padrões de antes; só a leitura de negação é nova. */
@@ -99,8 +114,48 @@ const DOCUMENTOS = [
   'document', 'documents', 'docs', 'documento', 'documentos',
 ];
 
-/** Palavras que podem ficar entre o negador e a menção ("not a telex", "não haverá telex"). */
-const NEUTRAS_ANTES_TELEX = new Set([...AUXILIARES, ...ARTIGOS, ...PREPOSICOES]);
+/** Telex cancelado também não é evidência: "cancel the telex", "telex release cancelled". */
+const CANCELA_ANTES = ['cancel', 'cancelar', 'cancele', 'cancelem'];
+const CANCELA_DEPOIS = ['cancelled', 'canceled', 'cancelado', 'cancelada', 'revoked', 'revogado', 'revogada', 'withdrawn'];
+const NEGA_ANTES_TELEX = new Set([...NEGA_ANTES, ...CANCELA_ANTES]);
+const NEGA_DEPOIS_TELEX = new Set([...NEGA_DEPOIS, ...CANCELA_DEPOIS]);
+
+/** Conclusão EXPLÍCITA do telex. "approved" não conta: aprovação não é realização. */
+const CONFIRMA = new Set([
+  'released', 'completed', 'confirmed', 'done', 'effected', 'executed', 'performed', 'surrendered',
+  'liberado', 'liberada', 'realizado', 'realizada', 'efetuado', 'efetuada', 'concluído', 'concluido',
+  'concluída', 'concluida', 'confirmado', 'confirmada', 'feito', 'feita',
+]);
+/**
+ * Pendência ou condição: basta aparecer na mesma FRASE para a menção ser
+ * pendente ("Telex release confirmed, pending payment").
+ */
+const PENDENCIA_NA_FRASE = new Set([
+  'pending', 'awaiting', 'await', 'awaited', 'waiting', 'subject', 'conditional', 'condition',
+  'conditions', 'conditioned', 'upon', 'after', 'until', 'unless', 'once', 'if', 'whether',
+  'pendente', 'pendentes', 'aguardando', 'aguarda', 'aguardam', 'aguardamos', 'aguardar', 'aguardo',
+  'sujeito', 'sujeita', 'condicionado', 'condicionada', 'condição', 'condicao', 'mediante', 'após',
+  'apos', 'depois', 'caso', 'quando',
+]);
+/**
+ * Futuro, plano, pedido ou possibilidade: valem na mesma ORAÇÃO da menção
+ * ("Telex will be arranged", "Estamos providenciando o telex"), sem contaminar
+ * outra oração ("Telex released, you can pick up the cargo").
+ */
+const PENDENCIA_NA_ORACAO = new Set([
+  'will', 'shall', 'would', 'going', 'plan', 'planned', 'planning', 'intend', 'intends', 'expected',
+  'expect', 'expecting', 'tomorrow', 'soon', 'later', 'next', 'request', 'requested', 'requesting',
+  'can', 'could', 'may', 'might', 'possible', 'arrange', 'arranging',
+  'será', 'serão', 'sera', 'serao', 'seria', 'vai', 'vão', 'vao', 'vamos', 'iremos', 'irá', 'ira',
+  'irão', 'irao', 'previsto', 'prevista', 'previsão', 'previsao', 'amanhã', 'amanha', 'breve',
+  'providenciando', 'providenciar', 'providenciaremos', 'providenciará', 'providenciara',
+  'solicitado', 'solicitada', 'solicitamos', 'solicitar', 'solicitação', 'solicitacao', 'pedido',
+  'pedimos', 'pode', 'podem', 'poderia', 'possível', 'possivel',
+]);
+const PENDENCIA_EXPRESSOES = /\bto\s+be\b|\bassim\s+que\b|\blogo\s+que\b/i;
+
+/** Palavras que podem ficar entre o negador e a menção ("not a telex", "não haverá telex", "not released via telex"). */
+const NEUTRAS_ANTES_TELEX = new Set([...AUXILIARES, ...ARTIGOS, ...PREPOSICOES, ...CONFIRMA]);
 /** "OHBL has not been sent", "no original documents sent", "não foi enviado". */
 const NEUTRAS_ANTES_ENVIO = new Set([...AUXILIARES, ...ARTIGOS, ...DOCUMENTOS]);
 /** "Telex release has not been approved", "telex ainda não liberado". */
@@ -153,37 +208,93 @@ function oracaoDepois(t: string, pos: number): string {
  * Negador antes da menção, separado dela só por palavras neutras. `seguinte` é a
  * 1ª palavra depois da menção, na mesma oração (para o "no" português).
  */
-function negadaAntes(antes: string[], neutras: Set<string>, seguinte?: string): boolean {
+function negadaAntes(antes: string[], neutras: Set<string>, seguinte?: string, negadores = NEGA_ANTES): boolean {
   let vistas = 0;
   for (let k = antes.length - 1; k >= 0; k--) {
     if (antes[k] === 'no' && !noNega(antes, k, seguinte)) return false;
-    if (ehNegador(antes[k], NEGA_ANTES)) return negadorEfetivo(antes, k, NEGA_ANTES);
+    if (ehNegador(antes[k], negadores)) return negadorEfetivo(antes, k, negadores);
     if (!neutras.has(antes[k]) || ++vistas > MAX_NEUTRAS) return false;
   }
   return false;
 }
 
 /** Negador logo depois da menção, separado dela só por auxiliares. */
-function negadaDepois(depois: string[]): boolean {
+function negadaDepois(depois: string[], negadores = NEGA_DEPOIS): boolean {
   let vistas = 0;
   for (let k = 0; k < depois.length; k++) {
-    if (ehNegador(depois[k], NEGA_DEPOIS)) return negadorEfetivo(depois, k, NEGA_DEPOIS);
+    if (ehNegador(depois[k], negadores)) return negadorEfetivo(depois, k, negadores);
     if (!NEUTRAS_DEPOIS.has(depois[k]) || ++vistas > MAX_NEUTRAS) return false;
   }
   return false;
 }
 
-/** Alguma menção de telex que não esteja explicitamente negada na própria oração. */
-function telexAfirmado(t: string): boolean {
+/** Frase (até . ! ? ; ou quebra de linha) em volta da menção, e se ela é pergunta. */
+function fraseDa(t: string, inicio: number, fim: number): { texto: string; pergunta: boolean } {
+  const antes = t.slice(Math.max(0, inicio - CONTEXTO), inicio);
+  let corte = 0;
+  for (const m of antes.matchAll(/[.!?;\n\r]/g)) corte = (m.index ?? 0) + 1;
+  const depois = t.slice(fim, fim + CONTEXTO);
+  const termino = /[.!?;\n\r]/.exec(depois);
+  return {
+    texto: antes.slice(corte) + t.slice(inicio, fim) + (termino ? depois.slice(0, termino.index) : depois),
+    pergunta: termino?.[0] === '?',
+  };
+}
+
+/** Palavras de conclusão nesta lista que não estejam negadas ("HBL not released"). */
+const NEUTRAS_ANTES_CONCLUSAO = new Set([...AUXILIARES, ...ARTIGOS, ...DOCUMENTOS, 'telex', 'release']);
+function temConclusao(lista: string[]): boolean {
+  return lista.some((w, i) => CONFIRMA.has(w) && !negadaAntes(lista.slice(0, i), NEUTRAS_ANTES_CONCLUSAO));
+}
+
+type EstadoTelex = 'negado' | 'confirmado' | 'pendente';
+
+/**
+ * Uma menção de telex:
+ *  - negado: negação explícita ou cancelamento na própria oração;
+ *  - pendente: pergunta, pendência/condição na mesma frase, futuro/plano/pedido
+ *    na mesma oração, ou nenhuma conclusão explícita (só a palavra "telex");
+ *  - confirmado: conclusão explícita na oração da menção, ou numa oração da mesma
+ *    frase que fale do documento ("Conforme informado no telex release, o HBL foi
+ *    liberado"), sem nenhuma negação nessa oração.
+ */
+function classificarMencao(t: string, inicio: number, fim: number): EstadoTelex {
+  const depois = palavras(oracaoDepois(t, fim));
+  const antes = palavrasAntes(oracaoAntes(t, inicio));
+  if (negadaAntes(antes, NEUTRAS_ANTES_TELEX, depois[0], NEGA_ANTES_TELEX) || negadaDepois(depois, NEGA_DEPOIS_TELEX)) {
+    return 'negado';
+  }
+  const frase = fraseDa(t, inicio, fim);
+  const palavrasDaFrase = palavras(frase.texto);
+  if (frase.pergunta || palavrasDaFrase.some((w) => PENDENCIA_NA_FRASE.has(w)) || PENDENCIA_EXPRESSOES.test(frase.texto)) {
+    return 'pendente';
+  }
+  // A palavra inteira da menção ("Telex released": o padrão casa até "release").
+  const fimPalavra = fim + (/^[\p{L}\p{N}]*/u.exec(t.slice(fim))?.[0].length ?? 0);
+  const oracao = [...palavras(oracaoAntes(t, inicio)), ...palavras(t.slice(inicio, fimPalavra)), ...depois];
+  if (oracao.some((w) => PENDENCIA_NA_ORACAO.has(w))) return 'pendente';
+  if (temConclusao(oracao)) return 'confirmado';
+  const outras = frase.texto.split(FRONTEIRAS).map(palavras);
+  const conclusaoAoLado = outras.some(
+    (o) =>
+      o.some((w) => DOCUMENTOS.includes(w) || w === 'telex') &&
+      !o.some((w) => ehNegador(w, NEGA_ANTES_TELEX) || ehNegador(w, NEGA_DEPOIS_TELEX)) &&
+      temConclusao(o),
+  );
+  return conclusaoAoLado ? 'confirmado' : 'pendente';
+}
+
+/** Situação do telex no texto (envelope). Pendência em qualquer menção impede a confirmação. */
+function situacaoDoTelex(t: string): { telex: boolean; telexPendente: boolean } {
+  let confirmado = false;
+  let pendente = false;
   for (const m of t.matchAll(RE_TELEX)) {
     const inicio = m.index ?? 0;
-    const depois = palavras(oracaoDepois(t, inicio + m[0].length));
-    const negada =
-      negadaAntes(palavrasAntes(oracaoAntes(t, inicio)), NEUTRAS_ANTES_TELEX, depois[0]) ||
-      negadaDepois(depois);
-    if (!negada) return true;
+    const estado = classificarMencao(t, inicio, inicio + m[0].length);
+    if (estado === 'confirmado') confirmado = true;
+    if (estado === 'pendente') pendente = true;
   }
-  return false;
+  return { telex: confirmado && !pendente, telexPendente: pendente };
 }
 
 /**
@@ -215,10 +326,12 @@ function envioAfirmado(t: string): boolean {
 
 export function docResolutionFromText(text: string): DocResolution {
   const t = text || '';
+  const { telex, telexPendente } = situacaoDoTelex(t);
   return {
-    telex: telexAfirmado(t),
+    telex,
     wave: RE_WAVE.test(t),
     destino: RE_DESTINO.test(t),
     importador: envioAfirmado(t),
+    telexPendente,
   };
 }
