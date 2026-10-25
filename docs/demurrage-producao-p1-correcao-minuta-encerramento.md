@@ -529,6 +529,8 @@ liam o schema parcial) estão justificadas em §10.2.
 
 ## 12. Diagnóstico separado — autenticação de conta única e filas pessoais
 
+> **Atualização (ponteiro):** a entrega separada planejada aqui foi implementada e depois auditada. Está **APROVADA E CONGELADA** em `8266fba` (baseline anterior `29a3830`; commits aprovados `4bb0efc`, `b03b463`, `8266fba`). O desenho final difere deste plano em alguns pontos; por exemplo, não há o flag `PRIORA_MULTISESSAO`. Vale `docs/demurrage-producao-p1-autenticacao-filas.md` (§19 congelamento; §19.4 limitação do MVP: uma única organização em produção). Este ponteiro não altera o status desta correção de minuta e encerramento.
+
 Somente leitura; **nada foi implementado nesta entrega** (nenhuma linha de
 `src/auth`, `src/middleware`, `/api/me` ou do shell foi alterada). Achados
 verificados por uma segunda leitura adversarial independente (16 confirmados,

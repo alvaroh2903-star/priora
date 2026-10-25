@@ -1,6 +1,7 @@
 # Produção P1 — Autenticação, identidade operacional, atribuição e filas pessoais (entrega corretiva)
 
-> Entrega **corretiva**, só backend. Não congela nada e **não declara a Production P1 concluída**.
+> **APROVADA E CONGELADA** em `8266fba` por decisão formal do responsável pelo produto (§19). Entrega corretiva, só backend. **Não declara a Production P1 concluída** (§19.7).
+> **Limitação aceita para o MVP:** uma única organização em produção, dona exclusiva da integração Microsoft. Captura, reprocessamento, avisos e V1 pertencem só a ela. Nenhuma segunda organização é ativada até existir um canal de integração por organização (§19.4; checklist obrigatório no §19.5).
 > Frontend, HTML, CSS, JavaScript de apresentação e design: **intocados** (§17).
 > Fora desta entrega (não iniciados): administração tarifária, armazenamento definitivo dos arquivos de minuta, frontend/design.
 > O handoff HMAC (contrato assinado, idempotência e controle de capacidade) **não foi modificado** (§12). Ressalva: depois de uma atribuição interna, o responsável enviado pelo handoff é registrado no ledger, mas não promovido (§9, R12). A requisição e a resposta do handoff não mudam; o efeito dessa observação sobre o responsável, sim.
@@ -26,6 +27,7 @@
 16. Riscos remanescentes
 17. Confirmação: frontend e design intocados
 18. Auditoria corretiva final (D12, avisos, integração Microsoft, V1, inventário, sessões, validação)
+19. Congelamento formal (baseline, superfície, regra de alteração, limitação do MVP, checklist de deploy)
 
 ---
 
@@ -279,6 +281,8 @@ Mudanças observáveis de resposta (deliberadas): autor de fallback recusado `40
 
 ## 13. Implantação (ordem obrigatória)
 
+> **Checklist obrigatório do congelamento: §19.5.** Uma única organização em produção (§19.4).
+
 1. **Migrar o banco antes do código**: `npm run db:migrate:demurrage` (0049, 0050 e 0051 são aditivas; o código antigo as ignora, e a confirmação de envio da 0050 é um gatilho seguro para rollback, §18.2). O boot de produção recusa subir sem o schema delas. Aplicar fora do pico: a 0050 toma lock exclusivo nas tabelas de entregas e eventos de divergência. Em caso de erro de deadlock com o worker no ar, basta repetir; o runner é transacional.
 2. **Ambiente**: `SESSION_SECRET` (o mesmo de hoje; também assina cursores), `DEMURRAGE_DATABASE_URL` e **`PRIORA_TOKEN_CACHE_KEY` (obrigatória)**. Sem ela, a conta da integração não é gravada no banco: a V1, a captura e os avisos enxergam a integração como desconectada, numa falha fechada, e o boot registra o erro. Opcionais: `SESSION_MAX_AGE_DAYS`, `SESSION_IDLE_HOURS`, `PRIORA_ORIGENS_PERMITIDAS`. Os mesmos valores em todas as instâncias.
 3. **Confirmar a integração atual e definir a organização DONA** (auditoria final, §18.3). A integração atual era "a última conta que fez login".
@@ -393,7 +397,7 @@ Seis lentes (sessões/cookies; OAuth/integração/logs; organização/`/api/me`;
 - **R18 — `err.message` em 4xx** do Graph e da transportadora chega ao cliente na V1 (pré-existente; o 5xx é genérico).
 - **R19 — Stores e caches locais da V1 sem organização** (`.data/courier-*.json`, `demurrage-*.json`, caches de auditoria). Ao trocar a organização dona: limpar e reiniciar (§13, passo 7).
 - **R20 — Membership na dona dá a caixa inteira**: leitura e envio como a caixa (`POST /api/emails`), como em `ddc43db` para todos.
-- Entrega **não congelada**; a Production P1 **não** está concluída.
+- Entrega **aprovada e congelada** em `8266fba` (§19); a Production P1 **não** está concluída (§19.7).
 
 ## 17. Confirmação: frontend e design intocados
 
@@ -401,7 +405,7 @@ Seis lentes (sessões/cookies; OAuth/integração/logs; organização/`/api/me`;
 
 ## 18. Auditoria corretiva final
 
-Auditoria de `cc98c9a` e `29a3830` pedida antes de congelar a entrega. **A entrega não está congelada e a Production P1 não está concluída.** Não foram iniciados frontend, design, administração tarifária nem armazenamento definitivo de minutas. O handoff HMAC (contrato, idempotência e capacidade) não foi tocado.
+Auditoria de `cc98c9a` e `29a3830` pedida antes de congelar a entrega. À época da auditoria a entrega não estava congelada; depois ela foi **aprovada e congelada** em `8266fba` (§19). **A Production P1 não está concluída.** Não foram iniciados frontend, design, administração tarifária nem armazenamento definitivo de minutas. O handoff HMAC (contrato, idempotência e capacidade) não foi tocado.
 
 | § | Tema | Resultado |
 |---|---|---|
@@ -946,4 +950,142 @@ A suíte completa passou de 1290 testes (em `cc98c9a`) para 1345: são os testes
 - **Correção:** `b03b463`, só nos testes e sem mudar nenhuma asserção (§18.7). As suítes afetadas passaram 3 vezes seguidas, e a validação completa foi repetida do zero acima.
 - **Demais etapas da 1ª validação:** 01 129, 02 86, 04 87, 05 70, 06 47, 07 75 (07b ok), 08 1345, 09 25, 10 66, typecheck e build limpos.
 
-**Estado:** entrega **não congelada**; a Production P1 **não** está concluída.
+**Estado à época da validação:** entrega não congelada. Congelamento formal posterior no §19. A Production P1 **não** está concluída.
+
+## 19. Congelamento formal
+
+> **APROVADA E CONGELADA** por decisão formal do responsável pelo produto, encerrada no commit `8266fba3a19fd228a4901488ae1e269cb2eeb0fc`. Este registro é só documentação: nenhum código, migration, teste, frontend, HTML, CSS, JavaScript de apresentação ou design foi alterado nele. **A Production P1 NÃO está concluída** (§19.7).
+
+### 19.1 Baseline e commits aprovados
+
+| Item | Valor |
+|---|---|
+| Branch | `claude/practical-cerf-mnz7oj` |
+| Baseline anterior | `29a3830` (registro da validação da entrega de autenticação e filas, `cc98c9a`) |
+| Commit aprovado — correções e testes | `4bb0efc` |
+| Commit aprovado — correção da corrida no helper de teste | `b03b463` |
+| Commit aprovado — documentação final | `8266fba` |
+| Estado congelado | `8266fba3a19fd228a4901488ae1e269cb2eeb0fc` |
+
+A superfície abaixo entrou em `cc98c9a` e foi corrigida pelos três commits aprovados (§18). O que vale é o estado em `8266fba`.
+
+### 19.2 Superfície congelada
+
+- sessões humanas no PostgreSQL (`sessoes_humanas`, cookie `__Host-priora.sid`, store, expiração, revogação; §3, §18.6);
+- login e logout isolados por sessão (§3.1, §3.3);
+- identidade operacional (§3.5; `requireSessao`, `req.identidade`);
+- `/api/me` (`priora.me.v2`, inclusive `conexaoMicrosoft.podeUsarCaixaDaIntegracao`; §6);
+- seleção de organização (§7);
+- provisionamento (CLI do operador e `/admin/membros`; §8);
+- papéis (ANALYST, MANAGER, ADMIN; CLIENT nunca interno; administrador de plataforma; §8, §10);
+- atribuição e reatribuição (§9);
+- filas pessoais, da equipe e sem responsável (`MINHA_FILA`, `EQUIPE`, `SEM_RESPONSAVEL`; §10.1);
+- autorização das ações por responsável (§10.2, §11);
+- redirecionamento de avisos após reatribuição (§18.2);
+- isolamento da organização dona da integração (§18.3);
+- acesso V1 pelos membros internos ativos da organização dona (§18.4);
+- migrations `0049_sessoes_identidade_atribuicao.sql`, `0050_avisos_redirecionamento_responsavel.sql` e `0051_integracao_microsoft_organizacao.sql`.
+
+### 19.3 Regra de alteração
+
+A superfície congelada só muda mediante:
+
+1. defeito comprovado;
+2. problema de segurança ou de integridade;
+3. autorização explícita do responsável pelo produto.
+
+### 19.4 Limitação aceita para o MVP: uma única organização
+
+Decisão de implantação do responsável pelo produto:
+
+- **O primeiro lançamento real atende somente UMA organização**, vinculada como **dona exclusiva** da integração Microsoft (`vincular-integracao-organizacao`).
+- **Captura do pré-alerta, reprocessamento de Shipping Instructions, avisos por e-mail e V1 pertencem exclusivamente à organização dona.** Para qualquer outra organização:
+  - os avisos falham com `canal_de_outra_organizacao`, sem chamar o Graph;
+  - a V1 responde `403 integracao_de_outra_organizacao`;
+  - captura e reprocessamento são recusados (§18.3).
+- **Nenhuma segunda organização pode ser ativada em produção** enquanto não existir um canal de integração próprio por organização. O bloqueio é **operacional**: verificações obrigatórias antes do deploy e a cada mudança de provisionamento (§19.5, item 6).
+- **Isso não é suporte multiorganização concluído.** O modelo de dados e a autorização são multiorganização, mas a integração Microsoft é de uma organização só. A arquitetura multiorganização (canal por organização) é **trabalho separado** e exige **autorização específica**.
+- A limitação está no runbook (`docs/demurrage-runbook-operacional.md`, §12) e no checklist abaixo.
+
+### 19.5 Checklist obrigatório antes do deploy
+
+**Pré-requisito de ambiente** (§13, passo 2), com os mesmos valores em todas as instâncias:
+- `SESSION_SECRET`, que não pode ser o padrão de desenvolvimento;
+- `DEMURRAGE_DATABASE_URL`;
+- **`PRIORA_TOKEN_CACHE_KEY`**.
+
+**Ordem dos itens:** 1, 2 e 3 antes de publicar o código; 4 depois de publicar e antes do smoke test; 5 antes de liberar os analistas; 6 antes de liberar e a cada mudança de provisionamento.
+
+1. **Aplicar as migrations até a 0051, antes do código.**
+   - Rodar `npm run db:migrate:demurrage`.
+   - Conferir: `SELECT filename FROM schema_migrations ORDER BY filename DESC LIMIT 1` deve devolver `0051_integracao_microsoft_organizacao.sql`.
+   - O boot de produção recusa subir sem o schema da 0049 a 0051.
+2. **Provisionar o administrador da plataforma.**
+   - `npm run demurrage:provisionar -- vincular-usuario --nome … --email … --oid … --tid … --operador … --motivo …`
+   - `… adicionar-membro --org <organização do MVP> --email … --papel ADMIN --operador … --motivo …`
+   - `… admin-plataforma --email … --ativar --operador … --motivo …`
+   - Para conectar a integração, o administrador de plataforma precisa de membership interno ATIVO (§3.2).
+3. **Provisionar usuários, memberships e papéis**, todos na organização do MVP.
+   - `vincular-usuario` e `adicionar-membro --papel ANALYST|MANAGER|ADMIN`.
+   - Ajustes com `definir-papel`.
+   - Conferir com `listar-membros --org <organização do MVP>`.
+4. **Vincular a integração à organização do MVP.**
+   - O administrador de plataforma confirma, ou conecta, a conta técnica (`/auth/integracao/conectar`).
+   - Rodar `… vincular-integracao-organizacao --org <organização do MVP> --operador … --motivo …`.
+   - Conferir com `… conta-integracao`: `organizacaoDona` deve ser a organização do MVP e `vinculosAtivosDeOutrasContas` deve vir `[]`.
+   - Sem esse vínculo, a V1, a captura, o reprocessamento e os avisos ficam bloqueados (falha fechada).
+5. **Atribuir os processos abertos** antes de liberar os analistas.
+   - Levantar com `… processos-sem-responsavel --org <organização do MVP>`.
+   - Atribuir com `… atribuir-sem-responsavel --org … --para <membership> …` ou com `atribuir-responsavel`.
+6. **Confirmar que nenhuma segunda organização está ativa para esses fluxos.** Cada consulta deve devolver **somente** a organização do MVP:
+
+   ```sql
+   -- memberships internos ativos
+   SELECT organization_id, count(*) FROM organization_memberships
+    WHERE desativado_em IS NULL AND papel IN ('ANALYST', 'MANAGER', 'ADMIN') GROUP BY organization_id;
+   -- dona da integração: exatamente UMA linha, da organização do MVP, com conta_atual = true
+   SELECT v.organization_id, (v.home_account_id = c.home_account_id) AS conta_atual
+     FROM integracao_microsoft_vinculos v LEFT JOIN msal_conta_ativa c ON c.id = 'default'
+    WHERE v.desvinculado_em IS NULL;
+   -- caixas de captura não removidas
+   SELECT organization_id, estado FROM email_caixas WHERE estado <> 'removida';
+   -- credenciais ativas do handoff (criam processos na organização da credencial)
+   SELECT organization_id, nome FROM demurrage_handoff_credenciais WHERE status = 'ATIVA';
+   -- processos existentes
+   SELECT organization_id, count(*) FROM processos GROUP BY organization_id;
+   ```
+
+   - Qualquer outra organização numa dessas consultas **bloqueia o deploy** até uma decisão explícita. Nenhuma correção automática.
+   - Repita as consultas a cada mudança de provisionamento: membro, credencial de handoff, caixa ou vínculo.
+   - Depois de publicar, rode o smoke test do §13, passo 6.
+
+### 19.6 Resultados finais
+
+Validação sequencial em worktree limpo com banco novo, no commit `b03b463`. O código congelado é idêntico; `8266fba` só acrescenta documentação.
+
+| Etapa | Resultado |
+|---|---|
+| Testes novos | **129/129** |
+| Autenticação existente | **86/86** |
+| Notificações | **273/273** |
+| Entrega 1 + capacidade | **87/87** |
+| Entrega 2 | **70/70** |
+| Entrega 3 | **47/47** |
+| D12 (os 10 arquivos históricos, cada um com a contagem congelada) | **75/75** |
+| Suíte completa da Demurrage Engine | **1345/1345** |
+| V1 | **25/25** |
+| D13 UI | **66/66** |
+| `tsc --noEmit` e build | limpos |
+
+Zero falhos, ignorados, cancelados e `todo` em todas as etapas. Detalhe e a 1ª validação (`4bb0efc`) no §18.9.
+
+### 19.7 O que continua fora (a Production P1 não está concluída)
+
+Restam, cada um como frente própria que depende de autorização explícita:
+
+- administração operacional de tarifas;
+- armazenamento definitivo dos arquivos de minuta;
+- frontend;
+- integração produtora da Liberação, quando estiver pronta.
+
+A arquitetura multiorganização (canal de integração por organização, §19.4) é trabalho separado, com autorização específica. A correção de minuta e encerramento (`ddc43db`) mantém o status registrado no próprio relatório; este congelamento não o altera.

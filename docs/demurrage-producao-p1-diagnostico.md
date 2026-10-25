@@ -15,6 +15,24 @@
 > CONGELADO** (decisão formal do usuário; código `19fc8d9`, relatório
 > `6c04234`). Era o item 3 do §7, agora concluído — ver §6 e
 > `docs/demurrage-producao-p1-handoff-capacidade.md`.
+>
+> **Atualização — reabertura controlada do backend.** O "backend formalmente
+> concluído" acima foi reaberto, por autorização do usuário, para entregas
+> corretivas anteriores ao frontend:
+> - **Autenticação, identidade operacional, atribuição e filas pessoais —
+>   APROVADA E CONGELADA** (decisão formal do responsável pelo produto; estado
+>   congelado `8266fba`; baseline anterior `29a3830`; commits aprovados
+>   `4bb0efc`, `b03b463`, `8266fba`). Ver §6 e
+>   `docs/demurrage-producao-p1-autenticacao-filas.md` §19.
+> - **Limitação aceita para o MVP:** uma única organização em produção, dona
+>   exclusiva da integração Microsoft. Nenhuma segunda organização é ativada
+>   até existir um canal de integração por organização. Isso **não** é suporte
+>   multiorganização concluído.
+> - Correção de minuta e encerramento (`ddc43db`): status no próprio relatório
+>   (`docs/demurrage-producao-p1-correcao-minuta-encerramento.md`).
+> - **A Production P1 NÃO está concluída.** Restam: administração operacional
+>   de tarifas; armazenamento definitivo dos arquivos de minuta; frontend;
+>   integração produtora da Liberação, quando estiver pronta (§7).
 
 ## 0. Status executivo
 
@@ -306,9 +324,12 @@ Nenhuma das três entregas toca cálculo, relógio, tarifa, cadência de trackin
 | 2 — Rotas de ação operacional | **APROVADA E CONGELADA** | v1.2 | 1107/1107 |
 | 3 — Leitura para o frontend redesenhado | **APROVADA E CONGELADA** | v1.1 | 1154/1154 |
 | Adição à Entrega 1 — controle de capacidade da rota HTTP do handoff | **APROVADO E CONGELADO** | código `19fc8d9`, relatório `6c04234` | 1181/1181 |
+| Corretiva — autenticação, identidade, atribuição e filas pessoais | **APROVADA E CONGELADA** | `4bb0efc`, `b03b463`, `8266fba` (baseline `29a3830`) | 1345/1345 |
 
 **Backend da Produção P1: FORMALMENTE CONCLUÍDO** (decisão final do
-usuário, com o congelamento da Entrega 3 v1.1). Cada superfície congelada só
+usuário, com o congelamento da Entrega 3 v1.1). **Reaberto depois** de forma
+controlada para entregas corretivas (ver abaixo e o status no topo). A
+Production P1, como um todo, **não está concluída** (§7). Cada superfície congelada só
 muda mediante: defeito comprovado; problema de integridade de dados (ou
 falha de segurança, nas Entregas 1 e 2); ou aprovação explícita do usuário.
 
@@ -324,6 +345,54 @@ Entrega 2 70/70, Entrega 3 47/47, Demurrage Engine 1181/1181, V1 25/25,
 D13 UI 66/66, typecheck e build limpos. Só muda mediante defeito
 comprovado, problema de integridade/segurança ou autorização explícita do
 usuário.
+
+### Corretiva — autenticação, identidade, atribuição e filas pessoais
+
+**STATUS: APROVADA E CONGELADA** (decisão formal do responsável pelo produto).
+
+- **Estado congelado:** `8266fba3a19fd228a4901488ae1e269cb2eeb0fc`.
+- **Baseline anterior:** `29a3830`.
+- **Commits aprovados:** `4bb0efc` (correções e testes), `b03b463` (correção da corrida no helper de teste) e `8266fba` (documentação final).
+- **Relatório:** `docs/demurrage-producao-p1-autenticacao-filas.md` (§18 auditoria, §19 congelamento).
+
+**Superfície congelada:**
+- sessões humanas no PostgreSQL;
+- login e logout isolados por sessão;
+- identidade operacional;
+- `/api/me`;
+- seleção de organização;
+- provisionamento e papéis;
+- atribuição e reatribuição;
+- filas pessoais, da equipe e sem responsável;
+- autorização das ações por responsável;
+- redirecionamento de avisos após reatribuição;
+- isolamento da organização dona da integração;
+- acesso V1 pelos membros internos ativos da organização dona;
+- migrations `0049`, `0050` e `0051`.
+
+**Regra de alteração:** só mediante defeito comprovado, problema de segurança ou integridade, ou autorização explícita do responsável pelo produto.
+
+**Limitação aceita (MVP):**
+- somente uma organização em produção;
+- captura, reprocessamento, avisos e V1 pertencem exclusivamente à organização dona da integração;
+- a ativação de uma segunda organização fica bloqueada operacionalmente;
+- isso não é suporte multiorganização concluído.
+
+Checklist obrigatório de deploy: relatório §19.5 e `docs/demurrage-runbook-operacional.md` §12.
+
+**Regressão final no congelamento** (worktree limpo, banco novo, `b03b463`):
+- testes novos 129/129;
+- autenticação existente 86/86;
+- notificações 273/273;
+- Entrega 1 + capacidade 87/87;
+- Entrega 2 70/70;
+- Entrega 3 47/47;
+- D12 75/75;
+- Demurrage Engine completo 1345/1345;
+- V1 25/25;
+- D13 UI 66/66;
+- typecheck e build limpos;
+- zero falhos, ignorados, cancelados e `todo`.
 
 ---
 
@@ -350,6 +419,17 @@ acima:
 6. Tracking manual (§3, item 2).
 7. Administração de divergências de Free Time (§3, item 4b).
 8. Aposentadoria do V1 legado.
+9. Armazenamento definitivo dos arquivos de minuta (fora da correção de
+   minuta e encerramento e da entrega de autenticação; não iniciado).
+10. Arquitetura multiorganização da integração Microsoft (um canal de
+    integração por organização). Até lá vale a limitação do MVP: uma única
+    organização em produção (§6, "Corretiva — autenticação…"). Exige
+    autorização específica.
+
+**A Production P1 não está concluída:** restam a administração operacional de
+tarifas (item 4), o armazenamento definitivo dos arquivos de minuta (item 9),
+o frontend (item 1) e a integração produtora da Liberação (item 2), quando
+estiver pronta.
 
 ---
 
