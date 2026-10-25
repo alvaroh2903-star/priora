@@ -609,7 +609,37 @@ por contagem, como a varredura); bloqueio na cabeça da fila de expansões
 
 ### 13.5 Validação em worktree limpo e banco novo
 
-<!-- VALIDACAO -->
+Worktree novo no commit `408aff18e2c19a3ce02e7de773ee602aeef8e512`
+(`git status --porcelain` vazio antes e depois; só `dist/` e
+`node_modules/` ignorados), PostgreSQL 16 com banco recém-criado, `npm ci`
+limpo, passos **sequenciais** (`--test-concurrency=1`, nunca duas suítes de
+banco ao mesmo tempo).
+
+| Passo | Suíte | Testes | Passaram | Falharam | Cancelados | Ignorados | Todo |
+|---|---|---|---|---|---|---|---|
+| 01 | novos tarifários (`tarifasAdminP1`, `tarifasAdminP1Recalculo`, `tarifasAdminP1Revisao`) | 57 | 57 | 0 | 0 | 0 | 0 |
+| 02 | tarifários existentes (`tariffs`, `d15c`, `d15cV11`, `d15cV12`, `apuracao`, `apuracaoV12`–`V14`, `gestaoSelecaoFinanceira`, `migrate`, `migration0007`) | 142 | 142 | 0 | 0 | 0 | 0 |
+| 03 | minuta/encerramento (+ responsabilidade, lifecycle, estado operacional, claim do scheduler) | 215 | 215 | 0 | 0 | 0 | 0 |
+| 04 | autenticação e filas (novos P1 + sessão/token/multi-tenant existentes) | 215 | 215 | 0 | 0 | 0 | 0 |
+| 05 | Entrega 1 — handoff + capacidade | 87 | 87 | 0 | 0 | 0 | 0 |
+| 06 | Entrega 2 — ações | 70 | 70 | 0 | 0 | 0 | 0 |
+| 07 | Entrega 3 — leituras operacionais | 47 | 47 | 0 | 0 | 0 | 0 |
+| 08 | D12 read-model (10 arquivos históricos) | **75** | 75 | 0 | 0 | 0 | 0 |
+| 09 | notificações (divergência, pendência, fallback, tick) | 273 | 273 | 0 | 0 | 0 | 0 |
+| 10 | suíte completa Demurrage Engine (`npm run test:demurrage-engine`) | 1402 | 1402 | 0 | 0 | 0 | 0 |
+| 11 | V1 (`npm run test`) | 25 | 25 | 0 | 0 | 0 | 0 |
+| 12 | D13 UI (`npm run test:demurrage-ui`) | 66 | 66 | 0 | 0 | 0 | 0 |
+| 13 | `tsc --noEmit` | — | saída vazia, exit 0 | | | | |
+| 14 | `npm run build` | — | exit 0 | | | | |
+
+D12 congelado, cada arquivo rodado sozinho e conferido contra a contagem
+congelada: `demurrageV2Routes` 7, `leituraAutorizacao` 10, `leituraContrato`
+8, `leituraD12V12` 18, `leituraDetalhe` 6, `leituraFila` 6,
+`leituraFilaV11` 8, `leituraFiltros` 4, `leituraTimeline` 5,
+`leituraTimelineV11` 3 — total 75, todos passando, nenhum ignorado.
+
+Os passos 01–09 são recortes; o passo 10 é a suíte inteira (inclui todos
+eles). Nenhum teste foi pulado, desativado ou posto em quarentena.
 
 
 ---
