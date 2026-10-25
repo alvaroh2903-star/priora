@@ -38,6 +38,11 @@ import {
   Resolution,
 } from '../couriers/referenceResolver';
 import { docResolutionFromText } from '../couriers/docResolution';
+import {
+  FonteDocumental,
+  indiceComOrigem,
+  mencoesDocumentais,
+} from '../couriers/docAssociation';
 import { config } from '../config';
 
 export const courierRouter = Router();
@@ -345,6 +350,14 @@ async function buildCourierView(accessToken: string) {
     const refIndex: RefIndex = buildRefIndex(
       messages.map((m) => ({ subject: m.subject || '', body: fullTextOf(m) })),
     );
+    // O mesmo índice, guardando a mensagem de origem de cada ligação: a associação
+    // documento → processo por referência só vale vinda de OUTROS e-mails.
+    const indiceDocs = indiceComOrigem(
+      messages.map((m) => ({ id: m.id, subject: m.subject || '', body: fullTextOf(m) })),
+    );
+    // Mensagens de cada tracking (id + corpo), para a evidência documental por
+    // processo com origem estável (mensagem + linha).
+    const fontesByTracking = new Map<string, FonteDocumental[]>();
 
     for (const [cid, msgs] of groups) {
       msgs.sort((a, b) => (a.receivedDateTime < b.receivedDateTime ? 1 : -1));
@@ -414,6 +427,17 @@ async function buildCourierView(accessToken: string) {
         const arr = textByTracking.get(number) || [];
         arr.push(convText);
         textByTracking.set(number, arr);
+        const fontes = fontesByTracking.get(number) || [];
+        for (const x of cand)
+          if (!fontes.some((f) => f.messageId === x.m.id))
+            fontes.push({
+              messageId: x.m.id,
+              // Corpo inteiro (sem o bodyPreview, que repete o início cortado) + anexos.
+              texto: [x.m.body?.content || x.m.bodyPreview || '', attMap.get(x.m.id) || '']
+                .filter(Boolean)
+                .join('\n'),
+            });
+        fontesByTracking.set(number, fontes);
         const carrier = displayCarrier(carrierRaw);
         const existing = byTracking.get(number);
         if (existing) {
@@ -529,8 +553,17 @@ async function buildCourierView(accessToken: string) {
       // citado numa thread vizinha contamina todos os processos do envelope e
       // gera um falso "Via Telex Release". Sem sinal aqui, nada é afirmado.
       const ownText = (textByTracking.get(c.tracking) || []).join('\n');
+      // Citação no envelope inteiro (sem processo e sem negação). Mantido na
+      // resposta; a expectativa por processo da tela vem de docsEnvelope.
       const docExpect = docExpectFromText(courierText);
       const docResolution = docResolutionFromText(ownText);
+      // Evidência documental POR PROCESSO (conteúdo × associação), só dos e-mails
+      // deste courier. É o que define a expectativa física por linha do envelope.
+      const docsEnvelope = mencoesDocumentais(
+        fontesByTracking.get(c.tracking) || [],
+        processosEfetivos,
+        indiceDocs,
+      );
       // Documentos listados no e-mail do courier (cada linha = 1 documento).
       // Usado principalmente quando NENHUM processo foi concluído: mostra quantos
       // e quais documentos vêm no envelope, mesmo sem IMxxxx.
@@ -557,6 +590,7 @@ async function buildCourierView(accessToken: string) {
         referencias: c.referencias,
         docExpect,
         docResolution,
+        docsEnvelope,
         eta,
         // Resolução por referência: transparência de "como" o processo foi achado.
         resolucao: { resolvidos, candidatos },
@@ -977,10 +1011,23 @@ courierRouter.get(
       );
 
       const analysis = await parseThread(messages);
+      // IMs escritos no texto da conversa (regex, sem IA). Só qualificam as
+      // SUGESTÕES de processo da tela ("citado na conversa" × "só a Clara"):
+      // aparecer na conversa não prova que o processo está neste courier.
+      const processosNaConversa = Array.from(
+        new Set(
+          messages.flatMap((m) =>
+            (`${m.subject || ''}\n${m.body?.content || m.bodyPreview || ''}`.match(
+              /\bIM\s*[-:]?\s*\d{3,6}\b/gi,
+            ) || []).map((p) => `IM${p.replace(/\D/g, '')}`),
+          ),
+        ),
+      );
       res.json({
         ...analysis,
         expectativa: derivarExpectativa(analysis),
         processosDetalhe: mapProcessDocs(messages),
+        processosNaConversa,
       });
     } catch (err) {
       next(err);

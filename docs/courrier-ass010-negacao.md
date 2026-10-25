@@ -1,4 +1,4 @@
-# Courrier — ASS-010: negação explícita, Telex Release Confirmado × Pendente e IA sem autoridade documental (entregas PARCIAIS)
+# Courrier — ASS-010: negação explícita, Telex Release Confirmado × Pendente, IA sem autoridade documental e associação documento → processo (entregas PARCIAIS)
 
 **Requisito (Blueprint do Courrier, Revisão 3.0):**
 
@@ -97,14 +97,69 @@ texto inteiro. Não se usa a confirmação de um documento como prova para outro
     linha a linha) deixou de alterar o que é esperado. Antes, depois de expandir, ele
     podia tornar um documento "Não esperado" num processo, ou passar a esperar um
     documento que o e-mail do courier não citava;
-  - a expectativa vem só do `docExpect` da lista, igual com o card aberto ou
-    fechado, com ou sem análise, e depois de recarregar a página;
-  - **consequência (decisão pendente):** quando o e-mail lista documentos por
-    processo ("IM2204 - OMBL", "IM2205 - OHBL"), os dois documentos ficam
-    conferíveis nos dois processos, como já acontecia com o card fechado. Para
-    voltar a ter a precisão por processo sem depender da análise, seria preciso
-    aplicar a Regra 4 na própria lista, sem chamada nova. Isso muda a expectativa
-    exibida e precisa de validação.
+  - a expectativa por processo vem só da lista (`docsEnvelope`, abaixo), igual com
+    o card aberto ou fechado, com ou sem análise, e depois de recarregar a página;
+  - os `processNumbers` da análise (inclusive os IMs que só a Clara citou) não
+    viram mais linha do envelope: aparecem como **"Sugestões da análise — não
+    confirmadas"**, com a origem ("citado na conversa" ou "só a Clara"). Um IM
+    escrito na conversa também é só sugestão: não prova que o processo está neste
+    courier.
+
+## Associação documento → processo (entrega de 25/10)
+
+Corrige a atribuição cruzada: antes, um envelope que citava OMBL para um IM e OHBL
+para outro fazia os dois documentos serem esperados nos dois processos.
+
+**Três camadas separadas** (`src/couriers/docAssociation.ts`, calculado na lista,
+sem IA e sem chamada nova):
+
+| Camada | O que diz | Onde |
+|---|---|---|
+| Conteúdo físico | A menção a OMBL/OHBL afirma que o documento vem **neste** envelope (`afirmado`) ou não comprova (`nao-comprovado`: negado, a seguir/pendente, liberação eletrônica, emissão no destino, cópia/anexo) | `docsEnvelope.mencoes[].conteudo` |
+| Associação | A qual processo a menção pertence: `confirmada` (IM único na mesma linha; referência de BL que aponta para um único processo em **outro** e-mail; ou processo único do envelope sem referência em conflito), `ambigua` (com `candidatos` e `externos`) ou `sem-processo` | `docsEnvelope.mencoes[].associacao` |
+| Conferência física | Marcações e follow-ups do operador | `conferencia` / `followups` (não mudam) |
+
+- **Origem estável:** cada menção tem `id` = `mensagem#Llinha:tipo:ordem` e
+  `fonte` = { `messageId`, `linha`, `ref` (código do BL, se houver) }. Nenhum
+  trecho do e-mail sai na resposta. O id muda se a mensagem for movida no Outlook
+  (o Graph troca o id).
+- **A proximidade de linha dentro do próprio e-mail do courier não associa por
+  referência** (o índice global de referências faz isso; aqui só valem ligações de
+  outros e-mails).
+- **Vários IMs na mesma linha, IM/BL fora do envelope ou referência 1:N** ficam
+  ambíguos. Um processo único não vence IM ou BL em conflito.
+- A detecção continua determinística: **não prova que a fonte é confiável nem que
+  a atribuição está certa** — só o que o texto diz.
+
+**Na tabela do envelope, por processo × documento:**
+
+| Situação | Exibição | Controles | Cobrança |
+|---|---|---|---|
+| Afirmado e associado a este processo | Aguardando courier / Recebido / Não recebido | Sim | Sim, se marcado "Não recebido" |
+| Afirmado, associação ambígua com este processo como candidato | "A revisar — processo não confirmado" | **Não** (decisão 1: a marcação não pode criar a associação) | Não |
+| Só menções que não comprovam (negado, "to follow", telex…) | "A revisar — presença não comprovada" | Não | Não |
+| Nenhuma menção ao documento para este processo | "Não informado" (expectativa desconhecida; nada é fabricado) | Não | Não |
+| Marcação já gravada sem expectativa confirmada | "Registro: Recebido/Não recebido" + "Conflito de associação — revisar" (ou "Sem menção no e-mail — revisar") | Não | **Suspensa** (decisão 2); o follow-up já feito aparece |
+
+- "Não comprovado" não vira "não esperado" e não cancela expectativa sustentada
+  por outra menção afirmada.
+- Um documento associado a outro processo não vira "não esperado" aqui: pode haver
+  dois documentos do mesmo tipo.
+- O status da linha conta os documentos esperados **e os registros gravados**: uma
+  divergência registrada continua visível até a revisão; nada é dado como resolvido.
+- Documento afirmado sem processo confirmado aparece uma vez, no bloco
+  **"Documentos sem processo confirmado — revisar"**, sem virar expectativa em
+  nenhum IM.
+- Resolução (telex, importador, destino, Wave) continua valendo para o envelope
+  inteiro, antes da expectativa, como antes (lacuna 1).
+
+**Dependência identificada (não implementada):** registrar e atribuir documentos
+encontrados sem associação confirmada — ou conferir um documento cuja expectativa
+é desconhecida — é o tratamento de documentos inesperados/sem processo (**RES-006 a
+RES-008**). Até ele existir, essas células mostram o estado e os registros, sem
+controles. **Consequência:** num envelope cujo e-mail não cita OMBL/OHBL, não há
+conferência por documento na tela (o estado do courier — Recebido, Concluído —
+continua funcionando).
 - **Painel da Clara:** todas as observações viraram informativas, com o mesmo
   gatilho de antes:
   - telex: "Clara identificou menção a Telex Release. Isso, sozinho, não encerra a
@@ -132,20 +187,22 @@ texto inteiro. Não se usa a confirmação de um documento como prova para outro
 - Chamadas externas: 1 busca no Graph e 0 de IA por lista; 1 leitura de conversa
   no Graph e 1 chamada de IA por análise (ao expandir), como antes.
 - IA e prompts. A rota de análise continua devolvendo `hblResolution` e
-  `processosDetalhe`.
-- Liberação, Gestão, Demurrage e a tela Processos.
+  `processosDetalhe`, e passa a devolver `processosNaConversa` (regex sobre as
+  mesmas mensagens) só para qualificar as sugestões.
+- Liberação, Gestão, Demurrage, a tela Processos e a tela "Exigem Atenção".
 - A detecção de Wave BL, emissão no destino e envio ao importador no motor.
-- A lista de processos do card: os `processNumbers` da análise ainda acrescentam
-  linhas ao expandir (achado abaixo, lacuna 11).
+- `docExpect` continua na resposta da lista (a tela não o usa mais).
 
 ## Lacunas que continuam em ASS-010
 
 Os testes que exercitam estes casos estão rotulados como **caracterização de
 limitação conhecida**, e não como conformidade.
 
-1. **Atribuição por documento ou IM.** O sinal vale para o envelope inteiro. Uma
-   confirmação de outro IM, sem nenhuma pendência no texto, ainda encerra o OHBL de
-   todos os processos do envelope.
+1. **Atribuição da resolução por documento ou IM.** Telex, envio ao importador,
+   emissão no destino e Wave valem para o envelope inteiro. Uma confirmação de
+   outro IM, sem nenhuma pendência no texto, ainda encerra o OHBL de todos os
+   processos do envelope. (A **expectativa** já é por processo; a **resolução**
+   ainda não.)
 2. **Cronologia (ASS-009).** Um cancelamento posterior não restaura a expectativa, e
    uma confirmação posterior não encerra uma pendência anterior: fica pendente, que
    é o lado seguro.
@@ -167,18 +224,21 @@ limitação conhecida**, e não como conformidade.
     - pendência em outra oração da mesma frase também deixa pendente ("Telex released
       after payment", "… pending your freight payment");
     - pode haver pendência falsa, nunca confirmação falsa por esse motivo.
-11. **Processos acrescentados pela análise (achado, fora desta entrega).** Ao
-    expandir, o card une à lista os `processNumbers` da análise: os IMs achados por
-    regex na conversa inteira **e os que só a IA citou**, sem conferir no texto.
-    Cada processo novo ganha uma linha com OMBL/OHBL esperados. As linhas que já
-    existiam não mudam. Corrigir mexe na atribuição de processo ao courier e
-    precisa de decisão.
-12. **Regra 4 (documento por processo) sem efeito.** Ela só chegava com a análise;
-    hoje a expectativa é a do envelope inteiro. Ver "decisão pendente" acima.
+11. **Atribuição documento → processo é só por linha e por referência.** IM numa
+    linha e o documento na linha seguinte, ou tabela com o IM num cabeçalho, ficam
+    "sem processo" (a revisar). OMBL compartilhado por vários IMs na mesma linha
+    fica ambíguo, mesmo quando é um master legítimo de consolidação.
+12. **Documentos sem processo ou com expectativa desconhecida não têm conferência
+    na tela** até existir o tratamento de RES-006 a RES-008 (registrar e atribuir
+    documento encontrado).
+13. **Leitura de conteúdo conservadora:** "after", "if", "pending" e afins na mesma
+    frase, "copy/attached/pdf" e menções a telex/Wave no mesmo trecho deixam a
+    menção "não comprovada". Pode haver "a revisar" a mais; nunca expectativa a mais
+    por esse motivo.
 
 ## Testes
 
-`npm run courier-docs:selftest` (61 casos, isolado):
+`npm run courier-docs:selftest` (84 casos, isolado):
 
 - **`docResolution.test.ts` (31):**
   - confirmação, pendência, "approved", menção sem marcador, condição na frase e
@@ -190,16 +250,38 @@ limitação conhecida**, e não como conformidade.
   - equivalência e monotonia em 5.000 + 5.000 textos gerados: a menção é detectada
     como antes, nada é criado, e confirmado e pendente nunca saem juntos;
   - as caracterizações acima.
+- **`docAssociation.test.ts` (14):** o módulo puro de associação.
+  - conteúdo: lista simples e "seguem/enclosed" afirmam; negação, "to follow",
+    futuro, pendência, pergunta, telex/surrender/sea waybill, emissão no destino e
+    cópia/anexo não comprovam; a leitura é por oração;
+  - associação: IM único na linha confirma (IM2204 OMBL × IM2205 OHBL sem
+    cruzamento); vários IMs ficam ambíguos; sem IM com vários processos fica sem
+    processo; BL ligado a um processo em outro e-mail confirma; proximidade de
+    linha no próprio e-mail não confirma; 1:N e booking ficam ambíguos; processo
+    único confirma, mas não vence IM ou BL em conflito; base "IM2204-26";
+  - origem estável (mensagem, linha, ref, id), mesma saída para a mesma entrada,
+    nenhum trecho do e-mail; o motor documental não muda.
 - **`docResolution.rota.test.ts` (3):** `GET /api/couriers` pela rota real, com Graph,
   MSAL e Gemini falsos e rede bloqueada. Confere:
   - confirmado, pendente, sem marcador, negado e português afirmativo;
+  - o formato do `docsEnvelope` (sem trecho do e-mail) e "original HBL will
+    follow" como não comprovado;
   - os registros de estado, conferência e follow-up semeados não mudam;
   - 1 busca no Graph e 0 chamadas de IA por lista;
   - o texto do painel da Clara (`derivarExpectativa`): as observações de telex,
     Wave, destino e cliente são informativas.
-- **`docResolution.front.test.ts` (23):** o script real do Courier Module num `vm`
-  (`buildRow`), verificando que `buildRow` não altera estado, conferência nem faz
-  chamada. Confere:
+- **`docResolution.front.test.ts` (31):** o script real do Courier Module num `vm`
+  (`buildRow`), com o `docsEnvelope` gerado pelo módulo real a partir do texto,
+  verificando que `buildRow` não altera estado, conferência nem faz chamada.
+  Confere:
+  - associação: IM2204 OMBL × IM2205 OHBL sem cruzamento e sem controles onde não
+    há expectativa; documento de outro processo não vira "não esperado"; dois
+    documentos do mesmo tipo; IM desconhecido listado uma vez sem associação;
+    negado/"to follow"/telex/cópia a revisar sem cancelar expectativa afirmada;
+    sem menção = desconhecido; processo único não vence IM em conflito;
+  - decisão 1: "A revisar" sem Recebido/Não recebido; decisão 2: registro e
+    follow-up visíveis como conflito, divergência mantida, cobrança suspensa;
+  - IM só da IA ou só da conversa vira sugestão, sem linha nem chip;
   - a matriz motor × Clara: confirmado com e sem Clara; pendente com "Telex
     Release" e "confirmed"; sem confirmação com "pending", "Via Telex Release" e
     "confirmed"; sem análise; importador, destino e Wave reconhecidos pelo motor;
@@ -213,18 +295,23 @@ limitação conhecida**, e não como conformidade.
   - envelope em trânsito, recebido, OHBL recebido (Conferido) e não recebido
     (pendência e cobrança), confirmado pelo motor fora da conferência, e as
     marcações valendo com a Clara citando destinatário/destino/Wave;
-  - expandir ou recarregar: 192 combinações (expectativa × motor × estado ×
+  - expandir ou recarregar: 336 combinações (7 textos × motor × estado ×
     processos) × 5 análises × aberto/fechado dão a mesma projeção documental que o
     card sem análise; o mapa por processo não cria nem remove expectativa;
   - vários processos: a afirmação só da IA não encerra nenhum;
-  - caracterizações: múltiplos processos no envelope (sem atribuição por IM) e
-    linhas acrescentadas pelos `processNumbers` da análise (lacuna 11).
-- **`docResolution.analise.test.ts` (4):** caminho real de expandir. Lista
+  - caracterização: a resolução do motor vale para todos os processos do envelope
+    (lacuna 1).
+- **`docResolution.analise.test.ts` (5):** caminho real de expandir. Lista
   (`GET /api/couriers`) → clique em "ver envelope" no script real (`toggle`) →
   `GET /api/couriers/:cid/analysis` (rota real, Graph e Gemini falsos, rede
   bloqueada) → `buildRow`. Confere:
-  - a projeção documental é a mesma fechado, aberto, fechado com a análise em
-    memória e depois de recarregar com a Clara afirmando outra coisa;
+  - processos, chips, documentos sem processo e células iguais fechado, aberto,
+    fechado com a análise em memória e depois de recarregar com a Clara afirmando
+    outra coisa (inclusive com IM só da Clara e IM só da conversa);
+  - IM2204 OMBL × IM2205 OHBL sem cruzamento; marcação antiga do OHBL do IM2208
+    visível como conflito, com follow-up, divergência mantida e sem cobrança;
+    documento sem IM listado uma vez; "OHBL to follow" a revisar; sugestões
+    "só a Clara" e "citado na conversa"; origem estável das menções;
   - destino e "Telex release to consignee" só da Clara não encerram; Wave só da
     Clara não apaga a divergência nem as pendências de cobrança gravadas; o
     `processosDetalhe` chega, mas não muda o esperado; importador e Wave do motor

@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import path from 'path';
 import vm from 'vm';
+import { mencoesDocumentais } from './docAssociation';
 
 const HTML = path.join(__dirname, '..', '..', 'public', 'Courier Module.dc.html');
 const SCRIPT = (() => {
@@ -53,10 +54,19 @@ function componente() {
 
 type Opcoes = {
   estado?: string;
+  /** Mesma marcação de conferência gravada em todos os processos. */
   conf?: Record<string, string>;
+  /** Marcações gravadas por processo (quando diferem). */
+  confPor?: Record<string, Record<string, string>>;
+  /** Follow-ups gravados por processo. */
+  fupPor?: Record<string, Record<string, unknown>>;
   clara?: string | null;
   processos?: string[];
-  docExpect?: { mbl: boolean; hbl: boolean; anySeen: boolean };
+  /**
+   * Corpo do e-mail do courier. O docsEnvelope sai do módulo REAL
+   * (mencoesDocumentais). Padrão: "IMxxxx - OMBL / OHBL" para cada processo.
+   */
+  texto?: string;
   /** Resposta inteira de /analysis (hblResolution, processosDetalhe, processNumbers…). */
   analise?: Record<string, unknown>;
   /** Card aberto (expandedId), como depois do clique em "ver envelope". */
@@ -65,18 +75,21 @@ type Opcoes = {
 function montar(docResolution: Record<string, boolean>, op: Opcoes = {}) {
   const c = componente();
   const processos = op.processos || ['IM2101'];
+  const texto = op.texto ?? processos.map((p) => `${p} - OMBL / OHBL`).join('\n');
   const courier = {
     carrier: 'FedEx',
     tracking: '770012345611',
     agente: 'Agente sintético',
     data: '2026-10-01T12:00:00.000Z',
     processos,
-    docExpect: op.docExpect || { mbl: true, hbl: true, anySeen: true },
+    // Citação no envelope inteiro: a tela NÃO a usa mais (fica "tudo citado" de propósito).
+    docExpect: { mbl: true, hbl: true, anySeen: true },
     docResolution,
+    docsEnvelope: mencoesDocumentais([{ messageId: 'msg-1', texto }], processos, new Map()),
     conversationId: 'conv-1',
     estado: op.estado || 'Identificado',
-    conferencia: op.conf ? Object.fromEntries(processos.map((p) => [p, op.conf])) : {},
-    followups: {},
+    conferencia: op.confPor || (op.conf ? Object.fromEntries(processos.map((p) => [p, op.conf])) : {}),
+    followups: op.fupPor || {},
     resolucao: { resolvidos: [], candidatos: [] },
   };
   const confAntes = JSON.stringify(courier.conferencia);
@@ -93,14 +106,19 @@ function montar(docResolution: Record<string, boolean>, op: Opcoes = {}) {
   assert.equal(JSON.stringify(courier.conferencia), confAntes, 'buildRow alterou a conferência');
   return row;
 }
+/** Célula com os campos novos explícitos (false quando a revisão do front não os tem). */
+const cel = (c: any) => Object.assign({ desconhecido: false, revisar: false, registro: false }, c);
 function linhas(docResolution: Record<string, boolean>, op: Opcoes = {}) {
   return Array.from(montar(docResolution, op).envelope, (env: any) => ({
     codigo: env.codigo as string,
-    hbl: env.hbl,
-    mbl: env.mbl,
+    hbl: cel(env.hbl),
+    mbl: cel(env.mbl),
     hblDoc: Array.from(env.docsEsperados as any[]).find((d: any) => d.label === 'HBL Original'),
     mblDoc: Array.from(env.docsEsperados as any[]).find((d: any) => d.label === 'MBL'),
-    pendencias: Array.from(env.pendencias as any[], (p: any) => p.docLabel),
+    /** Pendências com sugestão de cobrança (tudo que não é conflito; vale também para o front antigo). */
+    pendencias: Array.from(env.pendencias as any[]).filter((p: any) => !p.conflito).map((p: any) => p.docLabel),
+    /** Registros "Não recebido" sem associação confirmada (sem cobrança automática). */
+    conflitos: Array.from(env.pendencias as any[]).filter((p: any) => p.conflito),
     st: env.stLabel,
   }));
 }
@@ -155,15 +173,15 @@ test('Clara × motor: sem confirmação do motor, a Clara não encerra o OHBL ("
     const { hbl, hblDoc } = linha(sem, { clara });
     assert.equal(hbl.resolved, false, clara);
     assert.equal(hbl.pend, false, `${clara}: o aviso de pendência é só do motor`);
-    assert.equal(hbl.waitText, 'Não informado', clara);
-    assert.equal(hblDoc.status, 'Não informado', clara);
+    assert.equal(hbl.waitText, 'Aguardando courier', clara);
+    assert.equal(hblDoc.status, 'Aguardando courier', clara);
   }
 });
 
-test('Clara × motor: sem confirmação e sem análise, o comportamento documental anterior é preservado', () => {
+test('Clara × motor: sem confirmação e sem análise, OMBL/OHBL afirmados para o processo aguardam o envelope', () => {
   const { hbl, hblDoc, mbl } = linha(sem);
-  assert.deepEqual([hbl.resolved, hbl.na, hbl.wait, hbl.waitText, hbl.pend], [false, false, true, 'Não informado', false]);
-  assert.equal(hblDoc.status, 'Não informado');
+  assert.deepEqual([hbl.resolved, hbl.desconhecido, hbl.wait, hbl.waitText, hbl.pend], [false, false, true, 'Aguardando courier', false]);
+  assert.equal(hblDoc.status, 'Aguardando courier');
   assert.deepEqual([mbl.resolved, mbl.waitText], [false, 'Aguardando courier']);
 });
 
@@ -283,8 +301,8 @@ const RESOLVIDOS = ['Telex Release Confirmado', 'Enviado ao importador', 'Emitid
 
 test('aceite: "Telex release to consignee" só da Clara não contorna a proteção do telex pela regra do destinatário', () => {
   const s = linha(sem, { clara: 'Telex release to consignee' });
-  assert.deepEqual([s.hbl.resolved, s.hbl.wait, s.hbl.waitText, s.hbl.pend], [false, true, 'Não informado', false]);
-  assert.equal(s.hblDoc.status, 'Não informado');
+  assert.deepEqual([s.hbl.resolved, s.hbl.wait, s.hbl.waitText, s.hbl.pend], [false, true, 'Aguardando courier', false]);
+  assert.equal(s.hblDoc.status, 'Aguardando courier');
   const p = linha(pendente, { clara: 'Telex release to consignee' });
   assert.deepEqual([p.hbl.resolved, p.hbl.pend, p.hbl.pendText], [false, true, PEND]);
   assert.equal(p.hblDoc.status, PEND);
@@ -299,7 +317,7 @@ test('aceite: afirmação só da IA sobre destinatário, destino ou Wave não re
       for (const clara of SO_DA_IA) {
         const l = linha(motor, { clara, estado });
         const id = `${clara} | ${estado} | pendente=${motor.telexPendente}`;
-        assert.deepEqual([l.hbl.resolved, l.mbl.resolved, l.hbl.na, l.mbl.na], [false, false, false, false], id);
+        assert.deepEqual([l.hbl.resolved, l.mbl.resolved, l.hbl.desconhecido, l.mbl.desconhecido], [false, false, false, false], id);
         assert.ok(!RESOLVIDOS.includes(l.hblDoc.status) && !RESOLVIDOS.includes(l.mblDoc.status), id);
       }
     }
@@ -380,12 +398,17 @@ const ANALISES: Array<Record<string, unknown>> = [
   },
 ];
 
-test('aceite: expandir ou recarregar a análise não muda, sozinho, a resolução documental (hblResolution e processosDetalhe)', () => {
-  const expectativas = [
-    { mbl: true, hbl: true, anySeen: true },
-    { mbl: true, hbl: false, anySeen: true },
-    { mbl: false, hbl: true, anySeen: true },
-    { mbl: false, hbl: false, anySeen: false },
+test('aceite: expandir ou recarregar a análise não muda, sozinho, a resolução, a associação nem a expectativa', () => {
+  // Corpos do e-mail do courier: padrão (os dois por processo), só OMBL, cruzado,
+  // sem IM, sem menção, "to follow" e linha com dois IMs.
+  const textos = [
+    undefined,
+    'IM2101 - OMBL',
+    'IM2101 - OHBL\nIM2102 - OMBL',
+    'OMBL e OHBL',
+    '',
+    'IM2101 OHBL to follow\nIM2101 - OMBL',
+    'IM2101 / IM2102 - OHBL',
   ];
   const motores = [sem, pendente, confirmado, { ...sem, importador: true }, { ...sem, wave: true }, { ...sem, destino: true }];
   const cenarios: Opcoes[] = [
@@ -395,20 +418,20 @@ test('aceite: expandir ou recarregar a análise não muda, sozinho, a resoluçã
     { estado: 'Divergência', conf: { mbl: 'recebido', hbl: 'nao_recebido' } },
   ];
   let casos = 0;
-  for (const docExpect of expectativas)
+  for (const texto of textos)
     for (const motor of motores)
       for (const cen of cenarios)
         for (const processos of [['IM2101'], ['IM2101', 'IM2102']]) {
-          const base = { ...cen, docExpect, processos };
+          const base = { ...cen, texto, processos };
           const recolhido = projecao(motor, base);
           for (const analise of ANALISES)
             for (const expandido of [true, false]) {
-              const id = JSON.stringify({ docExpect, motor, cen, processos, analise: analise.hblResolution, expandido });
+              const id = JSON.stringify({ texto, motor, cen, processos, analise: analise.hblResolution, expandido });
               assert.deepEqual(projecao(motor, { ...base, analise, expandido }), recolhido, id);
               casos++;
             }
         }
-  assert.equal(casos, 4 * 6 * 4 * 2 * ANALISES.length * 2);
+  assert.equal(casos, textos.length * 6 * 4 * 2 * ANALISES.length * 2);
 });
 
 test('aceite: o mapa por processo da análise não cria nem remove expectativa física', () => {
@@ -419,23 +442,120 @@ test('aceite: o mapa por processo da análise não cria nem remove expectativa f
     analise: { hblResolution: null, processosDetalhe: [{ codigo: 'IM2101', mbl: true, hbl: false }], processNumbers: [] },
     expandido: true,
   })[0];
-  assert.deepEqual([remover.hbl.na, remover.hbl.conf, remover.hblDoc.status], [false, true, 'Não recebido']);
+  assert.deepEqual([remover.hbl.conf, remover.hblDoc.status], [true, 'Não recebido']);
   const criar = linhas(sem, {
-    docExpect: { mbl: true, hbl: false, anySeen: true },
+    estado: 'Recebido',
+    texto: 'IM2101 - OMBL',
     analise: { hblResolution: null, processosDetalhe: [{ codigo: 'IM2101', mbl: true, hbl: true }], processNumbers: [] },
     expandido: true,
   })[0];
-  assert.deepEqual([criar.hbl.na, criar.hblDoc.status], [true, 'Não esperado']);
+  assert.deepEqual([criar.hbl.desconhecido, criar.hbl.conf, criar.hblDoc.status], [true, false, 'Não informado']);
 });
 
-test('caracterização (achado fora desta entrega): processNumbers da análise acrescentam linhas ao expandir; as linhas já existentes não mudam', () => {
-  // A análise une aos processos da lista os IMs que ela leu (inclusive os que só a
-  // IA citou). Isso acrescenta linhas com OMBL/OHBL esperados ao expandir. NÃO é
-  // conformidade: é atribuição de processo, registrada como achado.
+test('aceite: IM sugerido só pela IA não vira processo do courier nem expectativa — fica como sugestão não confirmada', () => {
   const op: Opcoes = { estado: 'Recebido' };
-  const antes = projecao(sem, op);
-  const depois = projecao(sem, { ...op, analise: { hblResolution: null, processosDetalhe: [], processNumbers: ['IM9999'] }, expandido: true });
-  assert.deepEqual(depois.envelope.map((e: any) => e.codigo), ['IM2101', 'IM9999']);
-  assert.deepEqual(depois.envelope[0], antes.envelope[0]);
-  assert.deepEqual([depois.envelope[1].hbl.conf, depois.envelope[1].mbl.conf], [true, true]);
+  const antes = montar(sem, op);
+  const depois = montar(sem, {
+    ...op,
+    analise: { hblResolution: null, processosDetalhe: [], processNumbers: ['IM2101-26', 'IM9999', 'IM2210'], processosNaConversa: ['IM2101', 'IM2210'] },
+    expandido: true,
+  });
+  assert.deepEqual(Array.from(depois.envelope, (e: any) => e.codigo), ['IM2101']);
+  assert.deepEqual([depois.procLabel, Array.from(depois.chips, (c: any) => c.codigo)], [antes.procLabel, ['IM2101']]);
+  // O IM na conversa também é só sugestão: aparecer no texto não prova que é deste courier.
+  assert.deepEqual(Array.from(depois.sugestoes, (s: any) => [s.codigo, s.origem]), [['IM9999', 'só a Clara'], ['IM2210', 'citado na conversa']]);
+  assert.equal(antes.hasSugestoes, false);
+});
+
+/* ---------------- associação documento → processo (decisões de 25/10) ---------------- */
+
+const envelope = (texto: string, processos: string[], op: Opcoes = {}) => linhas(sem, { estado: 'Recebido', ...op, texto, processos });
+/** Envelope de um processo só (IM2101): a linha dele. */
+const unico = (texto: string, op: Opcoes = {}) => envelope(texto, ['IM2101'], op)[0];
+const porCodigo = (ls: ReturnType<typeof linhas>) => Object.fromEntries(ls.map((l) => [l.codigo, l]));
+
+test('aceite: IM2204 com OMBL e IM2205 com OHBL — sem atribuição cruzada', () => {
+  const l = porCodigo(envelope('IM2204 - OMBL\nIM2205 - OHBL', ['IM2204', 'IM2205']));
+  assert.deepEqual([l.IM2204.mbl.conf, l.IM2204.hbl.conf, l.IM2204.hbl.desconhecido], [true, false, true]);
+  assert.deepEqual([l.IM2205.hbl.conf, l.IM2205.mbl.conf, l.IM2205.mbl.desconhecido], [true, false, true]);
+  assert.deepEqual([l.IM2204.hblDoc.status, l.IM2205.mblDoc.status], ['Não informado', 'Não informado']);
+  // Sem expectativa, sem controle: a marcação não pode criar a associação.
+  assert.equal(l.IM2204.hbl.onRecebido, undefined);
+  assert.equal(l.IM2205.mbl.onNao, undefined);
+});
+
+test('aceite: documento associado a outro processo não vira "não esperado"; dois documentos do mesmo tipo valem', () => {
+  const um = porCodigo(envelope('IM2205 - OHBL', ['IM2204', 'IM2205']));
+  assert.equal(um.IM2204.hblDoc.status, 'Não informado');
+  assert.ok(!JSON.stringify(montar(sem, { estado: 'Recebido', texto: 'IM2205 - OHBL', processos: ['IM2204', 'IM2205'] }).envelope).includes('Não esperado'));
+  const dois = porCodigo(envelope('IM2204 - OHBL\nIM2205 - OHBL', ['IM2204', 'IM2205']));
+  assert.deepEqual([dois.IM2204.hbl.conf, dois.IM2205.hbl.conf], [true, true]);
+});
+
+test('aceite: documento com IM desconhecido fica sem processo, listado uma vez, sem associação inventada', () => {
+  const row = montar(sem, { estado: 'Recebido', texto: 'OHBL SHYY1234567 enclosed', processos: ['IM2204', 'IM2205'] });
+  for (const e of Array.from(row.envelope) as any[]) {
+    const h = cel(e.hbl);
+    assert.deepEqual([h.conf, h.revisar, h.desconhecido], [false, false, true], e.codigo);
+  }
+  const sp = Array.from(row.semProcesso || [], (s: any) => [s.tipo, s.ref, s.detalhe]);
+  assert.deepEqual(sp, [['OHBL', 'SHYY1234567', 'Nenhum processo identificado']]);
+});
+
+test('aceite: envio negado, "to follow" e liberação eletrônica não provam que o documento está no envelope', () => {
+  for (const texto of ['IM2101 OHBL not sent', 'IM2101 OHBL to follow', 'OHBL will follow by next courier', 'No original OHBL in this envelope', 'OHBL telex released', 'OHBL copy attached']) {
+    const { hbl, hblDoc, pendencias } = unico(texto);
+    assert.deepEqual([hbl.revisar, hbl.conf, hbl.desconhecido], [true, false, false], texto);
+    assert.equal(hblDoc.status, 'A revisar — presença não comprovada', texto);
+    assert.deepEqual(pendencias, [], texto);
+  }
+  // Não comprovado não vira "não esperado" nem cancela expectativa sustentada por outra menção.
+  for (const texto of ['IM2101 - OHBL\nIM2101 OHBL to follow', 'OHBL enclosed. OHBL not sent to consignee', 'IM2101 - OMBL / OHBL\nTelex release requested for OHBL']) {
+    assert.equal(unico(texto).hbl.conf, true, texto);
+  }
+  const misto = unico('OMBL enclosed, OHBL to follow');
+  assert.deepEqual([misto.mbl.conf, misto.hbl.revisar], [true, true]);
+});
+
+test('aceite: sem menção a documento, a expectativa é desconhecida — nada de OMBL e OHBL fabricados', () => {
+  const { mbl, hbl, st, pendencias } = unico('');
+  assert.deepEqual([mbl.desconhecido, hbl.desconhecido, mbl.conf, hbl.conf], [true, true, false, false]);
+  assert.equal(st, 'Recebido');
+  assert.deepEqual(pendencias, []);
+});
+
+test('aceite: processo único não vence IM ou BL em conflito — fica a revisar, sem controles', () => {
+  const row = montar(sem, { estado: 'Recebido', texto: 'IM2299 - OHBL', processos: ['IM2101'] });
+  const e = (Array.from(row.envelope) as any[])[0];
+  assert.deepEqual([e.hbl.revisar, e.hbl.revisarText, e.hbl.conf], [true, 'A revisar — processo não confirmado', false]);
+  assert.deepEqual(Array.from(row.semProcesso, (s: any) => s.detalhe), ['Processos possíveis: IM2101 · citado fora do envelope: IM2299']);
+});
+
+test('decisão 1 (A): associação não confirmada aparece "A revisar" sem Recebido/Não recebido', () => {
+  const l = porCodigo(envelope('IM2101 / IM2102 - OHBL', ['IM2101', 'IM2102']));
+  for (const p of ['IM2101', 'IM2102']) {
+    assert.deepEqual([l[p].hbl.revisar, l[p].hbl.conf, l[p].hbl.onRecebido, l[p].hbl.onNao], [true, false, undefined, undefined], p);
+    assert.equal(l[p].hblDoc.status, 'A revisar — processo não confirmado');
+  }
+});
+
+test('decisão 2 (B): marcação e follow-up já gravados ficam visíveis como conflito, sem nova cobrança e sem resolver', () => {
+  // OHBL do IM2204 marcado "Não recebido" (com follow-up) quando o OHBL valia para os dois processos.
+  const op: Opcoes = {
+    estado: 'Divergência',
+    confPor: { IM2204: { mbl: 'recebido', hbl: 'nao_recebido' }, IM2205: { hbl: 'recebido' } },
+    fupPor: { IM2204: { hbl: { via: 'manual', at: '2026-10-02T10:00:00.000Z' } } },
+  };
+  const l = porCodigo(envelope('IM2204 - OMBL\nIM2205 - OHBL', ['IM2204', 'IM2205'], op));
+  const h = l.IM2204.hbl;
+  assert.deepEqual([h.registro, h.registroText, h.registroNota, h.conf], [true, 'Registro: Não recebido', 'Conflito de associação — revisar', false]);
+  assert.equal(l.IM2204.hblDoc.status, 'Registro: Não recebido (Conflito de associação — revisar)');
+  // A divergência continua visível; a cobrança automática fica suspensa; o follow-up aparece.
+  assert.equal(l.IM2204.st, 'Divergência');
+  assert.deepEqual(l.IM2204.pendencias, []);
+  assert.deepEqual(l.IM2204.conflitos.map((c: any) => [c.docLabel, c.fupDone, c.fupPend, typeof c.onGerarEmail]), [['OHBL', true, false, 'undefined']]);
+  assert.equal(l.IM2205.st, 'Conferido');
+  // Registro "Recebido" sem menção no e-mail: também preservado, a revisar.
+  const semMencao = unico('', { estado: 'Em Conferência', conf: { mbl: 'recebido', hbl: 'recebido' } });
+  assert.deepEqual([semMencao.mbl.registroText, semMencao.mbl.registroNota, semMencao.st], ['Registro: Recebido', 'Sem menção no e-mail — revisar', 'Conferido']);
 });

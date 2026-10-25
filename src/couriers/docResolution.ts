@@ -324,6 +324,29 @@ function envioAfirmado(t: string): boolean {
   return false;
 }
 
+/**
+ * Leitura de UMA menção qualquer (ex.: "OHBL"), com as mesmas regras de negação e
+ * pendência do telex: negada na própria oração ("OHBL not sent", "no original
+ * HBL")? pendente/futura ("OHBL will follow", "pending", pergunta)? Devolve também
+ * o texto da oração, para o chamador procurar outros marcadores. Não altera
+ * nenhuma regra de docResolutionFromText.
+ */
+export function leituraDeMencao(t: string, inicio: number, fim: number): { negada: boolean; pendente: boolean; oracao: string } {
+  const textoDepois = oracaoDepois(t, fim);
+  const textoAntes = oracaoAntes(t, inicio);
+  const depois = palavras(textoDepois);
+  const negada = negadaAntes(palavrasAntes(textoAntes), NEUTRAS_ANTES_ENVIO, depois[0]) || negadaDepois(depois);
+  const frase = fraseDa(t, inicio, fim);
+  const fimPalavra = fim + (/^[\p{L}\p{N}]*/u.exec(t.slice(fim))?.[0].length ?? 0);
+  const oracao = textoAntes + t.slice(inicio, fimPalavra) + textoDepois;
+  const pendente =
+    frase.pergunta ||
+    palavras(frase.texto).some((w) => PENDENCIA_NA_FRASE.has(w)) ||
+    PENDENCIA_EXPRESSOES.test(frase.texto) ||
+    palavras(oracao).some((w) => PENDENCIA_NA_ORACAO.has(w));
+  return { negada, pendente, oracao };
+}
+
 export function docResolutionFromText(text: string): DocResolution {
   const t = text || '';
   const { telex, telexPendente } = situacaoDoTelex(t);

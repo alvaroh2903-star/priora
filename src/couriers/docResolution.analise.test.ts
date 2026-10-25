@@ -49,16 +49,21 @@ const T_IA_DESTINO = '770012345623';
 const T_MAPA = '770012345624';
 const T_DET_IMPORTADOR = '770012345625';
 const T_DET_WAVE = '770012345626';
+const T_CRUZADO = '770012345627';
+const T_SEM_IM = '770012345628';
+const T_A_SEGUIR = '770012345629';
 
 const caixa: Array<Record<string, any>> = [];
-function email(i: number, tracking: string, processos: string, linhas: string[]) {
+/** Mensagens que só existem na CONVERSA (não voltam na busca da lista). */
+const soNaConversa: Array<Record<string, any>> = [];
+function email(i: number, tracking: string, processos: string, linhas: string[], destino = caixa) {
   const corpo = [
     `Segue o tracking FedEx ${tracking} com os documentos originais (OBL) do processo ${processos} enviados por courier.`,
     ...linhas,
   ].join('\n');
-  caixa.push({
+  destino.push({
     id: `msg-a${i}`,
-    conversationId: `conv-a${i}`,
+    conversationId: `conv-a${Math.floor(i)}`,
     subject: `Courier FedEx - documentos originais ${processos}`,
     from: { emailAddress: { name: `Agente ${i}`, address: `agente${i}@exemplo.test` } },
     toRecipients: [],
@@ -81,6 +86,14 @@ email(3, T_MAPA, 'IM2204 e IM2205', ['IM2204 - OMBL', 'IM2205 - OHBL']);
 // Sinais determinísticos: devem continuar valendo, com ou sem análise.
 email(4, T_DET_IMPORTADOR, 'IM2206', ['OHBL sent to consignee, not to the agent.']);
 email(5, T_DET_WAVE, 'IM2207', ['Wave BL issued for this shipment.']);
+// Antes, OMBL e OHBL valiam para os dois processos; há marcação gravada no OHBL do IM2208.
+email(6, T_CRUZADO, 'IM2208 e IM2209', ['IM2208 - OMBL', 'IM2209 - OHBL']);
+// Documento sem IM num envelope com dois processos.
+email(7, T_SEM_IM, 'IM2210 e IM2211', ['OHBL SHYA26041234 enclosed']);
+// Um documento no envelope, o outro "a seguir".
+email(8, T_A_SEGUIR, 'IM2212', ['OMBL enclosed, OHBL to follow.']);
+// Resposta na mesma conversa, que a busca da lista não trouxe: cita outro IM.
+email(8.5, T_A_SEGUIR, 'IM2212', ['Please also check IM2290.'], soNaConversa);
 
 /* ---------- registros já existentes (semeados ANTES de o store carregar) ---------- */
 
@@ -93,12 +106,20 @@ const semente = {
   estados: {
     [T_IA_WAVE]: { estado: 'Divergência', nota: 'nota sintética', updatedAt: '2026-10-02T10:00:00.000Z' },
     [T_MAPA]: { estado: 'Em Conferência', updatedAt: '2026-10-02T10:00:00.000Z' },
+    [T_CRUZADO]: { estado: 'Divergência', updatedAt: '2026-10-02T10:00:00.000Z' },
+    [T_SEM_IM]: { estado: 'Recebido', updatedAt: '2026-10-02T10:00:00.000Z' },
+    [T_A_SEGUIR]: { estado: 'Recebido', updatedAt: '2026-10-02T10:00:00.000Z' },
   },
   conferencia: {
     [T_IA_WAVE]: { IM2202: { mbl: 'nao_recebido', hbl: 'nao_recebido' } },
     [T_MAPA]: { IM2204: { mbl: 'recebido' }, IM2205: { hbl: 'recebido' } },
+    // Marcado quando o OHBL ainda valia para os dois processos (atribuição cruzada).
+    [T_CRUZADO]: { IM2208: { mbl: 'recebido', hbl: 'nao_recebido' }, IM2209: { hbl: 'recebido' } },
   },
-  followups: { [T_IA_WAVE]: { IM2202: { mbl: { via: 'manual', at: '2026-10-02T11:00:00.000Z' } } } },
+  followups: {
+    [T_IA_WAVE]: { IM2202: { mbl: { via: 'manual', at: '2026-10-02T11:00:00.000Z' } } },
+    [T_CRUZADO]: { IM2208: { hbl: { via: 'manual', at: '2026-10-02T11:00:00.000Z' } } },
+  },
 };
 for (const k of Object.keys(arquivos) as Array<keyof typeof arquivos>) {
   fs.writeFileSync(arquivos[k], JSON.stringify(semente[k], null, 2));
@@ -135,7 +156,7 @@ graphLib.Client.init = () => {
     const conv = /^conversationId eq '(.+)'$/.exec(String(req.params.filter || ''));
     if (req.caminho === '/me/messages' && conv) {
       chamadas.conversa++;
-      return { value: caixa.filter((m) => m.conversationId === conv[1]) };
+      return { value: [...caixa, ...soNaConversa].filter((m) => m.conversationId === conv[1]) };
     }
     throw new Error(`rota do Graph não prevista no teste: ${req.caminho}`);
   };
@@ -150,7 +171,12 @@ const CLARA: Record<string, [string | null, string | null]> = {
   [T_MAPA]: [null, 'HBL sent to client'],
   [T_DET_IMPORTADOR]: ['Telex release pending', 'Destination Release'],
   [T_DET_WAVE]: [null, 'Telex release confirmed'],
+  [T_CRUZADO]: [null, 'HBL sent to client'],
+  [T_SEM_IM]: ['Destination Release', null],
+  [T_A_SEGUIR]: ['Telex release to consignee', 'Wave BL'],
 };
+/** IMs que SÓ a Clara (falsa) "lê", sem aparecer em nenhum texto. */
+const SO_DA_CLARA: Record<string, string[]> = { [T_A_SEGUIR]: ['IM9999'] };
 /** Qual das duas respostas a Clara falsa devolve (0 = 1ª análise, 1 = recarregada). */
 let rodada: 0 | 1 = 0;
 const { getGeminiClient } = require('../ai/geminiClient') as typeof import('../ai/geminiClient');
@@ -163,7 +189,7 @@ const { getGeminiClient } = require('../ai/geminiClient') as typeof import('../a
   return {
     text: JSON.stringify({
       tracking: [{ carrier: 'FedEx', number: t }],
-      processNumbers: Array.from(new Set(procs)),
+      processNumbers: Array.from(new Set([...procs, ...(SO_DA_CLARA[t] || [])])),
       externalReferences: [],
       documents: ['OMBL', 'OHBL'],
       hblResolution,
@@ -252,11 +278,18 @@ const doTracking = (couriers: any[], t: string) => {
   return c;
 };
 
-/** Projeção DOCUMENTAL do card (sem funções). */
+/**
+ * Projeção DOCUMENTAL do card (sem funções): processos do courier, células,
+ * documentos sem processo, pendências e status. As sugestões da análise ficam de
+ * fora de propósito — elas podem aparecer ao expandir, sem virar associação.
+ */
 function projecao(c: any, courier: any) {
   const row = c.buildRow(courier);
   return JSON.parse(
     JSON.stringify({
+      procLabel: row.procLabel,
+      chips: Array.from(row.chips, (x: any) => x.codigo),
+      semProcesso: row.semProcesso,
       envelope: Array.from(row.envelope, (env: any) => ({
         codigo: env.codigo,
         hbl: env.hbl,
@@ -320,34 +353,78 @@ test('afirmações só da IA não resolvem; regras determinísticas e conferênc
     const analise = await expandir(c, courier);
     return { p: projecao(c, courier), analise };
   };
-  // "Telex release to consignee" e destino só da Clara: OHBL e OMBL seguem esperados.
-  for (const t of [T_IA_CNEE, T_IA_DESTINO]) {
-    const { p } = await aberto(t);
-    assert.deepEqual([p.envelope[0].hbl.resolved, p.envelope[0].mbl.resolved], [false, false], t);
-    assert.deepEqual([p.envelope[0].hbl.waitText, p.envelope[0].mbl.waitText], ['Não informado', 'Aguardando courier'], t);
-  }
-  // Wave BL só da Clara, com OMBL/OHBL marcados como não recebidos: a divergência e as
-  // pendências de cobrança continuam (antes a string da Clara as apagava).
-  const wave = (await aberto(T_IA_WAVE)).p.envelope[0];
-  assert.deepEqual(wave.docs.map((d: any) => d.status), ['Não recebido', 'Não recebido']);
-  assert.deepEqual(wave.pendencias.map((x: any) => [x.docLabel, x.fupDone]), [['OMBL', true], ['OHBL', false]]);
-  assert.equal(wave.st, 'Divergência');
-  // Mapa por linha da análise (processosDetalhe) chega, mas não muda o esperado: as
-  // marcações gravadas seguem e o documento ainda não conferido continua pendente de conferência.
+  // IM2204 com OMBL e IM2205 com OHBL: a associação vem da LISTA (linha do e-mail),
+  // não do processosDetalhe da análise. Sem atribuição cruzada.
   const mapa = await aberto(T_MAPA);
   assert.deepEqual(mapa.analise.processosDetalhe, [
     { codigo: 'IM2204', mbl: true, hbl: false },
     { codigo: 'IM2205', mbl: false, hbl: true },
   ]);
   const porProc = Object.fromEntries(mapa.p.envelope.map((e: any) => [e.codigo, e]));
-  assert.deepEqual(porProc.IM2204.docs.map((d: any) => d.status), ['Recebido', 'Não recebido']);
-  assert.deepEqual(porProc.IM2205.docs.map((d: any) => d.status), ['Não recebido', 'Recebido']);
-  assert.deepEqual([porProc.IM2204.st, porProc.IM2205.st], ['Recebido', 'Recebido']);
+  assert.deepEqual(porProc.IM2204.docs.map((d: any) => d.status), ['Recebido', 'Não informado']);
+  assert.deepEqual(porProc.IM2205.docs.map((d: any) => d.status), ['Não informado', 'Recebido']);
+  assert.deepEqual([porProc.IM2204.st, porProc.IM2205.st], ['Conferido', 'Conferido']);
+  // Wave BL só da Clara, com OMBL/OHBL marcados como não recebidos: a divergência e as
+  // pendências de cobrança continuam (antes a string da Clara as apagava).
+  const wave = (await aberto(T_IA_WAVE)).p.envelope[0];
+  assert.deepEqual(wave.docs.map((d: any) => d.status), ['Não recebido', 'Não recebido']);
+  assert.deepEqual(wave.pendencias.map((x: any) => [x.docLabel, x.fupDone]), [['OMBL', true], ['OHBL', false]]);
+  assert.equal(wave.st, 'Divergência');
+  // "Telex release to consignee" e destino só da Clara: OHBL e OMBL seguem esperados
+  // (afirmados no e-mail, aguardando o envelope).
+  for (const t of [T_IA_CNEE, T_IA_DESTINO]) {
+    const { p } = await aberto(t);
+    assert.deepEqual([p.envelope[0].hbl.resolved, p.envelope[0].mbl.resolved], [false, false], t);
+    assert.deepEqual([p.envelope[0].hbl.waitText, p.envelope[0].mbl.waitText], ['Aguardando courier', 'Aguardando courier'], t);
+  }
   // Regras determinísticas: as mesmas de antes, mesmo com a Clara dizendo outra coisa.
   const imp = (await aberto(T_DET_IMPORTADOR)).p.envelope[0];
   assert.deepEqual([imp.hbl.resolved, imp.hbl.text, imp.mbl.resolved], [true, 'Enviado ao importador', false]);
   const wv = (await aberto(T_DET_WAVE)).p.envelope[0];
   assert.deepEqual([wv.hbl.text, wv.mbl.text], ['Via Wave BL', 'Via Wave BL']);
+});
+
+test('associação pela rota real: sem cruzamento, sem processo inventado, "a seguir" a revisar e registros antigos em conflito', async () => {
+  rodada = 0;
+  const antes = retrato();
+  const couriers = await lista();
+  const abrir = async (t: string) => {
+    const courier = doTracking(couriers, t);
+    const c = novoCard(courier);
+    await expandir(c, courier);
+    const row = c.buildRow(courier);
+    return { courier, row, porProc: Object.fromEntries((Array.from(row.envelope) as any[]).map((e) => [e.codigo, e])) };
+  };
+
+  // Atribuição cruzada antiga: o OHBL do IM2208 foi marcado "Não recebido" (com follow-up).
+  const cruz = await abrir(T_CRUZADO);
+  const h = cruz.porProc.IM2208.hbl;
+  assert.deepEqual([h.registro, h.registroText, h.registroNota, h.conf], [true, 'Registro: Não recebido', 'Conflito de associação — revisar', false]);
+  assert.equal(cruz.porProc.IM2208.stLabel, 'Divergência', 'a divergência registrada continua visível');
+  const pend = Array.from(cruz.porProc.IM2208.pendencias) as any[];
+  assert.deepEqual(pend.map((p) => [p.docLabel, p.conflito, p.fupDone, p.fupPend, typeof p.onGerarEmail]), [['OHBL', true, true, false, 'undefined']]);
+  assert.deepEqual([cruz.porProc.IM2208.mbl.conf, cruz.porProc.IM2209.hbl.conf, cruz.porProc.IM2209.mbl.desconhecido], [true, true, true]);
+  // A origem de cada menção é estável (mensagem + linha), sem trecho do e-mail.
+  assert.deepEqual(
+    cruz.courier.docsEnvelope.mencoes.map((m: any) => [m.id, m.associacao.processo]),
+    [['msg-a6#L1:OMBL:0', 'IM2208'], ['msg-a6#L2:OHBL:0', 'IM2209']],
+  );
+  assert.ok(!JSON.stringify(cruz.courier.docsEnvelope).includes('Segue o tracking'));
+
+  // Documento sem IM num envelope de dois processos: listado uma vez, sem expectativa nos IMs.
+  const semIm = await abrir(T_SEM_IM);
+  assert.deepEqual(Array.from(semIm.row.semProcesso, (s: any) => [s.tipo, s.ref, s.detalhe]), [['OHBL', 'SHYA26041234', 'Nenhum processo identificado']]);
+  for (const p of ['IM2210', 'IM2211']) assert.deepEqual([semIm.porProc[p].hbl.desconhecido, semIm.porProc[p].hbl.conf], [true, false], p);
+
+  // "OMBL enclosed, OHBL to follow": OMBL esperado; OHBL a revisar, sem controles.
+  const seguir = await abrir(T_A_SEGUIR);
+  const s = seguir.porProc.IM2212;
+  assert.deepEqual([s.mbl.conf, s.hbl.revisar, s.hbl.revisarText, s.hbl.conf], [true, true, 'A revisar — presença não comprovada', false]);
+  // IM só da Clara e IM só da conversa: sugestões, nunca processo do courier.
+  assert.deepEqual(Array.from(seguir.row.chips, (x: any) => x.codigo), ['IM2212']);
+  assert.deepEqual(Array.from(seguir.row.sugestoes, (x: any) => [x.codigo, x.origem]).sort(), [['IM2290', 'citado na conversa'], ['IM9999', 'só a Clara']]);
+
+  assert.deepEqual(retrato(), antes, 'registros de estado, conferência ou follow-up foram modificados');
 });
 
 test('painel da Clara pela rota real: observações de destinatário, destino e Wave só informam', async () => {

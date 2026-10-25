@@ -189,7 +189,17 @@ test('rota GET /api/couriers: a resolução documental corrigida chega à respos
   for (const c of r.corpo.couriers) {
     assert.deepEqual(Object.keys(c.docResolution).sort(), ['destino', 'importador', 'telex', 'telexPendente', 'wave']);
     assert.ok(!(c.docResolution.telex && c.docResolution.telexPendente));
+    // Evidência documental por processo: conteúdo × associação, com origem; sem trecho do e-mail.
+    for (const m of c.docsEnvelope.mencoes) {
+      assert.deepEqual(Object.keys(m).sort(), ['associacao', 'conteudo', 'fonte', 'id', 'tipo']);
+      assert.deepEqual(Object.keys(m.fonte).sort(), ['linha', 'messageId', 'ref']);
+    }
   }
+  // "original HBL will follow" não comprova o OHBL neste envelope.
+  assert.deepEqual(
+    porTracking(r.corpo, T_TELEX_NEGADO).docsEnvelope.mencoes.map((m: any) => [m.tipo, m.conteudo.situacao, m.associacao.processo]),
+    [['OHBL', 'nao-comprovado', 'IM2101']],
+  );
   // Registros existentes: lidos e devolvidos, nunca reescritos.
   const sel = porTracking(r.corpo, T_TELEX_NEGADO);
   assert.equal(sel.estado, 'Recebido');
