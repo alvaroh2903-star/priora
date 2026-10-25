@@ -210,7 +210,7 @@ test('rota GET /api/couriers: mesmas chamadas externas — 1 busca no Graph por 
   assert.deepEqual(bloqueadas, []);
 });
 
-test('análise da Clara: a observação de telex informa, sem mandar encerrar o OHBL físico; as demais seguem iguais', () => {
+test('análise da Clara: as observações de telex, Wave, destino e cliente informam, sem mandar encerrar o original físico', () => {
   const analise = (hblResolution: string) =>
     ({ hblResolution, evidences: [], documents: [], processNumbers: ['IM2101'], confidence: 0.9 }) as unknown as Parameters<
       typeof derivarExpectativa
@@ -222,8 +222,19 @@ test('análise da Clara: a observação de telex informa, sem mandar encerrar o 
     ], h);
     assert.ok(!observacoes.some((o) => /não esperar OHBL/i.test(o)), h);
   }
-  // Wave BL, emissão no destino e envio ao cliente: textos de antes (fora desta entrega).
-  assert.deepEqual(derivarExpectativa(analise('Wave BL')).observacoes, ['Wave BL detectado — expectativa de OMBL físico cancelada.']);
-  assert.deepEqual(derivarExpectativa(analise('Destination Release')).observacoes, ['Emissão no destino — expectativa documental física cancelada.']);
-  assert.deepEqual(derivarExpectativa(analise('Original HBL sent to consignee')).observacoes, ['OHBL enviado ao cliente.']);
+  // Wave BL, emissão no destino e envio ao cliente: também só informam (mesmos gatilhos de antes).
+  assert.deepEqual(derivarExpectativa(analise('Wave BL')).observacoes, [
+    'Clara identificou menção a Wave BL. Isso, sozinho, não encerra a expectativa do OMBL/OHBL físico: vale a confirmação documental exibida na tabela.',
+  ]);
+  assert.deepEqual(derivarExpectativa(analise('Destination Release')).observacoes, [
+    'Clara identificou menção a emissão no destino. Isso, sozinho, não encerra a expectativa do OMBL/OHBL físico: vale a confirmação documental exibida na tabela.',
+  ]);
+  assert.deepEqual(derivarExpectativa(analise('Original HBL sent to consignee')).observacoes, [
+    'Clara identificou menção a envio do OHBL ao cliente. Isso, sozinho, não encerra a expectativa do OHBL físico: vale a confirmação documental exibida na tabela.',
+  ]);
+  for (const h of ['Wave BL', 'Destination Release', 'Original HBL sent to consignee', 'Telex release to consignee', 'Emitido no destino']) {
+    for (const o of derivarExpectativa(analise(h)).observacoes) {
+      assert.ok(!/cancelad|não esperar|^OHBL enviado/i.test(o), `${h}: ${o}`);
+    }
+  }
 });

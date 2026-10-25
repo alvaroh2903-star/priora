@@ -836,9 +836,9 @@ class Component extends DCLogic {
     // análise da Clara (assíncrona), carregada ao expandir
     var cid=courier.conversationId, a=this.state.analysis[cid], stt=this.state.aStatus[cid]||'';
 
-    // Mapa por processo do documento esperado (MBL/HBL), lido linha a linha pela Clara.
-    var docMap={};
-    if (a && a.processosDetalhe) a.processosDetalhe.forEach(function(pd){ docMap[String(pd.codigo).toUpperCase()]={ mbl:!!pd.mbl, hbl:!!pd.hbl }; });
+    // O mapa por processo da análise (a.processosDetalhe) NÃO altera a expectativa
+    // documental: ele só chega junto com a análise da Clara (ao expandir), e
+    // expandir ou recarregar a análise não pode, sozinho, mudar o que é esperado.
 
     // Lista EFETIVA de processos: a lista rápida só lê o bodyPreview (corta a
     // tabela); quando a Clara lê o corpo inteiro, pega todos. Fazemos a união.
@@ -919,18 +919,15 @@ class Component extends DCLogic {
     row.aLoading=(stt==='loading'); row.aError=(stt.indexOf('error')===0);
     row.aErrorMsg=row.aError?('Não consegui analisar: '+stt.slice(6)):'';
 
-    // Resolução do HBL/MBL. Combina o que a Clara leu (a.hblResolution) com a
-    // detecção DETERMINÍSTICA do backend (courier.docResolution) — assim o motivo
-    // aparece mesmo sem a análise da IA ter rodado. Para telex, vale só o backend.
-    var hblRaw=((a && a.hblResolution) || '').toLowerCase();
+    // Resolução do HBL/MBL: SÓ a detecção DETERMINÍSTICA do backend
+    // (courier.docResolution) encerra a expectativa do OHBL/OMBL físico — telex,
+    // envio ao importador, emissão no destino e Wave BL. O que a Clara leu
+    // (a.hblResolution) é informação auxiliar do painel, sem efeito aqui. Detecção
+    // determinística não prova que a fonte é confiável nem que o documento é deste
+    // processo (o sinal vale para o envelope inteiro).
     var dr=courier.docResolution||{};
-    // Telex: SÓ o motor documental (docResolution) encerra o OHBL físico. A menção
-    // de telex lida pela Clara (hblResolution) é informação auxiliar, sem efeito.
     var telexPendente=!!dr.telexPendente && !dr.telex;
-    var fTelex=!!dr.telex,
-        fWave=/wave/.test(hblRaw) || !!dr.wave,
-        fDestino=/destino|destination/.test(hblRaw) || !!dr.destino,
-        fImport=/consignee|client|cliente|importer|importador/.test(hblRaw) || !!dr.importador;
+    var fTelex=!!dr.telex, fWave=!!dr.wave, fDestino=!!dr.destino, fImport=!!dr.importador;
     var hblText = fTelex?'Telex Release Confirmado': fImport?'Enviado ao importador': fDestino?'Emitido no destino': fWave?'Via Wave BL': null;
     // OHBL ainda esperado com telex só pendente: aviso ao analista do que falta.
     var hblPendente=(!hblText && telexPendente) ? 'Telex Release Pendente — aguardando confirmação' : '';
@@ -945,14 +942,11 @@ class Component extends DCLogic {
     // ---- tabela "conteúdo esperado do envelope": uma linha por processo ----
     row.envelope=(procs||[]).map(function(proc){
       var val=self.confDe(courier, proc);
-      // Expectativa documental. Prioridade: (1) o que a Clara leu linha a linha
-      // (docMap, mais preciso); (2) o que os e-mails do courier CITAM (docExpect
-      // do backend — se só citam OMBL, o OHBL não é esperado); (3) sem nenhum
-      // sinal, ambos permanecem conferíveis. Nada é inventado.
+      // Expectativa documental: o que os e-mails do courier CITAM (docExpect do
+      // backend — se só citam OMBL, o OHBL não é esperado); sem nenhum sinal, ambos
+      // permanecem conferíveis. Nada é inventado. É a mesma com ou sem a análise.
       var de=courier.docExpect||{ mbl:true, hbl:true, anySeen:false };
-      var defFlags=de.anySeen?{ mbl:!!de.mbl, hbl:!!de.hbl }:{ mbl:true, hbl:true };
-      var flags=docMap[proc]||defFlags;
-      if (!flags.mbl && !flags.hbl) flags=de.anySeen?defFlags:{ mbl:true, hbl:true };
+      var flags=de.anySeen?{ mbl:!!de.mbl, hbl:!!de.hbl }:{ mbl:true, hbl:true };
       if (!flags.mbl && !flags.hbl) flags={ mbl:true, hbl:true };
       var cell=function(docKey, expected, resolvedText, waitLabel){
         // Resolução conhecida (ex.: Telex Release) vem ANTES de "não esperado":

@@ -1,8 +1,10 @@
 /**
  * ASS-010 (entregas parciais) — tela do Courier: Telex Release Confirmado ×
- * Pendente e a regra de que a Clara NÃO encerra sozinha o OHBL físico. Roda o
- * script REAL de public/Courier Module.dc.html num vm isolado (sem rede, sem
- * DOM) e chama buildRow com couriers sintéticos.
+ * Pendente e a regra de que a IA (Clara) NÃO encerra sozinha a expectativa do
+ * OHBL/OMBL físico — nem por telex, nem por envio ao importador, emissão no
+ * destino ou Wave BL — e de que expandir/recarregar a análise não muda a
+ * resolução documental. Roda o script REAL de public/Courier Module.dc.html num
+ * vm isolado (sem rede, sem DOM) e chama buildRow com couriers sintéticos.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -20,7 +22,9 @@ const SCRIPT = (() => {
 /** Efeitos colaterais que buildRow NUNCA pode ter (conferência, rede). */
 const efeitos = { setState: 0, fetch: 0 };
 
+let Classe: any = null;
 function componente() {
+  if (Classe) return new Classe({});
   const ctx = vm.createContext({
     window: {},
     document: { visibilityState: 'visible' },
@@ -43,8 +47,8 @@ function componente() {
       efeitos.setState++;
     }
   }
-  const Component = vm.runInContext(`(function(DCLogic){${SCRIPT}\n;return Component;})`, ctx)(DCLogic);
-  return new Component({});
+  Classe = vm.runInContext(`(function(DCLogic){${SCRIPT}\n;return Component;})`, ctx)(DCLogic);
+  return new Classe({});
 }
 
 type Opcoes = {
@@ -52,8 +56,13 @@ type Opcoes = {
   conf?: Record<string, string>;
   clara?: string | null;
   processos?: string[];
+  docExpect?: { mbl: boolean; hbl: boolean; anySeen: boolean };
+  /** Resposta inteira de /analysis (hblResolution, processosDetalhe, processNumbers…). */
+  analise?: Record<string, unknown>;
+  /** Card aberto (expandedId), como depois do clique em "ver envelope". */
+  expandido?: boolean;
 };
-function linhas(docResolution: Record<string, boolean>, op: Opcoes = {}) {
+function montar(docResolution: Record<string, boolean>, op: Opcoes = {}) {
   const c = componente();
   const processos = op.processos || ['IM2101'];
   const courier = {
@@ -62,7 +71,7 @@ function linhas(docResolution: Record<string, boolean>, op: Opcoes = {}) {
     agente: 'Agente sintético',
     data: '2026-10-01T12:00:00.000Z',
     processos,
-    docExpect: { mbl: true, hbl: true, anySeen: true },
+    docExpect: op.docExpect || { mbl: true, hbl: true, anySeen: true },
     docResolution,
     conversationId: 'conv-1',
     estado: op.estado || 'Identificado',
@@ -71,21 +80,50 @@ function linhas(docResolution: Record<string, boolean>, op: Opcoes = {}) {
     resolucao: { resolvidos: [], candidatos: [] },
   };
   const confAntes = JSON.stringify(courier.conferencia);
-  if (op.clara !== undefined) {
-    c.state.analysis = { 'conv-1': { hblResolution: op.clara, processosDetalhe: [], processNumbers: [] } };
+  const analise =
+    op.analise || (op.clara !== undefined ? { hblResolution: op.clara, processosDetalhe: [], processNumbers: [] } : undefined);
+  if (analise) {
+    c.state.analysis = { 'conv-1': analise };
     c.state.aStatus = { 'conv-1': 'ok' };
   }
+  if (op.expandido) c.state.expandedId = courier.tracking;
   const antes = { ...efeitos };
   const row = c.buildRow(courier);
   assert.deepEqual(efeitos, antes, 'buildRow alterou estado ou fez chamada');
   assert.equal(JSON.stringify(courier.conferencia), confAntes, 'buildRow alterou a conferência');
-  return Array.from(row.envelope, (env: any) => ({
+  return row;
+}
+function linhas(docResolution: Record<string, boolean>, op: Opcoes = {}) {
+  return Array.from(montar(docResolution, op).envelope, (env: any) => ({
+    codigo: env.codigo as string,
     hbl: env.hbl,
     mbl: env.mbl,
     hblDoc: Array.from(env.docsEsperados as any[]).find((d: any) => d.label === 'HBL Original'),
+    mblDoc: Array.from(env.docsEsperados as any[]).find((d: any) => d.label === 'MBL'),
     pendencias: Array.from(env.pendencias as any[], (p: any) => p.docLabel),
     st: env.stLabel,
   }));
+}
+/**
+ * Projeção DOCUMENTAL do card (sem funções): por processo, as células OMBL/OHBL,
+ * a lista "Documentos esperados", as pendências e o status; e o rodapé.
+ */
+function projecao(docResolution: Record<string, boolean>, op: Opcoes = {}) {
+  const row = montar(docResolution, op);
+  return JSON.parse(
+    JSON.stringify({
+      envelope: Array.from(row.envelope, (env: any) => ({
+        codigo: env.codigo,
+        hbl: env.hbl,
+        mbl: env.mbl,
+        docs: env.docsEsperados,
+        pendencias: env.pendencias,
+        st: env.stLabel,
+      })),
+      footDiv: row.footDiv,
+      footOk: row.footOk,
+    }),
+  );
 }
 const linha = (dr: Record<string, boolean>, op: Opcoes = {}) => linhas(dr, op)[0];
 
@@ -218,9 +256,186 @@ test('caracterização (limitação conhecida, sem atribuição por IM): confirm
   assert.deepEqual(pendentes.map((l) => [l.hbl.resolved, l.hbl.pend]), [[false, true], [false, true]]);
 });
 
-test('caracterização (limitação conhecida, fora desta entrega): string da Clara com palavras de importador/destino/Wave ainda encerra por essas regras', () => {
-  // Só o TELEX perdeu a autoridade da Clara nesta entrega. As regras de envio ao
-  // importador, emissão no destino e Wave BL seguem lendo a string da Clara (decisão pendente).
-  const { hbl } = linha(sem, { clara: 'Telex release to consignee' });
-  assert.deepEqual([hbl.resolved, hbl.text], [true, 'Enviado ao importador']);
+test('caracterização (limitação conhecida, sem atribuição por IM): envio ao importador, destino e Wave do motor valem para todos os processos do envelope', () => {
+  // Detecção determinística não prova que o documento é deste processo. NÃO é conformidade.
+  for (const [motor, texto] of [[{ ...sem, importador: true }, 'Enviado ao importador'], [{ ...sem, wave: true }, 'Via Wave BL'], [{ ...sem, destino: true }, 'Emitido no destino']] as const) {
+    const todos = linhas(motor, { processos: ['IM2101', 'IM2102'] });
+    assert.deepEqual(todos.map((l) => [l.hbl.resolved, l.hbl.text]), [[true, texto], [true, texto]], texto);
+  }
+});
+
+test('vários processos no envelope: a afirmação só da IA não encerra o OHBL/OMBL de nenhum deles', () => {
+  for (const clara of ['Telex release to consignee', 'Wave BL', 'Destination Release']) {
+    const ia = linhas(sem, { processos: ['IM2101', 'IM2102'], clara });
+    assert.deepEqual(ia.map((l) => [l.hbl.resolved, l.mbl.resolved]), [[false, false], [false, false]], clara);
+  }
+});
+
+/* ---------------- IA sem autoridade: importador, destino e Wave BL (conformidade) ---------------- */
+
+/** Afirmações que só a IA (hblResolution da Clara) faz sobre destinatário, destino ou Wave. */
+const SO_DA_IA = [
+  'Telex release to consignee', 'Original HBL sent to consignee', 'HBL sent to client', 'OHBL enviado ao cliente',
+  'Enviado ao importador', 'Sent to importer', 'Wave BL', 'Via Wave BL', 'Destination Release', 'Emitido no destino',
+  'BL issued at destination', 'Wave BL — emitido no destino, enviado ao cliente',
+];
+const RESOLVIDOS = ['Telex Release Confirmado', 'Enviado ao importador', 'Emitido no destino', 'Via Wave BL'];
+
+test('aceite: "Telex release to consignee" só da Clara não contorna a proteção do telex pela regra do destinatário', () => {
+  const s = linha(sem, { clara: 'Telex release to consignee' });
+  assert.deepEqual([s.hbl.resolved, s.hbl.wait, s.hbl.waitText, s.hbl.pend], [false, true, 'Não informado', false]);
+  assert.equal(s.hblDoc.status, 'Não informado');
+  const p = linha(pendente, { clara: 'Telex release to consignee' });
+  assert.deepEqual([p.hbl.resolved, p.hbl.pend, p.hbl.pendText], [false, true, PEND]);
+  assert.equal(p.hblDoc.status, PEND);
+  // Recebido o envelope, o OHBL segue conferível.
+  const r = linha(sem, { clara: 'Telex release to consignee', estado: 'Recebido' });
+  assert.deepEqual([r.hbl.resolved, r.hbl.conf], [false, true]);
+});
+
+test('aceite: afirmação só da IA sobre destinatário, destino ou Wave não resolve OHBL nem OMBL', () => {
+  for (const motor of [sem, pendente]) {
+    for (const estado of ['Identificado', 'Recebido', 'Em Conferência', 'Divergência']) {
+      for (const clara of SO_DA_IA) {
+        const l = linha(motor, { clara, estado });
+        const id = `${clara} | ${estado} | pendente=${motor.telexPendente}`;
+        assert.deepEqual([l.hbl.resolved, l.mbl.resolved, l.hbl.na, l.mbl.na], [false, false, false, false], id);
+        assert.ok(!RESOLVIDOS.includes(l.hblDoc.status) && !RESOLVIDOS.includes(l.mblDoc.status), id);
+      }
+    }
+  }
+});
+
+test('aceite: regras determinísticas preservadas — mesma precedência e mesmos documentos, com ou sem string da Clara', () => {
+  // Referência: as regras do motor como eram (telex > importador > destino > Wave no
+  // OHBL; Wave > destino no OMBL; importador nunca resolve o OMBL).
+  const ref = (dr: Record<string, boolean>) => ({
+    hbl: dr.telex ? 'Telex Release Confirmado' : dr.importador ? 'Enviado ao importador' : dr.destino ? 'Emitido no destino' : dr.wave ? 'Via Wave BL' : '',
+    mbl: dr.wave ? 'Via Wave BL' : dr.destino ? 'Emitido no destino' : '',
+  });
+  let casos = 0;
+  for (const telex of ['nenhum', 'confirmado', 'pendente'])
+    for (const wave of [false, true])
+      for (const destino of [false, true])
+        for (const importador of [false, true]) {
+          const dr = { telex: telex === 'confirmado', telexPendente: telex === 'pendente', wave, destino, importador };
+          const r = ref(dr);
+          for (const clara of [undefined, 'Telex release confirmed', ...SO_DA_IA]) {
+            const { hbl, mbl, hblDoc, mblDoc } = linha(dr, clara === undefined ? {} : { clara });
+            const id = `${JSON.stringify(dr)} | ${clara}`;
+            assert.deepEqual([hbl.resolved, hbl.text, mbl.resolved, mbl.text], [!!r.hbl, r.hbl, !!r.mbl, r.mbl], id);
+            assert.equal(hbl.pend, !r.hbl && telex === 'pendente', id);
+            if (r.hbl) assert.equal(hblDoc.status, r.hbl, id);
+            if (r.mbl) assert.equal(mblDoc.status, r.mbl, id);
+            casos++;
+          }
+        }
+  assert.equal(casos, 24 * 14);
+});
+
+test('aceite: conferência física intacta — com a Clara citando destinatário/destino/Wave, as marcações valem', () => {
+  const clara = 'Wave BL — emitido no destino, enviado ao cliente';
+  const nao = linha(sem, { clara, estado: 'Divergência', conf: { mbl: 'nao_recebido', hbl: 'nao_recebido' } });
+  assert.deepEqual([nao.mblDoc.status, nao.hblDoc.status], ['Não recebido', 'Não recebido']);
+  assert.deepEqual(nao.pendencias, ['OMBL', 'OHBL']);
+  assert.equal(nao.st, 'Divergência');
+  const ok = linha(sem, { clara, estado: 'Em Conferência', conf: { mbl: 'recebido', hbl: 'recebido' } });
+  assert.deepEqual([ok.mblDoc.status, ok.hblDoc.status, ok.st], ['Recebido', 'Recebido', 'Conferido']);
+  assert.deepEqual(ok.pendencias, []);
+});
+
+test('aceite: resolução determinística segue tirando da conferência só o documento da regra', () => {
+  const conf = { mbl: 'nao_recebido', hbl: 'nao_recebido' };
+  // Envio ao importador encerra o OHBL; o OMBL continua conferível e cobrável.
+  const imp = linha({ ...sem, importador: true }, { estado: 'Divergência', conf });
+  assert.deepEqual([imp.hbl.resolved, imp.mbl.conf, imp.pendencias, imp.st], [true, true, ['OMBL'], 'Divergência']);
+  // Wave BL e emissão no destino encerram os dois.
+  for (const motor of [{ ...sem, wave: true }, { ...sem, destino: true }]) {
+    const l = linha(motor, { estado: 'Divergência', conf });
+    assert.deepEqual([l.hbl.resolved, l.mbl.resolved, l.pendencias], [true, true, []]);
+  }
+});
+
+/* ---------------- expandir/recarregar a análise não muda a resolução documental ---------------- */
+
+/** Respostas de /analysis sintéticas: string da Clara + mapa por processo (processosDetalhe). */
+const ANALISES: Array<Record<string, unknown>> = [
+  { hblResolution: 'Telex release to consignee', processosDetalhe: [{ codigo: 'IM2101', mbl: true, hbl: false }], processNumbers: ['IM2101'] },
+  {
+    hblResolution: 'Wave BL',
+    processosDetalhe: [{ codigo: 'IM2101', mbl: false, hbl: true }, { codigo: 'IM2102', mbl: true, hbl: false }],
+    processNumbers: [],
+  },
+  { hblResolution: 'Destination Release', processosDetalhe: [{ codigo: 'IM2101', mbl: false, hbl: false }], processNumbers: ['IM2101-26'] },
+  // processNumbers só com processos que já estão na lista (as linhas novas são o achado caracterizado abaixo).
+  { hblResolution: null, processosDetalhe: [{ codigo: 'IM2101', mbl: true, hbl: true }, { codigo: 'IM2102', mbl: true, hbl: true }], processNumbers: ['IM2101'] },
+  {
+    hblResolution: 'Original HBL sent to consignee',
+    processosDetalhe: [],
+    processNumbers: [],
+    expectativa: { documentos: [], observacoes: ['Clara identificou menção a envio do OHBL ao cliente.'], revisao: [] },
+    evidences: [{ conclusion: 'OHBL enviado ao cliente', snippet: 'sintético' }],
+    resumo: ['Resumo sintético.'],
+    confidence: 0.95,
+  },
+];
+
+test('aceite: expandir ou recarregar a análise não muda, sozinho, a resolução documental (hblResolution e processosDetalhe)', () => {
+  const expectativas = [
+    { mbl: true, hbl: true, anySeen: true },
+    { mbl: true, hbl: false, anySeen: true },
+    { mbl: false, hbl: true, anySeen: true },
+    { mbl: false, hbl: false, anySeen: false },
+  ];
+  const motores = [sem, pendente, confirmado, { ...sem, importador: true }, { ...sem, wave: true }, { ...sem, destino: true }];
+  const cenarios: Opcoes[] = [
+    { estado: 'Identificado' },
+    { estado: 'Recebido' },
+    { estado: 'Em Conferência', conf: { mbl: 'recebido', hbl: 'recebido' } },
+    { estado: 'Divergência', conf: { mbl: 'recebido', hbl: 'nao_recebido' } },
+  ];
+  let casos = 0;
+  for (const docExpect of expectativas)
+    for (const motor of motores)
+      for (const cen of cenarios)
+        for (const processos of [['IM2101'], ['IM2101', 'IM2102']]) {
+          const base = { ...cen, docExpect, processos };
+          const recolhido = projecao(motor, base);
+          for (const analise of ANALISES)
+            for (const expandido of [true, false]) {
+              const id = JSON.stringify({ docExpect, motor, cen, processos, analise: analise.hblResolution, expandido });
+              assert.deepEqual(projecao(motor, { ...base, analise, expandido }), recolhido, id);
+              casos++;
+            }
+        }
+  assert.equal(casos, 4 * 6 * 4 * 2 * ANALISES.length * 2);
+});
+
+test('aceite: o mapa por processo da análise não cria nem remove expectativa física', () => {
+  // Antes, depois de expandir, processosDetalhe tornava o OHBL "Não esperado" num
+  // processo (ou passava a esperá-lo onde o e-mail do courier não o citava).
+  const remover = linhas(sem, {
+    estado: 'Recebido',
+    analise: { hblResolution: null, processosDetalhe: [{ codigo: 'IM2101', mbl: true, hbl: false }], processNumbers: [] },
+    expandido: true,
+  })[0];
+  assert.deepEqual([remover.hbl.na, remover.hbl.conf, remover.hblDoc.status], [false, true, 'Não recebido']);
+  const criar = linhas(sem, {
+    docExpect: { mbl: true, hbl: false, anySeen: true },
+    analise: { hblResolution: null, processosDetalhe: [{ codigo: 'IM2101', mbl: true, hbl: true }], processNumbers: [] },
+    expandido: true,
+  })[0];
+  assert.deepEqual([criar.hbl.na, criar.hblDoc.status], [true, 'Não esperado']);
+});
+
+test('caracterização (achado fora desta entrega): processNumbers da análise acrescentam linhas ao expandir; as linhas já existentes não mudam', () => {
+  // A análise une aos processos da lista os IMs que ela leu (inclusive os que só a
+  // IA citou). Isso acrescenta linhas com OMBL/OHBL esperados ao expandir. NÃO é
+  // conformidade: é atribuição de processo, registrada como achado.
+  const op: Opcoes = { estado: 'Recebido' };
+  const antes = projecao(sem, op);
+  const depois = projecao(sem, { ...op, analise: { hblResolution: null, processosDetalhe: [], processNumbers: ['IM9999'] }, expandido: true });
+  assert.deepEqual(depois.envelope.map((e: any) => e.codigo), ['IM2101', 'IM9999']);
+  assert.deepEqual(depois.envelope[0], antes.envelope[0]);
+  assert.deepEqual([depois.envelope[1].hbl.conf, depois.envelope[1].mbl.conf], [true, true]);
 });

@@ -1,0 +1,394 @@
+/**
+ * ASS-010 (entrega parcial) — caminho real de EXPANDIR o card: GET /api/couriers
+ * (lista) → clique em "ver envelope" no script REAL do Courier Module (vm) →
+ * GET /api/couriers/:cid/analysis (rota real, Clara falsa) → buildRow.
+ *
+ * Confere que a análise da IA (hblResolution) e o mapa por processo que chega com
+ * ela (processosDetalhe) não mudam a resolução documental, que as observações do
+ * painel só informam e que as chamadas externas são as mesmas de antes.
+ *
+ * Isolado: Graph, MSAL e Gemini FALSOS, rede bloqueada fora de 127.0.0.1, DATA_DIR
+ * temporário. Caixa sintética. Os registros semeados não podem mudar.
+ */
+import { test, after } from 'node:test';
+import assert from 'node:assert/strict';
+import crypto from 'crypto';
+import fs from 'fs';
+import net, { AddressInfo } from 'net';
+import os from 'os';
+import path from 'path';
+import vm from 'vm';
+
+/* ---------- ambiente e guarda de rede (antes de carregar qualquer módulo do app) ---------- */
+
+const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'priora-docres-analise-'));
+Object.assign(process.env, {
+  DATA_DIR: dataDir,
+  SESSION_SECRET: 'segredo-de-sessao-de-teste-0123456789abcdef',
+  GEMINI_API_KEY: 'chave-falsa-de-teste',
+  NODE_ENV: 'test',
+});
+
+const bloqueadas: string[] = [];
+const conectar = net.Socket.prototype.connect;
+net.Socket.prototype.connect = function (this: net.Socket, ...args: any[]) {
+  const o = Array.isArray(args[0]) ? args[0][0] : args[0];
+  const host = typeof o === 'object' && o ? (o.path ? 'localhost' : o.host || 'localhost') : args[1] || 'localhost';
+  if (!['127.0.0.1', 'localhost', '::1'].includes(String(host))) {
+    bloqueadas.push(String(host));
+    throw new Error(`rede bloqueada no teste: ${host}`);
+  }
+  return (conectar as any).apply(this, args);
+} as typeof net.Socket.prototype.connect;
+
+/* ---------- caixa sintética ---------- */
+
+const T_IA_CNEE = '770012345621';
+const T_IA_WAVE = '770012345622';
+const T_IA_DESTINO = '770012345623';
+const T_MAPA = '770012345624';
+const T_DET_IMPORTADOR = '770012345625';
+const T_DET_WAVE = '770012345626';
+
+const caixa: Array<Record<string, any>> = [];
+function email(i: number, tracking: string, processos: string, linhas: string[]) {
+  const corpo = [
+    `Segue o tracking FedEx ${tracking} com os documentos originais (OBL) do processo ${processos} enviados por courier.`,
+    ...linhas,
+  ].join('\n');
+  caixa.push({
+    id: `msg-a${i}`,
+    conversationId: `conv-a${i}`,
+    subject: `Courier FedEx - documentos originais ${processos}`,
+    from: { emailAddress: { name: `Agente ${i}`, address: `agente${i}@exemplo.test` } },
+    toRecipients: [],
+    ccRecipients: [],
+    receivedDateTime: new Date(Date.UTC(2026, 9, 2, 12, 0, 0) - i * 3600_000).toISOString(),
+    bodyPreview: corpo.slice(0, 80),
+    body: { contentType: 'text', content: corpo },
+    isRead: true,
+    hasAttachments: false,
+    attachments: [],
+    webLink: '',
+  });
+}
+// Sem nenhum sinal determinístico de resolução: só a IA vai "afirmar" algo.
+email(0, T_IA_CNEE, 'IM2201', ['Documentos: OMBL e OHBL.']);
+email(1, T_IA_WAVE, 'IM2202', ['Documentos: OMBL e OHBL.']);
+email(2, T_IA_DESTINO, 'IM2203', ['Documentos: OMBL e OHBL.']);
+// Mapa por linha (Regra 4): IM2204 só OMBL, IM2205 só OHBL — chega no processosDetalhe da análise.
+email(3, T_MAPA, 'IM2204 e IM2205', ['IM2204 - OMBL', 'IM2205 - OHBL']);
+// Sinais determinísticos: devem continuar valendo, com ou sem análise.
+email(4, T_DET_IMPORTADOR, 'IM2206', ['OHBL sent to consignee, not to the agent.']);
+email(5, T_DET_WAVE, 'IM2207', ['Wave BL issued for this shipment.']);
+
+/* ---------- registros já existentes (semeados ANTES de o store carregar) ---------- */
+
+const arquivos = {
+  estados: path.join(dataDir, 'courier-estados.json'),
+  conferencia: path.join(dataDir, 'courier-conferencia.json'),
+  followups: path.join(dataDir, 'courier-followups.json'),
+};
+const semente = {
+  estados: {
+    [T_IA_WAVE]: { estado: 'Divergência', nota: 'nota sintética', updatedAt: '2026-10-02T10:00:00.000Z' },
+    [T_MAPA]: { estado: 'Em Conferência', updatedAt: '2026-10-02T10:00:00.000Z' },
+  },
+  conferencia: {
+    [T_IA_WAVE]: { IM2202: { mbl: 'nao_recebido', hbl: 'nao_recebido' } },
+    [T_MAPA]: { IM2204: { mbl: 'recebido' }, IM2205: { hbl: 'recebido' } },
+  },
+  followups: { [T_IA_WAVE]: { IM2202: { mbl: { via: 'manual', at: '2026-10-02T11:00:00.000Z' } } } },
+};
+for (const k of Object.keys(arquivos) as Array<keyof typeof arquivos>) {
+  fs.writeFileSync(arquivos[k], JSON.stringify(semente[k], null, 2));
+}
+const retrato = () =>
+  Object.fromEntries(
+    Object.entries(arquivos).map(([k, p]) => [k, { hash: crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex'), mtime: fs.statSync(p).mtimeMs }]),
+  );
+
+/* ---------- dependências falsas ---------- */
+
+const HOME = 'objeto-sintetico.tenant-sintetico';
+require('../auth/msalClient').getMsalClient = () => ({
+  getTokenCache: () => ({ getAccountByHomeId: async (h: string) => (h === HOME ? { homeAccountId: HOME } : null) }),
+  acquireTokenSilent: async () => ({ accessToken: 'token-sintetico' }),
+});
+require('../auth/microsoftAccount').getActiveHomeAccountId = () => HOME;
+
+const chamadas = { busca: 0, conversa: 0, ia: 0 };
+const graphLib = require('@microsoft/microsoft-graph-client');
+graphLib.Client.init = () => {
+  const req = { caminho: '', params: {} as Record<string, unknown> };
+  const cadeia: Record<string, (...a: any[]) => any> = {};
+  for (const metodo of ['header', 'select', 'expand', 'orderby']) cadeia[metodo] = () => cadeia;
+  cadeia.api = (p: string) => ((req.caminho = p), cadeia);
+  cadeia.search = (q: string) => ((req.params.search = q), cadeia);
+  cadeia.filter = (f: string) => ((req.params.filter = f), cadeia);
+  cadeia.top = (t: number) => ((req.params.top = t), cadeia);
+  cadeia.get = async () => {
+    if (req.caminho === '/me/messages' && req.params.search) {
+      chamadas.busca++;
+      return { value: caixa.slice(0, Number(req.params.top)) };
+    }
+    const conv = /^conversationId eq '(.+)'$/.exec(String(req.params.filter || ''));
+    if (req.caminho === '/me/messages' && conv) {
+      chamadas.conversa++;
+      return { value: caixa.filter((m) => m.conversationId === conv[1]) };
+    }
+    throw new Error(`rota do Graph não prevista no teste: ${req.caminho}`);
+  };
+  return cadeia;
+};
+
+/** O que a Clara (falsa) "afirma" para cada courier: 1ª análise e a recarregada. */
+const CLARA: Record<string, [string | null, string | null]> = {
+  [T_IA_CNEE]: ['Telex release to consignee', 'Original HBL sent to consignee'],
+  [T_IA_WAVE]: ['Wave BL', 'Via Wave BL'],
+  [T_IA_DESTINO]: ['Destination Release', 'Emitido no destino'],
+  [T_MAPA]: [null, 'HBL sent to client'],
+  [T_DET_IMPORTADOR]: ['Telex release pending', 'Destination Release'],
+  [T_DET_WAVE]: [null, 'Telex release confirmed'],
+};
+/** Qual das duas respostas a Clara falsa devolve (0 = 1ª análise, 1 = recarregada). */
+let rodada: 0 | 1 = 0;
+const { getGeminiClient } = require('../ai/geminiClient') as typeof import('../ai/geminiClient');
+(getGeminiClient().models as any).generateContent = async (params: { contents: unknown }) => {
+  chamadas.ia++;
+  const t = Object.keys(CLARA).find((k) => String(params.contents).includes(k));
+  if (!t) throw new Error('conversa inesperada na IA falsa');
+  const hblResolution = CLARA[t][rodada];
+  const procs = String(params.contents).match(/\bIM\d{4}\b/g) || [];
+  return {
+    text: JSON.stringify({
+      tracking: [{ carrier: 'FedEx', number: t }],
+      processNumbers: Array.from(new Set(procs)),
+      externalReferences: [],
+      documents: ['OMBL', 'OHBL'],
+      hblResolution,
+      carrier: 'FedEx',
+      etaArrival: null,
+      vessel: null,
+      dates: [],
+      evidences: hblResolution ? [{ conclusion: hblResolution, snippet: 'trecho sintético' }] : [],
+      confidence: 0.92,
+      resumo: ['Resumo sintético.'],
+    }),
+  };
+};
+
+/* ---------- app com a rota real ---------- */
+
+const express = require('express') as typeof import('express');
+const { courierRouter } = require('../routes/courierRoutes') as typeof import('../routes/courierRoutes');
+
+const app = express();
+app.use(express.json());
+app.use((req, _res, next) => {
+  (req as any).session = { homeAccountId: HOME, destroy: (cb?: () => void) => cb && cb() };
+  next();
+});
+app.use('/api/couriers', courierRouter);
+const servidor = app.listen(0, '127.0.0.1');
+const pronto = new Promise<void>((r) => servidor.once('listening', () => r()));
+after(() => {
+  servidor.closeAllConnections();
+  servidor.close();
+  fs.rmSync(dataDir, { recursive: true, force: true });
+});
+const base = () => `http://127.0.0.1:${(servidor.address() as AddressInfo).port}`;
+
+/* ---------- script REAL do Courier Module, com fetch apontando para a rota real ---------- */
+
+const HTML = path.join(__dirname, '..', '..', 'public', 'Courier Module.dc.html');
+const SCRIPT = (() => {
+  const m = /<script type="text\/x-dc" data-dc-script>([\s\S]*?)<\/script>/.exec(fs.readFileSync(HTML, 'utf8'));
+  if (!m) throw new Error('script data-dc-script não encontrado');
+  return m[1];
+})();
+
+/** Toda chamada que o front faz (método + caminho). Só GET de análise é esperado. */
+const pedidosDoFront: string[] = [];
+let Classe: any = null;
+function componente() {
+  if (!Classe) {
+    const ctx = vm.createContext({
+      window: {},
+      document: { visibilityState: 'visible' },
+      fetch: (url: string, op: { method?: string } = {}) => {
+        pedidosDoFront.push(`${op.method || 'GET'} ${url}`);
+        return fetch(base() + url, op as any);
+      },
+      setTimeout: () => 0,
+      clearTimeout: () => undefined,
+      console,
+      Date,
+    });
+    class DCLogic {
+      state: Record<string, unknown> = {};
+      props: unknown;
+      constructor(props: unknown) {
+        this.props = props;
+      }
+      setState(p: Record<string, unknown>) {
+        Object.assign(this.state, p);
+      }
+    }
+    Classe = vm.runInContext(`(function(DCLogic){${SCRIPT}\n;return Component;})`, ctx)(DCLogic);
+  }
+  return new Classe({});
+}
+
+async function lista(): Promise<any[]> {
+  await pronto;
+  const r = await fetch(base() + '/api/couriers');
+  assert.equal(r.status, 200);
+  return (await r.json()).couriers;
+}
+const doTracking = (couriers: any[], t: string) => {
+  const c = couriers.find((x) => String(x.tracking).replace(/\D/g, '') === t);
+  assert.ok(c, `courier ${t} não apareceu na lista`);
+  return c;
+};
+
+/** Projeção DOCUMENTAL do card (sem funções). */
+function projecao(c: any, courier: any) {
+  const row = c.buildRow(courier);
+  return JSON.parse(
+    JSON.stringify({
+      envelope: Array.from(row.envelope, (env: any) => ({
+        codigo: env.codigo,
+        hbl: env.hbl,
+        mbl: env.mbl,
+        docs: env.docsEsperados,
+        pendencias: env.pendencias,
+        st: env.stLabel,
+      })),
+      footDiv: row.footDiv,
+      footOk: row.footOk,
+    }),
+  );
+}
+
+/** Clique em "ver envelope": abre o card e espera a análise da rota real chegar. */
+async function expandir(c: any, courier: any) {
+  c.toggle(courier);
+  const cid = courier.conversationId;
+  for (let i = 0; i < 300 && c.state.aStatus[cid] === 'loading'; i++) await new Promise((r) => setTimeout(r, 10));
+  assert.equal(c.state.aStatus[cid], 'done', `análise não carregou: ${c.state.aStatus[cid]}`);
+  return c.state.analysis[cid];
+}
+const novoCard = (courier: any) => {
+  const c = componente();
+  // Rastreio já pré-carregado (como no load()): expandir não o consulta de novo.
+  c.state.tracking = { [courier.tracking]: { state: 'done', data: { found: false } } };
+  return c;
+};
+
+/* ---------- testes ---------- */
+
+test('expandir e recarregar a análise (rota real) não muda a resolução documental do card', async () => {
+  const antes = retrato();
+  const couriers = await lista();
+  for (const t of Object.keys(CLARA)) {
+    const courier = doTracking(couriers, t);
+    const c = novoCard(courier);
+    const recolhido = projecao(c, courier);
+    rodada = 0;
+    const a1 = await expandir(c, courier);
+    assert.equal(a1.hblResolution, CLARA[t][0], t);
+    assert.deepEqual(projecao(c, courier), recolhido, `${t}: mudou ao expandir`);
+    c.toggle(courier);
+    assert.deepEqual(projecao(c, courier), recolhido, `${t}: mudou ao fechar com a análise em memória`);
+    // Recarregar a página: novo card, nova análise (a Clara agora "afirma" outra coisa).
+    const c2 = novoCard(courier);
+    rodada = 1;
+    const a2 = await expandir(c2, courier);
+    assert.equal(a2.hblResolution, CLARA[t][1], t);
+    assert.deepEqual(projecao(c2, courier), recolhido, `${t}: mudou ao recarregar a análise`);
+  }
+  assert.deepEqual(retrato(), antes, 'estado, conferência ou follow-up foram modificados');
+});
+
+test('afirmações só da IA não resolvem; regras determinísticas e conferência física seguem valendo', async () => {
+  rodada = 0;
+  const couriers = await lista();
+  const aberto = async (t: string) => {
+    const courier = doTracking(couriers, t);
+    const c = novoCard(courier);
+    const analise = await expandir(c, courier);
+    return { p: projecao(c, courier), analise };
+  };
+  // "Telex release to consignee" e destino só da Clara: OHBL e OMBL seguem esperados.
+  for (const t of [T_IA_CNEE, T_IA_DESTINO]) {
+    const { p } = await aberto(t);
+    assert.deepEqual([p.envelope[0].hbl.resolved, p.envelope[0].mbl.resolved], [false, false], t);
+    assert.deepEqual([p.envelope[0].hbl.waitText, p.envelope[0].mbl.waitText], ['Não informado', 'Aguardando courier'], t);
+  }
+  // Wave BL só da Clara, com OMBL/OHBL marcados como não recebidos: a divergência e as
+  // pendências de cobrança continuam (antes a string da Clara as apagava).
+  const wave = (await aberto(T_IA_WAVE)).p.envelope[0];
+  assert.deepEqual(wave.docs.map((d: any) => d.status), ['Não recebido', 'Não recebido']);
+  assert.deepEqual(wave.pendencias.map((x: any) => [x.docLabel, x.fupDone]), [['OMBL', true], ['OHBL', false]]);
+  assert.equal(wave.st, 'Divergência');
+  // Mapa por linha da análise (processosDetalhe) chega, mas não muda o esperado: as
+  // marcações gravadas seguem e o documento ainda não conferido continua pendente de conferência.
+  const mapa = await aberto(T_MAPA);
+  assert.deepEqual(mapa.analise.processosDetalhe, [
+    { codigo: 'IM2204', mbl: true, hbl: false },
+    { codigo: 'IM2205', mbl: false, hbl: true },
+  ]);
+  const porProc = Object.fromEntries(mapa.p.envelope.map((e: any) => [e.codigo, e]));
+  assert.deepEqual(porProc.IM2204.docs.map((d: any) => d.status), ['Recebido', 'Não recebido']);
+  assert.deepEqual(porProc.IM2205.docs.map((d: any) => d.status), ['Não recebido', 'Recebido']);
+  assert.deepEqual([porProc.IM2204.st, porProc.IM2205.st], ['Recebido', 'Recebido']);
+  // Regras determinísticas: as mesmas de antes, mesmo com a Clara dizendo outra coisa.
+  const imp = (await aberto(T_DET_IMPORTADOR)).p.envelope[0];
+  assert.deepEqual([imp.hbl.resolved, imp.hbl.text, imp.mbl.resolved], [true, 'Enviado ao importador', false]);
+  const wv = (await aberto(T_DET_WAVE)).p.envelope[0];
+  assert.deepEqual([wv.hbl.text, wv.mbl.text], ['Via Wave BL', 'Via Wave BL']);
+});
+
+test('painel da Clara pela rota real: observações de destinatário, destino e Wave só informam', async () => {
+  rodada = 0;
+  const couriers = await lista();
+  const obs: Record<string, string[]> = {};
+  for (const t of [T_IA_CNEE, T_IA_WAVE, T_IA_DESTINO]) {
+    const courier = doTracking(couriers, t);
+    const c = novoCard(courier);
+    await expandir(c, courier);
+    const row = c.buildRow(courier);
+    obs[t] = Array.from(row.observacoes as string[]);
+    for (const o of obs[t]) {
+      assert.match(o, /^Clara identificou menção a .+ Isso, sozinho, não encerra a expectativa do (OMBL\/OHBL|OHBL) físico/, `${t}: ${o}`);
+      assert.doesNotMatch(o, /cancelad|não esperar|^OHBL enviado/i, `${t}: ${o}`);
+    }
+  }
+  // "Telex release to consignee": a observação de telex e a de envio ao cliente, ambas informativas.
+  assert.equal(obs[T_IA_CNEE].length, 2);
+  assert.match(obs[T_IA_CNEE][0], /Telex Release/);
+  assert.match(obs[T_IA_CNEE][1], /envio do OHBL ao cliente/);
+  assert.deepEqual(obs[T_IA_WAVE].length, 1);
+  assert.match(obs[T_IA_WAVE][0], /Wave BL/);
+  assert.deepEqual(obs[T_IA_DESTINO].length, 1);
+  assert.match(obs[T_IA_DESTINO][0], /emissão no destino/);
+});
+
+test('mesmas chamadas externas: 1 busca no Graph por lista; 1 conversa no Graph e 1 IA por análise; nenhuma rede; nenhuma escrita', async () => {
+  chamadas.busca = chamadas.conversa = chamadas.ia = 0;
+  pedidosDoFront.length = 0;
+  rodada = 0;
+  const antes = retrato();
+  const couriers = await lista();
+  const courier = doTracking(couriers, T_MAPA);
+  const c = novoCard(courier);
+  await expandir(c, courier);
+  c.toggle(courier); // fechar
+  c.toggle(courier); // abrir de novo: análise em memória, sem nova chamada
+  projecao(c, courier);
+  assert.deepEqual(chamadas, { busca: 1, conversa: 1, ia: 1 });
+  assert.deepEqual(pedidosDoFront, [`GET /api/couriers/${encodeURIComponent(courier.conversationId)}/analysis`]);
+  assert.deepEqual(bloqueadas, []);
+  assert.deepEqual(retrato(), antes);
+});
