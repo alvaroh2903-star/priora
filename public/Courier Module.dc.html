@@ -160,9 +160,9 @@
                                     <div>
                                       <sc-if value="{{ e.mbl.desconhecido }}" hint-placeholder-val="{{ false }}"><span style="font-size:11.5px;color:#B4B9C9">Não informado</span></sc-if>
                                       <sc-if value="{{ e.mbl.revisar }}" hint-placeholder-val="{{ false }}"><span style="font-size:11.5px;font-weight:700;color:#B7791F">{{ e.mbl.revisarText }}</span></sc-if>
-                                      <sc-if value="{{ e.mbl.registro }}" hint-placeholder-val="{{ false }}"><div style="font-size:11.5px;font-weight:700;color:#B7791F">{{ e.mbl.registroText }}</div><div style="font-size:10.5px;color:#9A7B3F">{{ e.mbl.registroNota }}</div></sc-if>
                                       <sc-if value="{{ e.mbl.wait }}" hint-placeholder-val="{{ true }}"><span style="font-size:11.5px;color:#9AA0B4;font-style:italic">{{ e.mbl.waitText }}</span></sc-if>
                                       <sc-if value="{{ e.mbl.resolved }}" hint-placeholder-val="{{ false }}"><span style="font-size:12px;font-weight:700;color:#177D54">{{ e.mbl.text }}</span></sc-if>
+                                      <sc-if value="{{ e.mbl.registro }}" hint-placeholder-val="{{ false }}"><div style="font-size:11.5px;font-weight:700;color:#B7791F">{{ e.mbl.registroText }}</div><div style="font-size:10.5px;color:#9A7B3F">{{ e.mbl.registroNota }}</div></sc-if>
                                       <sc-if value="{{ e.mbl.conf }}" hint-placeholder-val="{{ false }}">
                                         <div style="display:flex;flex-direction:column;gap:5px">
                                           <span onClick="{{ e.mbl.onRecebido }}" style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:11.5px;color:#3C4258"><span style="width:14px;height:14px;border-radius:50%;border:2px solid {{ e.mbl.recBorder }};background:{{ e.mbl.recBg }};flex-shrink:0"></span>Recebido</span>
@@ -175,9 +175,9 @@
                                       <sc-if value="{{ e.hbl.pend }}" hint-placeholder-val="{{ false }}"><div style="font-size:11px;font-weight:700;color:#B7791F;margin-bottom:4px">{{ e.hbl.pendText }}</div></sc-if>
                                       <sc-if value="{{ e.hbl.desconhecido }}" hint-placeholder-val="{{ false }}"><span style="font-size:11.5px;color:#B4B9C9">Não informado</span></sc-if>
                                       <sc-if value="{{ e.hbl.revisar }}" hint-placeholder-val="{{ false }}"><span style="font-size:11.5px;font-weight:700;color:#B7791F">{{ e.hbl.revisarText }}</span></sc-if>
-                                      <sc-if value="{{ e.hbl.registro }}" hint-placeholder-val="{{ false }}"><div style="font-size:11.5px;font-weight:700;color:#B7791F">{{ e.hbl.registroText }}</div><div style="font-size:10.5px;color:#9A7B3F">{{ e.hbl.registroNota }}</div></sc-if>
                                       <sc-if value="{{ e.hbl.wait }}" hint-placeholder-val="{{ true }}"><span style="font-size:11.5px;color:#9AA0B4;font-style:italic">{{ e.hbl.waitText }}</span></sc-if>
                                       <sc-if value="{{ e.hbl.resolved }}" hint-placeholder-val="{{ false }}"><span style="font-size:12px;font-weight:700;color:#177D54">{{ e.hbl.text }}</span></sc-if>
+                                      <sc-if value="{{ e.hbl.registro }}" hint-placeholder-val="{{ false }}"><div style="font-size:11.5px;font-weight:700;color:#B7791F">{{ e.hbl.registroText }}</div><div style="font-size:10.5px;color:#9A7B3F">{{ e.hbl.registroNota }}</div></sc-if>
                                       <sc-if value="{{ e.hbl.conf }}" hint-placeholder-val="{{ false }}">
                                         <div style="display:flex;flex-direction:column;gap:5px">
                                           <span onClick="{{ e.hbl.onRecebido }}" style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:11.5px;color:#3C4258"><span style="width:14px;height:14px;border-radius:50%;border:2px solid {{ e.hbl.recBorder }};background:{{ e.hbl.recBg }};flex-shrink:0"></span>Recebido</span>
@@ -210,8 +210,8 @@
                                           <!-- Registro "Não recebido" sem associação confirmada: visível, sem cobrança automática -->
                                           <sc-if value="{{ pa.conflito }}" hint-placeholder-val="{{ false }}">
                                             <div style="margin-top:12px;background:#FDF8EE;border:1px solid #F4E4C4;border-radius:10px;padding:12px 14px">
-                                              <div style="font-size:12.5px;font-weight:800;color:#B9760A">Não recebido registrado — associação a revisar ({{ pa.docLabel }})</div>
-                                              <div style="font-size:11.5px;color:#7A5A20;margin-top:4px">O e-mail não confirma este documento neste processo. O registro foi mantido; a sugestão automática de cobrança fica suspensa até a revisão.</div>
+                                              <div style="font-size:12.5px;font-weight:800;color:#B9760A">{{ pa.titulo }}</div>
+                                              <div style="font-size:11.5px;color:#7A5A20;margin-top:4px">{{ pa.nota }}</div>
                                               <sc-if value="{{ pa.fupDone }}" hint-placeholder-val="{{ false }}"><div style="font-size:11.5px;color:#7A8099;margin-top:4px">Follow-up já registrado para este documento.</div></sc-if>
                                             </div>
                                           </sc-if>
@@ -1016,6 +1016,7 @@ class Component extends DCLogic {
       if ((m.conteudo||{}).situacao!=='afirmado' || as.situacao==='confirmada') return;
       var detalhe=(as.candidatos||[]).length ? ('Processos possíveis: '+as.candidatos.join(', ')) : 'Nenhum processo identificado';
       if ((as.externos||[]).length) detalhe+=' · citado fora do envelope: '+as.externos.join(', ');
+      if ((as.referenciasCompartilhadas||[]).length) detalhe+=' · referência ligada a muitos processos: '+as.referenciasCompartilhadas.join(', ');
       var k=m.tipo+'|'+ref+'|'+detalhe;
       if (vistosSP[k]) return; vistosSP[k]=1;
       semProcesso.push({ tipo:m.tipo, ref:ref, hasRef:!!ref, detalhe:detalhe });
@@ -1028,9 +1029,18 @@ class Component extends DCLogic {
       var cell=function(docKey, ev, resolvedText){
         var c={ resolved:false, wait:false, conf:false, revisar:false, desconhecido:false, registro:false,
           text:'', waitText:'', revisarText:'', registroText:'', registroNota:'' };
-        // Resolução conhecida (ex.: Telex Release) vem primeiro, como antes.
-        if (resolvedText){ c.resolved=true; c.text=resolvedText; return c; }
-        var v=val[docKey];
+        var v=val[docKey], marcado=(v==='recebido' || v==='nao_recebido');
+        // Resolução conhecida (ex.: Telex Release) vem primeiro, como antes. Ela vale
+        // para o envelope inteiro; a marcação gravada NESTE processo não some: fica
+        // visível ao lado, para revisão (não é dada como resolvida).
+        if (resolvedText){
+          c.resolved=true; c.text=resolvedText;
+          if (marcado){
+            c.registro=true; c.registroText='Registro: '+(v==='recebido'?'Recebido':'Não recebido');
+            c.registroNota='Resolução do e-mail vale para o envelope inteiro — revisar';
+          }
+          return c;
+        }
         if (ev.esperado){
           if (!received){ c.wait=true; c.waitText='Aguardando courier'; return c; }
           var recSel=(v==='recebido'), naoSel=(v==='nao_recebido');
@@ -1043,7 +1053,7 @@ class Component extends DCLogic {
         }
         // Sem expectativa confirmada: sem Recebido/Não recebido (a marcação não pode
         // criar a associação). Registro já gravado continua visível, a revisar.
-        if (v==='recebido' || v==='nao_recebido'){
+        if (marcado){
           c.registro=true; c.registroText='Registro: '+(v==='recebido'?'Recebido':'Não recebido');
           c.registroNota=(ev.ambiguo||ev.naoComprovado||ev.outroProcesso) ? 'Conflito de associação — revisar' : 'Sem menção no e-mail — revisar';
           return c;
@@ -1063,20 +1073,21 @@ class Component extends DCLogic {
       if (estado==='Identificado'){ st={label:'Em trânsito', color:'#3D34C9', bg:'#EEEBFE'}; }
       else {
         // Entram no status os documentos ESPERADOS (não resolvidos) e os registros
-        // já gravados, mesmo sem associação confirmada: o registro é um fato e a
-        // divergência dele continua visível até a revisão.
+        // já gravados — mesmo sem associação confirmada ou com resolução do e-mail:
+        // o registro é um fato e a divergência dele continua visível até a revisão.
         var phys=[];
         [['mbl',evM,mblText],['hbl',evH,hblText]].forEach(function(x){
-          var v=val[x[0]];
-          if (x[2]) return;
-          if (x[1].esperado || v==='recebido' || v==='nao_recebido') phys.push(v);
+          var v=val[x[0]], marcado=(v==='recebido' || v==='nao_recebido');
+          if (marcado || (!x[2] && x[1].esperado)) phys.push(v);
         });
         if (phys.indexOf('nao_recebido')>=0){ st={label:'Divergência', color:'#C2333A', bg:'#FDECEC'}; anyDiv=true; }
         else if (phys.length && phys.every(function(x){ return x==='recebido'; })){ st={label:'Conferido', color:'#177D54', bg:'#E7F6EF'}; }
         else { st={label:'Recebido', color:'#177D54', bg:'#E7F6EF'}; }
       }
       var docLine=function(label, docKey, c, pendente){
-        if (c.resolved) return { label:label, status:c.text, color:'#177D54' };
+        if (c.resolved) return c.registro
+          ? { label:label, status:c.text+' · '+c.registroText+' ('+c.registroNota+')', color:'#B7791F' }
+          : { label:label, status:c.text, color:'#177D54' };
         if (c.registro) return { label:label, status:c.registroText+' ('+c.registroNota+')', color:'#B7791F' };
         if (c.revisar) return { label:label, status:c.revisarText, color:'#B7791F' };
         if (c.desconhecido) return { label:label, status:'Não informado', color:'#9AA0B4' };
@@ -1094,17 +1105,24 @@ class Component extends DCLogic {
       var rr=resolvMap[proc];
 
       // ---- Próxima ação recomendada: documento ESPERADO e físico marcado como
-      // "Não recebido" gera pendência com follow-up ao agente. Resolvidos (Telex
-      // etc.) NUNCA geram ação. Registro "Não recebido" sem associação confirmada
-      // continua visível (com o follow-up já feito), mas sem sugestão automática
-      // de cobrança até a revisão: não é resolvido nem apagado. ----
+      // "Não recebido" gera pendência com follow-up ao agente. Registro "Não
+      // recebido" de documento resolvido pelo e-mail (Telex etc., que vale para o
+      // envelope inteiro) ou sem associação confirmada continua visível, com o
+      // follow-up já feito, mas sem sugestão automática de cobrança até a revisão:
+      // não é resolvido nem apagado. ----
       var fup=self.fupDe(courier, proc);
       var pendencias=[];
       var addPend=function(docKey, label, ev, resolvedText){
-        if (resolvedText || val[docKey]!=='nao_recebido') return;
+        if (val[docKey]!=='nao_recebido') return;
         var done=!!fup[docKey];
-        if (!ev.esperado){
-          pendencias.push({ docLabel:label, esperado:false, conflito:true, fupDone:done, fupPend:false });
+        if (resolvedText || !ev.esperado){
+          pendencias.push({ docLabel:label, esperado:false, conflito:true, fupDone:done, fupPend:false,
+            titulo: resolvedText
+              ? ('Não recebido registrado — resolução do e-mail a revisar ('+label+')')
+              : ('Não recebido registrado — associação a revisar ('+label+')'),
+            nota: resolvedText
+              ? ('O e-mail indica "'+resolvedText+'" para o envelope inteiro, sem dizer de qual processo. O registro deste processo foi mantido; a sugestão automática de cobrança fica suspensa até a revisão.')
+              : 'O e-mail não confirma este documento neste processo. O registro foi mantido; a sugestão automática de cobrança fica suspensa até a revisão.' });
           return;
         }
         pendencias.push({

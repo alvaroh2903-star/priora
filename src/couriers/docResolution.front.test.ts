@@ -11,7 +11,8 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import path from 'path';
 import vm from 'vm';
-import { mencoesDocumentais } from './docAssociation';
+import { indiceComOrigem, IndiceComOrigem, mencoesDocumentais } from './docAssociation';
+import { MAX_SHARED_PROCESSES } from './referenceResolver';
 
 const HTML = path.join(__dirname, '..', '..', 'public', 'Courier Module.dc.html');
 const SCRIPT = (() => {
@@ -71,6 +72,8 @@ type Opcoes = {
   analise?: Record<string, unknown>;
   /** Card aberto (expandedId), como depois do clique em "ver envelope". */
   expandido?: boolean;
+  /** Índice de referências dos OUTROS e-mails (padrão: vazio). */
+  indice?: IndiceComOrigem;
 };
 function montar(docResolution: Record<string, boolean>, op: Opcoes = {}) {
   const c = componente();
@@ -85,7 +88,7 @@ function montar(docResolution: Record<string, boolean>, op: Opcoes = {}) {
     // Citação no envelope inteiro: a tela NÃO a usa mais (fica "tudo citado" de propósito).
     docExpect: { mbl: true, hbl: true, anySeen: true },
     docResolution,
-    docsEnvelope: mencoesDocumentais([{ messageId: 'msg-1', texto }], processos, new Map()),
+    docsEnvelope: mencoesDocumentais([{ messageId: 'msg-1', texto }], processos, op.indice || new Map()),
     conversationId: 'conv-1',
     estado: op.estado || 'Identificado',
     conferencia: op.confPor || (op.conf ? Object.fromEntries(processos.map((p) => [p, op.conf])) : {}),
@@ -257,11 +260,57 @@ test('OHBL marcado como não recebido: gera pendência e sugestão de cobrança,
   }
 });
 
-test('Telex Release Confirmado pelo motor: OHBL sai da conferência e não gera cobrança, mesmo marcado como não recebido', () => {
-  const { hbl, pendencias, st } = linha(confirmado, { estado: 'Divergência', conf: { mbl: 'recebido', hbl: 'nao_recebido' } });
-  assert.deepEqual([hbl.resolved, hbl.conf], [true, false]);
+test('Telex Release Confirmado pelo motor: OHBL sai da conferência sem cobrança nova, mas a marcação "Não recebido" gravada continua visível', () => {
+  const { hbl, pendencias, conflitos, st } = linha(confirmado, { estado: 'Divergência', conf: { mbl: 'recebido', hbl: 'nao_recebido' } });
+  assert.deepEqual([hbl.resolved, hbl.conf, hbl.registro, hbl.registroText], [true, false, true, 'Registro: Não recebido']);
   assert.deepEqual(pendencias, []);
-  assert.equal(st, 'Conferido');
+  assert.deepEqual(conflitos.map((c: any) => c.docLabel), ['OHBL']);
+  assert.equal(st, 'Divergência', 'a divergência registrada não é dada como resolvida');
+});
+
+/* ---------------- resolução do envelope × registro humano do processo ---------------- */
+
+test('resolução eletrônica do envelope com dois IMs: a marcação "Não recebido" e o follow-up do processo seguem visíveis, a revisar', () => {
+  const op: Opcoes = {
+    estado: 'Divergência',
+    processos: ['IM2301', 'IM2302'],
+    confPor: { IM2301: { mbl: 'recebido', hbl: 'nao_recebido' } },
+    fupPor: { IM2301: { hbl: { via: 'manual', at: '2026-10-02T10:00:00.000Z' } } },
+  };
+  const l = Object.fromEntries(linhas(confirmado, op).map((x) => [x.codigo, x]));
+  const h = l.IM2301.hbl;
+  // Resolução inferida e registro humano aparecem separados, na mesma célula.
+  assert.deepEqual([h.resolved, h.text, h.registro, h.registroText, h.registroNota, h.conf], [
+    true, 'Telex Release Confirmado', true, 'Registro: Não recebido', 'Resolução do e-mail vale para o envelope inteiro — revisar', false,
+  ]);
+  assert.equal(l.IM2301.hblDoc.status, 'Telex Release Confirmado · Registro: Não recebido (Resolução do e-mail vale para o envelope inteiro — revisar)');
+  // A divergência histórica continua; sem cobrança nova; o follow-up aparece.
+  assert.equal(l.IM2301.st, 'Divergência');
+  assert.deepEqual(l.IM2301.pendencias, []);
+  assert.deepEqual(
+    l.IM2301.conflitos.map((c: any) => [c.docLabel, c.fupDone, c.fupPend, typeof c.onGerarEmail, c.titulo]),
+    [['OHBL', true, false, 'undefined', 'Não recebido registrado — resolução do e-mail a revisar (OHBL)']],
+  );
+  assert.match(l.IM2301.conflitos[0].nota, /envelope inteiro.*registro deste processo foi mantido.*cobrança fica suspensa/);
+  // O outro IM, sem registro, só mostra a resolução.
+  assert.deepEqual([l.IM2302.hbl.resolved, l.IM2302.hbl.registro, l.IM2302.conflitos], [true, false, []]);
+  // Wave BL (resolve os dois documentos): o registro do OMBL também fica visível.
+  const w = linhas({ ...sem, wave: true }, { ...op, confPor: { IM2301: { mbl: 'nao_recebido' } }, fupPor: {} })[0];
+  assert.deepEqual([w.mbl.resolved, w.mbl.registroText, w.st, w.pendencias, w.conflitos.map((c: any) => c.docLabel)], [
+    true, 'Registro: Não recebido', 'Divergência', [], ['OMBL'],
+  ]);
+});
+
+test('referência ligada a processos demais não confirma pelo processo único — fica a revisar, com a incerteza visível', () => {
+  const indice = indiceComOrigem(
+    Array.from({ length: MAX_SHARED_PROCESSES + 1 }, (_, k) => ({ id: `pre-${k}`, subject: `Pre-alert IM${2331 + k}`, body: 'HBL SHGEN00000001' })),
+  );
+  const row = montar(sem, { estado: 'Recebido', texto: 'OHBL SHGEN00000001 enclosed', processos: ['IM2101'], indice });
+  const h = cel((Array.from(row.envelope) as any[])[0].hbl);
+  assert.deepEqual([h.revisar, h.revisarText, h.conf], [true, 'A revisar — processo não confirmado', false]);
+  assert.deepEqual(Array.from(row.semProcesso, (s: any) => s.detalhe), [
+    'Processos possíveis: IM2101 · referência ligada a muitos processos: SHGEN00000001',
+  ]);
 });
 
 /* ---------------- caracterização: limitações conhecidas (fora do escopo) ---------------- */

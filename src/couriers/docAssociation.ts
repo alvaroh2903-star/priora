@@ -10,8 +10,9 @@
  *  - ASSOCIAÇÃO: a qual processo do envelope a menção pertence, e com que
  *    segurança. "confirmada" só com IM único na mesma linha, referência de BL que
  *    aponta para um único processo em OUTRO e-mail, ou envelope de processo único
- *    sem referência em conflito. O resto fica "ambigua" (com candidatos) ou
- *    "sem-processo" — nunca é replicado para todos os IMs;
+ *    sem referência em conflito nem referência compartilhada por processos demais.
+ *    O resto fica "ambigua" (com candidatos) ou "sem-processo" — nunca é
+ *    replicado para todos os IMs;
  *  - CONFERÊNCIA FÍSICA: são os registros do operador (courierStore). Nada aqui
  *    lê, muda ou apaga esses registros.
  *
@@ -45,6 +46,11 @@ export interface MencaoDocumental {
     candidatos: string[];
     /** Processos citados na linha (IM ou referência) que NÃO estão no envelope. */
     externos: string[];
+    /**
+     * Referências da linha ligadas a mais de MAX_SHARED_PROCESSES processos. Não
+     * apontam processo nenhum, mas são incerteza: impedem confirmar a associação.
+     */
+    referenciasCompartilhadas: string[];
   };
 }
 
@@ -170,29 +176,39 @@ export function mencoesDocumentais(
       const imNaLinha = evidencia.size > 0;
       const refs = tokenize('', linha).refs.filter((r) => r.type !== 'CONTAINER');
       let refInsegura = false;
+      const compartilhadas: string[] = [];
       for (const r of refs) {
         const q = processosDaReferencia(indice, r.normalized, proprios);
-        if (q.processos.length === 0 || q.processos.length > MAX_SHARED_PROCESSES) continue;
+        if (q.processos.length === 0) continue;
+        // Ligada a processos demais (código genérico ou consolidação grande): não
+        // aponta processo nenhum, mas também não é "sem evidência" — é incerteza.
+        if (q.processos.length > MAX_SHARED_PROCESSES) {
+          compartilhadas.push(r.raw);
+          continue;
+        }
         q.processos.forEach((p) => evidencia.add(baseDe(p)));
         if (q.booking || q.processos.length > 1) refInsegura = true;
       }
+      const incerta = refInsegura || compartilhadas.length > 0;
 
       const noEnvelope = Array.from(evidencia).filter((b) => envelope.has(b)).map((b) => envelope.get(b)!);
       const externos = Array.from(evidencia).filter((b) => !envelope.has(b));
+      const sem = { candidatos: [] as string[], externos: [] as string[], referenciasCompartilhadas: [] as string[] };
       let associacao: MencaoDocumental['associacao'];
-      if (evidencia.size === 0) {
+      if (evidencia.size === 0 && !incerta) {
         associacao =
           envelope.size === 1
-            ? { situacao: 'confirmada', processo: Array.from(envelope.values())[0], via: 'processo-unico', candidatos: [], externos: [] }
-            : { situacao: 'sem-processo', processo: null, via: null, candidatos: [], externos: [] };
-      } else if (evidencia.size === 1 && externos.length === 0 && !refInsegura) {
-        associacao = { situacao: 'confirmada', processo: noEnvelope[0], via: imNaLinha ? 'linha' : 'referencia', candidatos: [], externos: [] };
+            ? { situacao: 'confirmada', processo: Array.from(envelope.values())[0], via: 'processo-unico', ...sem }
+            : { situacao: 'sem-processo', processo: null, via: null, ...sem };
+      } else if (evidencia.size === 1 && externos.length === 0 && !incerta) {
+        associacao = { situacao: 'confirmada', processo: noEnvelope[0], via: imNaLinha ? 'linha' : 'referencia', ...sem };
       } else {
-        // Vários IMs, IM/referência fora do envelope ou referência 1:N: fica para
-        // revisão. Num envelope de processo único, ele segue como candidato — a
-        // referência em conflito não vence nem é vencida pelo "processo único".
+        // Vários IMs, IM/referência fora do envelope, referência 1:N ou referência
+        // compartilhada por processos demais: fica para revisão. Num envelope de
+        // processo único, ele segue como candidato — a referência em conflito não
+        // vence nem é vencida pelo "processo único".
         const candidatos = envelope.size === 1 ? Array.from(new Set([...noEnvelope, ...envelope.values()])) : noEnvelope;
-        associacao = { situacao: 'ambigua', processo: null, via: null, candidatos, externos };
+        associacao = { situacao: 'ambigua', processo: null, via: null, candidatos, externos, referenciasCompartilhadas: compartilhadas };
       }
 
       const ordem: Record<string, number> = {};
@@ -206,7 +222,12 @@ export function mencoesDocumentais(
           tipo,
           fonte: { messageId: fonte.messageId, linha: i, ref: refDoTipo ? refDoTipo.raw : null },
           conteudo: conteudoDaMencao(linha, inicio, inicio + oc[0].length),
-          associacao: { ...associacao, candidatos: [...associacao.candidatos], externos: [...associacao.externos] },
+          associacao: {
+            ...associacao,
+            candidatos: [...associacao.candidatos],
+            externos: [...associacao.externos],
+            referenciasCompartilhadas: [...associacao.referenciasCompartilhadas],
+          },
         });
       }
     });

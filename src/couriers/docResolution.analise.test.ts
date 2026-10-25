@@ -52,6 +52,8 @@ const T_DET_WAVE = '770012345626';
 const T_CRUZADO = '770012345627';
 const T_SEM_IM = '770012345628';
 const T_A_SEGUIR = '770012345629';
+const T_RESOLVIDO = '770012345630';
+const T_GENERICO = '770012345631';
 
 const caixa: Array<Record<string, any>> = [];
 /** Mensagens que só existem na CONVERSA (não voltam na busca da lista). */
@@ -94,6 +96,27 @@ email(7, T_SEM_IM, 'IM2210 e IM2211', ['OHBL SHYA26041234 enclosed']);
 email(8, T_A_SEGUIR, 'IM2212', ['OMBL enclosed, OHBL to follow.']);
 // Resposta na mesma conversa, que a busca da lista não trouxe: cita outro IM.
 email(8.5, T_A_SEGUIR, 'IM2212', ['Please also check IM2290.'], soNaConversa);
+// Dois IMs e telex confirmado para o envelope; há "Não recebido" + follow-up no OHBL do IM2301.
+email(9, T_RESOLVIDO, 'IM2301 e IM2302', ['IM2301 - OMBL / OHBL', 'IM2302 - OMBL / OHBL', 'HBL released via telex release.']);
+// Processo único com um BL que, nos pré-alertas, está ligado a processos demais.
+email(10, T_GENERICO, 'IM2320', ['OHBL SHGEN00000001 enclosed']);
+for (let k = 0; k < 9; k++) {
+  caixa.push({
+    id: `pre-${k}`,
+    conversationId: `conv-pre-${k}`,
+    subject: `Pre-alert IM${2331 + k}`,
+    from: { emailAddress: { name: 'Origem', address: 'origem@exemplo.test' } },
+    toRecipients: [],
+    ccRecipients: [],
+    receivedDateTime: new Date(Date.UTC(2026, 8, 20, 12, 0, 0) + k * 60_000).toISOString(),
+    bodyPreview: 'Pre-alert',
+    body: { contentType: 'text', content: `Pre-alert IM${2331 + k}\nHBL SHGEN00000001` },
+    isRead: true,
+    hasAttachments: false,
+    attachments: [],
+    webLink: '',
+  });
+}
 
 /* ---------- registros já existentes (semeados ANTES de o store carregar) ---------- */
 
@@ -109,16 +132,20 @@ const semente = {
     [T_CRUZADO]: { estado: 'Divergência', updatedAt: '2026-10-02T10:00:00.000Z' },
     [T_SEM_IM]: { estado: 'Recebido', updatedAt: '2026-10-02T10:00:00.000Z' },
     [T_A_SEGUIR]: { estado: 'Recebido', updatedAt: '2026-10-02T10:00:00.000Z' },
+    [T_RESOLVIDO]: { estado: 'Divergência', updatedAt: '2026-10-02T10:00:00.000Z' },
+    [T_GENERICO]: { estado: 'Recebido', updatedAt: '2026-10-02T10:00:00.000Z' },
   },
   conferencia: {
     [T_IA_WAVE]: { IM2202: { mbl: 'nao_recebido', hbl: 'nao_recebido' } },
     [T_MAPA]: { IM2204: { mbl: 'recebido' }, IM2205: { hbl: 'recebido' } },
     // Marcado quando o OHBL ainda valia para os dois processos (atribuição cruzada).
     [T_CRUZADO]: { IM2208: { mbl: 'recebido', hbl: 'nao_recebido' }, IM2209: { hbl: 'recebido' } },
+    [T_RESOLVIDO]: { IM2301: { mbl: 'recebido', hbl: 'nao_recebido' } },
   },
   followups: {
     [T_IA_WAVE]: { IM2202: { mbl: { via: 'manual', at: '2026-10-02T11:00:00.000Z' } } },
     [T_CRUZADO]: { IM2208: { hbl: { via: 'manual', at: '2026-10-02T11:00:00.000Z' } } },
+    [T_RESOLVIDO]: { IM2301: { hbl: { via: 'manual', at: '2026-10-02T11:00:00.000Z' } } },
   },
 };
 for (const k of Object.keys(arquivos) as Array<keyof typeof arquivos>) {
@@ -174,6 +201,8 @@ const CLARA: Record<string, [string | null, string | null]> = {
   [T_CRUZADO]: [null, 'HBL sent to client'],
   [T_SEM_IM]: ['Destination Release', null],
   [T_A_SEGUIR]: ['Telex release to consignee', 'Wave BL'],
+  [T_RESOLVIDO]: [null, 'Telex release confirmed'],
+  [T_GENERICO]: ['Original HBL sent to consignee', null],
 };
 /** IMs que SÓ a Clara (falsa) "lê", sem aparecer em nenhum texto. */
 const SO_DA_CLARA: Record<string, string[]> = { [T_A_SEGUIR]: ['IM9999'] };
@@ -423,6 +452,27 @@ test('associação pela rota real: sem cruzamento, sem processo inventado, "a se
   // IM só da Clara e IM só da conversa: sugestões, nunca processo do courier.
   assert.deepEqual(Array.from(seguir.row.chips, (x: any) => x.codigo), ['IM2212']);
   assert.deepEqual(Array.from(seguir.row.sugestoes, (x: any) => [x.codigo, x.origem]).sort(), [['IM2290', 'citado na conversa'], ['IM9999', 'só a Clara']]);
+
+  // Telex confirmado para o envelope (dois IMs): o "Não recebido" + follow-up do IM2301
+  // continuam visíveis ao lado da resolução, a revisar, sem cobrança nova.
+  const res = await abrir(T_RESOLVIDO);
+  assert.equal(res.courier.docResolution.telex, true);
+  const r1 = res.porProc.IM2301;
+  assert.deepEqual([r1.hbl.resolved, r1.hbl.text, r1.hbl.registro, r1.hbl.registroText, r1.hbl.conf], [
+    true, 'Telex Release Confirmado', true, 'Registro: Não recebido', false,
+  ]);
+  assert.equal(r1.stLabel, 'Divergência');
+  assert.deepEqual(
+    (Array.from(r1.pendencias) as any[]).map((p) => [p.docLabel, p.conflito, p.fupDone, p.fupPend, typeof p.onGerarEmail]),
+    [['OHBL', true, true, false, 'undefined']],
+  );
+  assert.deepEqual([res.porProc.IM2302.hbl.resolved, res.porProc.IM2302.hbl.registro], [true, false]);
+
+  // BL ligado a processos demais: processo único não confirma; fica a revisar.
+  const gen = await abrir(T_GENERICO);
+  const [mg] = gen.courier.docsEnvelope.mencoes;
+  assert.deepEqual([mg.associacao.situacao, mg.associacao.referenciasCompartilhadas], ['ambigua', ['SHGEN00000001']]);
+  assert.deepEqual([gen.porProc.IM2320.hbl.revisar, gen.porProc.IM2320.hbl.conf], [true, false]);
 
   assert.deepEqual(retrato(), antes, 'registros de estado, conferência ou follow-up foram modificados');
 });
