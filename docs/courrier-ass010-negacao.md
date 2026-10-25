@@ -153,6 +153,10 @@ sem IA e sem chamada nova):
 - O status da linha conta os documentos esperados **e os registros gravados** —
   inclusive os de documento resolvido pelo e-mail: uma divergência registrada
   continua visível até a revisão; nada é dado como resolvido.
+- O rodapé do courier recebido só diz "Documentos disponíveis para conferência"
+  quando há algum documento conferível; sem nenhum, diz que não há documento com
+  expectativa confirmada (e aponta os itens a revisar, se houver). "Finalizar
+  courier" continua disponível como antes (achado da validação no navegador).
 - Documento afirmado sem processo confirmado aparece uma vez, no bloco
   **"Documentos sem processo confirmado — revisar"**, sem virar expectativa em
   nenhum IM.
@@ -246,7 +250,7 @@ limitação conhecida**, e não como conformidade.
 
 ## Testes
 
-`npm run courier-docs:selftest` (89 casos, isolado):
+`npm run courier-docs:selftest` (90 casos, isolado):
 
 - **`docResolution.test.ts` (31):**
   - confirmação, pendência, "approved", menção sem marcador, condição na frase e
@@ -280,7 +284,7 @@ limitação conhecida**, e não como conformidade.
   - 1 busca no Graph e 0 chamadas de IA por lista;
   - o texto do painel da Clara (`derivarExpectativa`): as observações de telex,
     Wave, destino e cliente são informativas.
-- **`docResolution.front.test.ts` (33):** o script real do Courier Module num `vm`
+- **`docResolution.front.test.ts` (34):** o script real do Courier Module num `vm`
   (`buildRow`), com o `docsEnvelope` gerado pelo módulo real a partir do texto,
   verificando que `buildRow` não altera estado, conferência nem faz chamada.
   Confere:

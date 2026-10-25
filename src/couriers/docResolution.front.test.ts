@@ -301,6 +301,22 @@ test('resolução eletrônica do envelope com dois IMs: a marcação "Não receb
   ]);
 });
 
+test('rodapé do courier recebido só diz "Documentos disponíveis para conferência" quando há documento conferível', () => {
+  const rodape = (op: Opcoes) => montar(sem, { estado: 'Recebido', ...op }).footOkText;
+  assert.equal(rodape({}), 'Courier recebido. Documentos disponíveis para conferência.');
+  assert.equal(rodape({ texto: 'Favor confirmar o recebimento.' }), 'Courier recebido. Nenhum documento com expectativa confirmada para conferir neste envelope.');
+  assert.equal(
+    rodape({ texto: 'IM2101 / IM2102 - OHBL', processos: ['IM2101', 'IM2102'] }),
+    'Courier recebido. Nenhum documento com expectativa confirmada para conferir neste envelope — veja os itens a revisar.',
+  );
+  assert.equal(
+    rodape({ texto: 'OHBL SHYY1234567 enclosed', processos: ['IM2101', 'IM2102'] }),
+    'Courier recebido. Nenhum documento com expectativa confirmada para conferir neste envelope — veja os itens a revisar.',
+  );
+  // Finalizar continua disponível como antes: o ciclo do courier não muda.
+  assert.equal(montar(sem, { estado: 'Recebido', texto: '' }).footOk, true);
+});
+
 test('referência ligada a processos demais não confirma pelo processo único — fica a revisar, com a incerteza visível', () => {
   const indice = indiceComOrigem(
     Array.from({ length: MAX_SHARED_PROCESSES + 1 }, (_, k) => ({ id: `pre-${k}`, subject: `Pre-alert IM${2331 + k}`, body: 'HBL SHGEN00000001' })),
