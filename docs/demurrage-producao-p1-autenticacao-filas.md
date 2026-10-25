@@ -866,6 +866,7 @@ Toda alteração traz no próprio código o comentário `Produção P1 (auditori
 | `minutaTestHelper.ts` | recusa responsável prévio que não seja ANALYST | H5 |
 | `testDb.ts` | `truncateAll` inclui `integracao_microsoft_vinculos` | tabela nova |
 | `migrate`, `responsavelOperacional`, `registroDemurrageV12` (×2), `responsabilidadeAuditoria`, `responsabilidadeV12`, `schedulerClaimFencing`, `demurrageAcoesEntrega2V11`, `demurrageAcoesEntrega2V12`, `minutaEncerramentoP1` | listas de migrations com 0050 e 0051 (aditivas) | migrations novas |
+| `d15c.test.ts`, `schedulerClaimFencing.test.ts` (helper `comBancoTemporario`) | depois de `pool.end()`, espera (até 5 s) os backends do próprio pool saírem, e só então encerra o resto e apaga o banco temporário | corrida pré-existente desde a D15-C v1.1 (`0a0ee9c`). O `end()` do pg-pool 3.14 resolve antes de os sockets fecharem, e o `pg_terminate_backend` seguinte entregava o FATAL 57P01 a um cliente sem ouvinte de erro: uma exceção não capturada derrubou o D15-C #25 na 1ª validação limpa (§18.9). Nenhuma asserção mudou |
 | `migration0007.test.ts` | `integracao_microsoft_vinculos` entra em `TABELAS_COM_ORG` (tem `organization_id` e o trigger de imutabilidade) | tabela nova |
 
 ### 18.8 Revisão adversarial final (antes do commit)

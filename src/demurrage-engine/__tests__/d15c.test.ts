@@ -839,6 +839,17 @@ async function comBancoTemporario<T>(fn: (pool: Pool) => Promise<T>): Promise<T>
     return await fn(pool);
   } finally {
     await pool.end();
+    // Produção P1 (auditoria final): o `end()` do pg-pool resolve ANTES de os sockets dos clientes
+    // fecharem. Encerrar os backends nesse instante entregava o FATAL 57P01 a um cliente já sem
+    // ouvinte de erro — exceção não capturada que derrubava o teste ao acaso. Espera (até 5 s) os
+    // backends do próprio pool saírem e só então encerra o que sobrar (ex.: autovacuum).
+    for (let i = 0; i < 100; i++) {
+      const { rows } = await admin.query(
+        `SELECT count(*)::int n FROM pg_stat_activity WHERE datname = $1 AND backend_type = 'client backend' AND pid <> pg_backend_pid()`, [nome],
+      );
+      if (!rows[0].n) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
     await admin.query(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`, [nome]);
     await admin.query(`DROP DATABASE IF EXISTS "${nome}"`);
     await admin.end();
