@@ -351,6 +351,16 @@
                             <span style="font-size:12.5px;color:#C2333A">Divergência: há documento não recebido. Resolva antes de concluir o courier.</span>
                           </div>
                         </sc-if>
+                        <!-- Concluído com pendência aberta (HIS-004): continua visível, sem ação -->
+                        <sc-if value="{{ r.footConcluido }}" hint-placeholder-val="{{ false }}">
+                          <div style="margin-top:12px;background:#FDF8EE;border:1px solid #F4E4C4;border-radius:12px;padding:12px 15px">
+                            <div style="font-size:12.5px;font-weight:800;color:#B9760A">Courier concluído com registro pendente — revisar</div>
+                            <div style="font-size:11.5px;color:#7A5A20;margin-top:4px;line-height:1.45">Continua na lista porque a conclusão não encerra divergência nem conflito. Os registros abaixo foram mantidos como estão.</div>
+                            <sc-for list="{{ r.pendAbertas }}" as="pab" hint-placeholder-count="1">
+                              <div style="font-size:11.5px;color:#7A5A20;margin-top:4px">• {{ pab.texto }}</div>
+                            </sc-for>
+                          </div>
+                        </sc-if>
 
                         <!-- Clara: diagnóstico ENXUTO (uma linha; só cresce quando há problema ou ao pedir) -->
                         <div style="margin-top:14px">
@@ -980,6 +990,9 @@ class Component extends DCLogic {
     var mblText = fWave?'Via Wave BL': fDestino?'Emitido no destino': null;
 
     var received = (estado==='Recebido' || estado==='Em Conferência' || estado==='Divergência');
+    // Concluído só aparece na lista com pendência aberta (HIS-004): somente leitura,
+    // sem reabrir, sem marcar e sem sugerir cobrança.
+    var concluido = (estado==='Concluído');
     // ETA por processo: o backend ainda não fornece uma data de chegada real por
     // processo. Não inventamos a data do e-mail como ETA — fica "—" até existir.
     var eta='—';
@@ -1044,6 +1057,14 @@ class Component extends DCLogic {
           return c;
         }
         if (ev.esperado){
+          if (concluido){
+            // Concluído: mostra o registro como está, sem controles.
+            if (marcado){
+              c.registro=true; c.registroText='Registro: '+(v==='recebido'?'Recebido':'Não recebido');
+              c.registroNota=(v==='nao_recebido') ? 'Divergência registrada — courier concluído' : 'Courier concluído';
+            } else { c.wait=true; c.waitText='Não conferido'; }
+            return c;
+          }
           if (!received){ c.wait=true; c.waitText='Aguardando courier'; return c; }
           var recSel=(v==='recebido'), naoSel=(v==='nao_recebido');
           c.conf=true;
@@ -1102,7 +1123,8 @@ class Component extends DCLogic {
         if (!received) return { label:label, status:'Aguardando courier', color:'#9AA0B4' };
         return { label:label, status:'Não recebido', color:'#9AA0B4' };
       };
-      var claraNote = (estado==='Identificado') ? 'depende da chegada do envelope para conferência documental.'
+      var claraNote = concluido ? 'registra o courier como concluído: os registros ficam como estão e as pendências seguem abertas até a revisão.'
+        : (estado==='Identificado') ? 'depende da chegada do envelope para conferência documental.'
         : (estado==='Divergência') ? 'registrou divergência — verifique os documentos marcados como não recebidos.'
         : 'liberou a conferência: confirme cada documento recebido no envelope.';
       var rowKey=courier.tracking+'|'+proc;
@@ -1119,6 +1141,12 @@ class Component extends DCLogic {
       var addPend=function(docKey, label, ev, resolvedText){
         if (val[docKey]!=='nao_recebido') return;
         var done=!!fup[docKey];
+        if (concluido && !resolvedText && ev.esperado){
+          pendencias.push({ docLabel:label, esperado:false, conflito:true, fupDone:done, fupPend:false,
+            titulo: 'Não recebido registrado — courier concluído ('+label+')',
+            nota: 'O courier foi concluído com este documento registrado como não recebido. A divergência continua aberta e visível; nenhuma cobrança é sugerida automaticamente.' });
+          return;
+        }
         if (resolvedText || !ev.esperado){
           pendencias.push({ docLabel:label, esperado:false, conflito:true, fupDone:done, fupPend:false,
             titulo: resolvedText
@@ -1187,6 +1215,13 @@ class Component extends DCLogic {
     row.hasCandidatos=(row.candidatos.length>0);
 
     // ---- rodapé: portão de recebimento / conferência ----
+    // Concluído com pendência aberta (HIS-004): aviso de revisão com os registros
+    // pendentes vindos do backend. A conclusão não encerra divergência nem conflito.
+    var MOTIVO={ 'ausencia-registrada':'ausência registrada', 'conflito-resolucao':'resolução do e-mail a revisar', 'conflito-associacao':'associação a revisar' };
+    row.pendAbertas=(courier.pendenciasAbertas||[]).map(function(p){
+      return { texto: p.processo+' · '+(p.documento==='mbl'?'OMBL':'OHBL')+' — Registro: '+(p.registro==='recebido'?'Recebido':'Não recebido')+' ('+(MOTIVO[p.motivo]||p.motivo)+')' };
+    });
+    row.footConcluido=(concluido && row.pendAbertas.length>0);
     row.footWait=(estado==='Identificado');
     row.footDiv=(received && anyDiv);
     row.footOk=(received && !anyDiv);
@@ -1269,7 +1304,8 @@ class Component extends DCLogic {
     // KPIs (honestos, fonte: Outlook)
     var procSet={}; couriers.forEach(function(c){ (c.processos||[]).forEach(function(p){ procSet[p]=1; }); });
     var nProc=Object.keys(procSet).length;
-    var nRevisar=couriers.filter(function(c){ return c.precisaRevisao || self.estadoDe(c)==='Divergência'; }).length;
+    var concluidoPendente=function(c){ return self.estadoDe(c)==='Concluído' && (c.pendenciasAbertas||[]).length>0; };
+    var nRevisar=couriers.filter(function(c){ return c.precisaRevisao || self.estadoDe(c)==='Divergência' || concluidoPendente(c); }).length;
     var kpis=[
       { label:'Couriers identificados', value:String(couriers.length), color:'#4327E6', valColor:'#161A2E', hint:'um por tracking' },
       { label:'Processos agrupados', value:String(nProc), color:'#1F9D6B', valColor:'#161A2E', hint:'vinculados a um envelope' },
@@ -1284,11 +1320,11 @@ class Component extends DCLogic {
     else if (!couriers.length){ claraIntro='Não encontrei trackings de courier nesta caixa. Assim que um agente informar um tracking, o courier aparece aqui.'; semAtencao=true; atCalmMsg='Nada para revisar por enquanto.'; }
     else {
       claraIntro='Reconstruí '+couriers.length+' courier'+(couriers.length===1?'':'s')+' a partir dos seus e-mails — '+nProc+' processo'+(nProc===1?'':'s')+' agrupado'+(nProc===1?'':'s')+(sem.length?(', e '+sem.length+' processo'+(sem.length===1?'':'s')+' ainda sem courier.'):'.');
-      var criticos=couriers.filter(function(c){ return c.precisaRevisao || self.estadoDe(c)==='Divergência'; }).slice(0,3);
+      var criticos=couriers.filter(function(c){ return c.precisaRevisao || self.estadoDe(c)==='Divergência' || concluidoPendente(c); }).slice(0,3);
       atencao=criticos.map(function(c){
-        var div=(self.estadoDe(c)==='Divergência');
-        return { tracking:c.tracking, tag:div?'Divergência':'Revisar', tagColor:div?'#C2333A':'#B9760A', tagBg:div?'#FDECEC':'#FDF3E0',
-          motivo: div?'Divergência aberta — bloqueia o encerramento.':'Tracking sem processo vinculado.',
+        var div=(self.estadoDe(c)==='Divergência'), conc=concluidoPendente(c);
+        return { tracking:c.tracking, tag:div?'Divergência':conc?'Concluído':'Revisar', tagColor:div?'#C2333A':'#B9760A', tagBg:div?'#FDECEC':'#FDF3E0',
+          motivo: div?'Divergência aberta — bloqueia o encerramento.':conc?'Concluído com registro pendente — revisar.':'Tracking sem processo vinculado.',
           onOpen:function(){ self.toggle(c); try{window.scrollTo(0,0);}catch(e){} } };
       });
       if (!atencao.length){ semAtencao=true; atTitulo='Tudo em ordem'; atICon='#1F9D6B'; atCalmMsg='Nenhuma pendência crítica. Todos os couriers têm processo vinculado.'; }

@@ -191,6 +191,40 @@ continua funcionando).
 - **Resolução da expectativa física não é liberação da carga.** Esta tela só diz
   se um original físico ainda é esperado no envelope.
 
+## HIS-004 — concluído com pendência aberta continua visível (parcial)
+
+Concluir a conferência não encerra pendência documental. Antes, todo courier
+"Concluído" saía da lista principal, inclusive com divergência registrada.
+
+- **Pendência aberta** (`src/couriers/pendenciasAbertas.ts`, mesmas regras de
+  evidência da tela), a partir dos registros humanos:
+  - `ausencia-registrada`: documento marcado "Não recebido" (ausência confirmada
+    por pessoa);
+  - `conflito-resolucao`: registro num documento que o e-mail dá como resolvido
+    para o envelope inteiro (telex, importador, destino, Wave);
+  - `conflito-associacao`: registro num documento sem associação confirmada ao
+    processo.
+- **Não é pendência:** expectativa desconhecida sem registro ("Não informado"), nem
+  "Recebido" sem conflito. Documento sem processo e sem registro também não segura
+  o courier (RES-008 permite concluir).
+- **Lista:** um courier "Concluído" fica se tiver pendência aberta; sem pendência,
+  sai como antes. A resposta traz `pendenciasAbertas` por courier e
+  `concluidosComPendencia`.
+- **Tela do concluído:** somente leitura, sem reabrir:
+  - os registros e follow-ups aparecem como estão;
+  - não há Recebido/Não recebido, nem "Finalizar", nem sugestão de cobrança;
+  - o aviso "Courier concluído com registro pendente — revisar" lista as
+    pendências;
+  - "Exige atenção" e "Precisam de revisão" contam o concluído com pendência.
+- **Finalização:** nenhum bloqueio novo. Com divergência registrada, a tela já não
+  oferecia "Finalizar"; a finalização pela rota (operador/API ou dado legado) segue
+  aceita e o courier continua visível.
+- **Pré-requisito que falta:** o armazenamento não tem registro de "pendência
+  encerrada sem recebimento" (aceita, dispensada, justificada), nem reabertura. Por
+  isso, enquanto o "Não recebido" estiver gravado, a pendência é aberta, e não há
+  como encerrá-la num courier concluído pela tela. Isso depende do ciclo de
+  pendências (HIS/RES), não implementado.
+
 ## O que NÃO mudou
 
 - Persistência (estados, conferência, follow-ups em JSON) e migrations. As
@@ -250,7 +284,15 @@ limitação conhecida**, e não como conformidade.
 
 ## Testes
 
-`npm run courier-docs:selftest` (90 casos, isolado):
+`npm run courier-docs:selftest` (isolado; os números por arquivo abaixo; HIS-004 em
+`pendenciasAbertas.test.ts` e `pendenciasAbertas.rota.test.ts`).
+
+Validação no navegador (fora do CI, precisa do React local; ver o cabeçalho do
+script): `npm run courier-docs:navegador -- <pasta-react> [saida]`, roteiro e
+fixtures sintéticas em `scripts/courier-navegador/`. As capturas não são
+versionadas.
+
+Arquivos:
 
 - **`docResolution.test.ts` (31):**
   - confirmação, pendência, "approved", menção sem marcador, condição na frase e

@@ -43,6 +43,7 @@ import {
   indiceComOrigem,
   mencoesDocumentais,
 } from '../couriers/docAssociation';
+import { pendenciasAbertas } from '../couriers/pendenciasAbertas';
 import { config } from '../config';
 
 export const courierRouter = Router();
@@ -580,6 +581,7 @@ async function buildCourierView(accessToken: string) {
         for (const cv of convsByProcess.get(processBase(p)) || [])
           linkedConvs.add(cv);
       const conversationIds = Array.from(linkedConvs);
+      const conferencia = conferencias[trackingKey(c.tracking)] || {};
 
       return {
         carrier: c.carrier,
@@ -603,8 +605,11 @@ async function buildCourierView(accessToken: string) {
         conversationId: c.conversationId,
         estado,
         nota: reg?.nota || null,
-        conferencia: conferencias[trackingKey(c.tracking)] || {},
+        conferencia,
         followups: followups[trackingKey(c.tracking)] || {},
+        // Registros humanos ainda pendentes (ausência registrada ou conflito de
+        // associação/resolução). Concluir o courier não os encerra (HIS-004).
+        pendenciasAbertas: pendenciasAbertas(conferencia, docsEnvelope.mencoes, docResolution),
         // MBL/HBL conhecidos por processo (dos e-mails) — para o follow-up.
         refsPorProcesso: Object.fromEntries(
           processosEfetivos
@@ -622,11 +627,18 @@ async function buildCourierView(accessToken: string) {
       };
     });
 
-    // Concluídos saem da lista principal (viram histórico), conforme o Manual.
+    // Concluídos saem da lista principal (viram histórico), conforme o Manual —
+    // EXCETO os que têm pendência aberta registrada (HIS-004): concluir a
+    // conferência não encerra a divergência nem o conflito. Eles continuam
+    // visíveis, concluídos, com os registros como estão. Sem registro pendente
+    // (inclusive expectativa só desconhecida), o concluído sai da lista.
     const couriers = couriersAll
-      .filter((c) => c.estado !== 'Concluído')
+      .filter((c) => c.estado !== 'Concluído' || c.pendenciasAbertas.length > 0)
       .sort((a, b) => (a.data < b.data ? 1 : -1));
     const concluidos = couriersAll.filter((c) => c.estado === 'Concluído').length;
+    const concluidosComPendencia = couriersAll.filter(
+      (c) => c.estado === 'Concluído' && c.pendenciasAbertas.length > 0,
+    ).length;
 
     // Atividades recentes: derivadas dos e-mails CANDIDATOS mais recentes.
     const seenAtiv = new Set<string>();
@@ -665,6 +677,7 @@ async function buildCourierView(accessToken: string) {
       ),
       atividades,
       concluidos,
+      concluidosComPendencia,
     };
 }
 

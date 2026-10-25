@@ -12,6 +12,7 @@ import fs from 'fs';
 import path from 'path';
 import vm from 'vm';
 import { indiceComOrigem, IndiceComOrigem, mencoesDocumentais } from './docAssociation';
+import { pendenciasAbertas } from './pendenciasAbertas';
 import { MAX_SHARED_PROCESSES } from './referenceResolver';
 
 const HTML = path.join(__dirname, '..', '..', 'public', 'Courier Module.dc.html');
@@ -94,7 +95,10 @@ function montar(docResolution: Record<string, boolean>, op: Opcoes = {}) {
     conferencia: op.confPor || (op.conf ? Object.fromEntries(processos.map((p) => [p, op.conf])) : {}),
     followups: op.fupPor || {},
     resolucao: { resolvidos: [], candidatos: [] },
+    pendenciasAbertas: [] as unknown[],
   };
+  // Como a rota faz: pendências abertas a partir dos registros (módulo real).
+  courier.pendenciasAbertas = pendenciasAbertas(courier.conferencia as any, courier.docsEnvelope.mencoes, docResolution);
   const confAntes = JSON.stringify(courier.conferencia);
   const analise =
     op.analise || (op.clara !== undefined ? { hblResolution: op.clara, processosDetalhe: [], processNumbers: [] } : undefined);
@@ -299,6 +303,72 @@ test('resolução eletrônica do envelope com dois IMs: a marcação "Não receb
   assert.deepEqual([w.mbl.resolved, w.mbl.registroText, w.st, w.pendencias, w.conflitos.map((c: any) => c.docLabel)], [
     true, 'Registro: Não recebido', 'Divergência', [], ['OMBL'],
   ]);
+});
+
+/* ---------------- HIS-004: concluído com pendência aberta ---------------- */
+
+test('HIS-004: concluído com "Não recebido" + follow-up mostra registro, follow-up e aviso — sem controles nem cobrança', () => {
+  const op: Opcoes = {
+    estado: 'Concluído',
+    processos: ['IM2501', 'IM2502'],
+    confPor: { IM2501: { mbl: 'recebido', hbl: 'nao_recebido' } },
+    fupPor: { IM2501: { hbl: { via: 'manual', at: '2026-10-02T10:00:00.000Z' } } },
+  };
+  const row = montar(sem, op);
+  const l = Object.fromEntries(linhas(sem, op).map((x) => [x.codigo, x]));
+  const h = l.IM2501.hbl;
+  assert.deepEqual([h.registro, h.registroText, h.registroNota, h.conf, h.onRecebido], [
+    true, 'Registro: Não recebido', 'Divergência registrada — courier concluído', false, undefined,
+  ]);
+  assert.deepEqual([l.IM2501.mbl.registroText, l.IM2501.mbl.conf], ['Registro: Recebido', false]);
+  assert.equal(l.IM2501.st, 'Divergência', 'a divergência registrada não é dada como resolvida');
+  assert.deepEqual(l.IM2501.pendencias, [], 'sem cobrança sugerida');
+  assert.deepEqual(l.IM2501.conflitos.map((c: any) => [c.titulo, c.fupDone, typeof c.onGerarEmail]), [
+    ['Não recebido registrado — courier concluído (OHBL)', true, 'undefined'],
+  ]);
+  assert.deepEqual([row.footConcluido, row.footOk, row.footDiv, row.footWait], [true, false, false, false]);
+  assert.match((Array.from(row.envelope) as any[])[0].claraNote, /concluído: os registros ficam como estão/);
+  assert.deepEqual(Array.from(row.pendAbertas, (p: any) => p.texto), ['IM2501 · OHBL — Registro: Não recebido (ausência registrada)']);
+  // Processo sem registro: nada conferível, sem controles.
+  assert.deepEqual([l.IM2502.hbl.wait, l.IM2502.hbl.waitText, l.IM2502.hbl.conf], [true, 'Não conferido', false]);
+});
+
+test('HIS-004: concluído com conflito de resolução ou de associação também mostra o aviso', () => {
+  const telex = montar(confirmado, { estado: 'Concluído', conf: { hbl: 'nao_recebido' } });
+  assert.deepEqual(Array.from(telex.pendAbertas, (p: any) => p.texto), ['IM2101 · OHBL — Registro: Não recebido (resolução do e-mail a revisar)']);
+  const assoc = montar(sem, { estado: 'Concluído', texto: 'IM2503 - OMBL\nIM2504 - OHBL', processos: ['IM2503', 'IM2504'], confPor: { IM2503: { hbl: 'recebido' } } });
+  assert.deepEqual(Array.from(assoc.pendAbertas, (p: any) => p.texto), ['IM2503 · OHBL — Registro: Recebido (associação a revisar)']);
+  assert.equal(assoc.footConcluido, true);
+});
+
+test('HIS-004: expectativa desconhecida sem registro não é ausência — concluído sem pendência não pede revisão', () => {
+  const row = montar(sem, { estado: 'Concluído', texto: 'Favor confirmar.' });
+  assert.deepEqual([Array.from(row.pendAbertas).length, row.footConcluido], [0, false]);
+});
+
+test('HIS-004: a tela e o backend concordam sobre o que é pendência aberta', () => {
+  // Para cada registro: pendente no backend ⇔ a tela mostra "Não recebido" ou um
+  // registro com aviso de conflito/resolução (fora do concluído).
+  const textos = ['IM2101 - OMBL / OHBL', 'IM2101 - OMBL', 'Favor confirmar.', 'IM2101 OHBL to follow', 'IM2101 - OMBL\nIM2102 - OHBL', 'IM2101 / IM2102 - OHBL'];
+  const motores = [sem, confirmado, { ...sem, wave: true }, { ...sem, importador: true }];
+  const marcas = ['recebido', 'nao_recebido'];
+  let casos = 0;
+  for (const texto of textos)
+    for (const dr of motores)
+      for (const m of marcas)
+        for (const n of marcas) {
+          const confPor = { IM2101: { mbl: m, hbl: n } };
+          const op: Opcoes = { estado: 'Em Conferência', texto, processos: ['IM2101', 'IM2102'], confPor };
+          const back = pendenciasAbertas(confPor, mencoesDocumentais([{ messageId: 'msg-1', texto }], ['IM2101', 'IM2102'], new Map()).mencoes, dr);
+          const l = linhas(dr, op).find((x) => x.codigo === 'IM2101')!;
+          for (const [doc, c, v] of [['mbl', l.mbl, m], ['hbl', l.hbl, n]] as const) {
+            const tela = v === 'nao_recebido' || (c.registro && c.registroNota !== 'Sem menção no e-mail — revisar');
+            const id = JSON.stringify({ texto, dr, doc, v });
+            assert.equal(back.some((p) => p.documento === doc), tela, id);
+            casos++;
+          }
+        }
+  assert.equal(casos, 6 * 4 * 4 * 2);
 });
 
 test('rodapé do courier recebido só diz "Documentos disponíveis para conferência" quando há documento conferível', () => {
