@@ -127,7 +127,7 @@ const { getGeminiClient } = require('../ai/geminiClient') as typeof import('../a
 /* ---------- app com a rota real ---------- */
 
 const express = require('express') as typeof import('express');
-const { courierRouter } = require('../routes/courierRoutes') as typeof import('../routes/courierRoutes');
+const { courierRouter, derivarExpectativa } = require('../routes/courierRoutes') as typeof import('../routes/courierRoutes');
 
 const app = express();
 app.use(express.json());
@@ -208,4 +208,22 @@ test('rota GET /api/couriers: mesmas chamadas externas — 1 busca no Graph por 
   await listar();
   assert.deepEqual(chamadas, { graph: 1, ia: 0 });
   assert.deepEqual(bloqueadas, []);
+});
+
+test('análise da Clara: a observação de telex informa, sem mandar encerrar o OHBL físico; as demais seguem iguais', () => {
+  const analise = (hblResolution: string) =>
+    ({ hblResolution, evidences: [], documents: [], processNumbers: ['IM2101'], confidence: 0.9 }) as unknown as Parameters<
+      typeof derivarExpectativa
+    >[0];
+  for (const h of ['Telex Release', 'Via Telex Release', 'Telex release confirmed', 'Telex release pending payment']) {
+    const { observacoes } = derivarExpectativa(analise(h));
+    assert.deepEqual(observacoes, [
+      'Clara identificou menção a Telex Release. Isso, sozinho, não encerra a expectativa do OHBL físico: vale a confirmação documental exibida na tabela.',
+    ], h);
+    assert.ok(!observacoes.some((o) => /não esperar OHBL/i.test(o)), h);
+  }
+  // Wave BL, emissão no destino e envio ao cliente: textos de antes (fora desta entrega).
+  assert.deepEqual(derivarExpectativa(analise('Wave BL')).observacoes, ['Wave BL detectado — expectativa de OMBL físico cancelada.']);
+  assert.deepEqual(derivarExpectativa(analise('Destination Release')).observacoes, ['Emissão no destino — expectativa documental física cancelada.']);
+  assert.deepEqual(derivarExpectativa(analise('Original HBL sent to consignee')).observacoes, ['OHBL enviado ao cliente.']);
 });

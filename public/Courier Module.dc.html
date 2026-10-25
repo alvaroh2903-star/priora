@@ -921,17 +921,17 @@ class Component extends DCLogic {
 
     // Resolução do HBL/MBL. Combina o que a Clara leu (a.hblResolution) com a
     // detecção DETERMINÍSTICA do backend (courier.docResolution) — assim o motivo
-    // (ex.: "Via Telex Release") aparece mesmo sem a análise da IA ter rodado.
+    // aparece mesmo sem a análise da IA ter rodado. Para telex, vale só o backend.
     var hblRaw=((a && a.hblResolution) || '').toLowerCase();
     var dr=courier.docResolution||{};
-    // Telex Release PENDENTE (regra determinística do backend): não encerra o OHBL
-    // físico e impede que a menção de telex lida pela Clara o encerre.
+    // Telex: SÓ o motor documental (docResolution) encerra o OHBL físico. A menção
+    // de telex lida pela Clara (hblResolution) é informação auxiliar, sem efeito.
     var telexPendente=!!dr.telexPendente && !dr.telex;
-    var fTelex=!!dr.telex || (!telexPendente && /telex/.test(hblRaw)),
+    var fTelex=!!dr.telex,
         fWave=/wave/.test(hblRaw) || !!dr.wave,
         fDestino=/destino|destination/.test(hblRaw) || !!dr.destino,
         fImport=/consignee|client|cliente|importer|importador/.test(hblRaw) || !!dr.importador;
-    var hblText = fTelex?(dr.telex?'Telex Release Confirmado':'Via Telex Release'): fImport?'Enviado ao importador': fDestino?'Emitido no destino': fWave?'Via Wave BL': null;
+    var hblText = fTelex?'Telex Release Confirmado': fImport?'Enviado ao importador': fDestino?'Emitido no destino': fWave?'Via Wave BL': null;
     // OHBL ainda esperado com telex só pendente: aviso ao analista do que falta.
     var hblPendente=(!hblText && telexPendente) ? 'Telex Release Pendente — aguardando confirmação' : '';
     var mblText = fWave?'Via Wave BL': fDestino?'Emitido no destino': null;

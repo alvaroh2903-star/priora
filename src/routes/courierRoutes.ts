@@ -830,11 +830,15 @@ function mapProcessDocs(
  * Derivação da "expectativa documental" a partir da análise da Clara
  * (aplica as regras do Manual: Telex/Wave/Emissão no destino, etc.)
  * ------------------------------------------------------------------ */
-function derivarExpectativa(a: Awaited<ReturnType<typeof parseThread>>) {
+export function derivarExpectativa(a: Awaited<ReturnType<typeof parseThread>>) {
   const observacoes: string[] = [];
   const hbl = (a.hblResolution || '').toLowerCase();
+  // A Clara só INFORMA o telex: quem encerra o OHBL físico é a confirmação do
+  // motor documental (docResolution.telex), exibida na tabela do envelope.
   if (/telex/.test(hbl))
-    observacoes.push('Telex Release detectado — não esperar OHBL físico.');
+    observacoes.push(
+      'Clara identificou menção a Telex Release. Isso, sozinho, não encerra a expectativa do OHBL físico: vale a confirmação documental exibida na tabela.',
+    );
   if (/wave/.test(hbl))
     observacoes.push('Wave BL detectado — expectativa de OMBL físico cancelada.');
   if (/destino|destination/.test(hbl))

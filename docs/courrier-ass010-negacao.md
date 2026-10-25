@@ -74,12 +74,20 @@ texto inteiro. Não se usa a confirmação de um documento como prova para outro
   - aparece o aviso **"Telex Release Pendente — aguardando confirmação"** na célula
     e na lista "Documentos esperados";
   - o aviso não diz que o agente enviará o OHBL físico.
-- **Pendente prevalece sobre a Clara** (decisão de 25/10): com `telexPendente`, a
-  menção de telex no `hblResolution` da Clara não encerra o OHBL.
-- **Sem regra determinística de telex:** a string da Clara continua podendo
-  encerrar o OHBL como "Via Telex Release" (rótulo de antes, não "Confirmado").
+- **A Clara não encerra o OHBL por telex** (regra aprovada, entrega de 25/10):
+  - só `docResolution.telex` (o motor documental) encerra o OHBL por telex;
+  - a menção de telex no `hblResolution` da Clara não tem nenhum efeito sobre a
+    célula, a lista "Documentos esperados", a conferência, o status do processo ou
+    a cobrança, haja ou não pendência no motor;
+  - o rótulo antigo "Via Telex Release" (vindo da Clara) deixou de existir.
+- **Painel da Clara:** a observação de telex virou informativa: "Clara identificou
+  menção a Telex Release. Isso, sozinho, não encerra a expectativa do OHBL físico:
+  vale a confirmação documental exibida na tabela." Antes ela dizia "não esperar
+  OHBL físico".
 - **Envio ao importador, emissão no destino e Wave BL** continuam encerrando como
-  antes.
+  antes, inclusive pela string da Clara (fora desta entrega). Como a menção de
+  telex da Clara deixou de vir antes delas, a resolução por essas regras aparece com
+  o próprio rótulo ("Enviado ao importador", "Emitido no destino", "Via Wave BL").
 
 ## O que NÃO mudou
 
@@ -102,11 +110,15 @@ limitação conhecida**, e não como conformidade.
    uma confirmação posterior não encerra uma pendência anterior: fica pendente, que
    é o lado seguro.
 3. **Avaliação da fonte confiável** (autor, origem, confirmação escrita): não é feita.
-4. **Coerência com o `hblResolution` da Clara:**
-   - sem regra determinística de telex, a string da Clara ainda encerra o OHBL,
-     mesmo que ela própria diga "pending";
-   - a observação textual da análise ("Telex Release detectado — não esperar OHBL
-     físico") e a tela Processos continuam como antes.
+4. **Coerência com a Clara: resolvida só para telex.** Continuam em aberto:
+   - as regras de **envio ao importador, emissão no destino e Wave BL** ainda leem a
+     string da Clara e podem encerrar o OHBL (e o OMBL, nos dois últimos casos)
+     sozinhas. Exemplo: "Telex release to consignee" encerra como "Enviado ao
+     importador";
+   - as observações correspondentes no painel ("expectativa … cancelada", "OHBL
+     enviado ao cliente") não mudaram;
+   - a tela **Processos** (outro módulo) continua exibindo o `hblResolution` da
+     Clara como status.
 5. **Evidência não persistida.** A decisão é recalculada a cada lista a partir dos
    próprios e-mails do courier. Guardar a evidência exige persistência, que não foi
    autorizada.
@@ -124,7 +136,7 @@ limitação conhecida**, e não como conformidade.
 
 ## Testes
 
-`npm run courier-docs:selftest` (40 casos, isolado):
+`npm run courier-docs:selftest` (48 casos, isolado):
 
 - **`docResolution.test.ts` (31):**
   - confirmação, pendência, "approved", menção sem marcador, condição na frase e
@@ -136,16 +148,22 @@ limitação conhecida**, e não como conformidade.
   - equivalência e monotonia em 5.000 + 5.000 textos gerados: a menção é detectada
     como antes, nada é criado, e confirmado e pendente nunca saem juntos;
   - as caracterizações acima.
-- **`docResolution.rota.test.ts` (2):** `GET /api/couriers` pela rota real, com Graph,
+- **`docResolution.rota.test.ts` (3):** `GET /api/couriers` pela rota real, com Graph,
   MSAL e Gemini falsos e rede bloqueada. Confere:
   - confirmado, pendente, sem marcador, negado e português afirmativo;
   - os registros de estado, conferência e follow-up semeados não mudam;
-  - 1 busca no Graph e 0 chamadas de IA por lista.
-- **`docResolution.front.test.ts` (7):** o script real do Courier Module num `vm`
-  (`buildRow`). Confere:
-  - pendente não encerra e mostra o aviso;
-  - pendente prevalece sobre a Clara;
-  - confirmado encerra;
-  - envelope recebido segue conferível e gera cobrança;
-  - importador continua encerrando;
-  - mais a caracterização da Clara sem regra determinística.
+  - 1 busca no Graph e 0 chamadas de IA por lista;
+  - o texto do painel da Clara (`derivarExpectativa`): a observação de telex é
+    informativa e as demais não mudam.
+- **`docResolution.front.test.ts` (14):** o script real do Courier Module num `vm`
+  (`buildRow`), verificando que `buildRow` não altera estado, conferência nem faz
+  chamada. Confere:
+  - a matriz motor × Clara: confirmado com e sem Clara; pendente com "Telex
+    Release" e "confirmed"; sem confirmação com "pending", "Via Telex Release" e
+    "confirmed"; sem análise; importador, destino e Wave reconhecidos pelo motor;
+  - o critério essencial: 13 strings de telex da Clara × 2 estados do motor ×
+    4 estados do envelope, e nenhuma põe `hbl.resolved = true`;
+  - envelope em trânsito, recebido, OHBL recebido (Conferido) e não recebido
+    (pendência e cobrança), e confirmado pelo motor fora da conferência;
+  - caracterizações: múltiplos processos no envelope (sem atribuição por IM) e a
+    string da Clara ainda encerrando pelas regras de importador, destino e Wave.
