@@ -716,4 +716,46 @@ heurística (§15, risco 8). Rodada encerrada sem achado confirmado.
 
 ## 18. Validação
 
-(preenchido na validação em worktree limpo)
+Worktree novo, destacado no commit `af855a2` (árvore limpa: `git status
+--porcelain` vazio antes e depois; só `dist/` e `node_modules/` ignorados),
+`npm ci`, banco PostgreSQL novo, passos SEQUENCIAIS (um processo de teste por
+vez, `--test-concurrency=1`). Armazenamento simulado localmente (memória e S3
+falso em 127.0.0.1); nenhuma rede externa.
+
+| # | Suíte | Testes | Passados | Falhos | Ignorados | Cancelados | `todo` |
+|---|---|---|---|---|---|---|---|
+| 01 | Novos testes de arquivos (32 obrigatórios, 8 do provedor S3, 10 da revisão) | 50 | 50 | 0 | 0 | 0 | 0 |
+| 02 | Minuta e encerramento (+ responsabilidade, lifecycle, apuração) | 253 | 253 | 0 | 0 | 0 | 0 |
+| 03 | Tarifas (administração P1 + motores, seleção, D15-C, migrations) | 168 | 168 | 0 | 0 | 0 | 0 |
+| 04 | Autenticação e filas | 215 | 215 | 0 | 0 | 0 | 0 |
+| 05 | Notificações (avisos de divergência, pendência, fallback) | 273 | 273 | 0 | 0 | 0 | 0 |
+| 06 | Entrega 1 (handoff) + capacidade | 87 | 87 | 0 | 0 | 0 | 0 |
+| 07 | Entrega 2 (ações) | 70 | 70 | 0 | 0 | 0 | 0 |
+| 08 | Entrega 3 (leituras operacionais) | 47 | 47 | 0 | 0 | 0 | 0 |
+| 09 | D12 (10 arquivos históricos) | 75 | 75 | 0 | 0 | 0 | 0 |
+| 10 | Suíte completa do Demurrage Engine | 1452 | 1452 | 0 | 0 | 0 | 0 |
+| 11 | V1 (`npm run test`) | 25 | 25 | 0 | 0 | 0 | 0 |
+| 12 | D13 UI (`npm run test:demurrage-ui`) | 66 | 66 | 0 | 0 | 0 | 0 |
+| 13 | Typecheck (`tsc --noEmit`; e com os arquivos de teste) | — | sem erros | — | — | — | — |
+| 14 | Build (`npm run build`) | — | sem erros | — | — | — | — |
+
+**D12 75/75**, conferido arquivo a arquivo (cada um rodado isoladamente,
+contagem congelada): `demurrageV2Routes` 7, `leituraAutorizacao` 10,
+`leituraContrato` 8, `leituraD12V12` 18, `leituraDetalhe` 6, `leituraFila` 6,
+`leituraFilaV11` 8, `leituraFiltros` 4, `leituraTimeline` 5,
+`leituraTimelineV11` 3 — todos passados, nenhum ignorado ou `todo`.
+
+A suíte completa passa de 1402 (congelamento das tarifas) para 1452: +50 dos
+testes novos de arquivos; nenhum teste congelado removido, ignorado ou
+desativado (alterações inventariadas no §13).
+
+**Regressões da revisão adversarial** (§17), cada uma rodada contra uma cópia
+com o código ANTERIOR à respectiva correção (testes atuais, só ajuste de tipo
+quando o campo novo não existia): R1 falha (objeto do documento apagado), R2
+falha (`40P01`), R3 falha (incidente ausente da lista própria), R4a falha
+(502 em vez de 400), R4c falha (502 em vez de 400), R8 falha (400 em vez de
+408); R4b (controle) passa antes e depois. Com a correção, todas passam,
+repetidas três vezes.
+
+`public/` intocado (`git diff --stat 2331eea af855a2 -- public/` vazio).
+Entrega **não congelada**; a Production P1 **não** está concluída.
