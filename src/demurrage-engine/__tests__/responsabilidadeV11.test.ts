@@ -7,13 +7,13 @@ import { OrganizationRepository } from '../persistence/organizationRepository';
 import { ProcessoRepository } from '../persistence/processoRepository';
 import { ContainerRepository } from '../persistence/containerRepository';
 import { LifecycleRepository } from '../persistence/lifecycleRepository';
-import { MinutaRepository } from '../persistence/minutaRepository';
 import { ClosingService } from '../closing/closingService';
 import { recalcularApuracaoContainer } from '../apuracao/recalcularApuracao';
 import { seedRocketTermoPorEmbarque } from '../tariffs/seed/rocketTermoPorEmbarque';
 import { decidirResponsabilidade } from '../responsabilidade/decidirResponsabilidade';
 import { sugerirResponsabilidade } from '../responsabilidade/liberacaoPort';
 import { novoGestor } from './responsabilidadeTestHelper';
+import { minutaAceitaComArquivoDeTeste } from './minutaTestHelper';
 
 /**
  * Fase D11 v1.1 (corretiva, NÃO congelada) sobre `78c4e9e`:
@@ -83,12 +83,6 @@ async function cenario(
   await setEffective(pool, c, f.effective);
   await recalcularApuracaoContainer(pool, c, { dataReferencia: cfg.hoje });
   return { orgId: org.id, processoId: p.id, containerId: c, condicaoId };
-}
-
-async function minutaValidadaDireta(pool: Pool, containerId: string, numero: string, data: string) {
-  const minutas = new MinutaRepository(pool);
-  const m = await minutas.criarRecebida({ containerId, numeroInformado: numero, dataInformada: data });
-  await minutas.marcarValidada(m.id, data, false, null);
 }
 
 /* ================================================================== *
@@ -429,7 +423,8 @@ test('v1.1 #3 casos 1-6: nova versão da tabela muda as diárias sem mudar os di
     assert.equal(Number(valorAntigo.total), 600);
 
     // Caso 4: fechamento volta a ser bloqueado.
-    await minutaValidadaDireta(pool, c.containerId, 'VALV', '2026-02-11');
+    // Produção P1 (arquivos de minuta): a comprovação que libera o encerramento é a minuta ACEITA com o arquivo armazenado.
+    await minutaAceitaComArquivoDeTeste(pool, { containerId: c.containerId, numero: 'VALV', data: '2026-02-11', hoje: cfg.hoje });
     const gestorFinalizar = await novoGestor(pool, c.orgId);
     assert.deepEqual(
       await new ClosingService(pool).finalizarProcesso({ processoId: c.processoId, membershipId: gestorFinalizar, config: cfg }),
@@ -709,7 +704,8 @@ test('v1.1 migração 0032 → 0033: decisões existentes preservadas; a nova re
     await pool.query('DROP TABLE tariff_versao_transicoes');
     await pool.query('ALTER TABLE organization_memberships DROP COLUMN desativado_em');
     await runMigrations(pool);
-    await minutaValidadaDireta(pool, cli.containerId, 'MIGCLI', '2026-01-10');
+    // Produção P1 (arquivos de minuta): a comprovação que libera o encerramento é a minuta ACEITA com o arquivo armazenado.
+    await minutaAceitaComArquivoDeTeste(pool, { containerId: cli.containerId, numero: 'MIGCLI', data: '2026-01-10', hoje: cfg.hoje });
     assert.deepEqual(
       await new ClosingService(pool).finalizarProcesso({ processoId: cli.processoId, membershipId: gestorCli, config: cfg }),
       { ok: true },

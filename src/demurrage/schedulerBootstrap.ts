@@ -23,6 +23,9 @@ import {
 } from '../demurrage-engine/registro/notificacaoPendencia';
 import { criarAvisoPendenciaTransportGraph } from './avisoPendenciaTransportGraph';
 import { varrerEncerramentoAutomatico, ResultadoVarreduraEncerramento } from '../demurrage-engine/closing/encerramentoAutomatico';
+import { ArmazenamentoObjetos, codigoDeFalhaArmazenamento } from '../demurrage-engine/documentos/armazenamento';
+import { arquivosDoAmbiente } from '../demurrage-engine/documentos/configuracao';
+import { limpezaAutomaticaDocumentos, ResultadoLimpezaTick } from '../demurrage-engine/documentos/reconciliacao';
 
 export interface TickDeps {
   pool: Pool;
@@ -48,7 +51,18 @@ export interface TickDeps {
   varrerEncerramento?: typeof varrerEncerramentoAutomatico;
   /** SÓ TESTE: substitui o consumidor da etapa de recálculo tarifário (ex.: simular falha da etapa inteira). */
   processarRecalculoTarifario?: typeof processarRecalculoTarifario;
+  /**
+   * Produção P1 (arquivos de minuta) — limpeza de uploads abandonados.
+   * Ausente (ou `limpezaAutomatica` false) → a etapa não roda.
+   */
+  arquivos?: {
+    armazenamento: ArmazenamentoObjetos | null; limpezaAutomatica: boolean; naoVinculadoExpiraMs: number; carenciaRemocaoMs: number;
+    orcamentoMs?: number; limite?: number;
+  };
 }
+
+/** Produção P1 (arquivos de minuta) — limpeza de uploads abandonados (etapa isolada, a última do tick). */
+export type EtapaLimpezaDocumentosResultado = ResultadoLimpezaTick | { executada: false; erro?: string };
 
 /** Produção P1 (administração tarifária) — recálculo por mudança de tarifa (outbox `tipo = 'tarifa'`). */
 export interface EtapaRecalculoTarifarioResultado {
@@ -261,6 +275,33 @@ export interface TickResultado {
   encerramento: EtapaEncerramentoResultado;
   /** Produção P1 (administração tarifária) — recálculo por mudança de tarifa. */
   recalculoTarifario: EtapaRecalculoTarifarioResultado;
+  /** Produção P1 (arquivos de minuta) — expiração de uploads abandonados e remoção de objetos nunca vinculados. */
+  limpezaDocumentos: EtapaLimpezaDocumentosResultado;
+}
+
+/**
+ * Produção P1 (arquivos de minuta) — ÚLTIMA etapa do tick, isolada (nunca
+ * lança): primeiro a fase de banco (expira, transacional), depois a de
+ * armazenamento (remove objetos de chaves nunca vinculadas) com ORÇAMENTO de
+ * tempo e interrompida na primeira falha do provedor — um provedor lento
+ * nunca atrasa tracking, recálculo ou encerramento (que já rodaram). Remoção
+ * que não coube fica pendente e é retomada no próximo tick.
+ */
+async function etapaLimpezaDocumentos(deps: TickDeps): Promise<EtapaLimpezaDocumentosResultado> {
+  const a = deps.arquivos;
+  if (!a || !a.limpezaAutomatica || !a.armazenamento) return { executada: false };
+  try {
+    return await limpezaAutomaticaDocumentos(
+      { pool: deps.pool, armazenamento: a.armazenamento, naoVinculadoExpiraMs: a.naoVinculadoExpiraMs, carenciaRemocaoMs: a.carenciaRemocaoMs },
+      { limite: a.limite ?? 50, orcamentoMs: a.orcamentoMs ?? 20_000 },
+    );
+  } catch (e) {
+    // Só código fechado (nunca mensagem: o erro pode vir do provedor).
+    const c = codigoDeFalhaArmazenamento(e);
+    const codigo = c === 'ERRO_INTERNO' ? String((e as { code?: unknown })?.code ?? 'ERRO_INTERNO').slice(0, 40) : c;
+    console.error(`[demurrage-scheduler] etapa limpeza-documentos falhou (isolada): ${codigo}`);
+    return { executada: false, erro: codigo };
+  }
 }
 
 /**
@@ -273,7 +314,7 @@ export async function executarTickDemurrage(deps: TickDeps, hojeInjetado?: Civil
   const hoje = hojeInjetado ?? hojeOperacional(); // fuso local, nunca UTC.
   const workerId = deps.workerId ?? `tick-${process.pid}`;
   // Etapas existentes: INALTERADAS (mesma ordem, mesma propagação de erro).
-  let base: Omit<TickResultado, 'posCommit' | 'avisosFallback' | 'avisosPendencia' | 'encerramento' | 'recalculoTarifario'> | null = null;
+  let base: Omit<TickResultado, 'posCommit' | 'avisosFallback' | 'avisosPendencia' | 'encerramento' | 'recalculoTarifario' | 'limpezaDocumentos'> | null = null;
   let erroBase: unknown = null;
   try {
     const cal = await passagemDoCalendario(deps.pool, hoje);
@@ -315,8 +356,10 @@ export async function executarTickDemurrage(deps: TickDeps, hojeInjetado?: Civil
   // Produção P1 — encerramento automático: DEPOIS de tracking/recálculos/reparos
   // do tick, para avaliar o estado mais recente; fronteira de erro própria.
   const encerramento = await etapaEncerramento(deps, hoje);
+  // Produção P1 (arquivos de minuta) — limpeza sem urgência: a ÚLTIMA etapa.
+  const limpezaDocumentos = await etapaLimpezaDocumentos(deps);
   if (erroBase) throw erroBase; // comportamento pré-existente preservado: o tick reporta o erro ao laço
-  return { ...base!, posCommit, avisosFallback, avisosPendencia, encerramento, recalculoTarifario };
+  return { ...base!, posCommit, avisosFallback, avisosPendencia, encerramento, recalculoTarifario, limpezaDocumentos };
 }
 
 /** Linha de log de um tick (inclui os contadores das etapas da D10 v1.3). */
@@ -348,8 +391,16 @@ export function formatarLogTick(t: TickResultado): string {
       `esgotados=${t.recalculoTarifario.esgotados ?? '?'} encerramento-avaliados=${t.recalculoTarifario.encerramentoAvaliados} ` +
       `encerramento-finalizados=${t.recalculoTarifario.encerramentoFinalizados}` +
       `${t.recalculoTarifario.encerramentoErro ? ` ENCERRAMENTO-ERRO=${t.recalculoTarifario.encerramentoErro}` : ''}` +
-      `${t.recalculoTarifario.erro ? ` ERRO=${t.recalculoTarifario.erro}` : ''}`
+      `${t.recalculoTarifario.erro ? ` ERRO=${t.recalculoTarifario.erro}` : ''} | ` +
+      formatarLimpezaDocumentos(t.limpezaDocumentos)
   );
+}
+
+function formatarLimpezaDocumentos(l: EtapaLimpezaDocumentosResultado | undefined): string {
+  if (!l || !l.executada) return `documentos: limpeza=desligada${l?.erro ? ` ERRO=${l.erro}` : ''}`;
+  return `documentos: expirados=${l.pendentesExpirados}+${l.naoVinculadosExpirados} tentativas-descartadas=${l.tentativasDescartadas} ` +
+    `objetos-removidos=${l.objetosRemovidos} remocoes-pendentes=${l.remocoesPendentes}` +
+    `${l.interrompidaPor ? ` INTERROMPIDA=${l.interrompidaPor}` : ''}`;
 }
 
 /**
@@ -379,8 +430,15 @@ export function iniciarSchedulerDemurrage(opts: { intervalMs?: number } = {}): S
   const fallbackAvisoTransport = criarAvisoFallbackManualTransportGraph();
   const avisoPendenciaTransport = criarAvisoPendenciaTransportGraph();
 
+  // Mesma configuração validada no boot do app (`criarApp`); aqui só lida.
+  const amb = arquivosDoAmbiente();
+  const arquivos = {
+    armazenamento: amb.armazenamento, limpezaAutomatica: amb.cfg.limpezaAutomatica, naoVinculadoExpiraMs: amb.cfg.naoVinculadoExpiraMs,
+    carenciaRemocaoMs: amb.cfg.carenciaRemocaoMs,
+  };
+
   const tick = async (): Promise<void> => {
-    const t = await executarTickDemurrage({ pool, port, transport, avisoTransport, fallbackAvisoTransport, avisoPendenciaTransport });
+    const t = await executarTickDemurrage({ pool, port, transport, avisoTransport, fallbackAvisoTransport, avisoPendenciaTransport, arquivos });
     console.log(formatarLogTick(t));
   };
 

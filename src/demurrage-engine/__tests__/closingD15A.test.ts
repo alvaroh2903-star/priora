@@ -11,13 +11,11 @@ import { ClosingService } from '../closing/closingService';
 import { promoverHouseFreeTimeComClient } from '../freeTime/houseFreeTimeService';
 import { promoverMasterFreeTime } from '../freeTime/masterFreeTimeService';
 import { novoGestor, novoMembro } from './responsabilidadeTestHelper';
+import { documentoDeTeste } from './minutaTestHelper';
 import { createHash, randomUUID } from 'crypto';
 
-/** Produção P1 — o registro de minuta exige o documento (referência auditável). */
-const docD15A = (tag: string) => ({
-  origem: 'referencia_externa', referencia: `teste://d15a/${tag}`, nomeArquivo: `${tag}.pdf`, tipoConteudo: 'application/pdf',
-  tamanhoBytes: 2048, hashConteudo: createHash('sha256').update(tag).digest('hex'),
-});
+/** Produção P1 — o registro de minuta exige o documento; arquivos de minuta: um ARQUIVO armazenado do contêiner. */
+const docD15A = (pool: Pool, containerId: string) => documentoDeTeste(pool, containerId);
 
 /**
  * Fase D15-A — testes de aceitação obrigatórios (diagnóstico f22d153, escopo
@@ -236,9 +234,9 @@ test('D15-A #3 (reescrito na correção de minuta P1): minuta divergente registr
   try {
     await setupBanco(pool);
     const cen = await cenarioFinal(pool, 'MATV0000001');
-    const registrar = () => cen.svc.registrarMinuta({
+    const registrar = async () => cen.svc.registrarMinuta({
       containerId: cen.containerId, membershipId: cen.gestorId, numeroInformado: 'MATV0000001', dataInformada: '2026-09-20',
-      documento: docD15A(randomUUID()), config: cfg,
+      documento: await docD15A(pool, cen.containerId), config: cfg,
     });
     const r = await registrar();
     assert.ok(r.ok);
@@ -360,8 +358,9 @@ test('D15-A #7 (reescrito na correção de minuta P1): falha no meio do registro
     // só registra no processo atribuído a ele; atribuí-lo mantém o ANALYST como
     // ator e a regra testada (rollback total) intacta.
     await atribuirResponsavelDeTeste(pool, base.processoId, analistaId);
-    const m = await svc.registrarMinuta({ containerId: base.containerId, membershipId: analistaId, numeroInformado: 'ROLV0000001', dataInformada: '2026-09-12', documento: docD15A('a'), config: cfg });
+    const m = await svc.registrarMinuta({ containerId: base.containerId, membershipId: analistaId, numeroInformado: 'ROLV0000001', dataInformada: '2026-09-12', documento: await docD15A(pool, base.containerId), config: cfg });
     assert.ok(m.ok && m.minuta.estado === 'DIVERGENTE');
+    const docFalha = await docD15A(pool, base.containerId);
     const minutasAntes = (await pool.query(`SELECT id, estado_minuta, substituida_por_id FROM minutas ORDER BY id`)).rows;
     const containerAntes = await container(pool, base.containerId);
     const pendAntes = (await pool.query(`SELECT id, estado FROM demurrage_pendencias ORDER BY id`)).rows;
@@ -369,7 +368,7 @@ test('D15-A #7 (reescrito na correção de minuta P1): falha no meio do registro
 
     await assert.rejects(
       () => svc.registrarMinuta({
-        containerId: base.containerId, membershipId: analistaId, numeroInformado: 'ROLV0000001', dataInformada: '2026-09-10', documento: docD15A('b'), config: cfg,
+        containerId: base.containerId, membershipId: analistaId, numeroInformado: 'ROLV0000001', dataInformada: '2026-09-10', documento: docFalha, config: cfg,
         _testeAntesDoCommit: () => { throw new Error('falha injetada D15-A #7'); },
       }),
       /falha injetada D15-A #7/,

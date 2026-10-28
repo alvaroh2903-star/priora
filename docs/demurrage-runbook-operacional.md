@@ -15,6 +15,7 @@ Guia conciso para operar o backend do módulo Demurrage (motor V2, D10–D15-C v
 | `SESSION_SECRET` | Sim em produção | Assina o cookie da sessão humana (`__Host-priora.sid`) e os cursores. O padrão de desenvolvimento é recusado em produção. Mesmo valor em todas as instâncias. |
 | `PRIORA_TOKEN_CACHE_KEY` | Sim (Produção P1) | Cifra o cache MSAL durável e faz a conta da integração ficar gravada no banco. Sem ela, V1, captura e avisos enxergam a integração como desconectada (falha fechada). |
 | `SESSION_IDLE_HOURS`, `SESSION_MAX_AGE_DAYS`, `PRIORA_ORIGENS_PERMITIDAS` | Não (padrões: 12 h, 7 dias, só a própria origem) | Ociosidade e vida absoluta da sessão; origens extras aceitas nas escritas. Mesmos valores em todas as instâncias. |
+| `DEMURRAGE_ARQUIVOS_PROVEDOR`, `DEMURRAGE_ARQUIVOS_S3_ENDPOINT`, `_S3_REGIAO`, `_S3_BUCKET`, `_S3_ACCESS_KEY_ID`, `_S3_SECRET_ACCESS_KEY` | Sim em produção (Produção P1, arquivos de minuta) | Armazenamento de objetos PRIVADO (S3 compatível, HTTPS) onde ficam os arquivos reais das minutas. Ausente ou inválido em produção → o boot recusa subir (mensagem cita só o NOME da variável). Demais ajustes (`_TAMANHO_MAXIMO_BYTES`, `_UPLOAD_EXPIRA_MIN`, `_ENVIO_POSSE_MIN`, `_NAO_VINCULADO_EXPIRA_DIAS`, `_REMOCAO_CARENCIA_DIAS`, `_LIMPEZA_AUTOMATICA`, `_TIMEOUT_MS`, `_S3_PATH_STYLE`) em `docs/demurrage-producao-p1-arquivos-minuta.md` §4. `filesystem-dev` só fora de produção. |
 | Credenciais Microsoft Graph (config MSAL/token cache existente da Priora) | Sim, para notificações | Usadas por `criarGraphAlertTransport`/`criarAvisoDivergenciaTransportGraph`/`criarAvisoFallbackManualTransportGraph`/`criarAvisoPendenciaTransportGraph`. Sem token válido, as filas de aviso ficam `PENDING`/retentáveis — nunca perdem o item, nunca travam o tick. |
 
 Nenhuma string de conexão real ou segredo é listado aqui — configure-os pelo mecanismo de segredos do ambiente de destino.
@@ -30,13 +31,13 @@ ou, programaticamente, `runMigrations(pool)` (mesma função usada pela suíte d
 - é idempotente — re-executar não reaplica o que já está em `schema_migrations`;
 - é **estritamente aditivo**: 0001–0039 nunca são reescritas; uma correção posterior sempre chega como um arquivo novo (`00NN_...sql`), nunca como edição de um já entregue.
 
-**Produção P1:** aplique as migrations até a `0052_administracao_tarifaria.sql` **antes** de publicar o código. O boot de produção recusa subir sem o schema da 0049 a 0052 (`docs/demurrage-producao-p1-autenticacao-filas.md` §13 e §19.5; a 0052, administração tarifária — aprovada e congelada em `39fe34b` —, em `docs/demurrage-producao-p1-administracao-tarifas.md` §10 e §16.5).
+**Produção P1:** aplique as migrations até a `0053_documentos_armazenados.sql` **antes** de publicar o código. O boot de produção recusa subir sem o schema da 0049 a 0053 (`docs/demurrage-producao-p1-autenticacao-filas.md` §13 e §19.5; a 0052, administração tarifária — aprovada e congelada em `39fe34b` —, em `docs/demurrage-producao-p1-administracao-tarifas.md` §10 e §16.5; a 0053, arquivos das minutas, em `docs/demurrage-producao-p1-arquivos-minuta.md` §12 e §14).
 
 **Pré-requisito manual conhecido:** a migration `0037_d15c_integridade_tarifaria_e_filas.sql` aborta explicitamente (`RAISE EXCEPTION`) se `tariff_tables` já tiver versões duplicadas sob a nova unicidade (`NULLS NOT DISTINCT`). Isso só ocorreria num ambiente que já tivesse dado tarifário legado anômalo — a própria migration deixa claro que a resolução (qual versão é a verdadeira) é manual, nunca automática. Não há nenhum outro pré-requisito manual conhecido nas 39 migrations (a `0039`, D16 v1.1, só faz backfill automático — ver seção 7.1).
 
 ## 3. Como o scheduler inicia
 
-`src/index.ts` chama `iniciarSchedulerDemurrage()` no boot assíncrono do processo. Esse laço (`startSchedulerLoop`, `~1h`, `runOnStart: true` — recupera a janela vencida imediatamente após um deploy/restart, sem esperar a próxima hora cheia) executa `executarTickDemurrage`, que por sua vez roda, em sequência e com fronteira de erro própria por etapa: calendário → tracking → alert outbox → Shipping Instructions reaplicadas → recálculo pendente → avisos de divergência → pós-commit outbox → avisos de fallback manual → avisos de pendência. Uma etapa com erro não derruba o processo nem impede as etapas seguintes de serem tentadas no próximo tick.
+`src/index.ts` chama `iniciarSchedulerDemurrage()` no boot assíncrono do processo. Esse laço (`startSchedulerLoop`, `~1h`, `runOnStart: true` — recupera a janela vencida imediatamente após um deploy/restart, sem esperar a próxima hora cheia) executa `executarTickDemurrage`, que por sua vez roda, em sequência e com fronteira de erro própria por etapa: calendário → tracking → alert outbox → Shipping Instructions reaplicadas → recálculo pendente → avisos de divergência → pós-commit outbox → avisos de fallback manual → avisos de pendência → recálculo tarifário → encerramento automático → limpeza de documentos (Produção P1, arquivos de minuta: expira uploads abandonados e remove objetos nunca vinculados, com orçamento de tempo, por último). Uma etapa com erro não derruba o processo nem impede as etapas seguintes de serem tentadas no próximo tick.
 
 A captura de pré-alerta (`iniciarCapturaPreAlerta()`, também chamada no boot) é um laço **separado** (~10 min), isolado do scheduler principal — uma falha ali nunca afeta tracking/apuração.
 
@@ -44,6 +45,7 @@ A captura de pré-alerta (`iniciarCapturaPreAlerta()`, também chamada no boot) 
 
 - **Captura de e-mail (pré-alerta/SI):** `PRIORA_CAPTURA_PRE_ALERTA=off`. Desliga só a sincronização de pastas Graph; o resto da Demurrage continua.
 - **Scheduler principal:** não tem um kill switch dedicado — desliga removendo `DATABASE_URL`/`DEMURRAGE_DATABASE_URL` (não recomendado em produção real; útil para um worker de leitura dedicado, sem laço de manutenção).
+- **Limpeza de arquivos de minuta:** `DEMURRAGE_ARQUIVOS_LIMPEZA_AUTOMATICA=false` desliga só a etapa do tick que expira uploads abandonados e remove objetos nunca vinculados (use ao restaurar o banco de um backup; ver §10). Upload, download e registro de minuta continuam.
 - **Transporte de notificação ausente/sem token:** nunca é tratado como erro fatal — cada fila de aviso (`alertOutbox`, `divergenciaAvisos`, `avisosFallbackManual`, `notificacaoPendencia`) deixa a entrega em `PENDING`/retentável em vez de falhar o tick.
 
 ## 5. Fuso operacional
@@ -106,7 +108,8 @@ Todas exigem papel interno (`ANALYST`/`MANAGER`/`ADMIN`) resolvido pelo membersh
 
 ## 10. Backup e rollback
 
-- **Backup:** backup/restore de PostgreSQL padrão (`pg_dump`/snapshot do provedor). Nenhum estado de negócio vive fora do Postgres (sem cache externo que precise de backup próprio).
+- **Backup:** backup/restore de PostgreSQL padrão (`pg_dump`/snapshot do provedor). **Exceção (Produção P1, arquivos de minuta):** o BINÁRIO dos arquivos das minutas vive no armazenamento de objetos (bucket S3 compatível) — proteja-o com o mecanismo do provedor (versionamento do bucket recomendado). O banco guarda só metadados e vínculos.
+- **Restauração do banco a partir de backup:** antes de subir, `DEMURRAGE_ARQUIVOS_LIMPEZA_AUTOMATICA=false`; rode `npm run demurrage:arquivos -- diagnosticar` (objetos que o banco restaurado não conhece aparecem como órfãos e nunca são apagados automaticamente); só então religue a limpeza.
 - **Rollback de deploy de código:** seguro — o schema é estritamente aditivo (nunca remove coluna/tabela usada por uma versão anterior do código dentro das migrations já entregues), então reverter para um binário/imagem anterior contra o MESMO banco já migrado funciona sem passo extra, desde que a versão anterior não dependesse de uma migration ainda não aplicada.
 - **Rollback de migration:** **não existe mecanismo de "down migration"** neste runner (decisão de projeto — ver `db/migrate.ts`). Reverter uma migration já aplicada em produção exige restaurar de um backup anterior ao deploy, nunca uma migration reversa. Planeje a janela de deploy de acordo.
 
@@ -118,6 +121,7 @@ Todas exigem papel interno (`ANALYST`/`MANAGER`/`ADMIN`) resolvido pelo membersh
 - **Courier/Auditoria:** sem integração de produção nesta fase.
 - **Entrada de dados em produção:** o contrato `registrarProcessoDemurrage()` (ponto de entrada de todo o motor V2) não tem, hoje, nenhuma rota HTTP nem job de scheduler que o chame em produção — só é exercitado pela suíte de testes. O motor está completo e testado, mas aguarda a integração controlada (ex.: com o pré-alerta/Auditoria) para receber dados reais. Da mesma forma, as ações de Gestor de fechamento/reabertura (`ClosingService`) e a escrita de decisão de responsabilidade (`decidirResponsabilidade`) existem como serviços testados, sem rota pública ainda.
 - **Transporte de notificação:** só Microsoft Graph (seção 6) — sem fallback para outro canal nesta fase.
+- **Armazenamento de objetos (Produção P1, arquivos de minuta):** provedor S3 compatível (AWS S3, Cloudflare R2, Backblaze B2, MinIO), cliente SigV4 próprio. Indisponível → upload/download respondem 502 e o registro de minuta nova fica impossível (exige arquivo disponível); nada do que já está confirmado é perdido. Reconciliação: `npm run demurrage:arquivos -- diagnosticar | corrigir --operador … --motivo …`.
 
 ## 12. Implantação da Produção P1 — organização única (MVP)
 
@@ -135,12 +139,14 @@ Administração operacional de tarifas: **aprovada e congelada** em `39fe34b` (c
 
 **Pré-requisito de ambiente (§1):** `SESSION_SECRET`, `DEMURRAGE_DATABASE_URL` e `PRIORA_TOKEN_CACHE_KEY`.
 
-**Ordem dos itens:** 1, 2 e 3 antes de publicar o código (a consulta de segurança do item 7 também); a confirmação do boot (item 1) ao publicar; 4 depois de publicar e antes do smoke test; 5 antes de liberar os analistas; 6 antes de liberar e a cada mudança de provisionamento; 7 (tarifas ativas) antes de liberar os encerramentos automáticos.
+Arquivos reais das minutas (Produção P1, **não congelada**): `docs/demurrage-producao-p1-arquivos-minuta.md`; checklist próprio no §14 do relatório, resumido no item 8 abaixo.
 
-- [ ] **1. Migrations até a 0052**, antes do código.
+**Ordem dos itens:** 1, 2 e 3 antes de publicar o código (a consulta de segurança do item 7 e os itens 8.1–8.5 também); a confirmação do boot (itens 1 e 8.6) ao publicar; 4 depois de publicar e antes do smoke test; 5 antes de liberar os analistas; 6 antes de liberar e a cada mudança de provisionamento; 7 (tarifas ativas) antes de liberar os encerramentos automáticos; 8.7 depois de publicar.
+
+- [ ] **1. Migrations até a 0053**, antes do código.
   - Rodar `npm run db:migrate:demurrage`.
-  - `SELECT filename FROM schema_migrations ORDER BY filename DESC LIMIT 1` deve devolver `0052_administracao_tarifaria.sql`.
-  - **Ao publicar, confirmar que o boot reconhece a migration:** em produção o boot recusa subir sem o schema da 0049 a 0052; a instância deve subir **sem** a mensagem `[boot] schema da migration 0052 ausente…`. Conferência equivalente: `SELECT 1 FROM tariff_versao_transicoes LIMIT 0` sem erro.
+  - `SELECT filename FROM schema_migrations ORDER BY filename DESC LIMIT 1` deve devolver `0053_documentos_armazenados.sql`.
+  - **Ao publicar, confirmar que o boot reconhece as migrations:** em produção o boot recusa subir sem o schema da 0049 a 0053; a instância deve subir **sem** a mensagem `[boot] schema da migration 00NN ausente…`. Conferência equivalente: `SELECT 1 FROM tariff_versao_transicoes LIMIT 0` e `SELECT 1 FROM documentos_armazenados_envios LIMIT 0` sem erro.
 - [ ] **2. Administrador da plataforma provisionado.**
   - `vincular-usuario` + `adicionar-membro --org <organização do MVP> --papel ADMIN` + `admin-plataforma --ativar`.
   - Ele precisa de membership interno ativo para conectar a integração.
@@ -174,5 +180,14 @@ Administração operacional de tarifas: **aprovada e congelada** em `39fe34b` (c
   - **Antes do deploy — consulta de segurança das tarifas legadas de armador com organização:** `SELECT count(*) FROM tariff_tables WHERE tipo = 'armador' AND organization_id IS NOT NULL;` **deve ser 0**. Diferente de 0 (linha privada de armador legada, que passaria a valer para a organização; relatório §3.3/§12) **bloqueia o deploy** até decisão explícita. Nenhuma correção automática.
   - **Antes de liberar os encerramentos automáticos:** um MANAGER/ADMIN cria, valida e ativa pela API `/api/demurrage/v2/tarifas` a tabela do cliente (Termo Único e/ou as de Termo por Embarque referenciadas pelas condições) e as de exposição estimada de cada armador usado. Não existe interruptor próprio do encerramento automático: o bloqueio pelos gates é a proteção.
   - Conferir que nenhum recálculo tarifário ficou esgotado: `SELECT count(*) FROM recalculo_outbox WHERE tipo = 'tarifa' AND estado = 'FAILED' AND tentativas >= 5;` deve ser 0 (senão, `GET /eventos/:id/recalculo` e `POST …/reprocessar`), e `SELECT count(*) FROM tariff_recalculo_expansoes WHERE concluida_em IS NULL;` deve cair a 0 em até um tick. Na linha do tick, o segmento `recalculo-tarifario` deve vir sem `ERRO=`/`ENCERRAMENTO-ERRO=` e com `expansao-falhas=0` (diferente de 0 por vários ticks = processo com lock retido).
+
+- [ ] **8. Arquivos reais das minutas** (`docs/demurrage-producao-p1-arquivos-minuta.md` §14). Sem arquivo armazenado disponível, contêiner com demurrage não encerra (`minuta_sem_arquivo_disponivel`) e nenhuma minuta nova é registrada.
+  - 8.1 Bucket **privado** (no R2: `r2.dev` desligado e nenhum domínio conectado; na AWS/B2: Block Public Access); versionamento recomendado.
+  - 8.2 Credencial da aplicação só com `GetObject`, `PutObject`, `DeleteObject` e `ListBucket` no bucket — sem `DeleteObjectVersion`, `PutBucketPolicy`, `PutObjectAcl`, `BypassGovernanceRetention`.
+  - 8.3 Smoke test manual do provedor com a credencial (PUT, HEAD, GET, LIST, DELETE de um objeto de teste fora de `doc/v1/`).
+  - 8.4 Variáveis `DEMURRAGE_ARQUIVOS_*` (§1) — sem elas o boot de produção recusa subir.
+  - 8.5 **Consulta de pré-deploy do legado:** `npm run demurrage:arquivos -- diagnosticar --sem-orfaos` → `legadoBloqueante` lista os contêineres com demurrage em processo OPEN cuja minuta é só referência (ou aprovação antiga) e que deixam de encerrar até o reenvio do arquivo. Combine o reenvio com os analistas. Nos itens com `devolucaoSoLegada: true`, a devolução existe só na validação antiga: registrar a nova versão limpa essa devolução e o contêiner passa a esperar o tracking — registre só quando o tracking trouxer a devolução (relatório de arquivos, §10). `arquivoIndisponivelBloqueante` (arquivo interno indisponível, ex.: objeto marcado ausente) é incidente, não legado: restaure o objeto pelo versionamento do bucket e rode `corrigir` (desmarca o que reapareceu íntegro), ou peça o reenvio como nova versão.
+  - 8.6 Ao publicar: log `[boot] armazenamento de documentos acessível (s3).`
+  - 8.7 Depois do primeiro documento: `diagnosticar` com `leituraAnonima` = `recusada`, sem `problemas` e sem `arquivoIndisponivelBloqueante` (código de saída 0; 3 = alerta); segmento `documentos:` da linha do tick sem `ERRO=`/`INTERROMPIDA=`.
 
 Depois de publicar: rodar o smoke test do relatório (§13, passo 6). Ao trocar a organização dona no futuro, o que só acontece com autorização, limpe os stores locais da V1 e reinicie as instâncias (§13, passo 7).

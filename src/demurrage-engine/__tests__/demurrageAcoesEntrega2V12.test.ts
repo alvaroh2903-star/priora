@@ -24,7 +24,9 @@ import { documentoDeTeste } from './minutaTestHelper';
 import { novoMembro } from './responsabilidadeTestHelper';
 
 /** Produção P1 (correção de minuta): o registro exige o documento (referência auditável). Fixo — retries idênticos mantêm o mesmo hash. */
-const DOC_E2 = documentoDeTeste('entrega2-documento-fixo');
+// Produção P1 (arquivos de minuta): o documento da minuta é um ARQUIVO armazenado do
+// contêiner — um por operação lógica (o retry com a MESMA chave reaproveita o mesmo).
+const docE2 = (pool: Pool, containerId: string) => documentoDeTeste(pool, containerId);
 
 /**
  * Produção P1 (Entrega 2 v1.2) — suíte de aceitação da corretiva FINAL de
@@ -151,19 +153,21 @@ test('v1.2 #1: identidade de idempotência com a organização CORRETA do contê
     const org = await criarOrg(pool, 'v12-01');
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const { containerId, numero } = await processoComRelogios(pool, org.id, 'IM-V12-01', 'ECSA');
+    const DOC_E2_containerId = await docE2(pool, containerId);
     // Produção P1 (filas pessoais): registrar minuta é ação PESSOAL — o ANALYST é o responsável do processo.
     await atribuirResponsavelDoContainerDeTeste(pool, containerId, await membershipIdPorHome(pool, home));
 
-    const r1 = await post(app.base, `/containers/${containerId}/minutas`, { documento: DOC_E2, numeroInformado: numero, dataInformada: '2026-09-10' }, home, { 'idempotency-key': randomUUID() });
+    const r1 = await post(app.base, `/containers/${containerId}/minutas`, { documento: DOC_E2_containerId, numeroInformado: numero, dataInformada: '2026-09-10' }, home, { 'idempotency-key': randomUUID() });
     assert.equal(r1.status, 201);
 
     const containerId2 = await containerCru(pool, org.id, numeroContainer('ECSB', 1));
+    const DOC_E2_containerId2 = await docE2(pool, containerId2);
     // Produção P1 (filas pessoais): o ANALYST da chamada direta é o responsável do processo do contêiner 2.
     const membroDireto = await novoMembro(pool, org.id, 'ANALYST');
     await atribuirResponsavelDoContainerDeTeste(pool, containerId2, membroDireto);
     const direto = await registrarMinutaIdempotente(pool, {
       organizationId: org.id, containerId: containerId2, numeroInformado: null, dataInformada: null, evidenciaRef: null,
-      membershipId: membroDireto, documento: DOC_E2, hoje: '2026-10-01',
+      membershipId: membroDireto, documento: DOC_E2_containerId2, hoje: '2026-10-01',
       idempotenciaRota: 'registrar_minuta', idempotenciaChave: randomUUID(),
     });
     assert.ok(direto.ok, `organização correta deveria ser aceita (${JSON.stringify(direto)})`);
@@ -200,6 +204,7 @@ test('v1.2 #3: chamada direta ao adaptador (fora da rota) com organização DIFE
     const orgA = await criarOrg(pool, 'v12-03-a');
     const orgB = await criarOrg(pool, 'v12-03-b');
     const containerIdA = await containerCru(pool, orgA.id, numeroContainer('ECSD', 1));
+    const DOC_E2_containerIdA = await docE2(pool, containerIdA);
 
     // A rota HTTP confere organizacaoDoContainer ANTES de chamar o adaptador;
     // este teste prova que, mesmo SEM essa checagem de rota, o banco por si
@@ -213,7 +218,7 @@ test('v1.2 #3: chamada direta ao adaptador (fora da rota) com organização DIFE
     await assert.rejects(
       () => registrarMinutaIdempotente(pool, {
         organizationId: orgB.id, containerId: containerIdA, numeroInformado: null, dataInformada: null, evidenciaRef: null,
-        membershipId: membroA, documento: DOC_E2, hoje: '2026-10-01',
+        membershipId: membroA, documento: DOC_E2_containerIdA, hoje: '2026-10-01',
         idempotenciaRota: 'registrar_minuta', idempotenciaChave: randomUUID(),
       }),
       /minutas_idempotencia_organizacao_do_container|foreign key/,
@@ -270,7 +275,7 @@ test('v1.2 #5: banco novo — migração limpa 0001→0044 cria a FK composta e 
     const r = await runMigrations(pool);
     // Produção P1 (filas pessoais): a migration 0049 (sessões, identidade e atribuição — aditiva); auditoria final: 0050 (avisos seguem o responsável atual) e 0051 (organização dona da integração), aditivas — a 0051 passa a ser a última.
     // Produção P1 (administração tarifária): a 0052 (aditiva) passa a ser a última.
-    assert.equal(r.applied[r.applied.length - 1], '0052_administracao_tarifaria.sql');
+    assert.equal(r.applied[r.applied.length - 1], '0053_documentos_armazenados.sql'); // Produção P1 (arquivos de minuta): a 0053 (aditiva) passa a ser a última.
 
     const { rows: fk } = await pool.query(
       `SELECT 1 FROM pg_constraint WHERE conname = 'minutas_idempotencia_organizacao_do_container'`,
@@ -344,10 +349,11 @@ test('v1.2 #7 (P1): duas reavaliações CONCORRENTES da mesma minuta (sem rota, 
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const membershipId = await membershipIdPorHome(pool, home);
     const { processoId, containerId, numero } = await processoComRelogios(pool, org.id, 'IM-V12-07', 'ECSF');
+    const DOC_E2_containerId = await docE2(pool, containerId);
     // Produção P1 (filas pessoais): registrar minuta é ação PESSOAL — o ANALYST é o responsável do processo.
     await atribuirResponsavelDoContainerDeTeste(pool, containerId, membershipId);
     const svc = new ClosingService(pool);
-    const r = await svc.registrarMinuta({ containerId, membershipId, numeroInformado: numero, dataInformada: '2026-09-10', documento: DOC_E2, config: cfg });
+    const r = await svc.registrarMinuta({ containerId, membershipId, numeroInformado: numero, dataInformada: '2026-09-10', documento: DOC_E2_containerId, config: cfg });
     assert.ok(r.ok && r.minuta.estado === 'ACEITA');
     // Simula "registrada antes do tracking" (RECEBIDA aguardando a devolução) — o caso em que a reavaliação decide.
     await pool.query(
@@ -376,10 +382,11 @@ test('v1.2 #8 (P1): reavaliação repetida de uma minuta já ACEITA é um no-op 
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const membershipId = await membershipIdPorHome(pool, home);
     const { processoId, containerId, numero } = await processoComRelogios(pool, org.id, 'IM-V12-08', 'ECSG');
+    const DOC_E2_containerId = await docE2(pool, containerId);
     // Produção P1 (filas pessoais): registrar minuta é ação PESSOAL — o ANALYST é o responsável do processo.
     await atribuirResponsavelDoContainerDeTeste(pool, containerId, membershipId);
     const svc = new ClosingService(pool);
-    const r = await svc.registrarMinuta({ containerId, membershipId, numeroInformado: numero, dataInformada: '2026-09-10', documento: DOC_E2, config: cfg });
+    const r = await svc.registrarMinuta({ containerId, membershipId, numeroInformado: numero, dataInformada: '2026-09-10', documento: DOC_E2_containerId, config: cfg });
     assert.ok(r.ok && r.minuta.estado === 'ACEITA');
     const linhaAntes = (await pool.query(`SELECT atualizado_em, avaliada_em FROM minutas WHERE container_id = $1`, [containerId])).rows[0];
     const eventosAntes = (await pool.query(`SELECT count(*)::int n FROM closing_events WHERE container_id = $1`, [containerId])).rows[0].n;
@@ -399,11 +406,12 @@ test('v1.2 #9 (P1): reavaliação repetida de uma minuta INCONSISTENTE é um no-
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const membershipId = await membershipIdPorHome(pool, home);
     const { processoId, containerId } = await processoComRelogios(pool, org.id, 'IM-V12-09', 'ECSH');
+    const DOC_E2_containerId = await docE2(pool, containerId);
     // Produção P1 (filas pessoais): registrar minuta é ação PESSOAL — o ANALYST é o responsável do processo.
     await atribuirResponsavelDoContainerDeTeste(pool, containerId, membershipId);
     const svc = new ClosingService(pool);
     // Número informado DIVERGENTE do contêiner real -> INCONSISTENTE (NUMERO_DIVERGENTE).
-    const r = await svc.registrarMinuta({ containerId, membershipId, numeroInformado: 'NUMERO0ERRADO', dataInformada: '2026-09-10', documento: DOC_E2, config: cfg });
+    const r = await svc.registrarMinuta({ containerId, membershipId, numeroInformado: 'NUMERO0ERRADO', dataInformada: '2026-09-10', documento: DOC_E2_containerId, config: cfg });
     assert.ok(r.ok && r.minuta.estado === 'INCONSISTENTE' && r.minuta.motivoRejeicao === 'NUMERO_DIVERGENTE');
     const pendAntes = (await pool.query(`SELECT id, estado FROM demurrage_pendencias WHERE container_id = $1`, [containerId])).rows;
 
@@ -425,9 +433,10 @@ test('v1.2 #12 (P1): a rota de validação foi REMOVIDA — requisições concor
     const homeAnalyst = await usuarioInterno(pool, org.id, 'ANALYST');
     const homeManager = await usuarioInterno(pool, org.id, 'MANAGER');
     const { containerId, numero } = await processoComRelogios(pool, org.id, 'IM-V12-12', 'ECSI');
+    const DOC_E2_containerId = await docE2(pool, containerId);
     // Produção P1 (filas pessoais): registrar minuta é ação PESSOAL — o ANALYST é o responsável do processo.
     await atribuirResponsavelDoContainerDeTeste(pool, containerId, await membershipIdPorHome(pool, homeAnalyst));
-    const reg = await post(app.base, `/containers/${containerId}/minutas`, { documento: DOC_E2, numeroInformado: numero, dataInformada: '2026-09-10' }, homeAnalyst, { 'idempotency-key': randomUUID() });
+    const reg = await post(app.base, `/containers/${containerId}/minutas`, { documento: DOC_E2_containerId, numeroInformado: numero, dataInformada: '2026-09-10' }, homeAnalyst, { 'idempotency-key': randomUUID() });
     const { minutaId, estado } = await reg.json();
     assert.equal(estado, 'ACEITA', 'o aceite já aconteceu no registro, sem gestor');
     const eventosAntes = (await pool.query(`SELECT count(*)::int n FROM closing_events WHERE container_id = $1`, [containerId])).rows[0].n;
@@ -452,7 +461,8 @@ test('v1.2 #13: Idempotency-Key vazio é rejeitado (400)', { skip: !url }, async
     const org = await criarOrg(pool, 'v12-13');
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const { containerId } = await processoComRelogios(pool, org.id, 'IM-V12-13', 'ECSJ');
-    const r = await post(app.base, `/containers/${containerId}/minutas`, { documento: DOC_E2, numeroInformado: 'x', dataInformada: '2026-09-10' }, home, { 'idempotency-key': '' });
+    const DOC_E2_containerId = await docE2(pool, containerId);
+    const r = await post(app.base, `/containers/${containerId}/minutas`, { documento: DOC_E2_containerId, numeroInformado: 'x', dataInformada: '2026-09-10' }, home, { 'idempotency-key': '' });
     assert.equal(r.status, 400);
   } finally { await app.close(); await pool.end(); }
 });
@@ -473,7 +483,8 @@ test('v1.2 #14: Idempotency-Key só com espaço em branco é rejeitado — pelo 
     const org = await criarOrg(pool, 'v12-14');
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const { containerId } = await processoComRelogios(pool, org.id, 'IM-V12-14', 'ECSK');
-    const r = await post(app.base, `/containers/${containerId}/minutas`, { documento: DOC_E2, numeroInformado: 'x', dataInformada: '2026-09-10' }, home, { 'idempotency-key': '   ' });
+    const DOC_E2_containerId = await docE2(pool, containerId);
+    const r = await post(app.base, `/containers/${containerId}/minutas`, { documento: DOC_E2_containerId, numeroInformado: 'x', dataInformada: '2026-09-10' }, home, { 'idempotency-key': '   ' });
     assert.equal(r.status, 400, 'o transporte HTTP entrega isso como cabeçalho vazio — ainda assim 400, nunca aceito como chave válida');
   } finally { await app.close(); await pool.end(); }
 });
@@ -486,8 +497,9 @@ test('v1.2 #15: Idempotency-Key acima do limite (200 caracteres) é rejeitado (4
     const org = await criarOrg(pool, 'v12-15');
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const { containerId } = await processoComRelogios(pool, org.id, 'IM-V12-15', 'ECSL');
+    const DOC_E2_containerId = await docE2(pool, containerId);
     const chaveGigante = 'a'.repeat(201);
-    const r = await post(app.base, `/containers/${containerId}/minutas`, { documento: DOC_E2, numeroInformado: 'x', dataInformada: '2026-09-10' }, home, { 'idempotency-key': chaveGigante });
+    const r = await post(app.base, `/containers/${containerId}/minutas`, { documento: DOC_E2_containerId, numeroInformado: 'x', dataInformada: '2026-09-10' }, home, { 'idempotency-key': chaveGigante });
     assert.equal(r.status, 400);
     assert.equal((await r.json()).error, 'idempotency_key_invalida');
     const { rows } = await pool.query(`SELECT count(*)::int n FROM minutas WHERE container_id = $1`, [containerId]);
@@ -503,8 +515,9 @@ test('v1.2 #16: Idempotency-Key com caractere fora do conjunto permitido (espaç
     const org = await criarOrg(pool, 'v12-16');
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const { containerId } = await processoComRelogios(pool, org.id, 'IM-V12-16', 'ECSM');
+    const DOC_E2_containerId = await docE2(pool, containerId);
     for (const chaveInvalida of ['chave com espaco', 'chave"aspas', 'chave\\barra']) {
-      const r = await post(app.base, `/containers/${containerId}/minutas`, { documento: DOC_E2, numeroInformado: 'x', dataInformada: '2026-09-10' }, home, { 'idempotency-key': chaveInvalida });
+      const r = await post(app.base, `/containers/${containerId}/minutas`, { documento: DOC_E2_containerId, numeroInformado: 'x', dataInformada: '2026-09-10' }, home, { 'idempotency-key': chaveInvalida });
       assert.equal(r.status, 400, `deveria rejeitar: ${JSON.stringify(chaveInvalida)}`);
       assert.equal((await r.json()).error, 'idempotency_key_invalida');
     }
@@ -519,9 +532,10 @@ test('v1.2 #17: chaves equivalentes (mesmo valor, espaço nas bordas diferente) 
     const org = await criarOrg(pool, 'v12-17');
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const { containerId, numero } = await processoComRelogios(pool, org.id, 'IM-V12-17', 'ECSN');
+    const DOC_E2_containerId = await docE2(pool, containerId);
     // Produção P1 (filas pessoais): registrar minuta é ação PESSOAL — o ANALYST é o responsável do processo.
     await atribuirResponsavelDoContainerDeTeste(pool, containerId, await membershipIdPorHome(pool, home));
-    const corpo = { documento: DOC_E2, numeroInformado: numero, dataInformada: '2026-09-10' };
+    const corpo = { documento: DOC_E2_containerId, numeroInformado: numero, dataInformada: '2026-09-10' };
 
     const r1 = await post(app.base, `/containers/${containerId}/minutas`, corpo, home, { 'idempotency-key': '  CHAVE-EQUIVALENTE-V12-17  ' });
     assert.equal(r1.status, 201);

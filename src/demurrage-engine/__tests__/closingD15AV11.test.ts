@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { documentoDeTeste } from './minutaTestHelper';
 import assert from 'node:assert/strict';
 import { Pool } from 'pg';
 import { runMigrations } from '../db/migrate';
@@ -443,10 +444,12 @@ test('D15-A v1.1 #2 (reescrito na correção de minuta P1): registro de minuta c
     // mantém o ANALYST como ator e a regra testada (sem deadlock) intacta.
     await atribuirResponsavelDeTeste(pool, base.processoId, analistaId);
 
+    // Produção P1 (arquivos de minuta): o documento é um ARQUIVO armazenado, criado ANTES da corrida.
+    const documentoDlock = await documentoDeTeste(pool, base.containerId, analistaId);
     const [rv, rf] = await Promise.all([
       svc.registrarMinuta({
         containerId: base.containerId, membershipId: analistaId, numeroInformado: base.numero, dataInformada: '2026-09-10',
-        documento: { origem: 'referencia_externa', referencia: 'teste://dlock', nomeArquivo: 'dlock.pdf', tipoConteudo: 'application/pdf', tamanhoBytes: 10, hashConteudo: createHash('sha256').update('dlock').digest('hex') },
+        documento: documentoDlock,
         config: cfg,
       }),
       svc.finalizarProcesso({ processoId: base.processoId, membershipId: gestorId, config: cfg }),

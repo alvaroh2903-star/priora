@@ -156,7 +156,10 @@ test('0007 — organization_id imutável nas tabelas de tenant', { skip: !url },
       // Produção P1 (administração tarifária): eventos de auditoria e
       // transições de ciclo de vida das versões (append-only) e expansão do
       // recálculo tarifário — migration 0052 (organização imutável).
-      'tariff_admin_eventos', 'tariff_versao_transicoes', 'tariff_recalculo_expansoes'];
+      'tariff_admin_eventos', 'tariff_versao_transicoes', 'tariff_recalculo_expansoes',
+      // Produção P1 (arquivos de minuta): documentos armazenados, tentativas de
+      // envio e eventos de auditoria — migration 0053 (organização imutável).
+      'documentos_armazenados', 'documentos_armazenados_envios', 'documentos_armazenados_eventos'];
     const { rows } = await pool.query(`
       SELECT c.table_name,
              EXISTS (SELECT 1 FROM pg_trigger tg

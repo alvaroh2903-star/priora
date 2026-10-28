@@ -28,9 +28,13 @@ import { CivilDate } from '../temporal/civilDate';
  * hash v1 (antes desta correção, sem documento) não bate com o v2 e é
  * tratada como reutilizada (409) — nunca devolve um resultado de um pedido
  * de formato diferente.
+ *
+ * Hash v3 (`acoes.registrar_minuta.v3`, Produção P1 — arquivos de minuta): o
+ * documento é o id do ARQUIVO armazenado (`documento.documentoId`). Chave
+ * gravada com v1/v2 → 409 (pedido de outro formato), pela mesma regra.
  */
 
-const VERSAO_HASH_REGISTRO_MINUTA = 'acoes.registrar_minuta.v2';
+const VERSAO_HASH_REGISTRO_MINUTA = 'acoes.registrar_minuta.v3';
 
 /**
  * Mesma normalização de número de contêiner/minuta usada pela verificação
@@ -77,12 +81,7 @@ export function calcularHashRegistroMinuta(campos: CamposRegistroMinuta): string
     numeroInformado: normalizarNumeroCanonico(campos.numeroInformado),
     dataInformada: campos.dataInformada ?? null,
     evidenciaRef: normalizarTextoCanonico(campos.evidenciaRef),
-    documento: d ? {
-      origem: normalizarTextoCanonico(d.origem), referencia: normalizarTextoCanonico(d.referencia),
-      nomeArquivo: normalizarTextoCanonico(d.nomeArquivo), tipoConteudo: normalizarTextoCanonico(d.tipoConteudo),
-      tamanhoBytes: typeof d.tamanhoBytes === 'number' ? d.tamanhoBytes : normalizarTextoCanonico(d.tamanhoBytes),
-      hashConteudo: normalizarTextoCanonico(d.hashConteudo),
-    } : null,
+    documento: d ? { documentoId: typeof d.documentoId === 'string' ? d.documentoId.trim().toLowerCase() : null } : null,
   });
 }
 
@@ -108,7 +107,12 @@ export type ResultadoRegistroMinutaIdempotente =
    * antiga é REJEITADA; o chamador precisa de uma chave NOVA.
    */
   | { ok: false; motivo: 'idempotency_key_legado_sem_hash' }
-  | { ok: false; motivo: 'container_nao_encontrado' | 'ator_nao_autorizado' | 'ator_nao_responsavel' | 'documento_obrigatorio' | 'documento_invalido'; campo?: string };
+  | {
+      ok: false;
+      motivo: 'container_nao_encontrado' | 'ator_nao_autorizado' | 'ator_nao_responsavel' | 'documento_obrigatorio' | 'documento_invalido'
+        | 'documento_nao_encontrado' | 'documento_indisponivel' | 'documento_ja_vinculado';
+      campo?: string; detalhe?: string; estado?: string;
+    };
 
 async function existeChaveLegado0042(pool: Pool, organizationId: string, rota: string, chave: string): Promise<boolean> {
   const { rows } = await pool.query(

@@ -7,7 +7,7 @@ import { OrganizationRepository } from '../persistence/organizationRepository';
 import { ProcessoRepository } from '../persistence/processoRepository';
 import { ContainerRepository } from '../persistence/containerRepository';
 import { MinutaRepository } from '../persistence/minutaRepository';
-import { registrarMinutaDeTeste } from './minutaTestHelper';
+import { minutaAceitaComArquivoDeTeste, registrarMinutaDeTeste } from './minutaTestHelper';
 import { TrackingTargetRepository } from '../persistence/trackingTargetRepository';
 import { ClosingService } from '../closing/closingService';
 import { ingestTrackingResult } from '../tracking/eventIngestion';
@@ -175,12 +175,17 @@ async function minutaValidadaDireta(pool: Pool, containerId: string, data: strin
   return m.id;
 }
 
-test('v1.3-3a: comprovação correspondente + sem divergência → FINAL permitido', { skip: !url }, async () => {
+test('v1.3-3a: comprovação correspondente + sem divergência → FINAL permitido (Produção P1, arquivos de minuta: só com o ARQUIVO armazenado)', { skip: !url }, async () => {
   const pool = testPool();
   try {
     await setupBanco(pool);
     const { processoId, containerId, svc, gestorId } = await cenarioConfirmada(pool, 'CMPA01');
     await minutaValidadaDireta(pool, containerId, '2026-09-10'); // == effective/evidência efetiva
+    // Produção P1 (arquivos de minuta): a comprovação legada (aprovação humana, sem arquivo) continua
+    // CORRESPONDENTE, mas não libera mais o encerramento com demurrage — falta o arquivo real.
+    assert.deepEqual(await svc.finalizarProcesso({ processoId, membershipId: gestorId, config: cfg }), { ok: false, motivo: 'minuta_sem_arquivo_disponivel' });
+    // Com a minuta técnica ACEITA e o arquivo armazenado, o mesmo processo encerra.
+    await minutaAceitaComArquivoDeTeste(pool, { containerId, numero: 'CMPA01', data: '2026-09-10', hoje: cfg.hoje });
     assert.deepEqual(await svc.finalizarProcesso({ processoId, membershipId: gestorId, config: cfg }), { ok: true });
   } finally { await pool.end(); }
 });

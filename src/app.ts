@@ -22,6 +22,10 @@ import { criarDemurrageGestaoRouter } from './routes/demurrageGestaoRoutes';
 import { criarDemurrageAcoesRouter } from './routes/demurrageAcoesRoutes';
 import { criarDemurrageAdminRouter } from './routes/demurrageAdminRoutes';
 import { criarDemurrageTarifasRouter } from './routes/demurrageTarifasRoutes';
+import { criarDemurrageDocumentosRouter } from './routes/demurrageDocumentosRoutes';
+import { ArmazenamentoObjetos, codigoDeFalhaArmazenamento } from './demurrage-engine/documentos/armazenamento';
+import { arquivosDoAmbiente, ConfiguracaoArquivos } from './demurrage-engine/documentos/configuracao';
+import { GanchosTesteDocumentos } from './demurrage-engine/documentos/servico';
 import { auditoriaRouter } from './routes/auditoriaRoutes';
 import { capturaRouter } from './routes/capturaRoutes';
 import { demurrageHandoffRouter } from './routes/demurrageHandoffRoutes';
@@ -69,6 +73,14 @@ export interface CriarAppDeps {
   purgarSessoesACada?: number | null;
   /** Confiar no proxy HTTPS do host (`trust proxy`) — padrão: só em produção. */
   confiarProxy?: boolean;
+  /**
+   * Produção P1 (arquivos de minuta) — armazenamento de objetos dos
+   * documentos. Padrão: o do ambiente (`DEMURRAGE_ARQUIVOS_*`); em produção,
+   * ausente ou inválido derruba o boot. Testes injetam o provedor em memória.
+   */
+  arquivos?: { armazenamento: ArmazenamentoObjetos | null; cfg: ConfiguracaoArquivos };
+  /** SÓ TESTE — ganchos de falha/concorrência do serviço de documentos. */
+  ganchosDocumentos?: GanchosTesteDocumentos;
 }
 
 function temBanco(): boolean {
@@ -80,7 +92,8 @@ export const SEGREDO_DE_DESENVOLVIMENTO = 'dev-insecure-secret-change-me';
 /**
  * Pré-requisito de boot: com banco configurado, o schema que este código lê
  * precisa existir — sessões (0049), redirecionamento dos avisos (0050),
- * organização dona da integração (0051) e administração tarifária (0052).
+ * organização dona da integração (0051), administração tarifária (0052) e
+ * documentos armazenados das minutas (0053).
  * Produção: lança (o processo não sobe). Desenvolvimento: só avisa.
  */
 export async function verificarTabelaDeSessoes(pool: () => Pool = getPool): Promise<void> {
@@ -90,6 +103,7 @@ export async function verificarTabelaDeSessoes(pool: () => Pool = getPool): Prom
     ['0050', `SELECT envio_confirmado_em FROM ft_divergencia_entregas LIMIT 0`],
     ['0051', `SELECT 1 FROM integracao_microsoft_vinculos LIMIT 0`],
     ['0052', `SELECT 1 FROM tariff_versao_transicoes LIMIT 0`],
+    ['0053', `SELECT 1 FROM documentos_armazenados_envios LIMIT 0`],
   ];
   for (const [migration, sql] of exigidos) {
     try {
@@ -103,6 +117,26 @@ export async function verificarTabelaDeSessoes(pool: () => Pool = getPool): Prom
   }
 }
 
+/**
+ * Produção P1 (arquivos de minuta) — sonda de boot do armazenamento (HEAD do
+ * bucket): NÃO derruba o boot (o provedor pode oscilar), mas registra no log
+ * — só o código fechado, nunca endpoint, bucket ou credencial — que uploads e
+ * downloads vão falhar. A configuração em si já foi validada em `criarApp`.
+ */
+export async function verificarArmazenamentoNoBoot(): Promise<void> {
+  const { armazenamento } = arquivosDoAmbiente();
+  if (!armazenamento) {
+    console.warn('[boot] armazenamento de documentos NÃO configurado (DEMURRAGE_ARQUIVOS_PROVEDOR) — upload e registro de minuta indisponíveis.');
+    return;
+  }
+  try {
+    await armazenamento.verificarAcesso();
+    console.log(`[boot] armazenamento de documentos acessível (${armazenamento.nome}).`);
+  } catch (err) {
+    console.error(`[boot] armazenamento de documentos INACESSÍVEL (${codigoDeFalhaArmazenamento(err)}) — uploads e downloads vão falhar até corrigir.`);
+  }
+}
+
 export function criarApp(deps: CriarAppDeps = {}): Express {
   const app = express();
   const segredo = deps.segredo ?? config.sessionSecret;
@@ -111,6 +145,10 @@ export function criarApp(deps: CriarAppDeps = {}): Express {
     throw new Error('SESSION_SECRET obrigatório em produção (o padrão de desenvolvimento não é aceito).');
   }
   const pool = deps.pool ?? (deps.sessionStore || temBanco() ? getPool : null);
+  // Validado na montagem: configuração inválida (ou ausente em produção) lança
+  // aqui, antes de o servidor aceitar requisições — a mensagem cita só o nome
+  // da variável, nunca o valor.
+  const arquivos = deps.arquivos ?? arquivosDoAmbiente();
 
   // Em produção o app roda atrás do proxy HTTPS do host (Render etc.).
   // Sem isto, o express-session não seta o cookie "secure" e o login quebra.
@@ -219,6 +257,10 @@ export function criarApp(deps: CriarAppDeps = {}): Express {
   app.use('/api/demurrage/v2/admin', criarDemurrageAdminRouter({ pool: poolOuPadrao, requireAuthMiddleware: requireSessao }));
   // Produção P1 — administração tarifária (MANAGER/ADMIN; ANALYST só leitura operacional), só backend.
   app.use('/api/demurrage/v2/tarifas', criarDemurrageTarifasRouter({ pool: poolOuPadrao, requireAuthMiddleware: requireSessao }));
+  // Produção P1 — arquivos reais das minutas (upload/download transmitidos pelo backend), só backend.
+  app.use('/api/demurrage/v2/documentos', criarDemurrageDocumentosRouter({
+    pool: poolOuPadrao, requireAuthMiddleware: requireSessao, arquivos, ganchosTeste: deps.ganchosDocumentos,
+  }));
   app.use('/api/demurrage/v2', criarDemurrageV2Router({ pool: poolOuPadrao, requireAuthMiddleware: requireSessao }));
   // Caminho V2 sem rota: 404 aqui — nunca cai no router V1 (que exigiria a
   // caixa Microsoft da integração e responderia 401/403 enganosos).

@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { documentoDeTeste } from './minutaTestHelper';
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'crypto';
 import { Pool } from 'pg';
@@ -103,14 +104,12 @@ async function novoProcesso(pool: Pool, numero = 'IM-CLS') {
 async function setupBanco(pool: Pool) { await runMigrations(pool); await truncateAll(pool); }
 const cfg = { hoje: HOJE };
 const container = (pool: Pool, id: string) => pool.query(`SELECT * FROM containers WHERE id=$1`, [id]).then((r) => r.rows[0]);
-const docTeste = (tag: string) => ({
-  origem: 'referencia_externa', referencia: `teste://minuta/${tag}`, nomeArquivo: `${tag}.pdf`, tipoConteudo: 'application/pdf',
-  tamanhoBytes: 1024, hashConteudo: createHash('sha256').update(tag).digest('hex'),
-});
+// Produção P1 (arquivos de minuta): o documento da minuta é um ARQUIVO armazenado do contêiner (`minutaTestHelper.documentoDeTeste`).
+const docTeste = (pool: Pool, containerId: string) => documentoDeTeste(pool, containerId);
 /** Registro de minuta pelo fluxo ÚNICO (aceite técnico no próprio registro). */
 async function registrar(svc: ClosingService, membershipId: string, containerId: string, numero: string | null, data: string | null) {
   const r = await svc.registrarMinuta({
-    containerId, membershipId, numeroInformado: numero, dataInformada: data, documento: docTeste(`${containerId}-${numero}-${data}-${randomUUID()}`), config: cfg,
+    containerId, membershipId, numeroInformado: numero, dataInformada: data, documento: await docTeste((svc as unknown as { pool: Pool }).pool, containerId), config: cfg,
   });
   if (!r.ok) throw new Error(`registro recusado: ${r.motivo}`);
   return r;
@@ -292,7 +291,7 @@ test('RBAC (D15-A + P1): qualquer papel interno registra minuta; só MANAGER/ADM
     await seed(pool, c.id, orgId, { discharge: '2026-09-01', houseFT: 20, masterFT: 20, trackingReturn: '2026-09-10' });
     const svc = new ClosingService(pool);
     // CLIENT não registra minuta (nem papel forjado tem efeito — o serviço resolve o membership).
-    const rCliente = await svc.registrarMinuta({ containerId: c.id, membershipId: clienteId, numeroInformado: 'HDMURBAC001', dataInformada: '2026-09-10', documento: docTeste('cli'), config: cfg });
+    const rCliente = await svc.registrarMinuta({ containerId: c.id, membershipId: clienteId, numeroInformado: 'HDMURBAC001', dataInformada: '2026-09-10', documento: await docTeste(pool, c.id), config: cfg });
     assert.deepEqual(rCliente, { ok: false, motivo: 'ator_nao_autorizado' });
     assert.deepEqual(await svc.finalizarProcesso({ processoId, membershipId: analistaId, config: cfg } as any), { ok: false, motivo: 'apenas_manager_admin' });
     assert.deepEqual(await svc.solicitarReabertura({ processoId, membershipId: clienteId, justificativa: 'x' }), { ok: false, motivo: 'ator_nao_autorizado' });

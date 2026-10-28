@@ -56,6 +56,8 @@ test('migrations: aplica todas as migrations pendentes em um banco novo e é ide
       '0047_handoff_controle_capacidade.sql', '0048_minuta_aceite_tecnico_encerramento_automatico.sql', '0049_sessoes_identidade_atribuicao.sql', '0050_avisos_redirecionamento_responsavel.sql', '0051_integracao_microsoft_organizacao.sql',
       // Produção P1 (administração tarifária): a 0052 (versões, transições e eventos de tarifa — aditiva) passa a ser a última.
       '0052_administracao_tarifaria.sql',
+      // Produção P1 (arquivos de minuta): a 0053 (documentos armazenados, tentativas e eventos — aditiva) passa a ser a última.
+      '0053_documentos_armazenados.sql',
     ];
 
     const first = await runMigrations(pool);

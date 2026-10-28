@@ -38,10 +38,12 @@
 >   contagem informativa de decisões afetadas numa desativação logo depois da
 >   ativação, antes do recálculo, pode ser maior que o real — nunca menor; não
 >   altera seleção, valores, invalidação nem recálculo.
-> - **A Production P1 NÃO está concluída.** Restam: armazenamento definitivo
->   dos arquivos de minuta; congelamento formal da correção de minuta e
->   encerramento; frontend; integração produtora da Liberação, quando estiver
->   pronta (§7).
+> - Armazenamento definitivo dos arquivos de minuta: **entregue para revisão,
+>   NÃO congelado** (`docs/demurrage-producao-p1-arquivos-minuta.md`).
+> - **A Production P1 NÃO está concluída.** Restam: a revisão/aprovação do
+>   armazenamento dos arquivos de minuta; congelamento formal da correção de
+>   minuta e encerramento; frontend; integração produtora da Liberação, quando
+>   estiver pronta (§7).
 
 ## 0. Status executivo
 
@@ -493,14 +495,15 @@ acima:
 7. Administração de divergências de Free Time (§3, item 4b).
 8. Aposentadoria do V1 legado.
 9. Armazenamento definitivo dos arquivos de minuta (fora da correção de
-   minuta e encerramento e da entrega de autenticação; não iniciado).
+   minuta e encerramento e da entrega de autenticação). **Entregue para
+   revisão, NÃO congelado** — `docs/demurrage-producao-p1-arquivos-minuta.md`.
 10. Arquitetura multiorganização da integração Microsoft (um canal de
     integração por organização). Até lá vale a limitação do MVP: uma única
     organização em produção (§6, "Corretiva — autenticação…"). Exige
     autorização específica.
 
-**A Production P1 não está concluída:** restam o armazenamento definitivo
-dos arquivos de minuta (item 9), o congelamento formal da correção de minuta
+**A Production P1 não está concluída:** restam a revisão/aprovação do
+armazenamento dos arquivos de minuta (item 9), o congelamento formal da correção de minuta
 e encerramento (`docs/demurrage-producao-p1-correcao-minuta-encerramento.md`),
 o frontend (item 1) e a integração produtora da Liberação (item 2), quando
 estiver pronta.

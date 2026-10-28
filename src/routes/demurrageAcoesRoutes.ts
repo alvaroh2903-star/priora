@@ -205,9 +205,11 @@ export function criarDemurrageAcoesRouter(deps: DemurrageAcoesRoutesDeps = {}): 
    *      de idempotência atômica nas colunas de `minutas`, amarrada ao
    *      contêiner e a um hash canônico do pedido). Produção P1 (correção de
    *      minuta): qualquer papel interno registra; o corpo traz o DOCUMENTO
-   *      (referência auditável do arquivo real — `documento.origem`,
-   *      `referencia`, `nomeArquivo`, `tipoConteudo`, `tamanhoBytes`,
-   *      `hashConteudo` SHA-256); a verificação técnica AUTOMÁTICA decide o
+   *      — Produção P1 (arquivos de minuta): `documento.documentoId`, o
+   *      ARQUIVO real já enviado e confirmado em `/v2/documentos/uploads`
+   *      (DISPONIVEL, do mesmo contêiner, nunca vinculado; a referência
+   *      externa antiga → 400 `referencia_externa_descontinuada`); a
+   *      verificação técnica AUTOMÁTICA decide o
    *      estado na mesma transação (ACEITA/DIVERGENTE/INCONSISTENTE/RECEBIDA)
    *      e substitui a minuta vigente anterior do contêiner. Sem aprovação de
    *      gestor. Depois do registro, o encerramento automático é avaliado.
@@ -244,10 +246,13 @@ export function criarDemurrageAcoesRouter(deps: DemurrageAcoesRoutesDeps = {}): 
       });
       if (!resultado.ok) {
         const status = (resultado.motivo === 'ator_nao_autorizado' || resultado.motivo === 'ator_nao_responsavel') ? 403
-          : resultado.motivo === 'container_nao_encontrado' ? 404
+          : (resultado.motivo === 'container_nao_encontrado' || resultado.motivo === 'documento_nao_encontrado') ? 404
           : (resultado.motivo === 'documento_obrigatorio' || resultado.motivo === 'documento_invalido') ? 400 : 409;
-        const campo = 'campo' in resultado && resultado.campo ? { campo: resultado.campo } : {};
-        res.status(status).json({ error: resultado.motivo, ...campo });
+        const extra: Record<string, string> = {};
+        if ('campo' in resultado && resultado.campo) extra.campo = resultado.campo;
+        if ('detalhe' in resultado && resultado.detalhe) extra.detalhe = resultado.detalhe;
+        if ('estado' in resultado && resultado.estado) extra.estado = resultado.estado;
+        res.status(status).json({ error: resultado.motivo, ...extra });
         return;
       }
       const m = resultado.minuta;

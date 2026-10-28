@@ -210,7 +210,15 @@ export class ClosingService {
    *  - DEMURRAGE_CONFIRMADA exige: responsabilidade decidida (≠ EM_ANALISE);
    *    minuta ACEITA tecnicamente contra a devolução ATUAL do tracking (ou,
    *    em contêiner só com minutas LEGADAS, a comprovação legada v1.3); e cada
-   *    relógio em demurrage com valor ATIVO ESTIMATED|CONFIRMED.
+   *    relógio em demurrage com valor ATIVO ESTIMATED|CONFIRMED;
+   *  - Produção P1 (arquivos de minuta): DEMURRAGE_CONFIRMADA exige também o
+   *    ARQUIVO REAL da minuta usada como evidência guardado pela Priora e
+   *    disponível (documento armazenado DISPONIVEL, objeto não marcado
+   *    ausente, inspeção não reprovada) — senão `minuta_sem_arquivo_
+   *    disponivel`. Minuta LEGADA (só referência externa, ou aprovação humana
+   *    sem arquivo) não libera o encerramento: o analista envia o arquivo e
+   *    registra nova versão. Processo FINAL não é tocado (fechamentos
+   *    históricos preservados); ZERO_CONFIRMADO continua sem exigir minuta.
    */
   private async gateEncerramentoComClient(
     client: PoolClient, conts: Array<{ id: string; effective_return_date: CivilDate | null; tracking_return_date: CivilDate | null }>, config: ClosingConfig,
@@ -236,6 +244,7 @@ export class ClosingService {
 
       const vigente = await minutas.vigenteTecnica(c.id);
       let comprovado = false;
+      let arquivoDisponivel = false;
       if (vigente) {
         if (vigente.estado === 'DIVERGENTE') return bloqueio('divergencia_pendente', c.id);
         if (vigente.estado === 'INCONSISTENTE') return bloqueio('minuta_inconsistente', c.id);
@@ -246,6 +255,13 @@ export class ClosingService {
           return bloqueio('minuta_aguardando_avaliacao', c.id);
         }
         comprovado = true;
+        const { rows: arq } = await client.query(
+          `SELECT 1 FROM documentos d JOIN documentos_armazenados a ON a.id = d.armazenado_id AND a.minuta_id = d.minuta_id
+            WHERE d.minuta_id = $1 AND a.estado = 'DISPONIVEL' AND a.objeto_ausente_em IS NULL
+              AND a.inspecao IN ('NAO_REALIZADA', 'APROVADA')`,
+          [vigente.id],
+        );
+        arquivoDisponivel = arq.length > 0;
       } else {
         // Só minutas LEGADAS (ou nenhuma): semântica de comprovação v1.3 preservada.
         const dataFinalEvidencia: CivilDate | null = c.effective_return_date ?? c.tracking_return_date ?? null;
@@ -265,6 +281,9 @@ export class ClosingService {
       const relogioEmDemurrage = (clock: { status: string; diasDemurrage: number }) => clock.status === 'OK' && clock.diasDemurrage >= 1;
       if (relogioEmDemurrage(facts.clienteClock) && !confirmado('cliente')) return bloqueio('valor_cliente_nao_confirmado', c.id);
       if (relogioEmDemurrage(facts.rocketClock) && !confirmado('rocket')) return bloqueio('valor_rocket_nao_confirmado', c.id);
+      // Produção P1 (arquivos de minuta) — ÚLTIMO requisito: o arquivo real da
+      // minuta usada como evidência, guardado e disponível.
+      if (!arquivoDisponivel) return bloqueio('minuta_sem_arquivo_disponivel', c.id);
     }
     return { ok: true };
   }

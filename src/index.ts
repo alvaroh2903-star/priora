@@ -1,4 +1,4 @@
-import { criarApp, verificarTabelaDeSessoes } from './app';
+import { criarApp, verificarArmazenamentoNoBoot, verificarTabelaDeSessoes } from './app';
 import { inicializarPersistenciaAuth } from './auth/persistenciaAuth';
 import { config } from './config';
 import { iniciarSchedulerDemurrage } from './demurrage/schedulerBootstrap';
@@ -22,6 +22,8 @@ async function main(): Promise<void> {
   // deploy anterior) em vez de responder 500 a todo login. Rode
   // `npm run db:migrate:demurrage` ANTES de publicar o código.
   await verificarTabelaDeSessoes();
+  // Produção P1 (arquivos de minuta): sonda do bucket (não fatal; só código no log).
+  await verificarArmazenamentoNoBoot();
   await inicializarPersistenciaAuth();
 
   const server = app.listen(config.port, () => {

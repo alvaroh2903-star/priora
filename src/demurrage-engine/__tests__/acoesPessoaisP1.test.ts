@@ -237,7 +237,9 @@ const corpoPendencia = (tipo: string, motivo = 'Confirmado manualmente com o cli
 const corpoFallback = (valorDias: number, observadoEm: string, tag: string) => ({
   campo: 'house', valorDias, observadoEm, evidenciaRef: `evid://fallback/${tag}`, justificativa: 'HBL retificado confirmado por e-mail do armador.',
 });
-const corpoMinuta = (numero: string, data: string | null, tag: string) => ({ numeroInformado: numero, dataInformada: data, documento: documentoDeTeste(tag) });
+// Produção P1 (arquivos de minuta): o documento é um ARQUIVO armazenado do contêiner (um por operação lógica).
+const corpoMinuta = async (pool: Pool, containerId: string, numero: string, data: string | null, _tag: string) =>
+  ({ numeroInformado: numero, dataInformada: data, documento: await documentoDeTeste(pool, containerId) });
 
 /* ================================================================== *
  * 1 — Minuta técnica (pessoal).
@@ -254,12 +256,12 @@ test('P1 ações pessoais #1 — minuta: ANALYST responsável registra (aceite t
     await atribuir(pool, eq.orgId, p1.processoId, eq.gestor.membershipId, eq.a1.membershipId);
     const minutasDe = (containerId: string) => pool.query(`SELECT count(*)::int AS n FROM minutas WHERE container_id = $1`, [containerId]).then((r) => r.rows[0].n);
 
-    await esperar403NaoResponsavel(await post(app.base, `/containers/${p1.containerId}/minutas`, corpoMinuta(p1.numero, '2026-09-10', 'a2'), eq.a2.home, randomUUID()), 'ANALYST não responsável');
-    await esperar403NaoResponsavel(await post(app.base, `/containers/${p2.containerId}/minutas`, corpoMinuta(p2.numero, '2026-09-10', 'a1-sem'), eq.a1.home, randomUUID()), 'ANALYST em processo sem responsável');
+    await esperar403NaoResponsavel(await post(app.base, `/containers/${p1.containerId}/minutas`, await corpoMinuta(pool, p1.containerId, p1.numero, '2026-09-10', 'a2'), eq.a2.home, randomUUID()), 'ANALYST não responsável');
+    await esperar403NaoResponsavel(await post(app.base, `/containers/${p2.containerId}/minutas`, await corpoMinuta(pool, p2.containerId, p2.numero, '2026-09-10', 'a1-sem'), eq.a1.home, randomUUID()), 'ANALYST em processo sem responsável');
     assert.equal(await minutasDe(p1.containerId), 0, 'recusa = zero escrita');
     assert.equal(await minutasDe(p2.containerId), 0, 'recusa = zero escrita');
 
-    const ok = await post(app.base, `/containers/${p1.containerId}/minutas`, corpoMinuta(p1.numero, '2026-09-10', 'a1'), eq.a1.home, randomUUID());
+    const ok = await post(app.base, `/containers/${p1.containerId}/minutas`, await corpoMinuta(pool, p1.containerId, p1.numero, '2026-09-10', 'a1'), eq.a1.home, randomUUID());
     assert.equal(ok.status, 201);
     const bodyOk = await ok.json();
     assert.equal(bodyOk.estado, 'ACEITA', 'aceite técnico automático no próprio registro — nenhuma aprovação de gestor');
@@ -270,10 +272,10 @@ test('P1 ações pessoais #1 — minuta: ANALYST responsável registra (aceite t
     assert.equal(m1[0].incluido_por_membership_id, eq.a1.membershipId);
 
     // MANAGER em processo SEM responsável; ADMIN em processo de OUTRO analista.
-    const doGestor = await post(app.base, `/containers/${p2.containerId}/minutas`, corpoMinuta(p2.numero, '2026-09-10', 'gestor'), eq.gestor.home, randomUUID());
+    const doGestor = await post(app.base, `/containers/${p2.containerId}/minutas`, await corpoMinuta(pool, p2.containerId, p2.numero, '2026-09-10', 'gestor'), eq.gestor.home, randomUUID());
     assert.equal(doGestor.status, 201);
     const bodyGestor = await doGestor.json();
-    const doAdmin = await post(app.base, `/containers/${p1.containerId}/minutas`, corpoMinuta(p1.numero, '2026-09-10', 'admin'), eq.admin.home, randomUUID());
+    const doAdmin = await post(app.base, `/containers/${p1.containerId}/minutas`, await corpoMinuta(pool, p1.containerId, p1.numero, '2026-09-10', 'admin'), eq.admin.home, randomUUID());
     assert.equal(doAdmin.status, 201);
     const bodyAdmin = await doAdmin.json();
     const { rows: aud } = await pool.query(
@@ -510,7 +512,7 @@ test('P1 #7 — nenhuma aprovação de minuta por gestor: `/minutas/:id/validar`
     const eq = await equipe(pool, 'p1-410');
     const p = await processoMinimo(pool, eq.orgId, 'IM-P1-410', 'PAVA');
     await atribuir(pool, eq.orgId, p.processoId, eq.gestor.membershipId, eq.a1.membershipId);
-    const reg = await post(app.base, `/containers/${p.containerId}/minutas`, corpoMinuta(p.numero, '2026-09-10', 'v410'), eq.a1.home, randomUUID());
+    const reg = await post(app.base, `/containers/${p.containerId}/minutas`, await corpoMinuta(pool, p.containerId, p.numero, '2026-09-10', 'v410'), eq.a1.home, randomUUID());
     assert.equal(reg.status, 201);
     const { minutaId, estado } = await reg.json();
     const antes = (await pool.query(`SELECT estado_minuta, atualizado_em FROM minutas WHERE id = $1`, [minutaId])).rows[0];
@@ -552,14 +554,14 @@ test('P1 #8 — membership desativado: o middleware recusa (403 membership_inati
     assert.equal(await responsavelDe(pool, pAberto.processoId), eq.a1.membershipId, 'a desativação não retira a atribuição (o handoff a tolera)');
 
     // HTTP: a sessão do desativado já para no middleware.
-    const http = await post(app.base, `/containers/${pAberto.containerId}/minutas`, corpoMinuta(pAberto.numero, '2026-09-10', 'inat'), eq.a1.home, randomUUID());
+    const http = await post(app.base, `/containers/${pAberto.containerId}/minutas`, await corpoMinuta(pool, pAberto.containerId, pAberto.numero, '2026-09-10', 'inat'), eq.a1.home, randomUUID());
     assert.equal(http.status, 403);
     assert.equal((await http.json()).error, 'membership_inativo');
 
     // Serviços (chamados diretamente — a régua vale para qualquer chamador).
     const minuta = await registrarMinutaTecnica(pool, {
       containerId: pAberto.containerId, membershipId: eq.a1.membershipId, numeroInformado: pAberto.numero, dataInformada: '2026-09-10',
-      documento: documentoDeTeste('inat'), hoje: HOJE,
+      documento: await documentoDeTeste(pool, pAberto.containerId), hoje: HOJE,
     });
     assert.deepEqual(minuta, { ok: false, motivo: 'ator_nao_autorizado' });
     await assert.rejects(
@@ -611,7 +613,7 @@ test('P1 #9 — desativação que comita enquanto a ação espera o lock do proc
 
     await segurador.query('BEGIN');
     await lockProcesso(segurador, p.processoId);
-    const resposta = post(app.base, `/containers/${p.containerId}/minutas`, corpoMinuta(p.numero, '2026-09-10', 'corrida-inat'), eq.a1.home, randomUUID());
+    const resposta = post(app.base, `/containers/${p.containerId}/minutas`, await corpoMinuta(pool, p.containerId, p.numero, '2026-09-10', 'corrida-inat'), eq.a1.home, randomUUID());
     await esperarAlguemNoLockConsultivo(pool); // o middleware já aceitou a sessão ATIVA
     await desativar(pool, eq.a1.membershipId);
     await segurador.query('COMMIT');
@@ -638,7 +640,7 @@ test('P1 #10 — réplica idempotente: ANALYST não responsável nunca recebe a 
     const p2 = await processoMinimo(pool, eq.orgId, 'IM-P1-REP-2', 'PAKB');
     for (const p of [p1, p2]) await atribuir(pool, eq.orgId, p.processoId, eq.gestor.membershipId, eq.a1.membershipId);
     const chave = `minuta-${randomUUID()}`;
-    const corpo = corpoMinuta(p1.numero, '2026-09-10', 'replay');
+    const corpo = await corpoMinuta(pool, p1.containerId, p1.numero, '2026-09-10', 'replay');
 
     const original = await post(app.base, `/containers/${p1.containerId}/minutas`, corpo, eq.a1.home, chave);
     assert.equal(original.status, 201);
@@ -688,8 +690,9 @@ test('P1 #11 — corrida determinística: reatribuição comitada enquanto a aç
     const corrida = (p: { processoId: string }, disparar: () => Promise<Response>) =>
       corridaComReatribuicao(pool, eq.orgId, p.processoId, eq.gestor.membershipId, eq.a1.membershipId, eq.a2.membershipId, disparar);
 
+    const corpoCorrida = await corpoMinuta(pool, pMin.containerId, pMin.numero, '2026-09-10', 'corrida');
     await esperar403NaoResponsavel(
-      await corrida(pMin, () => post(app.base, `/containers/${pMin.containerId}/minutas`, corpoMinuta(pMin.numero, '2026-09-10', 'corrida'), eq.a1.home, randomUUID())),
+      await corrida(pMin, () => post(app.base, `/containers/${pMin.containerId}/minutas`, corpoCorrida, eq.a1.home, randomUUID())),
       'minuta');
     await esperar403NaoResponsavel(
       await corrida(pPend, () => post(app.base, `/pendencias/${pend}/resolver`, corpoPendencia('armador_ausente'), eq.a1.home)),

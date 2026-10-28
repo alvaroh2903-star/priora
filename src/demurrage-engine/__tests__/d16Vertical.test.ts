@@ -18,7 +18,7 @@ import { ClosingService } from '../closing/closingService';
 import { passagemDoCalendario } from '../apuracao/passagemCalendario';
 import { decidirResponsabilidade } from '../responsabilidade/decidirResponsabilidade';
 import { seedArmadorTables } from '../tariffs/seed/armadorTables';
-import { registrarMinutaDeTeste } from './minutaTestHelper';
+import { registrarMinutaDeTeste, documentoDeTeste } from './minutaTestHelper';
 import { seedRocketTermoPorEmbarque } from '../tariffs/seed/rocketTermoPorEmbarque';
 import {
   criarRascunho, ativar, criarVersaoCorrigida, substituirFaixas, TariffTableImutavelError, FaixaEntrada,
@@ -1486,7 +1486,8 @@ test('D16 #22: isolamento de organização — registro, tracking, responsabilid
     // Produção P1: o membership de OUTRA organização não registra minuta em A;
     // o de A registra, o aceite é técnico e o processo encerra AUTOMATICAMENTE.
     const closing = new ClosingService(pool);
-    const docIso = { origem: 'referencia_externa', referencia: 'teste://d16/iso', nomeArquivo: 'iso.pdf', tipoConteudo: 'application/pdf', tamanhoBytes: 10, hashConteudo: 'b'.repeat(64) };
+    // Produção P1 (arquivos de minuta): o documento é um ARQUIVO armazenado do contêiner de A.
+    const docIso = await documentoDeTeste(pool, a.containerId, gestorA);
     assert.deepEqual(
       await closing.registrarMinuta({ containerId: a.containerId, membershipId: gestorB, numeroInformado: nA, dataInformada: '2026-10-04', documento: docIso, config: { hoje: '2026-10-05' } }),
       { ok: false, motivo: 'ator_nao_autorizado' },

@@ -21,7 +21,9 @@ import { documentoDeTeste } from './minutaTestHelper';
 import { novoMembro } from './responsabilidadeTestHelper';
 
 /** Produção P1 (correção de minuta): o registro exige o documento (referência auditável). Fixo — retries idênticos mantêm o mesmo hash. */
-const DOC_E2 = documentoDeTeste('entrega2-documento-fixo');
+// Produção P1 (arquivos de minuta): o documento da minuta é um ARQUIVO armazenado do
+// contêiner — um por operação lógica (o retry com a MESMA chave reaproveita o mesmo).
+const docE2 = (pool: Pool, containerId: string) => documentoDeTeste(pool, containerId);
 
 /**
  * Produção P1 (Entrega 2) — suíte de aceitação das rotas internas de ação
@@ -422,15 +424,16 @@ test('Entrega 2 #16: registro de minuta usa o caminho oficial (ClosingService.re
     const org = await criarOrg(pool, 'e2-16');
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const { containerId, numero } = await processoComRelogios(pool, org.id, 'IM-E2-16', 'ECQL');
+    const DOC_E2_containerId = await docE2(pool, containerId);
     // Produção P1 (filas pessoais): registrar minuta é ação PESSOAL — o ANALYST é o responsável do processo.
     await atribuirResponsavelDoContainerDeTeste(pool, containerId, await membershipIdPorHome(pool, home));
 
-    const semChave = await post(app.base, `/containers/${containerId}/minutas`, { documento: DOC_E2, numeroInformado: numero, dataInformada: '2026-09-10' }, home);
+    const semChave = await post(app.base, `/containers/${containerId}/minutas`, { documento: DOC_E2_containerId, numeroInformado: numero, dataInformada: '2026-09-10' }, home);
     assert.equal(semChave.status, 400);
 
     const res = await fetch(`${app.base}/containers/${containerId}/minutas`, {
       method: 'POST', headers: { 'content-type': 'application/json', 'x-test-home-account-id': home, 'idempotency-key': randomUUID() },
-      body: JSON.stringify({ documento: DOC_E2, numeroInformado: numero, dataInformada: '2026-09-10' }),
+      body: JSON.stringify({ documento: DOC_E2_containerId, numeroInformado: numero, dataInformada: '2026-09-10' }),
     });
     assert.equal(res.status, 201);
     const body = await res.json();
@@ -463,6 +466,7 @@ test('Entrega 2 #17/#18 (reescrito na correção P1): divergência preserva as D
     const homeAnalyst = await usuarioInterno(pool, org.id, 'ANALYST');
     const homeManager = await usuarioInterno(pool, org.id, 'MANAGER');
     const { containerId, numero } = await processoComRelogios(pool, org.id, 'IM-E2-1718', 'ECQM');
+    const DOC_E2_containerId = await docE2(pool, containerId);
     // Produção P1 (filas pessoais): registrar minuta é ação PESSOAL — o ANALYST é o responsável do processo.
     await atribuirResponsavelDoContainerDeTeste(pool, containerId, await membershipIdPorHome(pool, homeAnalyst));
 
@@ -470,7 +474,7 @@ test('Entrega 2 #17/#18 (reescrito na correção P1): divergência preserva as D
     const chave = randomUUID();
     const registrar = () => fetch(`${app.base}/containers/${containerId}/minutas`, {
       method: 'POST', headers: { 'content-type': 'application/json', 'x-test-home-account-id': homeAnalyst, 'idempotency-key': chave },
-      body: JSON.stringify({ documento: DOC_E2, numeroInformado: numero, dataInformada: '2026-09-12' }),
+      body: JSON.stringify({ documento: DOC_E2_containerId, numeroInformado: numero, dataInformada: '2026-09-12' }),
     });
     const reg = await registrar();
     assert.equal(reg.status, 201);
@@ -686,12 +690,13 @@ test('Entrega 2 #26: duas requisições concorrentes com a MESMA Idempotency-Key
     const org = await criarOrg(pool, 'e2-26');
     const home = await usuarioInterno(pool, org.id, 'ANALYST');
     const { containerId, numero } = await processoComRelogios(pool, org.id, 'IM-E2-26', 'ECQP');
+    const DOC_E2_containerId = await docE2(pool, containerId);
     // Produção P1 (filas pessoais): registrar minuta é ação PESSOAL — o ANALYST é o responsável do processo.
     await atribuirResponsavelDoContainerDeTeste(pool, containerId, await membershipIdPorHome(pool, home));
     const chave = randomUUID();
     const chamar = () => fetch(`${app.base}/containers/${containerId}/minutas`, {
       method: 'POST', headers: { 'content-type': 'application/json', 'x-test-home-account-id': home, 'idempotency-key': chave },
-      body: JSON.stringify({ documento: DOC_E2, numeroInformado: numero, dataInformada: '2026-09-10' }),
+      body: JSON.stringify({ documento: DOC_E2_containerId, numeroInformado: numero, dataInformada: '2026-09-10' }),
     });
     const [r1, r2] = await Promise.all([chamar(), chamar()]);
     const [b1, b2] = await Promise.all([r1.json(), r2.json()]);

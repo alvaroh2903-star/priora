@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { documentoDeTeste } from './minutaTestHelper';
 import assert from 'node:assert/strict';
 import express from 'express';
 import { AddressInfo } from 'node:net';
@@ -403,7 +404,8 @@ test('Entrega 3 #14 (reescrito na correção P1): o item de /minutas traz o cont
     assert.equal(validar.status, 410, 'não existe mais validação por gestor');
     const substituta = await post(acaoBase, `/containers/${lido.itens[0].container.id}/minutas`, {
       numeroInformado: numero, dataInformada: '2026-09-10',
-      documento: { origem: 'referencia_externa', referencia: 'teste://e3-14', nomeArquivo: 'e3-14.pdf', tipoConteudo: 'application/pdf', tamanhoBytes: 10, hashConteudo: 'c'.repeat(64) },
+      // Produção P1 (arquivos de minuta): o documento é um ARQUIVO armazenado do contêiner lido.
+      documento: await documentoDeTeste(pool, containerId),
     }, homeManager, { 'idempotency-key': randomUUID() });
     assert.equal(substituta.status, 201, 'o contêiner lido é aceito, sem tradução, pela ação de registro');
     assert.deepEqual((await (await get(app.base, '/minutas', homeManager)).json()).itens, [], 'a legada foi substituída — nenhum item irremovível');

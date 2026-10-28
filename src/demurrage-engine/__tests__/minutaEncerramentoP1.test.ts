@@ -30,6 +30,7 @@ import { seedRocketTermoPorEmbarque } from '../tariffs/seed/rocketTermoPorEmbarq
 import { criarDemurrageAcoesRouter } from '../../routes/demurrageAcoesRoutes';
 import { criarDemurrageV2Router } from '../../routes/demurrageV2Routes';
 import { confirmarResponsabilidadeClienteIntegral } from './responsabilidadeTestHelper';
+import { documentoDeTeste } from './minutaTestHelper';
 import { containerContrato, contratoRegistro, ingerirTrackingDoContainer, numeroContainer, o, resultadoTracking } from './registroDemurrageHelpers';
 
 /**
@@ -101,12 +102,16 @@ function get(base: string, caminho: string, home: string): Promise<Response> {
   return fetch(`${base}${caminho}`, { headers: { 'x-test-home-account-id': home } });
 }
 
-/** Referência auditável de um arquivo real fictício (o sistema guarda referência + hash, nunca o binário). */
-function doc(tag: string) {
-  return {
-    origem: 'email_anexo', referencia: `graph:message/${tag}/attachment/1`, nomeArquivo: `minuta-${tag}.pdf`,
-    tipoConteudo: 'application/pdf', tamanhoBytes: 48213, hashConteudo: createHash('sha256').update(tag).digest('hex'),
-  };
+/**
+ * Produção P1 (arquivos de minuta): o documento da minuta é um ARQUIVO
+ * armazenado do contêiner — um por (contêiner, tag); a MESMA tag reaproveita
+ * o mesmo arquivo (retry/réplica da mesma operação, inclusive concorrente).
+ */
+const docsPorTag = new Map<string, Promise<{ documentoId: string }>>();
+function doc(pool: Pool, containerId: string, tag: string): Promise<{ documentoId: string }> {
+  const k = `${containerId}:${tag}`;
+  if (!docsPorTag.has(k)) docsPorTag.set(k, documentoDeTeste(pool, containerId));
+  return docsPorTag.get(k)!;
 }
 
 /* ------------------------------------------------------------------ *
@@ -182,8 +187,8 @@ const contagens = (pool: Pool) => pool.query(
           (SELECT count(*) FROM fechamentos)::int AS fechamentos`,
 ).then((r) => r.rows[0]);
 
-function corpoMinuta(numero: string, data: string | null, tag: string) {
-  return { numeroInformado: numero, dataInformada: data, documento: doc(tag) };
+async function corpoMinuta(pool: Pool, containerId: string, numero: string, data: string | null, tag: string) {
+  return { numeroInformado: numero, dataInformada: data, documento: await doc(pool, containerId, tag) };
 }
 
 /* ================================================================== *
@@ -262,11 +267,11 @@ test('P1 #3/#4: ANALISTA registra a minuta coerente → ACEITA por verificação
 
     // CLIENT nunca registra (barreira G6) — e nada é escrito.
     const antes = await contagens(pool);
-    const rCliente = await post(app.base, `/a/containers/${c.containers[0].id}/minutas`, corpoMinuta(c.containers[0].numero, '2026-09-10', 'cli'), cliente.home, 'p1-03-cli');
+    const rCliente = await post(app.base, `/a/containers/${c.containers[0].id}/minutas`, await corpoMinuta(pool, c.containers[0].id, c.containers[0].numero, '2026-09-10', 'cli'), cliente.home, 'p1-03-cli');
     assert.equal(rCliente.status, 403);
     assert.deepEqual(await contagens(pool), antes);
 
-    const resp = await post(app.base, `/a/containers/${c.containers[0].id}/minutas`, corpoMinuta(c.containers[0].numero, '2026-09-10', 'a1'), analista.home, 'p1-03-a1');
+    const resp = await post(app.base, `/a/containers/${c.containers[0].id}/minutas`, await corpoMinuta(pool, c.containers[0].id, c.containers[0].numero, '2026-09-10', 'a1'), analista.home, 'p1-03-a1');
     assert.equal(resp.status, 201);
     const corpo = await resp.json();
     assert.equal(corpo.estado, 'ACEITA');
@@ -290,7 +295,9 @@ test('P1 #3/#4: ANALISTA registra a minuta coerente → ACEITA por verificação
     assert.equal(d.incluido_por, analista.usuarioId);
     assert.equal(d.incluido_por_membership_id, analista.membershipId);
     assert.equal(d.versao_minuta, 1);
-    assert.equal(d.hash_conteudo, doc('a1').hashConteudo);
+    // Produção P1 (arquivos de minuta): o hash é o CALCULADO pelo servidor no recebimento do arquivo armazenado (mesmo id).
+    assert.equal(d.armazenado_id, d.id);
+    assert.equal(d.hash_conteudo, (await pool.query(`SELECT sha256 FROM documentos_armazenados WHERE id = $1`, [d.id])).rows[0].sha256);
     const linha = (await pool.query(`SELECT effective_return_date, tracking_return_date FROM containers WHERE id = $1`, [c.containers[0].id])).rows[0];
     assert.deepEqual(linha, { effective_return_date: null, tracking_return_date: '2026-09-10' }, 'a minuta nunca escreve a devolução');
     // Ainda OPEN só porque a responsabilidade não foi decidida.
@@ -315,7 +322,7 @@ test('P1 #8: quando o último gate é liberado (decisão de responsabilidade pel
     await devolverPeloTracking(pool, c, { [a.numero]: '2026-09-10', [b.numero]: '2026-09-12' });
 
     for (const [x, data, tag] of [[a, '2026-09-10', 'a'], [b, '2026-09-12', 'b']] as const) {
-      const r = await post(app.base, `/a/containers/${x.id}/minutas`, corpoMinuta(x.numero, data, `p1-08-${tag}`), analista.home, `p1-08-${tag}`);
+      const r = await post(app.base, `/a/containers/${x.id}/minutas`, await corpoMinuta(pool, x.id, x.numero, data, `p1-08-${tag}`), analista.home, `p1-08-${tag}`);
       assert.equal(r.status, 201);
       assert.equal((await r.json()).estado, 'ACEITA');
     }
@@ -352,7 +359,7 @@ test('P1 regra 1: minuta registrada ANTES do tracking não fabrica devolução �
     await atribuirResponsavelDeTeste(pool, c.processoId, analista.membershipId);
     const r = await new ClosingService(pool).registrarMinuta({
       containerId: c.containers[0].id, membershipId: analista.membershipId, numeroInformado: c.containers[0].numero,
-      dataInformada: '2026-09-10', documento: doc('r1'), config: cfg,
+      dataInformada: '2026-09-10', documento: await doc(pool, c.containers[0].id, 'r1'), config: cfg,
     });
     assert.equal(r.ok, true);
     if (!r.ok) return;
@@ -389,7 +396,7 @@ test('P1 #5/#6: divergência abre pendência e bloqueia; inconsistência idem; a
     await atribuirResponsavelDeTeste(pool, c.processoId, analista.membershipId);
 
     // #5 — DIVERGENTE: coerente, mas a data difere da devolução oficial.
-    let resp = await post(app.base, `/a/containers/${x.id}/minutas`, corpoMinuta(x.numero, '2026-09-12', 'div'), analista.home, 'p1-05-div');
+    let resp = await post(app.base, `/a/containers/${x.id}/minutas`, await corpoMinuta(pool, x.id, x.numero, '2026-09-12', 'div'), analista.home, 'p1-05-div');
     assert.equal(resp.status, 201);
     let corpo = await resp.json();
     assert.equal(corpo.estado, 'DIVERGENTE');
@@ -419,7 +426,7 @@ test('P1 #5/#6: divergência abre pendência e bloqueia; inconsistência idem; a
     assert.equal(manual.status, 400);
 
     // INCONSISTENTE: número de outro contêiner → substitui a divergente e troca a pendência.
-    resp = await post(app.base, `/a/containers/${x.id}/minutas`, corpoMinuta('MSCU1234565', '2026-09-10', 'inc'), analista.home, 'p1-05-inc');
+    resp = await post(app.base, `/a/containers/${x.id}/minutas`, await corpoMinuta(pool, x.id, 'MSCU1234565', '2026-09-10', 'inc'), analista.home, 'p1-05-inc');
     corpo = await resp.json();
     assert.equal(corpo.estado, 'INCONSISTENTE');
     assert.equal(corpo.avaliacao.motivoInconsistencia, 'NUMERO_DIVERGENTE');
@@ -429,7 +436,7 @@ test('P1 #5/#6: divergência abre pendência e bloqueia; inconsistência idem; a
     assert.deepEqual(pend.map((p: any) => [p.tipo, p.estado]), [['minuta_divergente_tracking', 'resolvida'], ['minuta_inconsistente', 'aberta']]);
 
     // #6 — substituta coerente: ACEITA, pendências resolvidas automaticamente, FINAL.
-    resp = await post(app.base, `/a/containers/${x.id}/minutas`, corpoMinuta(x.numero, '2026-09-10', 'ok'), analista.home, 'p1-05-ok');
+    resp = await post(app.base, `/a/containers/${x.id}/minutas`, await corpoMinuta(pool, x.id, x.numero, '2026-09-10', 'ok'), analista.home, 'p1-05-ok');
     corpo = await resp.json();
     assert.equal(corpo.estado, 'ACEITA');
     assert.equal(corpo.versao, 3);
@@ -471,7 +478,7 @@ test('P1 #7: segunda minuta (inclusive em processo FINAL e sobre VALIDADA legada
     await new MinutaRepository(pool).marcarValidada(legada.id, '2026-09-10', false, null);
 
     for (const tag of ['s1', 's2']) {
-      const r = await post(app.base, `/a/containers/${x.id}/minutas`, corpoMinuta(x.numero, '2026-09-10', tag), analista.home, `p1-07-${tag}`);
+      const r = await post(app.base, `/a/containers/${x.id}/minutas`, await corpoMinuta(pool, x.id, x.numero, '2026-09-10', tag), analista.home, `p1-07-${tag}`);
       assert.equal(r.status, 201, `${tag}: nunca 500`);
       const corpo = await r.json();
       assert.equal(corpo.estado, 'ACEITA');
@@ -486,7 +493,7 @@ test('P1 #7: segunda minuta (inclusive em processo FINAL e sobre VALIDADA legada
     assert.equal(vigentes.length, 1);
 
     // Divergência pós-FINAL: registrada como fato material, exige reabertura, sem 500.
-    const r3 = await post(app.base, `/a/containers/${x.id}/minutas`, corpoMinuta(x.numero, '2026-09-25', 's3'), analista.home, 'p1-07-s3');
+    const r3 = await post(app.base, `/a/containers/${x.id}/minutas`, await corpoMinuta(pool, x.id, x.numero, '2026-09-25', 's3'), analista.home, 'p1-07-s3');
     assert.equal(r3.status, 201);
     const c3 = await r3.json();
     assert.equal(c3.estado, 'DIVERGENTE');
@@ -515,9 +522,9 @@ test('P1 #9: um único contêiner bloqueado (minuta divergente) impede o encerra
     await atribuirResponsavelDeTeste(pool, c.processoId, analista.membershipId);
     const svc = new ClosingService(pool);
     for (const x of [a, b]) await confirmarResponsabilidadeClienteIntegral(pool, { containerId: x.id, hoje: HOJE });
-    const ra = await svc.registrarMinuta({ containerId: a.id, membershipId: analista.membershipId, numeroInformado: a.numero, dataInformada: '2026-09-10', documento: doc('9a'), config: cfg });
+    const ra = await svc.registrarMinuta({ containerId: a.id, membershipId: analista.membershipId, numeroInformado: a.numero, dataInformada: '2026-09-10', documento: await doc(pool, a.id, '9a'), config: cfg });
     assert.ok(ra.ok && ra.minuta.estado === 'ACEITA');
-    const rb = await svc.registrarMinuta({ containerId: b.id, membershipId: analista.membershipId, numeroInformado: b.numero, dataInformada: '2026-09-11', documento: doc('9b'), config: cfg });
+    const rb = await svc.registrarMinuta({ containerId: b.id, membershipId: analista.membershipId, numeroInformado: b.numero, dataInformada: '2026-09-11', documento: await doc(pool, b.id, '9b'), config: cfg });
     assert.ok(rb.ok && rb.minuta.estado === 'DIVERGENTE');
     assert.deepEqual(rb.ok && rb.encerramento, { resultado: 'bloqueado', motivo: 'divergencia_pendente', containerId: b.id });
     const p = await statusProcesso(pool, c.processoId);
@@ -565,9 +572,9 @@ test('P1 #10: concorrência — avaliações simultâneas nunca fecham duas veze
     const analista = await membro(pool, c.orgId, 'ANALYST');
     // Produção P1 (filas pessoais): registrar minuta é ação pessoal — o ANALYST é o responsável do processo.
     await atribuirResponsavelDeTeste(pool, d.processoId, analista.membershipId);
-    const regs = await Promise.all([1, 2, 3, 4].map((i) => registrarMinutaTecnica(pool, {
+    const regs = await Promise.all([1, 2, 3, 4].map(async (i) => registrarMinutaTecnica(pool, {
       containerId: d.containers[0].id, membershipId: analista.membershipId, numeroInformado: d.containers[0].numero,
-      dataInformada: i % 2 ? '2026-09-10' : '2026-09-11', documento: doc(`c${i}`), hoje: HOJE,
+      dataInformada: i % 2 ? '2026-09-10' : '2026-09-11', documento: await doc(pool, d.containers[0].id, `c${i}`), hoje: HOJE,
     })));
     assert.ok(regs.every((r) => r.ok), 'nenhum conflito de domínio vira erro');
     const hist = await minutasDo(pool, d.containers[0].id);
@@ -580,9 +587,9 @@ test('P1 #10: concorrência — avaliações simultâneas nunca fecham duas veze
 
     // (c) a MESMA chave em paralelo nunca duplica.
     const idem = { organizationId: c.orgId, rota: 'registrar_minuta', chave: 'p1-10-mesma', hash: 'h'.repeat(64) };
-    const mesmas = await Promise.all([1, 2, 3].map(() => registrarMinutaTecnica(pool, {
+    const mesmas = await Promise.all([1, 2, 3].map(async () => registrarMinutaTecnica(pool, {
       containerId: d.containers[0].id, membershipId: analista.membershipId, numeroInformado: d.containers[0].numero,
-      dataInformada: '2026-09-10', documento: doc('mesma'), hoje: HOJE, idempotencia: idem,
+      dataInformada: '2026-09-10', documento: await doc(pool, d.containers[0].id, 'mesma'), hoje: HOJE, idempotencia: idem,
     })));
     assert.ok(mesmas.every((r) => r.ok));
     const ids = new Set(mesmas.map((r) => (r.ok ? r.minuta.id : '')));
@@ -602,7 +609,7 @@ test('P1 #11: repetição idempotente (mesma Idempotency-Key, mesmo corpo) devol
     const analista = await membro(pool, c.orgId, 'ANALYST');
     // Produção P1 (filas pessoais): registrar minuta é ação pessoal — o ANALYST é o responsável do processo.
     await atribuirResponsavelDeTeste(pool, c.processoId, analista.membershipId);
-    const corpo = corpoMinuta(x.numero, '2026-09-12', 'idem');
+    const corpo = await corpoMinuta(pool, x.id, x.numero, '2026-09-12', 'idem');
 
     const r1 = await post(app.base, `/a/containers/${x.id}/minutas`, corpo, analista.home, 'p1-11');
     assert.equal(r1.status, 201);
@@ -617,7 +624,7 @@ test('P1 #11: repetição idempotente (mesma Idempotency-Key, mesmo corpo) devol
     assert.deepEqual(b2.documento, b1.documento);
     assert.deepEqual(await contagens(pool), depois1, 'réplica sem nenhuma escrita');
 
-    const outro = await post(app.base, `/a/containers/${x.id}/minutas`, { ...corpo, documento: doc('outro-arquivo') }, analista.home, 'p1-11');
+    const outro = await post(app.base, `/a/containers/${x.id}/minutas`, { ...corpo, documento: await doc(pool, x.id, 'outro-arquivo') }, analista.home, 'p1-11');
     assert.equal(outro.status, 409);
     assert.equal((await outro.json()).error, 'idempotency_key_reutilizada');
     assert.deepEqual(await contagens(pool), depois1);
@@ -652,7 +659,7 @@ test('P1 #12/#13/#14: FINAL sai da fila padrão e dos contadores; filtro explíc
       await confirmarResponsabilidadeClienteIntegral(pool, { containerId: c.containers[0].id, hoje: HOJE });
       await new ClosingService(pool).registrarMinuta({
         containerId: c.containers[0].id, membershipId: leitor.membershipId, numeroInformado: c.containers[0].numero,
-        dataInformada: '2026-09-10', documento: doc(n), config: cfg,
+        dataInformada: '2026-09-10', documento: await doc(pool, c.containers[0].id, n), config: cfg,
       });
       assert.equal((await statusProcesso(pool, c.processoId)).apuracao_status, 'FINAL');
       finais.push(c);
@@ -745,7 +752,7 @@ test('P1 #15: ANALYST não ganha poder de gestor — finalizar/autorizar reabert
     // Reabertura: analista solicita (já permitido), mas não autoriza.
     const service = new ClosingService(pool);
     await confirmarResponsabilidadeClienteIntegral(pool, { containerId: x.id, hoje: HOJE });
-    const reg = await service.registrarMinuta({ containerId: x.id, membershipId: analista.membershipId, numeroInformado: x.numero, dataInformada: '2026-09-10', documento: doc('15'), config: cfg });
+    const reg = await service.registrarMinuta({ containerId: x.id, membershipId: analista.membershipId, numeroInformado: x.numero, dataInformada: '2026-09-10', documento: await doc(pool, x.id, '15'), config: cfg });
     assert.ok(reg.ok);
     assert.equal((await statusProcesso(pool, c.processoId)).apuracao_status, 'FINAL');
     const sol = await (await post(app.base, `/a/processos/${c.processoId}/reabertura/solicitar`, { justificativa: 'Corrigir devolução.' }, analista.home)).json();
@@ -792,7 +799,7 @@ test('P1 #16: outra organização nunca lê nem altera documento, minuta ou proc
     const analistaA = await membro(pool, a.orgId, 'ANALYST');
     // Produção P1 (filas pessoais): registrar minuta e ler o documento são pessoais — o ANALYST A é o responsável.
     await atribuirResponsavelDeTeste(pool, a.processoId, analistaA.membershipId);
-    const ra = await post(app.base, `/a/containers/${xa.id}/minutas`, corpoMinuta(xa.numero, '2026-09-12', '16a'), analistaA.home, 'p1-16-a');
+    const ra = await post(app.base, `/a/containers/${xa.id}/minutas`, await corpoMinuta(pool, xa.id, xa.numero, '2026-09-12', '16a'), analistaA.home, 'p1-16-a');
     const minutaA = (await ra.json()).minutaId;
 
     const orgB = (await new OrganizationRepository(pool).create('Outra', 'rk-outra')).id;
@@ -803,7 +810,9 @@ test('P1 #16: outra organização nunca lê nem altera documento, minuta ou proc
     const doc200 = await get(app.base, `/v2/minutas/${minutaA}/documento`, analistaA.home);
     assert.equal(doc200.status, 200);
     const corpoDoc = await doc200.json();
-    assert.equal(corpoDoc.referencia, doc('16a').referencia);
+    // Produção P1 (arquivos de minuta): arquivo interno — a chave nunca sai do backend (referencia null, contrato v2).
+    assert.equal(corpoDoc.referencia, null);
+    assert.equal(corpoDoc.armazenamento, 'INTERNO');
     assert.equal(corpoDoc.versaoMinuta, 1);
     assert.equal(corpoDoc.incluidoPor.membershipId, analistaA.membershipId);
 
@@ -811,7 +820,7 @@ test('P1 #16: outra organização nunca lê nem altera documento, minuta ou proc
       await get(app.base, `/v2/minutas/${minutaA}/documento`, analistaB.home),
       await get(app.base, `/v2/minutas/${randomUUID()}/documento`, analistaB.home),
       await get(app.base, `/v2/processos/${a.processoId}`, analistaB.home),
-      await post(app.base, `/a/containers/${xa.id}/minutas`, corpoMinuta(xa.numero, '2026-09-10', '16b'), analistaB.home, 'p1-16-b'),
+      await post(app.base, `/a/containers/${xa.id}/minutas`, await corpoMinuta(pool, xa.id, xa.numero, '2026-09-10', '16b'), analistaB.home, 'p1-16-b'),
       await post(app.base, `/a/processos/${a.processoId}/finalizar`, {}, gestorB.home),
     ];
     for (const r of r404) assert.equal(r.status, 404);
@@ -821,7 +830,7 @@ test('P1 #16: outra organização nunca lê nem altera documento, minuta ou proc
     assert.equal(filaB.total, 0);
     // Serviço chamado direto com membership de OUTRA organização: recusado, zero escrita.
     const direto = await registrarMinutaTecnica(pool, {
-      containerId: xa.id, membershipId: analistaB.membershipId, numeroInformado: xa.numero, dataInformada: '2026-09-10', documento: doc('16c'), hoje: HOJE,
+      containerId: xa.id, membershipId: analistaB.membershipId, numeroInformado: xa.numero, dataInformada: '2026-09-10', documento: await doc(pool, xa.id, '16c'), hoje: HOJE,
     });
     assert.deepEqual(direto, { ok: false, motivo: 'ator_nao_autorizado' });
     assert.deepEqual(await contagens(pool), antes);
@@ -843,15 +852,16 @@ test('P1 #17: falha ao gravar o documento desfaz TUDO — nenhuma minuta, substi
     // Produção P1 (filas pessoais): registrar minuta é ação pessoal — o ANALYST é o responsável do processo.
     await atribuirResponsavelDeTeste(pool, c.processoId, analista.membershipId);
     const svc = new ClosingService(pool);
-    const primeira = await svc.registrarMinuta({ containerId: x.id, membershipId: analista.membershipId, numeroInformado: x.numero, dataInformada: '2026-09-12', documento: doc('17a'), config: cfg });
+    const primeira = await svc.registrarMinuta({ containerId: x.id, membershipId: analista.membershipId, numeroInformado: x.numero, dataInformada: '2026-09-12', documento: await doc(pool, x.id, '17a'), config: cfg });
     assert.ok(primeira.ok && primeira.minuta.estado === 'DIVERGENTE');
+    const doc17b = await doc(pool, x.id, '17b');
     const antes = await contagens(pool);
     const pendAntes = await pendenciasDo(pool, x.id);
 
     const idem = { organizationId: c.orgId, rota: 'registrar_minuta', chave: 'p1-17', hash: 'a'.repeat(64) };
     await assert.rejects(() => registrarMinutaTecnica(pool, {
       containerId: x.id, membershipId: analista.membershipId, numeroInformado: x.numero, dataInformada: '2026-09-10',
-      documento: doc('17b'), hoje: HOJE, idempotencia: idem,
+      documento: doc17b, hoje: HOJE, idempotencia: idem,
       _testeFalhaAoGravarDocumento: () => { throw new Error('armazenamento indisponível'); },
     }), /armazenamento indisponível/);
     assert.deepEqual(await contagens(pool), antes);
@@ -874,7 +884,7 @@ test('P1 #17: falha ao gravar o documento desfaz TUDO — nenhuma minuta, substi
     assert.deepEqual(await contagens(pool), antes);
 
     const retry = await registrarMinutaTecnica(pool, {
-      containerId: x.id, membershipId: analista.membershipId, numeroInformado: x.numero, dataInformada: '2026-09-10', documento: doc('17b'), hoje: HOJE, idempotencia: idem,
+      containerId: x.id, membershipId: analista.membershipId, numeroInformado: x.numero, dataInformada: '2026-09-10', documento: await doc(pool, x.id, '17b'), hoje: HOJE, idempotencia: idem,
     });
     assert.ok(retry.ok && retry.novo && retry.minuta.estado === 'ACEITA');
   } finally { await pool.end(); }
@@ -923,13 +933,19 @@ test('P1 #18: registros LEGADOS (RECEBIDA/VALIDADA/REJEITADA do fluxo antigo) co
     const padrao = await (await get(app.base, `/v2/minutas`, leitor.home)).json();
     assert.deepEqual(padrao.itens.map((i: any) => [i.minutaId, i.acaoNecessaria]), [[recDiv.id, 'registrar_minuta_substituta']]);
 
-    // Semântica legada preservada no gate: RECEBIDA divergente legada bloqueia.
+    // Produção P1 (arquivos de minuta): a comprovação legada VALIDADA de `a` (aprovação humana, sem arquivo)
+    // não libera mais o encerramento de contêiner com demurrage — agora os DOIS contêineres bloqueiam
+    // (`a` por falta do arquivo, `b` pela divergência legada); o gate devolve o primeiro na ordem de id.
     const r1 = await new ClosingService(pool).avaliarEncerramentoAutomatico({ processoId: c.processoId, config: cfg });
-    assert.deepEqual(r1, { resultado: 'bloqueado', motivo: 'divergencia_pendente', containerId: b.id });
+    assert.ok(
+      [JSON.stringify({ resultado: 'bloqueado', motivo: 'minuta_sem_arquivo_disponivel', containerId: a.id }),
+        JSON.stringify({ resultado: 'bloqueado', motivo: 'divergencia_pendente', containerId: b.id })].includes(JSON.stringify(r1)),
+      JSON.stringify(r1),
+    );
 
     // A ação do analista: registrar a substituta coerente — substitui o legado
     // (sem apagar), e a devolução efetiva legada perde a base (volta o tracking).
-    const ra = await post(app.base, `/a/containers/${a.id}/minutas`, corpoMinuta(a.numero, '2026-09-10', '18a'), leitor.home, 'p1-18-a');
+    const ra = await post(app.base, `/a/containers/${a.id}/minutas`, await corpoMinuta(pool, a.id, a.numero, '2026-09-10', '18a'), leitor.home, 'p1-18-a');
     assert.equal((await ra.json()).estado, 'ACEITA');
     const linhaA = (await pool.query(`SELECT effective_return_date, effective_return_minuta_id, tracking_return_date FROM containers WHERE id = $1`, [a.id])).rows[0];
     assert.deepEqual(linhaA, { effective_return_date: null, effective_return_minuta_id: null, tracking_return_date: '2026-09-10' }, 'a devolução efetiva legada perde a base; o tracking é a oficial');
@@ -938,8 +954,11 @@ test('P1 #18: registros LEGADOS (RECEBIDA/VALIDADA/REJEITADA do fluxo antigo) co
     assert.equal(histA[1].data_validada, '2026-09-10', 'o que o gestor gravou no fluxo antigo continua na linha');
     const evLegado = (await pool.query(`SELECT payload FROM closing_events WHERE container_id = $1 AND tipo_evento = 'MINUTA_SUBSTITUIDA' ORDER BY criado_em`, [a.id])).rows;
     assert.deepEqual(evLegado.map((e: any) => [e.payload.estadoAnterior, e.payload.legado]), [['REJEITADA', true], ['VALIDADA', true]]);
+    // Semântica legada preservada no gate: com `a` resolvido (arquivo + minuta ACEITA), a RECEBIDA divergente legada de `b` bloqueia.
+    const r2 = await new ClosingService(pool).avaliarEncerramentoAutomatico({ processoId: c.processoId, config: cfg });
+    assert.deepEqual(r2, { resultado: 'bloqueado', motivo: 'divergencia_pendente', containerId: b.id });
 
-    const rb = await post(app.base, `/a/containers/${b.id}/minutas`, corpoMinuta(b.numero, '2026-09-10', '18b'), leitor.home, 'p1-18-b');
+    const rb = await post(app.base, `/a/containers/${b.id}/minutas`, await corpoMinuta(pool, b.id, b.numero, '2026-09-10', '18b'), leitor.home, 'p1-18-b');
     const corpoB = await rb.json();
     assert.equal(corpoB.estado, 'ACEITA');
     assert.deepEqual(corpoB.encerramento, { resultado: 'finalizado' });
@@ -966,7 +985,7 @@ test('P1 #18b: migration 0048 é ADITIVA — aplica sobre um banco na 0047 com d
 
     const up = await runMigrations(pool);
     // Produção P1 (filas pessoais): a 0049 (sessões/identidade/atribuição, aditiva) vem junto num upgrade a partir da 0047; auditoria final: também a 0050 e a 0051 (aditivas).
-    assert.deepEqual(up.applied, ['0048_minuta_aceite_tecnico_encerramento_automatico.sql', '0049_sessoes_identidade_atribuicao.sql', '0050_avisos_redirecionamento_responsavel.sql', '0051_integracao_microsoft_organizacao.sql', '0052_administracao_tarifaria.sql' /* Produção P1 (administração tarifária): aditiva */]);
+    assert.deepEqual(up.applied, ['0048_minuta_aceite_tecnico_encerramento_automatico.sql', '0049_sessoes_identidade_atribuicao.sql', '0050_avisos_redirecionamento_responsavel.sql', '0051_integracao_microsoft_organizacao.sql', '0052_administracao_tarifaria.sql' /* Produção P1 (administração tarifária): aditiva */, '0053_documentos_armazenados.sql' /* Produção P1 (arquivos de minuta): aditiva */]);
     const depois = (await pool.query(`SELECT id, estado_minuta, data_validada, regra_avaliacao, substituida_por_id FROM minutas ORDER BY id`)).rows;
     assert.deepEqual(depois.map((m: any) => ({ id: m.id, estado_minuta: m.estado_minuta, data_validada: m.data_validada })), antes, 'nenhuma linha legada reescrita');
     assert.ok(depois.every((m: any) => m.regra_avaliacao === null && m.substituida_por_id === null));
@@ -1025,7 +1044,7 @@ test('P1 revisão #1: devolução efetiva LEGADA de minuta substituída em proce
     // Produção P1 (filas pessoais): registrar minuta é ação pessoal — o ANALYST é o responsável do processo.
     await atribuirResponsavelDeTeste(pool, c.processoId, analista.membershipId);
     const r = await new ClosingService(pool).registrarMinuta({
-      containerId: x.id, membershipId: analista.membershipId, numeroInformado: x.numero, dataInformada: '2026-09-10', documento: doc('r1'), config: cfg,
+      containerId: x.id, membershipId: analista.membershipId, numeroInformado: x.numero, dataInformada: '2026-09-10', documento: await doc(pool, x.id, 'r1'), config: cfg,
     });
     assert.ok(r.ok && r.minuta.estado === 'ACEITA' && r.exigeReabertura === true);
     assert.equal((await pool.query(`SELECT effective_return_date FROM containers WHERE id = $1`, [x.id])).rows[0].effective_return_date, '2026-09-05', 'FINAL é congelado');
@@ -1058,7 +1077,7 @@ test('P1 revisão #3: o encerramento reavalia a minuta NA MESMA transação — 
     await atribuirResponsavelDeTeste(pool, c.processoId, analista.membershipId);
     const svc = new ClosingService(pool);
     const r = await registrarMinutaTecnica(pool, {
-      containerId: x.id, membershipId: analista.membershipId, numeroInformado: x.numero, dataInformada: '2026-09-10', documento: doc('r3a'), hoje: HOJE,
+      containerId: x.id, membershipId: analista.membershipId, numeroInformado: x.numero, dataInformada: '2026-09-10', documento: await doc(pool, x.id, 'r3a'), hoje: HOJE,
     });
     assert.ok(r.ok && r.minuta.estado === 'RECEBIDA');
     await pool.query(`UPDATE containers SET tracking_return_date = '2026-09-10' WHERE id = $1`, [x.id]);
@@ -1080,7 +1099,7 @@ test('P1 revisão #3: o encerramento reavalia a minuta NA MESMA transação — 
     const analistaF = await membro(pool, cf.orgId, 'ANALYST');
     await atribuirResponsavelDeTeste(pool, cf.processoId, analistaF.membershipId);
     const rf = await registrarMinutaTecnica(pool, {
-      containerId: xf.id, membershipId: analistaF.membershipId, numeroInformado: xf.numero, dataInformada: '2026-09-10', documento: doc('r3b'), hoje: HOJE,
+      containerId: xf.id, membershipId: analistaF.membershipId, numeroInformado: xf.numero, dataInformada: '2026-09-10', documento: await doc(pool, xf.id, 'r3b'), hoje: HOJE,
     });
     assert.ok(rf.ok && rf.minuta.estado === 'ACEITA');
     await pool.query(`UPDATE containers SET gate_out_date = '2026-09-11' WHERE id = $1`, [xf.id]);
@@ -1144,10 +1163,10 @@ test('P1 revisão #6: réplica idempotente reproduz exigeReabertura e substituid
     const analista = await membro(pool, c.orgId, 'ANALYST');
     // Produção P1 (filas pessoais): registrar minuta é ação pessoal — o ANALYST é o responsável do processo.
     await atribuirResponsavelDeTeste(pool, c.processoId, analista.membershipId);
-    const r1 = await post(app.base, `/a/containers/${x.id}/minutas`, corpoMinuta(x.numero, '2026-09-10', 'r6a'), analista.home, 'p1-r6-a');
+    const r1 = await post(app.base, `/a/containers/${x.id}/minutas`, await corpoMinuta(pool, x.id, x.numero, '2026-09-10', 'r6a'), analista.home, 'p1-r6-a');
     const b1 = await r1.json();
     assert.equal(b1.exigeReabertura, false);
-    const corpo = corpoMinuta(x.numero, '2026-09-25', 'r6b');
+    const corpo = await corpoMinuta(pool, x.id, x.numero, '2026-09-25', 'r6b');
     const r2 = await post(app.base, `/a/containers/${x.id}/minutas`, corpo, analista.home, 'p1-r6-b');
     assert.equal(r2.status, 201);
     const b2 = await r2.json();
@@ -1162,7 +1181,7 @@ test('P1 revisão #6: réplica idempotente reproduz exigeReabertura e substituid
     assert.deepEqual(b3.substituidas, [b1.minutaId]);
     assert.deepEqual(await contagens(pool), antes, 'réplica sem nenhuma escrita');
     // A primeira continua respondendo o que respondeu.
-    const r4 = await post(app.base, `/a/containers/${x.id}/minutas`, corpoMinuta(x.numero, '2026-09-10', 'r6a'), analista.home, 'p1-r6-a');
+    const r4 = await post(app.base, `/a/containers/${x.id}/minutas`, await corpoMinuta(pool, x.id, x.numero, '2026-09-10', 'r6a'), analista.home, 'p1-r6-a');
     const b4 = await r4.json();
     assert.equal(b4.exigeReabertura, false);
     assert.deepEqual(b4.substituidas, []);
@@ -1180,7 +1199,7 @@ test('P1 revisão #7: minuta que segue DIVERGENTE com o tracking em outra data t
     // Produção P1 (filas pessoais): registrar minuta é ação pessoal — o ANALYST é o responsável do processo.
     await atribuirResponsavelDeTeste(pool, c.processoId, analista.membershipId);
     const r = await registrarMinutaTecnica(pool, {
-      containerId: a.id, membershipId: analista.membershipId, numeroInformado: a.numero, dataInformada: '2026-09-12', documento: doc('r7'), hoje: HOJE,
+      containerId: a.id, membershipId: analista.membershipId, numeroInformado: a.numero, dataInformada: '2026-09-12', documento: await doc(pool, a.id, 'r7'), hoje: HOJE,
     });
     assert.ok(r.ok && r.minuta.estado === 'DIVERGENTE');
     const sem = async () => (await pendenciasDo(pool, a.id)).map((p: any) => [p.tipo, p.estado, p.contexto.dataTracking, p.contexto.minutaId]);
@@ -1237,9 +1256,9 @@ test('P1 revisão #9: registros concorrentes no mesmo processo nunca travam o po
     const analista = await membro(pool, c.orgId, 'ANALYST');
     // Produção P1 (filas pessoais): registrar minuta é ação pessoal — o ANALYST é o responsável do processo.
     await atribuirResponsavelDeTeste(pool, c.processoId, analista.membershipId);
-    const registros = c.containers.flatMap((x, i) => [0, 1].map((k) => registrarMinutaTecnica(pequeno, {
+    const registros = c.containers.flatMap((x, i) => [0, 1].map(async (k) => registrarMinutaTecnica(pequeno, {
       containerId: x.id, membershipId: analista.membershipId, numeroInformado: x.numero, dataInformada: '2026-09-10',
-      documento: doc(`r9-${i}-${k}`), hoje: HOJE,
+      documento: await doc(pool, x.id, `r9-${i}-${k}`), hoje: HOJE,
       idempotencia: { organizationId: c.orgId, rota: 'teste.r9', chave: `r9-${i}-${k}`, hash: `h-${i}-${k}` },
     })));
     const rs = await comPrazo(Promise.all(registros), 20000, 'registros concorrentes');
@@ -1349,13 +1368,15 @@ test('P1 revisão #12: texto que o banco recusaria (U+0000, surrogate isolado) e
     const analista = await membro(pool, c.orgId, 'ANALYST');
     const antes = await contagens(pool);
     const casos: Array<[unknown, number, string, string]> = [
-      [{ ...corpoMinuta(x.numero, '2026-09-10', 'r12a'), numeroInformado: `${x.numero}\u0000` }, 400, 'valor_invalido', 'numeroInformado'],
-      [{ ...corpoMinuta(x.numero, '2026-09-10', 'r12b'), dataInformada: '2026-09-1\uD800' }, 400, 'valor_invalido', 'dataInformada'],
-      [{ ...corpoMinuta(x.numero, '2026-09-10', 'r12c'), evidenciaRef: 'obs\u0000' }, 400, 'valor_invalido', 'evidenciaRef'],
-      [{ ...corpoMinuta(x.numero, '2026-09-10', 'r12d'), documento: { ...doc('r12d'), nomeArquivo: 'minuta\u0000.pdf' } }, 400, 'documento_invalido', 'nomeArquivo'],
-      [{ ...corpoMinuta(x.numero, '2026-09-10', 'r12e'), documento: { ...doc('r12e'), referencia: 'graph:\uDC00' } }, 400, 'documento_invalido', 'referencia'],
-      [{ ...corpoMinuta(x.numero, '2026-09-10', 'r12f'), documento: { ...doc('r12f'), hashConteudo: 'XYZ' } }, 400, 'documento_invalido', 'hashConteudo'],
-      [{ ...corpoMinuta(x.numero, '2026-09-10', 'r12g'), documento: 'graph:message/1' }, 400, 'documento_invalido', 'documento'],
+      [{ ...await corpoMinuta(pool, x.id, x.numero, '2026-09-10', 'r12a'), numeroInformado: `${x.numero}\u0000` }, 400, 'valor_invalido', 'numeroInformado'],
+      [{ ...await corpoMinuta(pool, x.id, x.numero, '2026-09-10', 'r12b'), dataInformada: '2026-09-1\uD800' }, 400, 'valor_invalido', 'dataInformada'],
+      [{ ...await corpoMinuta(pool, x.id, x.numero, '2026-09-10', 'r12c'), evidenciaRef: 'obs\u0000' }, 400, 'valor_invalido', 'evidenciaRef'],
+      // Produção P1 (arquivos de minuta): o documento é `{documentoId}` — id malformado, a forma antiga por
+      // referência (descontinuada) e id com texto que o banco recusaria continuam 400, nunca 500, nada gravado.
+      [{ ...await corpoMinuta(pool, x.id, x.numero, '2026-09-10', 'r12d'), documento: { documentoId: 'minuta\u0000.pdf' } }, 400, 'documento_invalido', 'documentoId'],
+      [{ ...await corpoMinuta(pool, x.id, x.numero, '2026-09-10', 'r12e'), documento: { origem: 'referencia_externa', referencia: 'graph:\uDC00' } }, 400, 'documento_invalido', 'documentoId'],
+      [{ ...await corpoMinuta(pool, x.id, x.numero, '2026-09-10', 'r12f'), documento: { documentoId: 'XYZ' } }, 400, 'documento_invalido', 'documentoId'],
+      [{ ...await corpoMinuta(pool, x.id, x.numero, '2026-09-10', 'r12g'), documento: 'graph:message/1' }, 400, 'documento_invalido', 'documento'],
     ];
     for (const [i, [corpo, status, erro, campo]] of casos.entries()) {
       const r = await post(app.base, `/a/containers/${x.id}/minutas`, corpo, analista.home, `p1-r12-${i}`);
@@ -1379,7 +1400,7 @@ test('P1 revisão #13: pendência de minuta nunca oferece podeResolver (a rota d
     const analista = await membro(pool, c.orgId, 'ANALYST');
     // Produção P1 (filas pessoais): minuta, pendências do processo e resolução são pessoais — o ANALYST é o responsável.
     await atribuirResponsavelDeTeste(pool, c.processoId, analista.membershipId);
-    const r = await post(app.base, `/a/containers/${a.id}/minutas`, corpoMinuta(a.numero, '2026-09-12', 'r13'), analista.home, 'p1-r13');
+    const r = await post(app.base, `/a/containers/${a.id}/minutas`, await corpoMinuta(pool, a.id, a.numero, '2026-09-12', 'r13'), analista.home, 'p1-r13');
     assert.equal((await r.json()).estado, 'DIVERGENTE');
     const lista = await (await get(app.base, `/v2/processos/${c.processoId}/pendencias`, analista.home)).json();
     const minuta = lista.itens.find((i: any) => i.tipo === 'minuta_divergente_tracking');
@@ -1405,7 +1426,7 @@ test('P1 revisão #14: indicador gerencial G-A9 ("aguardando tratamento") e sua 
     await confirmarResponsabilidadeClienteIntegral(pool, { containerId: fechado.containers[0].id, hoje: HOJE });
     await new ClosingService(pool).registrarMinuta({
       containerId: fechado.containers[0].id, membershipId: analista.membershipId, numeroInformado: fechado.containers[0].numero,
-      dataInformada: '2026-09-10', documento: doc('r14'), config: cfg,
+      dataInformada: '2026-09-10', documento: await doc(pool, fechado.containers[0].id, 'r14'), config: cfg,
     });
     assert.equal((await statusProcesso(pool, fechado.processoId)).apuracao_status, 'FINAL');
     const aberto = await cenario(pool, { orgId: org, numeroProcesso: 'IM-P1-R14B', comDemurrage: true });

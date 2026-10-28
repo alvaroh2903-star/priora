@@ -16,6 +16,7 @@ import { expandirPeriodos, validarEntrada, validarCoerencia, ErroResponsabilidad
 import { expandirFaixasAplicadas, atribuirValoresPorDia, somarPorLado } from '../responsabilidade/valoracaoPorDia';
 import { sugerirResponsabilidade, NullLiberacaoPort } from '../responsabilidade/liberacaoPort';
 import { novoGestor, confirmarResponsabilidadeClienteIntegral } from './responsabilidadeTestHelper';
+import { minutaAceitaComArquivoDeTeste } from './minutaTestHelper';
 
 /**
  * Fase D11 (Gates G1-G7) — Responsabilidade Rocket × Cliente. Entregue para
@@ -485,7 +486,8 @@ test('caso 14: fechamento é liberado com decisão válida', { skip: !url }, asy
     await setupBanco(pool);
     const { orgId, processoId, containerId } = await cenarioClienteComDias(pool, 'CASO14', { houseFT: 5, masterFT: 100, discharge: '2026-01-01', effective: '2026-01-10' });
     await confirmarResponsabilidadeClienteIntegral(pool, { containerId, hoje: cfg.hoje, organizationId: orgId });
-    await minutaValidadaDireta(pool, containerId, 'CASO14', '2026-01-10');
+    // Produção P1 (arquivos de minuta): a comprovação que libera o encerramento é a minuta ACEITA com o arquivo armazenado.
+    await minutaAceitaComArquivoDeTeste(pool, { containerId, numero: 'CASO14', data: '2026-01-10', hoje: cfg.hoje });
     const gestorId14 = await novoGestor(pool, orgId);
     const r = await new ClosingService(pool).finalizarProcesso({ processoId, membershipId: gestorId14, config: cfg });
     assert.deepEqual(r, { ok: true });
@@ -589,7 +591,8 @@ test('G_final: correção em processo FINAL exige reabertura (EXIGE_REABERTURA)'
     await setupBanco(pool);
     const { orgId, processoId, containerId } = await cenarioClienteComDias(pool, 'FINALX', { houseFT: 5, masterFT: 100, discharge: '2026-01-01', effective: '2026-01-10' });
     const v1 = await confirmarResponsabilidadeClienteIntegral(pool, { containerId, hoje: cfg.hoje, organizationId: orgId });
-    await minutaValidadaDireta(pool, containerId, 'FINALX', '2026-01-10');
+    // Produção P1 (arquivos de minuta): a comprovação que libera o encerramento é a minuta ACEITA com o arquivo armazenado.
+    await minutaAceitaComArquivoDeTeste(pool, { containerId, numero: 'FINALX', data: '2026-01-10', hoje: cfg.hoje });
     const gestorIdFinalX = await novoGestor(pool, orgId);
     assert.deepEqual(await new ClosingService(pool).finalizarProcesso({ processoId, membershipId: gestorIdFinalX, config: cfg }), { ok: true });
 

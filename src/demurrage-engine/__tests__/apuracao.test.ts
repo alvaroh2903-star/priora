@@ -14,6 +14,7 @@ import { recalcularApuracaoContainer } from '../apuracao/recalcularApuracao';
 import { passagemDoCalendario } from '../apuracao/passagemCalendario';
 import { seedRocketTermoPorEmbarque, seedRocketTermoUnico } from '../tariffs/seed/rocketTermoPorEmbarque';
 import { confirmarResponsabilidadeClienteIntegral, novoGestor } from './responsabilidadeTestHelper';
+import { minutaAceitaComArquivoDeTeste } from './minutaTestHelper';
 
 /**
  * Fase 8 v1.1 — GABARITO da apuração monetária orquestrada. Pipeline ÚNICO e
@@ -71,12 +72,16 @@ const relogio = (pool: Pool, id: string, tipo: string) => pool.query(`SELECT * F
 const clienteAtivo = (pool: Pool, id: string) =>
   pool.query(`SELECT * FROM valores_apurados WHERE container_id=$1 AND relogio_tipo='cliente' AND calculation_status IN ('OPEN','FINAL')`, [id]).then((r) => r.rows[0] ?? null);
 
-/** Minuta VALIDADA direta (comprovação), sem passar pela coerência da minuta. */
+/**
+ * Comprovação do contêiner. Produção P1 (arquivos de minuta): a minuta legada
+ * VALIDADA sem arquivo deixou de liberar o encerramento de contêiner com
+ * demurrage; a comprovação passa a ser a minuta técnica ACEITA com o arquivo
+ * armazenado (`minutaAceitaComArquivoDeTeste`). As regras verificadas aqui
+ * (responsabilidade, valores, FINAL/reabertura) não mudam.
+ */
 async function minutaValidada(pool: Pool, containerId: string, numero: string, data: string) {
-  const minutas = new MinutaRepository(pool);
-  const m = await minutas.criarRecebida({ containerId, numeroInformado: numero, dataInformada: data });
-  await minutas.marcarValidada(m.id, data, false, null);
-  return m.id;
+  void MinutaRepository;
+  return minutaAceitaComArquivoDeTeste(pool, { containerId, numero, data, hoje: cfg.hoje });
 }
 
 /* ================================================================== *

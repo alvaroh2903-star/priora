@@ -636,7 +636,13 @@ export interface ContainerDetalheV1 {
     substituidaPorId: string | null;
     dataTrackingComparada: string | null;
     aguardando: 'DEVOLUCAO_TRACKING' | 'DESCARGA' | null;
-    documento: { id: string; nomeArquivo: string; tipoConteudo: string; tamanhoBytes: number; hashConteudo: string } | null;
+    documento: {
+      id: string; nomeArquivo: string; tipoConteudo: string; tamanhoBytes: number; hashConteudo: string;
+      /** Produção P1 (arquivos de minuta), aditivo: `INTERNO` (arquivo guardado pela Priora) ou `REFERENCIA_EXTERNA` (legado). */
+      armazenamento?: 'INTERNO' | 'REFERENCIA_EXTERNA';
+      /** Produção P1 (arquivos de minuta), aditivo: o arquivo pode ser baixado agora. */
+      disponivel?: boolean;
+    } | null;
   }>;
   trackingAtualizadoEm: string | null;
   falhaTrackingAtiva: boolean;

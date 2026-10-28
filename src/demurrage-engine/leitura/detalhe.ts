@@ -163,8 +163,10 @@ async function buscarDadosBatchContainers(
   const { rows: minutasRows } = await pool.query(
     `SELECT m.id, m.container_id, m.estado_minuta, m.numero_informado, m.data_informada, m.data_validada, m.divergente_do_tracking,
             m.motivo_rejeicao, m.criado_em, m.regra_avaliacao, m.versao, m.substituida_por_id, m.data_tracking_comparada, m.aguardando,
-            d.id AS documento_id, d.nome_arquivo, d.tipo_conteudo, d.tamanho_bytes, d.hash_conteudo
+            d.id AS documento_id, d.nome_arquivo, d.tipo_conteudo, d.tamanho_bytes, d.hash_conteudo, d.armazenado_id,
+            da.estado AS arquivo_estado, da.objeto_ausente_em AS arquivo_ausente, da.inspecao AS arquivo_inspecao
        FROM minutas m LEFT JOIN documentos d ON d.minuta_id = m.id
+       LEFT JOIN documentos_armazenados da ON da.id = d.armazenado_id
       WHERE m.container_id = ANY($1) ORDER BY m.container_id, m.criado_em, m.id`,
     [containerIds],
   );
@@ -388,7 +390,13 @@ function montarDetalheContainerDeDados(
       // Metadados do documento (nunca a referência de armazenamento — essa só
       // pela leitura dedicada e autorizada `/minutas/:id/documento`).
       documento: m.documento_id
-        ? { id: m.documento_id, nomeArquivo: m.nome_arquivo, tipoConteudo: m.tipo_conteudo, tamanhoBytes: Number(m.tamanho_bytes), hashConteudo: m.hash_conteudo }
+        ? {
+            id: m.documento_id, nomeArquivo: m.nome_arquivo, tipoConteudo: m.tipo_conteudo, tamanhoBytes: Number(m.tamanho_bytes), hashConteudo: m.hash_conteudo,
+            // Produção P1 (arquivos de minuta) — aditivo: onde está o arquivo e se pode ser baixado agora.
+            armazenamento: m.armazenado_id ? 'INTERNO' as const : 'REFERENCIA_EXTERNA' as const,
+            disponivel: Boolean(m.armazenado_id) && (m.arquivo_estado === 'DISPONIVEL' || m.arquivo_estado === 'SUBSTITUIDO')
+              && m.arquivo_ausente == null && m.arquivo_inspecao !== 'REPROVADA' && m.arquivo_inspecao !== 'PENDENTE',
+          }
         : null,
     })),
     trackingAtualizadoEm: pacote.facts.ultimaConsultaValida,

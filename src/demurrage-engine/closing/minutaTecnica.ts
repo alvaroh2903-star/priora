@@ -9,6 +9,7 @@ import { ClosingEventRepository } from '../persistence/closingEventRepository';
 import { abrirPendenciaComClient, resolverPendenciasComClient, TIPOS_PENDENCIA_SO_RESOLUCAO_AUTOMATICA } from '../registro/pendencias';
 import { recalcularApuracaoContainerComClient } from '../apuracao/recalcularApuracao';
 import { LifecycleRepository } from '../persistence/lifecycleRepository';
+import { registrarEventoDocumento } from '../documentos/eventos';
 
 /**
  * Produção P1 (reabertura controlada — correção de minuta). Fluxo ÚNICO de
@@ -16,10 +17,14 @@ import { LifecycleRepository } from '../persistence/lifecycleRepository';
  *
  * Regras de produto:
  *  - o cliente envia a minuta fora do sistema; o ANALISTA (ou qualquer
- *    responsável interno — ANALYST/MANAGER/ADMIN) a registra com o documento
- *    real (referência auditável — ver `documentos`, migration 0048). Produção
- *    P1 (filas pessoais): é ação PESSOAL — o ANALYST só registra no processo
- *    atribuído a ele; MANAGER/ADMIN em qualquer processo da organização;
+ *    responsável interno — ANALYST/MANAGER/ADMIN) a registra com o ARQUIVO
+ *    REAL já enviado ao armazenamento privado da Priora (Produção P1 —
+ *    arquivos de minuta, migration 0053): o registro aponta para um
+ *    `documentos_armazenados` DISPONIVEL, nunca vinculado, do MESMO contêiner
+ *    e organização. A referência externa (0048) não é mais aceita em registro
+ *    novo. Produção P1 (filas pessoais): é ação PESSOAL — o ANALYST só
+ *    registra no processo atribuído a ele; MANAGER/ADMIN em qualquer processo
+ *    da organização;
  *  - NÃO existe aprovação de MANAGER/ADMIN: a verificação técnica automática
  *    (`avaliarMinutaTecnicamente`) decide sozinha — ACEITA (coerente e igual
  *    à devolução do tracking), DIVERGENTE (coerente, data diferente),
@@ -45,56 +50,33 @@ import { LifecycleRepository } from '../persistence/lifecycleRepository';
 
 export const REGRA_AVALIACAO_MINUTA = 'minuta.tecnica.v1';
 
-export const ORIGENS_DOCUMENTO_MINUTA = ['email_anexo', 'referencia_externa'] as const;
-export type OrigemDocumentoMinuta = (typeof ORIGENS_DOCUMENTO_MINUTA)[number];
-
-export const TIPOS_CONTEUDO_MINUTA = ['application/pdf', 'image/png', 'image/jpeg', 'image/tiff', 'image/webp', 'image/heic'] as const;
-export type TipoConteudoMinuta = (typeof TIPOS_CONTEUDO_MINUTA)[number];
-
-/** Mesmo limite do CHECK `documentos_minuta_coerente` (50 MiB). */
-export const TAMANHO_MAXIMO_DOCUMENTO_MINUTA = 52428800;
-
 /**
- * Referência auditável do arquivo real da minuta. O sistema NÃO guarda o
- * binário (não existe armazenamento de arquivos na Priora — ver relatório):
- * guarda onde o arquivo está (`referencia`, ex.: o anexo do e-mail no Graph
- * ou a chave de um repositório externo) e o que ele é (hash SHA-256, nome,
- * tipo e tamanho), o bastante para provar depois que o arquivo é o mesmo.
+ * Documento da minuta (Produção P1 — arquivos de minuta): o id de um
+ * documento ARMAZENADO pela Priora (upload iniciado, conteúdo recebido e
+ * confirmado — `documentos/servico.ts`). A forma antiga (referência externa
+ * + hash informado, 0048) não é mais aceita: o arquivo real precisa estar no
+ * armazenamento privado antes do registro.
  */
 export interface DocumentoMinutaEntrada {
-  origem: OrigemDocumentoMinuta;
-  referencia: string;
-  nomeArquivo: string;
-  tipoConteudo: TipoConteudoMinuta;
-  tamanhoBytes: number;
-  hashConteudo: string;
+  documentoId: string;
 }
 
 export type ValidacaoDocumento =
   | { ok: true; documento: DocumentoMinutaEntrada }
-  | { ok: false; motivo: 'documento_obrigatorio' | 'documento_invalido'; campo?: string };
+  | { ok: false; motivo: 'documento_obrigatorio' | 'documento_invalido'; campo?: string; detalhe?: string };
 
-/** Valida a FORMA do documento (o banco reforça com `documentos_minuta_coerente`). */
+const RE_UUID_DOCUMENTO = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Valida a FORMA do documento (`{ documentoId }`); o vínculo é conferido sob lock no registro. */
 export function validarDocumentoMinuta(bruto: unknown): ValidacaoDocumento {
   if (bruto === undefined || bruto === null) return { ok: false, motivo: 'documento_obrigatorio' };
   if (typeof bruto !== 'object' || Array.isArray(bruto)) return { ok: false, motivo: 'documento_invalido', campo: 'documento' };
   const d = bruto as Record<string, unknown>;
-  const invalido = (campo: string): ValidacaoDocumento => ({ ok: false, motivo: 'documento_invalido', campo });
-  if (!ORIGENS_DOCUMENTO_MINUTA.includes(d.origem as OrigemDocumentoMinuta)) return invalido('origem');
-  if (typeof d.referencia !== 'string' || !d.referencia.trim() || d.referencia.length > 1000 || !textoArmazenavel(d.referencia)) return invalido('referencia');
-  if (typeof d.nomeArquivo !== 'string' || !d.nomeArquivo.trim() || d.nomeArquivo.length > 255 || !textoArmazenavel(d.nomeArquivo)) return invalido('nomeArquivo');
-  if (!TIPOS_CONTEUDO_MINUTA.includes(d.tipoConteudo as TipoConteudoMinuta)) return invalido('tipoConteudo');
-  if (typeof d.tamanhoBytes !== 'number' || !Number.isInteger(d.tamanhoBytes) || d.tamanhoBytes < 1 || d.tamanhoBytes > TAMANHO_MAXIMO_DOCUMENTO_MINUTA) {
-    return invalido('tamanhoBytes');
+  if (d.documentoId === undefined && (d.referencia !== undefined || d.origem !== undefined || d.hashConteudo !== undefined)) {
+    return { ok: false, motivo: 'documento_invalido', campo: 'documentoId', detalhe: 'referencia_externa_descontinuada' };
   }
-  if (typeof d.hashConteudo !== 'string' || !/^[0-9a-f]{64}$/.test(d.hashConteudo)) return invalido('hashConteudo');
-  return {
-    ok: true,
-    documento: {
-      origem: d.origem as OrigemDocumentoMinuta, referencia: d.referencia.trim(), nomeArquivo: d.nomeArquivo.trim(),
-      tipoConteudo: d.tipoConteudo as TipoConteudoMinuta, tamanhoBytes: d.tamanhoBytes, hashConteudo: d.hashConteudo,
-    },
-  };
+  if (typeof d.documentoId !== 'string' || !RE_UUID_DOCUMENTO.test(d.documentoId)) return { ok: false, motivo: 'documento_invalido', campo: 'documentoId' };
+  return { ok: true, documento: { documentoId: d.documentoId.toLowerCase() } };
 }
 
 function ehPapelInterno(papel: PapelRbac): boolean {
@@ -317,6 +299,8 @@ export interface DocumentoRegistrado {
   id: string;
   versaoMinuta: number;
   hashConteudo: string;
+  /** `INTERNO` (arquivo guardado pela Priora) ou `REFERENCIA_EXTERNA` (legado 0048). */
+  armazenamento: 'INTERNO' | 'REFERENCIA_EXTERNA';
 }
 
 export type ResultadoRegistroMinutaTecnica =
@@ -334,13 +318,19 @@ export type ResultadoRegistroMinutaTecnica =
     }
   | {
       ok: false;
-      motivo: 'container_nao_encontrado' | 'ator_nao_autorizado' | 'ator_nao_responsavel' | 'documento_obrigatorio' | 'documento_invalido' | 'idempotency_key_reutilizada';
+      motivo: 'container_nao_encontrado' | 'ator_nao_autorizado' | 'ator_nao_responsavel' | 'documento_obrigatorio' | 'documento_invalido'
+        | 'idempotency_key_reutilizada' | 'documento_nao_encontrado' | 'documento_indisponivel' | 'documento_ja_vinculado';
       campo?: string;
+      detalhe?: string;
+      estado?: string;
     };
 
 async function documentoDaMinuta(db: Pool | PoolClient, minutaId: string): Promise<DocumentoRegistrado | null> {
-  const { rows } = await db.query(`SELECT id, versao_minuta, hash_conteudo FROM documentos WHERE minuta_id = $1`, [minutaId]);
-  return rows.length ? { id: rows[0].id, versaoMinuta: rows[0].versao_minuta, hashConteudo: rows[0].hash_conteudo } : null;
+  const { rows } = await db.query(`SELECT id, versao_minuta, hash_conteudo, armazenado_id FROM documentos WHERE minuta_id = $1`, [minutaId]);
+  return rows.length ? {
+    id: rows[0].id, versaoMinuta: rows[0].versao_minuta, hashConteudo: rows[0].hash_conteudo,
+    armazenamento: rows[0].armazenado_id ? 'INTERNO' : 'REFERENCIA_EXTERNA',
+  } : null;
 }
 
 async function replayIdempotente(
@@ -455,6 +445,25 @@ export async function registrarMinutaTecnica(pool: Pool, input: RegistrarMinutaT
     const novaId = randomUUID();
     const eventos = new ClosingEventRepository(client as unknown as Pool);
 
+    // 7b) o ARQUIVO da minuta (Produção P1 — arquivos de minuta): documento
+    //     armazenado do MESMO contêiner e organização, DISPONIVEL, nunca
+    //     vinculado, objeto não marcado ausente, inspeção não reprovada.
+    //     Travado aqui (depois de processo/contêiner/minutas — mesma ordem em
+    //     todo escritor): um vínculo concorrente do mesmo documento espera e
+    //     relê `documento_ja_vinculado`; a expiração de não vinculado também.
+    const { rows: arq } = await client.query(
+      `SELECT * FROM documentos_armazenados WHERE id = $1 AND organization_id = $2 AND container_id = $3 FOR UPDATE`,
+      [doc.documento.documentoId, ctx.organizationId, c.id],
+    );
+    if (!arq.length) { await client.query('ROLLBACK'); return { ok: false, motivo: 'documento_nao_encontrado' }; }
+    const a = arq[0];
+    if (a.minuta_id !== null) { await client.query('ROLLBACK'); return { ok: false, motivo: 'documento_ja_vinculado' }; }
+    if (a.estado !== 'DISPONIVEL') { await client.query('ROLLBACK'); return { ok: false, motivo: 'documento_indisponivel', estado: a.estado }; }
+    if (a.objeto_ausente_em !== null) { await client.query('ROLLBACK'); return { ok: false, motivo: 'documento_indisponivel', estado: a.estado, detalhe: 'objeto_ausente' }; }
+    if (a.inspecao !== 'NAO_REALIZADA' && a.inspecao !== 'APROVADA') {
+      await client.query('ROLLBACK'); return { ok: false, motivo: 'documento_indisponivel', estado: a.estado, detalhe: 'inspecao' };
+    }
+
     // 8) substitui ANTES do INSERT (o índice de vigência nunca vê duas vigentes;
     //    o FK adiável de `substituida_por_id` é conferido no COMMIT).
     for (const a of anteriores) {
@@ -495,27 +504,54 @@ export async function registrarMinutaTecnica(pool: Pool, input: RegistrarMinutaT
     }
     const novaRow = ins[0];
 
-    // 10) documento — referência auditável do arquivo real (append-only).
+    // 10) documento — vínculo de evidência com o ARQUIVO armazenado (append-only;
+    //     mesmo id do documento armazenado; nome/tipo/tamanho/hash são os
+    //     CALCULADOS pelo servidor no recebimento, nunca os informados).
     if (input._testeFalhaAoGravarDocumento) await input._testeFalhaAoGravarDocumento();
-    const d = doc.documento;
     // Processo FINAL: decide AGORA (antes do evento de registro, que guarda a
     // resposta para réplica idempotente) se a minuta é fato material pós-FINAL.
     const fatoPosFinal = ctx.apuracaoStatus === 'FINAL' ? await dataCongeladaDivergente(client, c, novaRow, input.hoje) : null;
     const exigeReabertura = fatoPosFinal !== null;
+    // Versões do arquivo: o documento armazenado da minuta que esta substitui
+    // (no máximo um — a vigente técnica é única) vira SUBSTITUIDO ANTES do
+    // vínculo do novo (índice de vigente único por contêiner); continua baixável.
+    const { rows: anteriorArq } = anteriores.length ? await client.query(
+      `SELECT a.id FROM documentos d JOIN documentos_armazenados a ON a.id = d.armazenado_id
+        WHERE d.minuta_id = ANY($1::uuid[]) AND a.estado = 'DISPONIVEL' FOR UPDATE OF a`,
+      [anteriores.map((x) => x.id)],
+    ) : { rows: [] as Array<{ id: string }> };
+    for (const ant of anteriorArq) {
+      await client.query(
+        `UPDATE documentos_armazenados SET estado = 'SUBSTITUIDO', substituido_por_id = $2, substituido_em = now() WHERE id = $1`,
+        [ant.id, a.id],
+      );
+      await registrarEventoDocumento(client, {
+        organizationId: ctx.organizationId, documentoId: ant.id, tipo: 'SUBSTITUIDO', ator: { membershipId: input.membershipId, usuarioId },
+        detalhes: { substituidoPor: a.id, minutaNova: novaId },
+      });
+    }
+    await client.query(
+      `UPDATE documentos_armazenados SET minuta_id = $2, versao = $3, vinculado_em = now(), substitui_id = $4 WHERE id = $1`,
+      [a.id, novaId, versao, anteriorArq[0]?.id ?? null],
+    );
+    await registrarEventoDocumento(client, {
+      organizationId: ctx.organizationId, documentoId: a.id, tipo: 'VINCULADO_MINUTA', ator: { membershipId: input.membershipId, usuarioId },
+      correlacaoId: a.correlacao_id, detalhes: { minutaId: novaId, versao, substitui: anteriorArq[0]?.id ?? null },
+    });
     const { rows: docRows } = await client.query(
       `INSERT INTO documentos (
-         processo_id, container_id, organization_id, minuta_id, versao_minuta, tipo, origem,
+         id, processo_id, container_id, organization_id, minuta_id, versao_minuta, tipo, origem, armazenado_id,
          referencia_armazenamento, nome_arquivo, tipo_conteudo, tamanho_bytes, hash_conteudo,
          incluido_por, incluido_por_membership_id
-       ) VALUES ($1, $2, $3, $4, $5, 'minuta_devolucao', $6, $7, $8, $9, $10, $11, $12, $13)
+       ) VALUES ($1, $2, $3, $4, $5, $6, 'minuta_devolucao', 'armazenamento_interno', $1, NULL, $7, $8, $9, $10, $11, $12)
        RETURNING id`,
-      [processoId, c.id, ctx.organizationId, novaId, versao, d.origem, d.referencia, d.nomeArquivo, d.tipoConteudo, d.tamanhoBytes, d.hashConteudo, usuarioId, input.membershipId],
+      [a.id, processoId, c.id, ctx.organizationId, novaId, versao, a.nome_original, a.tipo_detectado, a.tamanho_bytes, a.sha256, usuarioId, input.membershipId],
     );
     await eventos.registrar({
       processoId, containerId: c.id, tipoEvento: 'MINUTA_RECEBIDA', origem: 'humano', atorUsuarioId: usuarioId,
       payload: {
-        minutaId: novaId, versao, documentoId: docRows[0].id, hashConteudo: d.hashConteudo, substituiu: anteriores.map((a) => a.id),
-        exigeReabertura,
+        minutaId: novaId, versao, documentoId: docRows[0].id, hashConteudo: a.sha256, armazenamento: 'INTERNO',
+        substituiu: anteriores.map((x) => x.id), exigeReabertura,
         ...(dataIlegivel !== null ? { dataInformadaIlegivel: dataIlegivel } : {}),
       },
     });
@@ -553,7 +589,7 @@ export async function registrarMinutaTecnica(pool: Pool, input: RegistrarMinutaT
     return {
       ok: true, novo: true, minuta: mapRowMinuta(final[0]), processoId, organizationId: ctx.organizationId,
       apuracaoStatus: ctx.apuracaoStatus, substituidas: anteriores.map((a) => a.id), pendencia: aval.pendencia,
-      exigeReabertura, documento: { id: docRows[0].id, versaoMinuta: versao, hashConteudo: d.hashConteudo },
+      exigeReabertura, documento: { id: docRows[0].id, versaoMinuta: versao, hashConteudo: a.sha256, armazenamento: 'INTERNO' },
     };
   } catch (erro) {
     await client.query('ROLLBACK').catch(() => undefined);
