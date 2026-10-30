@@ -43,7 +43,8 @@
     "demurrage:calc": "ts-node src/demurrage/calculatorSelftest.ts",
     "auth:selftest": "ts-node src/auth/accountSwitchSelftest.ts",
     "rocket:selftest": "ts-node src/rocket/rocketSelftest.ts",
-    "mistral:selftest": "ts-node src/ai/mistralOcrSelftest.ts"
+    "mistral:selftest": "ts-node src/ai/mistralOcrSelftest.ts",
+    "legado:selftest": "node --test scripts/legado/teste/legado.test.js"
   },
   "keywords": [
     "outlook",
